@@ -13,7 +13,7 @@ if ! command -v brew &>/dev/null; then
   exit 0
 fi
 
-brew bundle --no-lock --file=/dev/stdin <<EOF
+brew bundle --file=/dev/stdin <<EOF
 # ── Core ──
 brew "git"
 brew "git-lfs"
