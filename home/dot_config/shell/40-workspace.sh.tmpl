@@ -5,9 +5,9 @@ export WORK="$WORKSPACE/work"
 export VAULT="$WORKSPACE/vault"
 
 # 빠른 이동
-alias work="cd \$WORK"
-alias vault="cd \$VAULT"
-alias brain="cd \$VAULT"
+alias work="cd $WORK"
+alias vault="cd $VAULT"
+alias brain="cd $VAULT"
 
 # 프로젝트 이동
 proj()  { cd "$WORK/projects/${1:-}" 2>/dev/null || echo "Not found: $1"; }
