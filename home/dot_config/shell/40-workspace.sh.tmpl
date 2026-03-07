@@ -1,6 +1,6 @@
 {{ if .enable_workspace -}}
 # workspace 경로
-export WORKSPACE="{{ .workspace_path }}"
+export WORKSPACE="{{ .workspace_path | replace "~" "$HOME" }}"
 export WORK="$WORKSPACE/work"
 export VAULT="$WORKSPACE/vault"
 
