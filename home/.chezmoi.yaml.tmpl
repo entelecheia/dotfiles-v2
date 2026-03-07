@@ -50,16 +50,40 @@
 {{-   end -}}
 {{- end -}}
 
-{{- /* ── SSH 설정 ─────────────────────────────────── */ -}}
-{{- $sshKeyName := "id_ed25519" -}}
+{{- /* ── SSH 설정 — github username 연동 ──────────── */ -}}
+{{- $sshKeyDefault := "id_ed25519" -}}
+{{- if $github -}}
+{{-   $sshKeyDefault = printf "id_ed25519_%s" $github -}}
+{{- end -}}
+{{- $sshKeyName := $sshKeyDefault -}}
 {{- if $interactive -}}
-{{-   $sshKeyName = promptStringOnce . "ssh_key_name" "SSH key filename" "id_ed25519" -}}
+{{-   $sshKeyName = promptStringOnce . "ssh_key_name" "SSH key filename" $sshKeyDefault -}}
 {{- end -}}
 
-{{- /* ── 암호화 (age key 존재 여부로 자동 판단) ──── */ -}}
+{{- /* ── 암호화 (age key 자동 감지 — 다중 경로) ──── */ -}}
 {{- $hasAgeKey := false -}}
-{{- if stat (joinPath .chezmoi.homeDir ".config" "chezmoi" "key.txt") -}}
-{{-   $hasAgeKey = true -}}
+{{- $ageIdentity := "" -}}
+
+{{- if $github -}}
+{{-   $try := joinPath .chezmoi.homeDir ".ssh" (printf "age_key_%s" $github) -}}
+{{-   if stat $try -}}
+{{-     $hasAgeKey = true -}}
+{{-     $ageIdentity = $try -}}
+{{-   end -}}
+{{- end -}}
+
+{{- if not $hasAgeKey -}}
+{{-   $try := joinPath .chezmoi.homeDir ".config" "chezmoi" "key.txt" -}}
+{{-   if stat $try -}}
+{{-     $hasAgeKey = true -}}
+{{-     $ageIdentity = $try -}}
+{{-   end -}}
+{{- end -}}
+
+{{- /* ── 다중 recipient prompt ────────────────────── */ -}}
+{{- $ageRecipients := "" -}}
+{{- if and $interactive $hasAgeKey -}}
+{{-   $ageRecipients = promptStringOnce . "age_recipients" "Age recipients (comma-separated public keys)" "" -}}
 {{- end -}}
 
 data:
@@ -80,10 +104,15 @@ data:
   workspace_gdrive: {{ $workspaceGdrive | quote }}
   ssh_key_name: {{ $sshKeyName | quote }}
   has_age_key: {{ $hasAgeKey }}
+  age_identity: {{ $ageIdentity | quote }}
+  age_recipients: {{ $ageRecipients | quote }}
 
 {{ if $hasAgeKey -}}
 encryption: age
 age:
-  identity: ~/.config/chezmoi/key.txt
-  recipient: "age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  identity: {{ $ageIdentity | quote }}
+  recipients:
+{{-   range splitList "," $ageRecipients }}
+    - {{ . | trim | quote }}
+{{-   end }}
 {{ end -}}

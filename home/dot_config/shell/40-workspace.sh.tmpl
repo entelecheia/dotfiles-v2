@@ -1,8 +1,8 @@
 {{ if .enable_workspace -}}
 # workspace 경로
-export AI_WORKSPACE="{{ .workspace_path }}"
-export WORK="$AI_WORKSPACE/work"
-export VAULT="$AI_WORKSPACE/vault"
+export WORKSPACE="{{ .workspace_path }}"
+export WORK="$WORKSPACE/work"
+export VAULT="$WORKSPACE/vault"
 
 # 빠른 이동
 alias work="cd \$WORK"

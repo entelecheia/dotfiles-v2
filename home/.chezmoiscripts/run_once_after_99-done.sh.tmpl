@@ -6,10 +6,12 @@ echo "========================================="
 echo ""
 echo "Next steps:"
 echo "  1. Restart shell:  exec zsh"
-{{ if not .has_age_key -}}
+{{ if .has_age_key -}}
+echo "  2. Setup secrets:  secrets init"
+echo "     Or restore:     secrets restore <backup-dir>"
+{{ else -}}
 echo "  2. (Optional) Setup encryption:"
 echo "     age-keygen -o ~/.config/chezmoi/key.txt"
-echo "     chezmoi edit-config  # add age recipient"
 {{ end -}}
 {{ if .enable_ai_tools -}}
 echo "  3. Install Claude Code:  npm i -g @anthropic-ai/claude-code"

@@ -37,7 +37,7 @@ CHEZMOI_ARGS="--no-tty --promptDefaults" bash <(curl -sL https://raw.githubuserc
 
 ## Modules (opt-in at `chezmoi init`)
 
-- **Workspace** — ai-workspace symlinks, navigation aliases
+- **Workspace** — workspace symlinks, navigation aliases
 - **AI Tools** — Claude Code, GitHub Models, Ollama config
 - **Warp** — Warp Terminal themes (macOS)
 
@@ -46,12 +46,51 @@ CHEZMOI_ARGS="--no-tty --promptDefaults" bash <(curl -sL https://raw.githubuserc
 - `minimal` — Core tools only (15 packages)
 - `full` — Everything (35+ packages)
 
-## Encryption (optional)
+## Secrets Management
+
+Secrets (SSH keys, API tokens) are **not** stored in the git repo — neither plaintext nor encrypted. Instead, they are managed locally with [age](https://github.com/FiloSottile/age) encryption.
+
+### Setup
+
+Age key auto-detection searches these paths in order:
+
+1. `~/.ssh/age_key_<github-username>`
+2. `~/.config/chezmoi/key.txt`
+
+If no key exists yet:
 
 ```bash
 age-keygen -o ~/.config/chezmoi/key.txt
-chezmoi add --encrypt ~/.ssh/id_ed25519
 ```
+
+Then re-run `chezmoi init` to configure recipients.
+
+### Encrypt & manage secrets
+
+```bash
+secrets init                    # encrypt SSH key + shell secrets
+secrets backup ~/Dropbox/keys   # copy .age files to backup
+secrets restore ~/Dropbox/keys  # restore on a new machine
+secrets status                  # check what's in place
+```
+
+Or via Make:
+
+```bash
+make secrets-init
+make secrets-status
+make secrets-backup DEST=~/backup
+make secrets-restore SRC=~/backup
+```
+
+### Where secrets live
+
+| Item | Location | Git tracked |
+|------|----------|-------------|
+| age identity (private) | `~/.ssh/age_key_<user>` or `~/.config/chezmoi/key.txt` | No |
+| Encrypted backups (.age) | `~/.local/share/chezmoi-secrets/` | No |
+| SSH private key | `~/.ssh/id_ed25519_<user>` | No |
+| Shell secrets | `~/.config/shell/90-secrets.sh` | No |
 
 ## Daily use
 

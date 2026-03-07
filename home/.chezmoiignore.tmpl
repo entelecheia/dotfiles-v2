@@ -3,9 +3,8 @@ LICENSE
 Makefile
 scripts/
 
-# 암호화 파일: age key 없으면 무시
+# 비밀 파일: age key 없으면 무시
 {{ if not .has_age_key }}
-.ssh/{{ .ssh_key_name }}
 .config/shell/90-secrets.sh
 {{ end }}
 
