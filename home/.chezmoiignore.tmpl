@@ -1,0 +1,29 @@
+README.md
+LICENSE
+Makefile
+scripts/
+
+# 암호화 파일: age key 없으면 무시
+{{ if not .has_age_key }}
+.ssh/{{ .ssh_key_name }}
+.config/shell/90-secrets.sh
+{{ end }}
+
+# 모듈 비활성 시 무시
+{{ if not .enable_workspace }}
+.config/shell/40-workspace.sh
+{{ end }}
+
+{{ if not .enable_ai_tools }}
+.config/shell/30-ai-tools.sh
+.config/claude/
+{{ end }}
+
+{{ if not .enable_warp }}
+.config/warp/
+{{ end }}
+
+# OS별 무시
+{{ if .is_linux }}
+.config/warp/
+{{ end }}

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+echo ""
+echo "========================================="
+echo "  Dotfiles v2 installation complete!"
+echo "========================================="
+echo ""
+echo "Next steps:"
+echo "  1. Restart shell:  exec zsh"
+{{ if not .has_age_key -}}
+echo "  2. (Optional) Setup encryption:"
+echo "     age-keygen -o ~/.config/chezmoi/key.txt"
+echo "     chezmoi edit-config  # add age recipient"
+{{ end -}}
+{{ if .enable_ai_tools -}}
+echo "  3. Install Claude Code:  npm i -g @anthropic-ai/claude-code"
+echo "  4. Authenticate GitHub:  gh auth login"
+{{ end -}}
+echo ""

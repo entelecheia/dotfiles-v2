@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BRANCH="${1:-$(git rev-parse --abbrev-ref HEAD)}"
+echo "[+] Fetching and resetting to origin/$BRANCH..."
+git fetch origin "$BRANCH"
+git reset --hard "origin/$BRANCH"
+echo "[+] Done"

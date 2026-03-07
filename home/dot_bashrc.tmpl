@@ -1,0 +1,14 @@
+# 최소 bash 설정 (서버 SSH 접속용)
+export LANG=en_US.UTF-8
+export TZ="{{ .timezone }}"
+export PATH="$HOME/.local/bin:$PATH"
+
+# tool init
+command -v zoxide &>/dev/null && eval "$(zoxide init bash)"
+command -v starship &>/dev/null && eval "$(starship init bash)"
+command -v direnv &>/dev/null && eval "$(direnv hook bash)"
+
+# 가능하면 zsh로 전환 안내
+if command -v zsh &>/dev/null && [ -z "$ZSH_VERSION" ]; then
+  echo "Tip: run 'zsh' or 'chsh -s $(which zsh)' to switch to zsh"
+fi

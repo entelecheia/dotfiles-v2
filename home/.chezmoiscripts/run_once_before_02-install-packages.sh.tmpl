@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{{ if .is_linux -}}
+# Linux 전제조건 (Homebrew 빌드 의존)
+sudo apt-get update -qq
+sudo apt-get install -y -qq build-essential procps curl file git zsh
+{{ end -}}
+
+# Homebrew가 없으면 건너뜀 (install-homebrew에서 설치)
+if ! command -v brew &>/dev/null; then
+  echo "[!] Homebrew not found, skipping packages"
+  exit 0
+fi
+
+brew bundle --no-lock --file=/dev/stdin <<EOF
+# ── Core ──
+brew "git"
+brew "git-lfs"
+brew "gh"
+brew "age"
+brew "fzf"
+brew "ripgrep"
+brew "fd"
+brew "bat"
+brew "jq"
+brew "yq"
+brew "direnv"
+brew "zoxide"
+brew "eza"
+brew "starship"
+brew "curl"
+
+{{ if eq .profile "full" -}}
+# ── CLI Tools ──
+brew "btop"
+brew "lazygit"
+brew "yazi"
+brew "glow"
+brew "csvlens"
+brew "chafa"
+
+# ── Dev ──
+brew "fnm"
+brew "uv"
+brew "pipx"
+{{ end -}}
+
+{{ if .is_darwin -}}
+# ── macOS Only ──
+brew "mas"
+{{ if eq .profile "full" -}}
+cask "warp"
+cask "shottr"
+cask "raycast"
+{{ end -}}
+{{ end -}}
+EOF
+
+echo "[+] Packages installed"

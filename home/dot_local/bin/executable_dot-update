@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[+] Updating dotfiles..."
+chezmoi update -v
+
+echo "[+] Updating Homebrew packages..."
+brew update && brew upgrade
+
+echo "[+] Done!"

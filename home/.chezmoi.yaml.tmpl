@@ -1,0 +1,89 @@
+{{- /* ── 인터랙티브 감지 ──────────────────────────── */ -}}
+{{- $interactive := stdinIsATTY -}}
+
+{{- /* ── 개인정보 (prompt) ────────────────────────── */ -}}
+{{- $name := "Your Name" -}}
+{{- $email := "you@example.com" -}}
+{{- $github := "" -}}
+{{- $timezone := "UTC" -}}
+
+{{- if $interactive -}}
+{{-   $name = promptStringOnce . "name" "Full name" -}}
+{{-   $email = promptStringOnce . "email" "Email address" -}}
+{{-   $github = promptStringOnce . "github" "GitHub username" -}}
+{{-   $timezone = promptStringOnce . "timezone" "Timezone (e.g. Asia/Seoul, America/New_York)" "UTC" -}}
+{{- end -}}
+
+{{- /* ── OS 정보 (자동 감지) ──────────────────────── */ -}}
+{{- $os := .chezmoi.os -}}
+{{- $arch := .chezmoi.arch -}}
+{{- $hostname := .chezmoi.hostname -}}
+{{- $isLinux := eq $os "linux" -}}
+{{- $isDarwin := eq $os "darwin" -}}
+
+{{- /* ── 프로필 ───────────────────────────────────── */ -}}
+{{- $profile := "full" -}}
+{{- if $interactive -}}
+{{-   $profile = promptStringOnce . "profile" "Profile (minimal/full)" "full" -}}
+{{- end -}}
+
+{{- /* ── 모듈 opt-in ──────────────────────────────── */ -}}
+{{- $enableWorkspace := false -}}
+{{- $enableAITools := true -}}
+{{- $enableWarp := false -}}
+
+{{- if $interactive -}}
+{{-   $enableWorkspace = promptBoolOnce . "enable_workspace" "Enable workspace integration (ai-workspace)?" false -}}
+{{-   $enableAITools = promptBoolOnce . "enable_ai_tools" "Enable AI tools (Claude Code, gh-models)?" true -}}
+{{-   if $isDarwin -}}
+{{-     $enableWarp = promptBoolOnce . "enable_warp" "Enable Warp Terminal config?" false -}}
+{{-   end -}}
+{{- end -}}
+
+{{- /* ── Workspace 설정 (opt-in 시) ───────────────── */ -}}
+{{- $workspacePath := "~/workspace" -}}
+{{- $workspaceGdrive := "" -}}
+{{- if and $interactive $enableWorkspace -}}
+{{-   $workspacePath = promptStringOnce . "workspace_path" "Workspace symlink path" "~/ai-workspace" -}}
+{{-   if $isDarwin -}}
+{{-     $workspaceGdrive = promptStringOnce . "workspace_gdrive" "Google Drive path (blank to skip)" "" -}}
+{{-   end -}}
+{{- end -}}
+
+{{- /* ── SSH 설정 ─────────────────────────────────── */ -}}
+{{- $sshKeyName := "id_ed25519" -}}
+{{- if $interactive -}}
+{{-   $sshKeyName = promptStringOnce . "ssh_key_name" "SSH key filename" "id_ed25519" -}}
+{{- end -}}
+
+{{- /* ── 암호화 (age key 존재 여부로 자동 판단) ──── */ -}}
+{{- $hasAgeKey := false -}}
+{{- if stat (joinPath .chezmoi.homeDir ".config" "chezmoi" "key.txt") -}}
+{{-   $hasAgeKey = true -}}
+{{- end -}}
+
+data:
+  name: {{ $name | quote }}
+  email: {{ $email | quote }}
+  github: {{ $github | quote }}
+  timezone: {{ $timezone | quote }}
+  os: {{ $os | quote }}
+  arch: {{ $arch | quote }}
+  hostname: {{ $hostname | quote }}
+  is_linux: {{ $isLinux }}
+  is_darwin: {{ $isDarwin }}
+  profile: {{ $profile | quote }}
+  enable_workspace: {{ $enableWorkspace }}
+  enable_ai_tools: {{ $enableAITools }}
+  enable_warp: {{ $enableWarp }}
+  workspace_path: {{ $workspacePath | quote }}
+  workspace_gdrive: {{ $workspaceGdrive | quote }}
+  ssh_key_name: {{ $sshKeyName | quote }}
+  has_age_key: {{ $hasAgeKey }}
+
+{{ if $hasAgeKey -}}
+encryption: age
+age:
+  identity: ~/.config/chezmoi/key.txt
+  recipient: "age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+{{ end -}}

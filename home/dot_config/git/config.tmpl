@@ -1,0 +1,37 @@
+[user]
+    name = {{ .name }}
+    email = {{ .email }}
+
+[init]
+    defaultBranch = main
+
+[core]
+    autocrlf = input
+    excludesFile = ~/.config/git/ignore
+    pager = bat --style=plain --paging=always 2>/dev/null || less
+
+[pull]
+    rebase = true
+
+[push]
+    autoSetupRemote = true
+
+[diff]
+    algorithm = histogram
+
+[merge]
+    conflictStyle = zdiff3
+
+[rerere]
+    enabled = true
+
+[alias]
+    st = status -sb
+    lg = log --graph --oneline --decorate -20
+    amend = commit --amend --no-edit
+    unstage = reset HEAD --
+
+{{ if .github -}}
+[url "git@github.com:"]
+    insteadOf = https://github.com/
+{{ end -}}
