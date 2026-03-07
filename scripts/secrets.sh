@@ -82,6 +82,7 @@ cmd_restore() {
   local age_identity
   age_identity="$(chezmoi data --format json 2>/dev/null | jq -r '.age_identity // empty')"
   [ -z "$age_identity" ] && { echo "[!] No age identity found. Run chezmoi init first."; exit 1; }
+  age_identity="${age_identity/#\~/$HOME}"
 
   local ssh_key
   ssh_key="$(chezmoi data --format json 2>/dev/null | jq -r '.ssh_key_name // "id_ed25519"')"
