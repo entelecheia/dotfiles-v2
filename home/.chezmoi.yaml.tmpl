@@ -4,13 +4,13 @@
 {{- /* ── 개인정보 (prompt) ────────────────────────── */ -}}
 {{- $name := "Your Name" -}}
 {{- $email := "you@example.com" -}}
-{{- $github := "" -}}
+{{- $github_user := "" -}}
 {{- $timezone := "UTC" -}}
 
 {{- if $interactive -}}
 {{-   $name = promptStringOnce . "name" "Full name" -}}
 {{-   $email = promptStringOnce . "email" "Email address" -}}
-{{-   $github = promptStringOnce . "github" "GitHub username" -}}
+{{-   $github_user = promptStringOnce . "github_user" "GitHub username" -}}
 {{-   $timezone = promptStringOnce . "timezone" "Timezone (e.g. Asia/Seoul, America/New_York)" "UTC" -}}
 {{- end -}}
 
@@ -52,8 +52,8 @@
 
 {{- /* ── SSH 설정 — github username 연동 ──────────── */ -}}
 {{- $sshKeyDefault := "id_ed25519" -}}
-{{- if $github -}}
-{{-   $sshKeyDefault = printf "id_ed25519_%s" $github -}}
+{{- if $github_user -}}
+{{-   $sshKeyDefault = printf "id_ed25519_%s" $github_user -}}
 {{- end -}}
 {{- $sshKeyName := $sshKeyDefault -}}
 {{- if $interactive -}}
@@ -64,8 +64,8 @@
 {{- $hasAgeKey := false -}}
 {{- $ageIdentity := "" -}}
 
-{{- if $github -}}
-{{-   $try := joinPath .chezmoi.homeDir ".ssh" (printf "age_key_%s" $github) -}}
+{{- if $github_user -}}
+{{-   $try := joinPath .chezmoi.homeDir ".ssh" (printf "age_key_%s" $github_user) -}}
 {{-   if stat $try -}}
 {{-     $hasAgeKey = true -}}
 {{-     $ageIdentity = $try -}}
@@ -89,7 +89,7 @@
 data:
   name: {{ $name | quote }}
   email: {{ $email | quote }}
-  github: {{ $github | quote }}
+  github_user: {{ $github_user | quote }}
   timezone: {{ $timezone | quote }}
   os: {{ $os | quote }}
   arch: {{ $arch | quote }}
