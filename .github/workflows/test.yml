@@ -27,6 +27,15 @@ jobs:
           DOTFILES_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: bash scripts/bootstrap.sh
 
+      - name: Setup Homebrew PATH
+        run: |
+          if [ -d /home/linuxbrew/.linuxbrew ]; then
+            echo "/home/linuxbrew/.linuxbrew/bin" >> $GITHUB_PATH
+          fi
+          if [ -d /opt/homebrew ]; then
+            echo "/opt/homebrew/bin" >> $GITHUB_PATH
+          fi
+
       - name: Verify core files
         run: |
           [ -f ~/.zshrc ]
