@@ -1,37 +1,21 @@
-.DEFAULT_GOAL := help
+.PHONY: build test lint clean install
 
-apply: ## Apply dotfiles to this machine
-	chezmoi apply -v
+VERSION ?= dev
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
+BIN     := bin/dotfiles
 
-update: ## Pull latest + apply
-	chezmoi update -v
+build:
+	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/dotfiles/
 
-diff: ## Preview pending changes
-	chezmoi diff
+test:
+	go test ./... -race -count=1
 
-edit: ## Edit chezmoi config
-	chezmoi edit-config
+lint:
+	golangci-lint run ./...
 
-add: ## Add a file: make add FILE=~/.config/foo
-	chezmoi add $(FILE)
+clean:
+	rm -rf bin/
 
-secrets-init: ## Encrypt secrets to ~/.local/share/chezmoi-secrets/
-	bash scripts/secrets.sh init
-
-secrets-backup: ## Backup secrets: make secrets-backup DEST=~/backup
-	bash scripts/secrets.sh backup $(DEST)
-
-secrets-restore: ## Restore secrets: make secrets-restore SRC=~/backup
-	bash scripts/secrets.sh restore $(SRC)
-
-secrets-status: ## Check secrets status
-	bash scripts/secrets.sh status
-
-test-ubuntu: ## Test in Ubuntu Docker
-	docker run --rm -it -v $(CURDIR):/dotfiles -w /dotfiles \
-		-e CHEZMOI_ARGS="--no-tty --promptDefaults" \
-		-e DOTFILES_REPO="local" \
-		ubuntu:24.04 bash -c "apt-get update && apt-get install -y curl git sudo && bash scripts/bootstrap.sh"
-
-help: ## Show this help
-	@grep -E '^[a-z_-]+:.*## ' Makefile | awk -F ':.*## ' '{printf "  %-20s %s\n", $$1, $$2}'
+install: build
+	cp $(BIN) $(HOME)/.local/bin/dotfiles

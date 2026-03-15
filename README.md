@@ -1,103 +1,99 @@
 # dotfiles-v2
 
-Cross-platform dotfiles managed by [chezmoi](https://chezmoi.io).
-macOS + Ubuntu. Lightweight, modular, AI-ready.
+Declarative user environment management — a single Go binary that replaces chezmoi.
+macOS + Linux. Modular, profile-based, AI-ready.
 
 ## Quick Start
 
-### One-line install
-
 ```bash
-curl -sL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/bootstrap.sh | sh
+# Install
+curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash
+
+# Interactive setup
+dotfiles init
+
+# Apply configuration
+dotfiles apply
 ```
 
-### Fork workflow (recommended)
+## Modules
 
-1. Fork this repo
-2. Run: `DOTFILES_REPO="youruser/dotfiles-v2" bash <(curl -sL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/bootstrap.sh)`
-3. Customize: `chezmoi edit-config`
-
-### Unattended (CI/Docker)
-
-```bash
-CHEZMOI_ARGS="--no-tty --promptDefaults" bash <(curl -sL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/bootstrap.sh)
-```
-
-## What's included
-
-| Category | Tools |
-|----------|-------|
-| Shell | zsh, oh-my-zsh, starship prompt |
-| Search | fzf, ripgrep, fd |
-| Files | eza, bat, yazi |
-| Git | lazygit, gh |
-| Dev | fnm (Node), uv (Python), pipx |
-| AI | Claude Code config, gh-models aliases |
-| Monitor | btop |
-
-## Modules (opt-in at `chezmoi init`)
-
-- **Workspace** — workspace symlinks, navigation aliases
-- **AI Tools** — Claude Code, GitHub Models, Ollama config
-- **Warp** — Warp Terminal themes (macOS)
+| Module | Description |
+|--------|-------------|
+| packages | Homebrew formula installation |
+| shell | zsh, Oh My Zsh, plugins, shell config files |
+| git | git config, aliases, global ignore |
+| ssh | SSH config with config.d includes |
+| terminal | starship prompt, Warp theme |
+| tmux | tmux.conf with vim bindings |
+| workspace | Symlink federation (Google Drive, vault) |
+| ai-tools | Claude Code, GitHub Models aliases |
+| fonts | Nerd Font auto-install from GitHub Releases |
+| conda | Conda/Mamba shell initialization |
+| gpg | GPG agent + git commit signing |
+| secrets | Age-encrypted SSH keys and shell secrets |
 
 ## Profiles
 
-- `minimal` — Core tools only (15 packages)
-- `full` — Everything (35+ packages)
+- **minimal** — Core tools (15 packages): packages, shell, git, ssh, terminal
+- **full** (extends minimal) — Everything (26+ packages): + workspace, ai-tools, tmux, fonts, conda, gpg, secrets
 
-## Secrets Management
-
-Secrets (SSH keys, API tokens) are **not** stored in the git repo — neither plaintext nor encrypted. Instead, they are managed locally with [age](https://github.com/FiloSottile/age) encryption.
-
-### Setup
-
-Age key auto-detection searches these paths in order:
-
-1. `~/.ssh/age_key_<github-username>`
-2. `~/.config/chezmoi/key.txt`
-
-If no key exists yet:
+## Commands
 
 ```bash
-age-keygen -o ~/.config/chezmoi/key.txt
+dotfiles init                    # Interactive TUI setup
+dotfiles apply [--dry-run]       # Apply configuration
+dotfiles check                   # Show current vs desired state
+dotfiles diff                    # Preview pending changes
+dotfiles update                  # Git pull + re-apply
+dotfiles reconfigure             # Re-run setup prompts
+dotfiles secrets init            # Encrypt SSH key + shell secrets
+dotfiles secrets backup <dir>    # Back up encrypted files
+dotfiles secrets restore <dir>   # Decrypt and restore
+dotfiles secrets status          # Check secrets state
+dotfiles version                 # Version info
 ```
 
-Then re-run `chezmoi init` to configure recipients.
+### Flags
 
-### Encrypt & manage secrets
-
-```bash
-secrets init                    # encrypt SSH key + shell secrets
-secrets backup ~/Dropbox/keys   # copy .age files to backup
-secrets restore ~/Dropbox/keys  # restore on a new machine
-secrets status                  # check what's in place
+```
+--profile    Profile name (minimal, full)
+--module     Run specific modules only
+--dry-run    Preview without changes
+--yes        Unattended mode
+--config     Custom config YAML path
 ```
 
-Or via Make:
+## Configuration
 
-```bash
-make secrets-init
-make secrets-status
-make secrets-backup DEST=~/backup
-make secrets-restore SRC=~/backup
+User settings stored in `~/.config/dotfiles/config.yaml` (created by `dotfiles init`):
+
+```yaml
+name: "Your Name"
+email: "you@example.com"
+github_user: "username"
+timezone: "Asia/Seoul"
+profile: "full"
 ```
 
-### Where secrets live
+## Architecture
 
-| Item | Location | Git tracked |
-|------|----------|-------------|
-| age identity (private) | `~/.ssh/age_key_<user>` or `~/.config/chezmoi/key.txt` | No |
-| Encrypted backups (.age) | `~/.local/share/chezmoi-secrets/` | No |
-| SSH private key | `~/.ssh/id_ed25519_<user>` | No |
-| Shell secrets | `~/.config/shell/90-secrets.sh` | No |
+Same modular Go architecture as [rootfiles-v2](https://github.com/entelecheia/rootfiles-v2):
 
-## Daily use
+```
+rootfiles-v2 (root, server)     dotfiles-v2 (user, workstation)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Packages (APT), users, SSH       Packages (Homebrew), shell, git
+Docker, GPUs, tunnels            Terminal, fonts, AI tools
+Locale, firewall, storage        Workspace, secrets, tmux
+```
+
+## Development
 
 ```bash
-chezmoi update    # pull + apply
-chezmoi diff      # preview changes
-chezmoi add FILE  # track a new file
+make build      # Build binary
+make test       # Run tests
+make install    # Install to ~/.local/bin/
 ```
 
 ## License

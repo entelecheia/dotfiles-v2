@@ -1,0 +1,36 @@
+name: Test
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".github/workflows/**"
+      - ".goreleaser.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - run: go test ./... -race -count=1
+      - run: go build -o bin/dotfiles ./cmd/dotfiles/
+      - run: ./bin/dotfiles --help
+      - run: ./bin/dotfiles version
