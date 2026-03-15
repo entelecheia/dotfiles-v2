@@ -1,7 +1,9 @@
 name: Release
+
 on:
-  push:
-    tags: ["v*"]
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
 
 permissions:
   contents: write
@@ -9,16 +11,27 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Only run if Test succeeded AND was triggered by a version tag
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
     steps:
+      - name: Get tag name
+        id: tag
+        run: echo "tag=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
+          ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: "release --clean"
+          args: release --clean
         env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
