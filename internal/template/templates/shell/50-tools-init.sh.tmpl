@@ -1,0 +1,13 @@
+# zoxide
+command -v zoxide &>/dev/null && eval "$(zoxide init zsh)"
+
+# starship prompt
+command -v starship &>/dev/null && eval "$(starship init zsh)"
+
+# fnm (Node.js)
+{{ if eq .Profile "full" -}}
+command -v fnm &>/dev/null && eval "$(fnm env --use-on-cd --shell zsh)"
+{{ end -}}
+
+# direnv
+command -v direnv &>/dev/null && eval "$(direnv hook zsh)"
