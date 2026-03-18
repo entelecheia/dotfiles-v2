@@ -9,6 +9,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "Makefile"
+      - "tests/**"
       - ".github/workflows/**"
       - ".goreleaser.yaml"
   pull_request:
@@ -18,6 +19,7 @@ on:
       - "internal/**"
       - "go.mod"
       - "go.sum"
+      - "tests/**"
 
 jobs:
   unit:
@@ -30,7 +32,100 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - run: go test ./... -race -count=1
-      - run: go build -o bin/dotfiles ./cmd/dotfiles/
+      - name: Run unit tests with coverage
+        run: go test ./... -race -count=1 -coverprofile=coverage.out
+      - name: Build binary
+        run: go build -o bin/dotfiles ./cmd/dotfiles/
       - run: ./bin/dotfiles --help
       - run: ./bin/dotfiles version
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  integration:
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            profile: minimal
+            dockerfile: Dockerfile.ubuntu-22.04
+          - os: ubuntu-22.04
+            profile: full
+            dockerfile: Dockerfile.ubuntu-22.04
+          - os: ubuntu-22.04
+            profile: server
+            dockerfile: Dockerfile.ubuntu-22.04
+          - os: ubuntu-24.04
+            profile: minimal
+            dockerfile: Dockerfile.ubuntu-24.04
+          - os: ubuntu-24.04
+            profile: full
+            dockerfile: Dockerfile.ubuntu-24.04
+          - os: ubuntu-24.04
+            profile: server
+            dockerfile: Dockerfile.ubuntu-24.04
+          - os: ubuntu-22.04
+            profile: server
+            dockerfile: Dockerfile.server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Build binary
+        run: go build -o dotfiles ./cmd/dotfiles/
+      - name: Build Docker image
+        run: docker build -t dotfiles-test:${{ matrix.os }}-${{ matrix.profile }} -f tests/${{ matrix.dockerfile }} .
+      - name: Run profile test
+        run: docker run --rm dotfiles-test:${{ matrix.os }}-${{ matrix.profile }} /tests/run-profile.sh ${{ matrix.profile }}
+
+  module:
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [packages, shell, git, ssh, terminal, tmux, ai-tools, conda]
+        os: [ubuntu-22.04]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Build binary
+        run: go build -o dotfiles ./cmd/dotfiles/
+      - name: Build Docker image
+        run: docker build -t dotfiles-test:${{ matrix.os }}-module -f tests/Dockerfile.${{ matrix.os }} .
+      - name: Run module test
+        run: docker run --rm dotfiles-test:${{ matrix.os }}-module /tests/run-module.sh ${{ matrix.module }}
+
+  scenario:
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - dry-run-all-profiles
+          - init-and-apply
+          - idempotency
+          - server-profile
+          - upgrade-check
+          - home-override
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Build binary
+        run: go build -o dotfiles ./cmd/dotfiles/
+      - name: Build Docker image
+        run: docker build -t dotfiles-test:scenario -f tests/Dockerfile.ubuntu-22.04 .
+      - name: Run scenario
+        run: docker run --rm dotfiles-test:scenario /tests/scenarios/${{ matrix.scenario }}.sh

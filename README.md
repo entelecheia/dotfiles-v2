@@ -4,10 +4,10 @@
 [![Release](https://github.com/entelecheia/dotfiles-v2/actions/workflows/release.yaml/badge.svg)](https://github.com/entelecheia/dotfiles-v2/actions/workflows/release.yaml)
 
 Declarative user environment management — a single Go binary that replaces chezmoi.
-macOS + Linux. Modular, profile-based, AI-ready.
+macOS + Linux + GPU servers. Modular, profile-based, AI-ready.
 
 > 선언적 사용자 환경 관리 — chezmoi를 대체하는 단일 Go 바이너리.
-> macOS + Linux. 모듈 기반, 프로필 시스템, AI-ready.
+> macOS + Linux + GPU 서버. 모듈 기반, 프로필 시스템, AI-ready.
 
 ---
 
@@ -59,7 +59,8 @@ dotfiles init
 Prompts for | 입력 항목:
 - Name, Email, GitHub username
 - Timezone (default: `Asia/Seoul`)
-- Profile (`minimal` / `full`)
+- Profile (`minimal` / `full` / `server`)
+- GPU/CUDA auto-detection (suggests `server` profile when NVIDIA GPU detected)
 - Module opt-ins: workspace, AI tools, Warp, fonts
 - SSH key name (auto-derived from GitHub username)
 
@@ -110,14 +111,15 @@ dotfiles diff
 dotfiles diff --module git
 ```
 
-### `dotfiles update`
+### `dotfiles upgrade`
 
-Pull latest changes from the dotfiles repo and re-apply.
+Download and install the latest dotfiles release from GitHub. Self-upgrading binary.
 
-dotfiles 저장소에서 최신 변경을 가져와 재적용합니다.
+GitHub에서 최신 dotfiles 릴리스를 다운로드하여 설치합니다. 자체 업그레이드 바이너리.
 
 ```bash
-dotfiles update
+dotfiles upgrade              # download & install latest
+dotfiles upgrade --check      # check for updates only
 ```
 
 ### `dotfiles reconfigure`
@@ -173,11 +175,12 @@ dotfiles version
 
 | Flag | Description | 설명 |
 |------|-------------|------|
-| `--profile` | Profile name (`minimal`, `full`) | 프로필 이름 |
+| `--profile` | Profile name (`minimal`, `full`, `server`) | 프로필 이름 |
 | `--module` | Run specific modules only (repeatable) | 특정 모듈만 실행 (반복 가능) |
 | `--dry-run` | Preview without changes | 변경 없이 미리보기 |
 | `--yes` | Unattended mode (skip prompts) | 무인 모드 (프롬프트 생략) |
 | `--config` | Custom config YAML path | 커스텀 설정 YAML 경로 |
+| `--home` | Override home directory (admin setup) | 홈 디렉토리 재정의 (관리자 설정) |
 
 ---
 
@@ -227,6 +230,13 @@ Profiles use YAML inheritance. `full` extends `minimal`.
 |---------|---------|----------|----------|-----------|
 | **minimal** | 5 | 15 | Lightweight dev setup | 경량 개발 환경 |
 | **full** | 12 | 26+ | Complete workstation | 완전한 워크스테이션 |
+| **server** | 8 | 19 | GPU/DGX server | GPU/DGX 서버 환경 |
+
+**server** profile: Extends `minimal` + tmux, ai-tools, conda. Disables workspace, fonts, gpg, secrets.
+Auto-suggested when NVIDIA GPU or CUDA is detected.
+
+서버 프로필: `minimal` 확장 + tmux, ai-tools, conda. workspace, fonts, gpg, secrets 비활성화.
+NVIDIA GPU 또는 CUDA 감지 시 자동 제안.
 
 ---
 
@@ -267,7 +277,9 @@ secrets:
 | `DOTFILES_NAME` | Override user name | 사용자 이름 재정의 |
 | `DOTFILES_EMAIL` | Override email | 이메일 재정의 |
 | `DOTFILES_WORKSPACE_PATH` | Override workspace path | 워크스페이스 경로 재정의 |
-| `DOTFILES_REPO_DIR` | Dotfiles repo directory for `update` | `update` 명령의 저장소 경로 |
+| `DOTFILES_REPO_DIR` | Dotfiles repo directory | 저장소 경로 |
+| `DOTFILES_HOME` | Override home directory | 홈 디렉토리 재정의 |
+| `GITHUB_TOKEN` | GitHub API token for `upgrade` | `upgrade` 명령의 GitHub API 토큰 |
 
 ---
 
@@ -317,7 +329,15 @@ dotfiles-v2/
 
 ## CI/CD
 
-- **Test**: Runs on push to `main`, version tags, and PRs. Matrix: `ubuntu-latest` + `macos-latest`.
+### Test Pipeline
+
+| Job | Matrix | Description | 설명 |
+|-----|--------|-------------|------|
+| **unit** | ubuntu-latest, macos-latest | Go unit tests + coverage | 유닛 테스트 + 커버리지 |
+| **integration** | ubuntu-{22.04,24.04} × {minimal,full,server} + GPU sim | Docker-based profile tests | Docker 기반 프로필 테스트 |
+| **module** | 8 modules × ubuntu-22.04 | Individual module tests | 개별 모듈 테스트 |
+| **scenario** | 6 E2E scenarios | dry-run, idempotency, server, upgrade, home-override | E2E 시나리오 테스트 |
+
 - **Release**: Triggered by `workflow_run` — only after Test succeeds on a `v*` tag. Uses GoReleaser for cross-platform builds (darwin/linux × amd64/arm64).
 
 ### Creating a Release | 릴리스 생성
@@ -327,6 +347,23 @@ git tag v0.1.0
 git push origin v0.1.0
 # Test workflow runs → on success → Release workflow creates GitHub Release
 ```
+
+---
+
+## GPU Server / DGX Provisioning | GPU 서버 프로비저닝
+
+```bash
+# On a fresh DGX or GPU server — auto-detects NVIDIA GPU + CUDA
+# 새 DGX 또는 GPU 서버에서 — NVIDIA GPU + CUDA 자동 감지
+curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash
+dotfiles init --yes           # auto-selects 'server' profile
+dotfiles apply --yes          # packages, shell, git, ssh, terminal, tmux, ai-tools, conda
+```
+
+Detection logic | 감지 로직:
+- `nvidia-smi` → GPU model detection | GPU 모델 감지
+- `/usr/local/cuda` → CUDA home path | CUDA 홈 경로
+- `/etc/dgx-release` → DGX identification | DGX 식별
 
 ---
 

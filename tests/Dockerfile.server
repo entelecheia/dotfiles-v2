@@ -1,0 +1,18 @@
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    sudo curl git zsh ca-certificates findutils coreutils \
+    && rm -rf /var/lib/apt/lists/*
+# Simulate GPU/CUDA environment
+RUN mkdir -p /usr/local/cuda/bin /usr/local/cuda/lib64
+# nvidia-smi stub that returns fake GPU info
+RUN printf '#!/bin/bash\necho "NVIDIA A100-SXM4-80GB"\n' > /usr/local/bin/nvidia-smi \
+    && chmod +x /usr/local/bin/nvidia-smi
+RUN useradd -m -s /bin/bash testuser \
+    && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+COPY dotfiles /usr/local/bin/dotfiles
+RUN chmod +x /usr/local/bin/dotfiles
+COPY tests/ /tests/
+RUN chmod +x /tests/*.sh && find /tests/scenarios -name '*.sh' -exec chmod +x {} +
+USER testuser
+WORKDIR /home/testuser

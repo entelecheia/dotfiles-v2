@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Scenario: server profile — correct modules enabled/disabled
+set -euo pipefail
+source "$(dirname "$0")/../assert.sh"
+
+echo "=== Scenario: server profile ==="
+
+echo ""
+echo "--- init + apply server ---"
+dotfiles init --profile server --yes
+dotfiles apply --profile server --yes --dry-run
+
+# Server profile should show these in dry-run output
+# (We verify the profile loads correctly and the right modules are selected)
+
+# Verify server profile selects correctly via check
+echo ""
+echo "--- check server ---"
+OUTPUT=$(dotfiles check --profile server 2>&1 || true)
+
+# Server enables: packages, shell, git, ssh, terminal, tmux, ai-tools, conda
+# Server disables: workspace, fonts, gpg, secrets
+echo "$OUTPUT" | grep -q "packages" && { PASS=$((PASS + 1)); echo "  ✓ packages module present"; } || { FAIL=$((FAIL + 1)); echo "  ✗ packages module missing"; }
+echo "$OUTPUT" | grep -q "shell" && { PASS=$((PASS + 1)); echo "  ✓ shell module present"; } || { FAIL=$((FAIL + 1)); echo "  ✗ shell module missing"; }
+echo "$OUTPUT" | grep -q "tmux" && { PASS=$((PASS + 1)); echo "  ✓ tmux module present"; } || { FAIL=$((FAIL + 1)); echo "  ✗ tmux module missing"; }
+echo "$OUTPUT" | grep -q "ai-tools" && { PASS=$((PASS + 1)); echo "  ✓ ai-tools module present"; } || { FAIL=$((FAIL + 1)); echo "  ✗ ai-tools module missing"; }
+echo "$OUTPUT" | grep -q "conda" && { PASS=$((PASS + 1)); echo "  ✓ conda module present"; } || { FAIL=$((FAIL + 1)); echo "  ✗ conda module missing"; }
+
+report
