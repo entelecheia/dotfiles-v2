@@ -5,3 +5,4 @@ dist/
 *.exe
 .omc/
 .omx/
+.claude/
