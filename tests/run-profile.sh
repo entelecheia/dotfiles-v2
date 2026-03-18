@@ -31,15 +31,15 @@ dotfiles check --profile "$PROFILE"
 case "$PROFILE" in
   minimal)
     assert_dir_exists "$HOME/.config/dotfiles" "Config directory exists"
-    assert_file_exists "$HOME/.config/dotfiles/state.yaml" "State file exists"
+    assert_file_exists "$HOME/.config/dotfiles/config.yaml" "Config file exists"
     ;;
   full)
     assert_dir_exists "$HOME/.config/dotfiles" "Config directory exists"
-    assert_file_exists "$HOME/.config/dotfiles/state.yaml" "State file exists"
+    assert_file_exists "$HOME/.config/dotfiles/config.yaml" "Config file exists"
     ;;
   server)
     assert_dir_exists "$HOME/.config/dotfiles" "Config directory exists"
-    assert_file_exists "$HOME/.config/dotfiles/state.yaml" "State file exists"
+    assert_file_exists "$HOME/.config/dotfiles/config.yaml" "Config file exists"
     ;;
 esac
 

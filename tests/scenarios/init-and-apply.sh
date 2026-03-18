@@ -21,6 +21,6 @@ dotfiles check
 assert_exit_code 0 dotfiles check
 
 assert_dir_exists "$HOME/.config/dotfiles" "Config directory created"
-assert_file_exists "$HOME/.config/dotfiles/state.yaml" "State file created"
+assert_file_exists "$HOME/.config/dotfiles/config.yaml" "Config file created"
 
 report
