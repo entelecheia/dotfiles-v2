@@ -1,0 +1,20 @@
+{{ if .EnableAITools -}}
+# ── Claude Code ──
+export ENABLE_LSP_TOOLS=1
+
+# ── GitHub Models ──
+command -v gh &>/dev/null && {
+  alias g4="gh models run gpt-4o"
+  alias p4="gh models run Phi-4"
+}
+
+# ── Fabric ──
+command -v fabric &>/dev/null && alias fa="fabric"
+
+# ── GPU monitoring ──
+{{ if .HasNVIDIAGPU -}}
+alias gpustat="nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv"
+alias gpuwatch="watch -n 1 nvidia-smi"
+{{ end -}}
+command -v pipx &>/dev/null && alias nvitop="pipx run nvitop"
+{{ end -}}

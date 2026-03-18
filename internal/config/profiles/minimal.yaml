@@ -1,0 +1,30 @@
+modules:
+  packages:
+    enabled: true
+  shell:
+    enabled: true
+  git:
+    enabled: true
+    signing: false
+  ssh:
+    enabled: true
+  terminal:
+    enabled: true
+    warp: false
+
+packages:
+  - git
+  - git-lfs
+  - gh
+  - age
+  - fzf
+  - ripgrep
+  - fd
+  - bat
+  - jq
+  - yq
+  - direnv
+  - zoxide
+  - eza
+  - starship
+  - curl

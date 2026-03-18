@@ -1,0 +1,19 @@
+# 기본 환경변수
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export EDITOR="{{ if .IsDarwin }}code --wait{{ else }}nano{{ end }}"
+export TZ="{{ .Timezone }}"
+
+# PATH
+export PATH="$HOME/.local/bin:$PATH"
+{{ if .IsDarwin -}}
+export PATH="/opt/homebrew/bin:$PATH"
+{{ else -}}
+[ -d /home/linuxbrew/.linuxbrew ] && export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+{{ end -}}
+{{ if .HasCUDA -}}
+# CUDA
+export CUDA_HOME={{ .CUDAHome }}
+export PATH="${CUDA_HOME}/bin:$PATH"
+export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+{{ end -}}

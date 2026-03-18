@@ -1,0 +1,26 @@
+extends: minimal
+
+modules:
+  tmux:
+    enabled: true
+  ai_tools:
+    enabled: true
+  conda:
+    enabled: true
+  workspace:
+    enabled: false
+  fonts:
+    enabled: false
+  gpg:
+    enabled: false
+  secrets:
+    enabled: false
+  terminal:
+    enabled: true
+    warp: false
+
+packages_extra:
+  - btop
+  - tmux
+  - uv
+  - pipx
