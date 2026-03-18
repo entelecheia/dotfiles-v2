@@ -23,6 +23,7 @@ func NewRootCmd(version, commit string) *cobra.Command {
 	root.AddCommand(newCheckCmd())
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newDiffCmd())
+	root.AddCommand(newPreflightCmd())
 	root.AddCommand(newSecretsCmd())
 	root.AddCommand(newUpgradeCmd(version))
 	root.AddCommand(newReconfigureCmd())

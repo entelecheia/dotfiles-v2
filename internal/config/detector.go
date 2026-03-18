@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -20,6 +21,10 @@ type SystemInfo struct {
 	HasCUDA      bool   `json:"has_cuda"`
 	CUDAHome     string `json:"cuda_home"`
 	IsDGX        bool   `json:"is_dgx"`
+	// Shell/Git detection
+	Shell      string `json:"shell"`
+	HasGit     bool   `json:"has_git"`
+	GitVersion string `json:"git_version"`
 }
 
 // DetectSystem probes the current system and returns SystemInfo.
@@ -30,6 +35,8 @@ func DetectSystem() (*SystemInfo, error) {
 	}
 
 	detectHostname(info)
+	detectShell(info)
+	detectGit(info)
 	detectBrew(info)
 	detectGPU(info)
 	detectCUDA(info)
@@ -89,5 +96,27 @@ func detectCUDA(info *SystemInfo) {
 func detectDGX(info *SystemInfo) {
 	if _, err := os.Stat("/etc/dgx-release"); err == nil {
 		info.IsDGX = true
+	}
+}
+
+func detectShell(info *SystemInfo) {
+	shell := os.Getenv("SHELL")
+	if shell != "" {
+		info.Shell = filepath.Base(shell)
+		return
+	}
+	info.Shell = "unknown"
+}
+
+func detectGit(info *SystemInfo) {
+	out, err := exec.Command("git", "--version").Output()
+	if err != nil {
+		return
+	}
+	info.HasGit = true
+	// parse "git version 2.43.0" -> "2.43.0"
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) >= 3 {
+		info.GitVersion = parts[2]
 	}
 }

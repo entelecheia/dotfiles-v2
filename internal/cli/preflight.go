@@ -1,0 +1,97 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
+)
+
+func newPreflightCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "preflight",
+		Short: "Check environment and generate config",
+		Long:  "Run environment checks and generate a dotfiles configuration based on the detected system.",
+		RunE:  runPreflight,
+	}
+	cmd.Flags().Bool("check-only", false, "Only run checks, don't generate config")
+	cmd.Flags().Bool("force", false, "Overwrite existing config file")
+	return cmd
+}
+
+func runPreflight(cmd *cobra.Command, _ []string) error {
+	checkOnly, _ := cmd.Flags().GetBool("check-only")
+	force, _ := cmd.Flags().GetBool("force")
+	homeOverride, _ := cmd.Flags().GetString("home")
+
+	// Resolve home directory
+	home := homeOverride
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+
+	// Detect system
+	sysInfo, err := config.DetectSystem()
+	if err != nil {
+		return fmt.Errorf("detecting system: %w", err)
+	}
+
+	// Run preflight checks
+	report := config.RunPreflightChecks(sysInfo, home)
+	printPreflightReport(report)
+
+	if checkOnly {
+		return nil
+	}
+
+	// Check existing config
+	statePath := config.StatePath()
+	if homeOverride != "" {
+		statePath = config.StatePathForHome(homeOverride)
+	}
+	if _, err := os.Stat(statePath); err == nil && !force {
+		fmt.Printf("\nConfig already exists: %s\n", statePath)
+		fmt.Println("Use --force to overwrite.")
+		return nil
+	}
+
+	// Generate config
+	state := config.GeneratePreflightConfig(sysInfo)
+
+	// Save
+	if homeOverride != "" {
+		if err := config.SaveStateForHome(homeOverride, state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+	} else {
+		if err := config.SaveState(state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+	}
+
+	fmt.Println("\n=== Generated Config ===")
+	ui.PrintStateSummary(state)
+	fmt.Printf("\n  Config saved: %s\n", statePath)
+	fmt.Println("  Run 'dotfiles apply' to apply the configuration.")
+
+	return nil
+}
+
+func printPreflightReport(report *config.PreflightReport) {
+	fmt.Println("=== Environment Preflight ===")
+	fmt.Println()
+
+	for _, c := range report.Checks {
+		statusStr := fmt.Sprintf("[%s]", c.Status)
+		fmt.Printf("  %-6s %-25s %s\n", statusStr, c.Name, c.Value)
+		if c.Message != "" {
+			fmt.Printf("         %-25s %s\n", "", c.Message)
+		}
+	}
+
+	pass, warn, fail := report.Counts()
+	fmt.Printf("\n  Result: %d passed, %d warnings, %d failures\n", pass, warn, fail)
+}
