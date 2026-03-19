@@ -2,6 +2,10 @@ package exec
 
 import (
 	"context"
+	"fmt"
+	"os"
+	osexec "os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -56,6 +60,35 @@ func (b *Brew) InstallCask(ctx context.Context, casks []string) error {
 	args := append([]string{"install", "--cask"}, casks...)
 	_, err := b.Runner.Run(ctx, "brew", args...)
 	return err
+}
+
+// InstallBrew installs Homebrew non-interactively.
+func (b *Brew) InstallBrew(ctx context.Context) error {
+	script := `NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+	_, err := b.Runner.RunShell(ctx, script)
+	if err != nil {
+		return fmt.Errorf("install homebrew: %w", err)
+	}
+	// Add brew to PATH for this process
+	b.RefreshPath()
+	return nil
+}
+
+// RefreshPath adds the Homebrew bin directory to PATH for the current process.
+func (b *Brew) RefreshPath() {
+	var brewPaths []string
+	if runtime.GOOS == "darwin" {
+		brewPaths = []string{"/opt/homebrew/bin"}
+	} else {
+		brewPaths = []string{"/home/linuxbrew/.linuxbrew/bin", "/home/linuxbrew/.linuxbrew/sbin"}
+	}
+	for _, p := range brewPaths {
+		if _, err := os.Stat(p); err == nil {
+			os.Setenv("PATH", p+":"+os.Getenv("PATH"))
+		}
+	}
+	// Clear cached lookups so IsAvailable() picks up the new PATH
+	osexec.LookPath("brew") // warm cache
 }
 
 // MissingFormulas returns formulas from the list that are not installed.
