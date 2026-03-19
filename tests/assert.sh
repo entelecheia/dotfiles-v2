@@ -89,8 +89,9 @@ assert_exit_code() {
   local expected="$1"
   shift
   local msg="${*@Q}"
-  "$@" >/dev/null 2>&1
-  local actual=$?
+  local actual
+  actual=0
+  "$@" >/dev/null 2>&1 || actual=$?
   if [[ "$actual" -eq "$expected" ]]; then
     PASS=$((PASS + 1))
     echo "  ✓ Exit code $expected: $msg"

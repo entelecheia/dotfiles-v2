@@ -13,6 +13,9 @@ func (m *PackagesModule) Name() string { return "packages" }
 func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
 	var changes []Change
 
+	// Ensure Homebrew PATH is set (may not be in PATH for fresh processes)
+	rc.Brew.RefreshPath()
+
 	if !rc.Brew.IsAvailable() {
 		changes = append(changes, Change{
 			Description: "install Homebrew",
@@ -44,6 +47,9 @@ func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResul
 
 func (m *PackagesModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	var messages []string
+
+	// Ensure Homebrew PATH is set (may not be in PATH for fresh processes)
+	rc.Brew.RefreshPath()
 
 	if !rc.Brew.IsAvailable() {
 		if err := rc.Brew.InstallBrew(ctx); err != nil {
