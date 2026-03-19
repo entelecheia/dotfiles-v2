@@ -23,22 +23,31 @@ curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/script
 
 ### Setup | 초기 설정
 
-```bash
-# Interactive TUI setup — prompts for name, email, profile, etc.
-# 대화형 TUI 설정 — 이름, 이메일, 프로필 등을 입력
-dotfiles init
+Interactive TUI setup — prompts for name, email, profile, etc.
+대화형 TUI 설정 — 이름, 이메일, 프로필 등을 입력
 
-# Apply all modules for selected profile
-# 선택한 프로필의 모든 모듈 적용
+```bash
+dotfiles init
+```
+
+Apply all modules for selected profile.
+선택한 프로필의 모든 모듈 적용.
+
+```bash
 dotfiles apply
 ```
 
 ### Build from source | 소스에서 빌드
 
 ```bash
-git clone https://github.com/entelecheia/dotfiles-v2.git
-cd dotfiles-v2
+git clone https://github.com/entelecheia/dotfiles-v2.git && cd dotfiles-v2
+```
+
+```bash
 make build      # → bin/dotfiles
+```
+
+```bash
 make install    # → ~/.local/bin/dotfiles
 ```
 
@@ -70,13 +79,84 @@ Apply configuration to the system. Runs each enabled module in order.
 
 시스템에 설정을 적용합니다. 활성화된 모듈을 순서대로 실행합니다.
 
+Interactive mode | 대화형 모드:
+
 ```bash
-dotfiles apply                           # interactive
-dotfiles apply --yes                     # unattended (skip prompts)
-dotfiles apply --dry-run                 # preview only, no changes
-dotfiles apply --profile minimal         # override profile
-dotfiles apply --module shell --module git  # specific modules only
+dotfiles apply
 ```
+
+Unattended (skip prompts) | 무인 모드 (프롬프트 생략):
+
+```bash
+dotfiles apply --yes
+```
+
+Preview only, no changes | 변경 없이 미리보기:
+
+```bash
+dotfiles apply --dry-run
+```
+
+Override profile | 프로필 재정의:
+
+```bash
+dotfiles apply --profile minimal
+```
+
+Specific modules only | 특정 모듈만 실행:
+
+```bash
+dotfiles apply --module shell --module git
+```
+
+#### Safe Apply — Preserve Current Environment | 안전한 적용 — 현재 환경 유지
+
+To apply dotfiles without disrupting your current setup, follow this step-by-step workflow.
+
+현재 환경을 유지하면서 dotfiles를 적용하려면 다음 단계를 따르세요.
+
+**Step 1.** Run preflight checks to scan your environment (no changes made).
+환경 사전 점검 실행 (변경 없음):
+
+```bash
+dotfiles preflight --check-only
+```
+
+**Step 2.** Generate a config file based on detected environment.
+감지된 환경 기반으로 설정 파일 자동 생성:
+
+```bash
+dotfiles preflight
+```
+
+**Step 3.** Check which modules have pending changes.
+어떤 모듈에 변경 사항이 있는지 확인:
+
+```bash
+dotfiles check
+```
+
+**Step 4.** Simulate the apply — preview all changes without writing.
+적용 시뮬레이션 — 실제 변경 없이 미리보기:
+
+```bash
+dotfiles apply --dry-run
+```
+
+**Step 5.** Apply only the modules you want.
+원하는 모듈만 선택 적용:
+
+```bash
+dotfiles apply --module shell
+```
+
+```bash
+dotfiles apply --module git
+```
+
+> Existing files are automatically backed up to `~/.local/share/dotfiles/backup/` before overwrite. Files with identical content (SHA256) are never overwritten.
+>
+> 기존 파일은 덮어쓰기 전에 `~/.local/share/dotfiles/backup/`에 자동 백업됩니다. 내용이 동일한 파일(SHA256)은 덮어쓰지 않습니다.
 
 ### `dotfiles check`
 
@@ -86,6 +166,11 @@ Compare current system state against desired profile. No changes made.
 
 ```bash
 dotfiles check
+```
+
+Check against a specific profile | 특정 프로필로 비교:
+
+```bash
 dotfiles check --profile full
 ```
 
@@ -108,6 +193,11 @@ Preview pending changes with detailed descriptions and commands.
 
 ```bash
 dotfiles diff
+```
+
+Diff for a specific module | 특정 모듈의 변경 사항:
+
+```bash
 dotfiles diff --module git
 ```
 
@@ -117,9 +207,16 @@ Download and install the latest dotfiles release from GitHub. Self-upgrading bin
 
 GitHub에서 최신 dotfiles 릴리스를 다운로드하여 설치합니다. 자체 업그레이드 바이너리.
 
+Download & install latest | 최신 버전 다운로드 및 설치:
+
 ```bash
-dotfiles upgrade              # download & install latest
-dotfiles upgrade --check      # check for updates only
+dotfiles upgrade
+```
+
+Check for updates only | 업데이트 확인만:
+
+```bash
+dotfiles upgrade --check
 ```
 
 ### `dotfiles reconfigure`
@@ -138,12 +235,34 @@ Manage age-encrypted secrets (SSH keys, shell secrets).
 
 age 암호화 기밀(SSH 키, 셸 시크릿) 관리.
 
+Encrypt SSH key + shell secrets | SSH 키 + 셸 시크릿 암호화:
+
 ```bash
-dotfiles secrets init              # encrypt SSH key + shell secrets
-dotfiles secrets backup <dir>      # copy .age files to backup dir
-dotfiles secrets restore <dir>     # decrypt from backup
-dotfiles secrets status            # check decrypted + encrypted files
-dotfiles secrets list              # list encrypted files
+dotfiles secrets init
+```
+
+Copy .age files to backup dir | .age 파일을 백업 디렉토리에 복사:
+
+```bash
+dotfiles secrets backup <dir>
+```
+
+Decrypt from backup | 백업에서 복호화:
+
+```bash
+dotfiles secrets restore <dir>
+```
+
+Check decrypted + encrypted files | 복호화/암호화 파일 상태 확인:
+
+```bash
+dotfiles secrets status
+```
+
+List encrypted files | 암호화된 파일 목록:
+
+```bash
+dotfiles secrets list
 ```
 
 **Encryption flow | 암호화 흐름:**
@@ -166,9 +285,13 @@ Print version, commit, Go version, and OS/arch.
 
 ```bash
 dotfiles version
-# dotfiles v0.1.0 (abc1234)
-#   go:   go1.23.0
-#   os:   darwin/arm64
+```
+
+Output example | 출력 예시:
+```
+dotfiles v0.1.0 (abc1234)
+  go:   go1.23.0
+  os:   darwin/arm64
 ```
 
 ### Global Flags | 전역 플래그
@@ -344,20 +467,35 @@ dotfiles-v2/
 
 ```bash
 git tag v0.1.0
-git push origin v0.1.0
-# Test workflow runs → on success → Release workflow creates GitHub Release
 ```
+
+```bash
+git push origin v0.1.0
+```
+
+Test workflow runs → on success → Release workflow creates GitHub Release.
 
 ---
 
 ## GPU Server / DGX Provisioning | GPU 서버 프로비저닝
 
+On a fresh DGX or GPU server — auto-detects NVIDIA GPU + CUDA.
+새 DGX 또는 GPU 서버에서 — NVIDIA GPU + CUDA 자동 감지.
+
 ```bash
-# On a fresh DGX or GPU server — auto-detects NVIDIA GPU + CUDA
-# 새 DGX 또는 GPU 서버에서 — NVIDIA GPU + CUDA 자동 감지
 curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash
-dotfiles init --yes           # auto-selects 'server' profile
-dotfiles apply --yes          # packages, shell, git, ssh, terminal, tmux, ai-tools, conda
+```
+
+Auto-selects 'server' profile | 'server' 프로필 자동 선택:
+
+```bash
+dotfiles init --yes
+```
+
+Apply packages, shell, git, ssh, terminal, tmux, ai-tools, conda:
+
+```bash
+dotfiles apply --yes
 ```
 
 Detection logic | 감지 로직:
@@ -369,12 +507,34 @@ Detection logic | 감지 로직:
 
 ## Development | 개발
 
+Build:
+
 ```bash
-make build      # Build → bin/dotfiles
-make test       # go test ./... -race
-make lint       # golangci-lint
-make clean      # Remove bin/
-make install    # Copy to ~/.local/bin/
+make build
+```
+
+Run tests:
+
+```bash
+make test
+```
+
+Lint:
+
+```bash
+make lint
+```
+
+Clean build artifacts:
+
+```bash
+make clean
+```
+
+Install to ~/.local/bin/:
+
+```bash
+make install
 ```
 
 ## License
