@@ -9,6 +9,13 @@ command -v eza &>/dev/null && {
 command -v bat &>/dev/null && alias cat="bat --paging=never"
 command -v lazygit &>/dev/null && alias lg="lazygit"
 
+# ── Tmux shortcuts ──
+alias ta="tmux attach -t"
+alias ts="tmux new-session -s"
+alias tl="tmux list-sessions"
+alias tk="tmux kill-session -t"
+alias td="tmux detach"
+
 # ── Git shortcuts ──
 alias gs="git status"
 alias gd="git diff"

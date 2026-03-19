@@ -343,6 +343,45 @@ workspace → ai-tools → fonts → conda → gpg → secrets
 
 ---
 
+## Tmux | tmux 설정
+
+### Key Bindings | 키바인딩
+
+| Key | Action | 설명 |
+|-----|--------|------|
+| `C-a` | Prefix | 프리픽스 키 |
+| `C-a d` | Detach session | 세션 분리 |
+| `C-a s` | List sessions | 세션 목록 |
+| `C-a $` | Rename session | 세션 이름 변경 |
+| `C-a c` | New window (current path) | 새 창 (현재 경로) |
+| `C-a ,` | Rename window | 창 이름 변경 |
+| `C-a n/p` | Next / previous window | 다음 / 이전 창 |
+| `C-a </>` | Swap window left / right | 창 순서 이동 |
+| `C-a \|` | Split horizontal | 수평 분할 |
+| `C-a -` | Split vertical | 수직 분할 |
+| `C-a h/j/k/l` | Navigate panes | 패인 이동 |
+| `C-a H/J/K/L` | Resize panes | 패인 크기 조절 |
+| `C-a Enter` | Enter copy mode | 복사 모드 진입 |
+| `v` (copy mode) | Begin selection | 선택 시작 |
+| `y` (copy mode) | Copy and exit | 복사 후 종료 |
+| `Escape` (copy mode) | Cancel | 취소 |
+| `C-a r` | Reload config | 설정 다시 로드 |
+| `C-a ?` | List all key bindings | 전체 키바인딩 목록 |
+| `C-a /` | Show cheatsheet popup | 치트시트 팝업 표시 |
+
+### Shell Aliases | 셸 별칭
+
+| Alias | Command | 설명 |
+|-------|---------|------|
+| `t [name]` | Attach or create session | 세션 접속 또는 생성 (기본: `main`) |
+| `ta <name>` | `tmux attach -t` | 세션 접속 |
+| `ts <name>` | `tmux new-session -s` | 새 세션 |
+| `tl` | `tmux list-sessions` | 세션 목록 |
+| `tk <name>` | `tmux kill-session -t` | 세션 종료 |
+| `td` | `tmux detach` | 세션 분리 |
+
+---
+
 ## Profiles | 프로필
 
 Profiles use YAML inheritance. `full` extends `minimal`.

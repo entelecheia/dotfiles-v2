@@ -24,6 +24,12 @@ mvenv() {
   echo "Moved $envfile -> $dest (symlinked)"
 }
 
+# tmux: attach or create session
+t() {
+  local name="${1:-main}"
+  tmux attach -t "$name" 2>/dev/null || tmux new-session -s "$name"
+}
+
 # mkcd: 디렉토리 생성 + 이동
 mkcd() { mkdir -p "$1" && cd "$1"; }
 
