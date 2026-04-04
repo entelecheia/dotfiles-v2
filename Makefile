@@ -18,4 +18,6 @@ clean:
 	rm -rf bin/
 
 install: build
+	@mkdir -p $(HOME)/.local/bin
 	cp $(BIN) $(HOME)/.local/bin/dotfiles
+	ln -sf $(HOME)/.local/bin/dotfiles $(HOME)/.local/bin/dot

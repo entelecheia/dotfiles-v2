@@ -117,6 +117,7 @@ jobs:
           - server-profile
           - upgrade-check
           - home-override
+          - workspace
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

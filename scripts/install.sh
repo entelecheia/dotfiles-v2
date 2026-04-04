@@ -27,7 +27,11 @@ mkdir -p "$INSTALL_DIR"
 curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" dotfiles
 
 chmod +x "$INSTALL_DIR/dotfiles"
-echo "[+] Installed to $INSTALL_DIR/dotfiles"
+
+# Create 'dot' convenience symlink
+ln -sf "$INSTALL_DIR/dotfiles" "$INSTALL_DIR/dot"
+
+echo "[+] Installed to $INSTALL_DIR/dotfiles (also available as 'dot')"
 echo "[+] Version: $($INSTALL_DIR/dotfiles --version)"
 
 # Check PATH

@@ -3,11 +3,11 @@
 [![Test](https://github.com/entelecheia/dotfiles-v2/actions/workflows/test.yaml/badge.svg)](https://github.com/entelecheia/dotfiles-v2/actions/workflows/test.yaml)
 [![Release](https://github.com/entelecheia/dotfiles-v2/actions/workflows/release.yaml/badge.svg)](https://github.com/entelecheia/dotfiles-v2/actions/workflows/release.yaml)
 
-Declarative user environment management — a single Go binary that replaces chezmoi.
-macOS + Linux + GPU servers. Modular, profile-based, AI-ready.
+Declarative user environment management + AI-powered tmux workspace manager.
+A single Go binary. macOS + Linux + GPU servers. Modular, profile-based, AI-ready.
 
-> 선언적 사용자 환경 관리 — chezmoi를 대체하는 단일 Go 바이너리.
-> macOS + Linux + GPU 서버. 모듈 기반, 프로필 시스템, AI-ready.
+> 선언적 사용자 환경 관리 + AI 기반 tmux 워크스페이스 매니저.
+> 단일 Go 바이너리. macOS + Linux + GPU 서버. 모듈 기반, 프로필 시스템, AI-ready.
 
 ---
 
@@ -37,6 +37,22 @@ Apply all modules for selected profile.
 dotfiles apply
 ```
 
+### Workspace | 워크스페이스
+
+Launch a multi-panel tmux workspace with one command.
+한 줄 명령으로 멀티패널 tmux 워크스페이스 실행.
+
+```bash
+dot myproject          # launch or resume workspace
+```
+
+SSH dropped? Terminal closed? Just run it again.
+SSH 끊김? 터미널 닫힘? 다시 실행하면 복귀.
+
+```bash
+dot myproject          # resumes exactly where you left off
+```
+
 ### Build from source | 소스에서 빌드
 
 ```bash
@@ -48,12 +64,15 @@ make build      # → bin/dotfiles
 ```
 
 ```bash
-make install    # → ~/.local/bin/dotfiles
+make install    # → ~/.local/bin/dotfiles + ~/.local/bin/dot (symlink)
 ```
 
 ---
 
 ## Commands | 명령어
+
+> `dotfiles` and `dot` are interchangeable — `dot` is a convenience symlink.
+> `dotfiles`와 `dot`은 동일하게 작동합니다 — `dot`은 편의 심링크입니다.
 
 ### `dotfiles init`
 
@@ -294,6 +313,92 @@ dotfiles v0.1.0 (abc1234)
   os:   darwin/arm64
 ```
 
+### `dotfiles open` / `dot <project>`
+
+Launch or resume a tmux workspace for a project. Auto-registers unregistered project names.
+
+프로젝트의 tmux 워크스페이스를 시작하거나 복귀합니다. 미등록 프로젝트는 자동 등록됩니다.
+
+```bash
+dot myproject                         # implicit: dot open myproject
+dot open myproject --layout claude    # override layout
+dot open myproject --theme dracula    # override theme
+```
+
+### `dotfiles register` / `dotfiles unregister`
+
+Register or remove a project directory.
+프로젝트 디렉토리를 등록하거나 제거합니다.
+
+```bash
+dotfiles register myproject .                          # current dir
+dotfiles register myproject ~/dev/app --layout claude  # with options
+dotfiles unregister myproject                          # remove
+```
+
+### `dotfiles list`
+
+Show registered projects and active tmux sessions. Active sessions marked with `*`.
+
+등록된 프로젝트와 활성 tmux 세션을 표시합니다. 활성 세션은 `*`로 표시됩니다.
+
+```bash
+dotfiles list     # or: dotfiles ls
+```
+
+Output example | 출력 예시:
+```
+Projects (2):
+  * myproject          ~/dev/app           (layout=dev, theme=default)
+    server-mon         ~/ops/monitoring    (layout=monitor, theme=nord)
+```
+
+### `dotfiles stop`
+
+Stop a tmux workspace session.
+tmux 워크스페이스 세션을 종료합니다.
+
+```bash
+dotfiles stop myproject       # with confirmation
+dotfiles stop myproject -f    # force (no confirmation)
+```
+
+### `dotfiles layouts`
+
+List available workspace layouts.
+사용 가능한 워크스페이스 레이아웃 목록을 표시합니다.
+
+```bash
+dotfiles layouts
+```
+
+| Layout | Panes | Description | 설명 |
+|--------|-------|-------------|------|
+| **dev** (default) | 5 | Claude + monitor + files + lazygit + shell | 노트북 친화 개발 환경 |
+| **claude** | 7 | Claude + monitor + files + remote + lazygit + shell + logs | Claude 중심 환경 |
+| **monitor** | 4 | monitor + lazygit + shell + logs | 서버 모니터링 |
+
+### `dotfiles doctor`
+
+Check workspace tool installation status.
+워크스페이스 도구 설치 상태를 점검합니다.
+
+```bash
+dotfiles doctor
+```
+
+Output example | 출력 예시:
+```
+Workspace tool status:
+
+  ✓ tmux         /opt/homebrew/bin/tmux
+  ✓ claude       /usr/local/bin/claude
+  ✓ lazygit      /opt/homebrew/bin/lazygit
+  ✓ btop         /opt/homebrew/bin/btop
+  ○ yazi         (optional — fallback available)
+  ✓ eza          /opt/homebrew/bin/eza
+```
+
 ### Global Flags | 전역 플래그
 
 | Flag | Description | 설명 |
@@ -380,6 +485,60 @@ workspace → ai-tools → fonts → conda → gpg → secrets
 | `tk <name>` | `tmux kill-session -t` | 세션 종료 |
 | `td` | `tmux detach` | 세션 분리 |
 
+### Workspace Layouts | 워크스페이스 레이아웃
+
+**dev** (default — 5 panes):
+```
+┌──────────────┬──────────┐
+│              │  MONITOR │
+│   CLAUDE     ├──────────┤
+│              │  FILES   │
+├──────────────┼──────────┤
+│  LAZYGIT     │   SHELL  │
+└──────────────┴──────────┘
+```
+
+**claude** (7 panes):
+```
+┌──────────────┬──────────┐
+│              │  MONITOR │
+│   CLAUDE     ├──────────┤
+│              │  FILES   │
+│              ├──────────┤
+│              │  REMOTE  │
+├──────────────┼─────┬────┤
+│   LAZYGIT    │SHELL│LOG │
+└──────────────┴─────┴────┘
+```
+
+**monitor** (4 panes):
+```
+┌──────────────┬──────────┐
+│   MONITOR    │  SHELL   │
+├──────────────┼──────────┤
+│   LAZYGIT    │  LOGS    │
+└──────────────┴──────────┘
+```
+
+### Themes | 테마
+
+5 built-in themes: `default`, `dracula`, `nord`, `catppuccin`, `tokyo-night`.
+Session-scoped — multiple workspaces can use different themes simultaneously.
+
+5개 내장 테마. 세션별 적용 — 여러 워크스페이스가 서로 다른 테마를 동시에 사용 가능.
+
+### Tool Fallback Chains | 도구 폴백 체인
+
+Missing optional tools are handled gracefully.
+선택적 도구가 없으면 대체 도구가 자동으로 사용됩니다.
+
+| Pane | Primary | Fallback | 폴백 |
+|------|---------|----------|------|
+| MONITOR | btop | htop → top | 순차적 대체 |
+| GIT | lazygit | git status | git 상태 표시 |
+| FILES | yazi | eza → tree → ls | 순차적 대체 |
+| CLAUDE | claude | install message | 설치 안내 |
+
 ---
 
 ## Profiles | 프로필
@@ -465,11 +624,22 @@ Locale, firewall, storage        Workspace, secrets, tmux
 dotfiles-v2/
 ├── cmd/dotfiles/main.go          # Entry point (ldflags: version, commit)
 ├── internal/
-│   ├── cli/                      # Cobra commands (9 files)
+│   ├── cli/                      # Cobra commands (12 files)
+│   │   ├── open.go               # dot open — workspace launcher
+│   │   └── workspace_cmds.go     # stop, list, register, unregister, layouts, doctor
 │   ├── config/                   # Config struct, loader, detector, state
 │   │   └── profiles/             # Embedded YAML profiles (go:embed)
 │   ├── exec/                     # Runner (dry-run), Brew wrapper
 │   ├── module/                   # 12 module implementations
+│   ├── workspace/                # Workspace management
+│   │   ├── config.go             # Project config, YAML load/save
+│   │   ├── deps.go               # Tool dependency checker
+│   │   ├── deploy.go             # Shell script deployer (go:embed)
+│   │   └── scripts/              # Embedded shell scripts
+│   │       ├── launcher.sh       # Session create/resume
+│   │       ├── layouts.sh        # Layout definitions (dev, claude, monitor)
+│   │       ├── tools.sh          # Tool launchers with fallback chains
+│   │       └── themes.sh         # Theme definitions (5 themes)
 │   ├── template/                 # Go text/template engine
 │   │   └── templates/            # Embedded templates (go:embed)
 │   ├── fileutil/                 # File ops, download, hash compare
@@ -498,7 +668,7 @@ dotfiles-v2/
 | **unit** | ubuntu-latest, macos-latest | Go unit tests + coverage | 유닛 테스트 + 커버리지 |
 | **integration** | ubuntu-{22.04,24.04} × {minimal,full,server} + GPU sim | Docker-based profile tests | Docker 기반 프로필 테스트 |
 | **module** | 8 modules × ubuntu-22.04 | Individual module tests | 개별 모듈 테스트 |
-| **scenario** | 6 E2E scenarios | dry-run, idempotency, server, upgrade, home-override | E2E 시나리오 테스트 |
+| **scenario** | 7 E2E scenarios | dry-run, idempotency, server, upgrade, home-override, workspace | E2E 시나리오 테스트 |
 
 - **Release**: Triggered by `workflow_run` — only after Test succeeds on a `v*` tag. Uses GoReleaser for cross-platform builds (darwin/linux × amd64/arm64).
 
