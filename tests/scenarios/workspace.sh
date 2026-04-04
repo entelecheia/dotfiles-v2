@@ -4,9 +4,18 @@
 # (tmux sessions need a terminal, but we test everything else).
 set -euo pipefail
 
-BIN="${1:-./dotfiles}"
-if [ ! -x "$BIN" ]; then
-  echo "FAIL: binary not found: $BIN"
+# Find binary: argument > PATH > common locations
+BIN="${1:-}"
+if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+  for candidate in ./dotfiles /usr/local/bin/dotfiles "$(command -v dotfiles 2>/dev/null)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      BIN="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
+  echo "FAIL: dotfiles binary not found"
   exit 1
 fi
 
