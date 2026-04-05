@@ -7,9 +7,9 @@ MODULE="${1:?Usage: run-module.sh <module>}"
 
 echo "=== Module test: $MODULE ==="
 
-# Determine profile — tmux/ai-tools/conda need full or server
+# Determine profile — some modules need full or server
 case "$MODULE" in
-  tmux|ai-tools|conda)
+  node|tmux|ai-tools|conda)
     PROFILE="full"
     ;;
   *)
@@ -32,6 +32,15 @@ case "$MODULE" in
     ;;
   shell)
     assert_dir_exists "$HOME/.config/shell" "Shell config directory"
+    ;;
+  node)
+    assert_file_exists "$HOME/.npmrc" "npmrc exists"
+    assert_file_contains "$HOME/.npmrc" "virtual-store-dir=" "npmrc has virtual-store-dir"
+    assert_file_contains "$HOME/.npmrc" "store-dir=" "npmrc has store-dir"
+    assert_file_contains "$HOME/.npmrc" "cache-dir=" "npmrc has cache-dir"
+    assert_dir_exists "$HOME/.local/share/pnpm/virtual-store" "pnpm virtual-store directory"
+    assert_dir_exists "$HOME/.local/share/pnpm/store" "pnpm store directory"
+    assert_dir_exists "$HOME/.cache/pnpm" "pnpm cache directory"
     ;;
   git)
     assert_file_exists "$HOME/.config/git/config" "Git config exists"
