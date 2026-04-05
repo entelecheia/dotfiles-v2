@@ -62,8 +62,9 @@ type TermConfig struct {
 // WorkConfig configures the workspace module.
 type WorkConfig struct {
 	Enabled bool   `yaml:"enabled"`
-	Path    string `yaml:"path,omitempty"`
-	Gdrive  string `yaml:"gdrive,omitempty"`
+	Path    string `yaml:"path,omitempty"`     // workspace root (e.g. ~/ai-workspace)
+	Gdrive  string `yaml:"gdrive,omitempty"`   // Google Drive path (for shell env only)
+	Symlink string `yaml:"symlink,omitempty"`  // explicit symlink target for Path (if set, Path → Symlink)
 }
 
 // FontsConfig configures the fonts module.

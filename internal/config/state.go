@@ -30,8 +30,9 @@ type UserModulesState struct {
 
 // UserWorkspaceState holds workspace config from user state.
 type UserWorkspaceState struct {
-	Path   string `yaml:"path,omitempty"`
-	Gdrive string `yaml:"gdrive,omitempty"`
+	Path    string `yaml:"path,omitempty"`
+	Gdrive  string `yaml:"gdrive,omitempty"`
+	Symlink string `yaml:"symlink,omitempty"` // explicit symlink target for Path
 }
 
 // UserFontsState holds font config from user state.
@@ -154,6 +155,7 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 		cfg.Modules.Workspace.Enabled = true
 		cfg.Modules.Workspace.Path = state.Modules.Workspace.Path
 		cfg.Modules.Workspace.Gdrive = state.Modules.Workspace.Gdrive
+		cfg.Modules.Workspace.Symlink = state.Modules.Workspace.Symlink
 	}
 	if state.Modules.AITools {
 		cfg.Modules.AITools.Enabled = true
