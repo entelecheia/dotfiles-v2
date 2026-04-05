@@ -88,6 +88,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// --- Secrets ---
+	if err := ui.ConfigureSecrets(state, state.Profile, yes); err != nil {
+		return err
+	}
+
 	// --- Persist ---
 	if homeOverride != "" {
 		if err := config.SaveStateForHome(homeOverride, state); err != nil {
