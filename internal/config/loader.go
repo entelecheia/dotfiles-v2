@@ -115,6 +115,9 @@ func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	if overlay.Shell.Enabled {
 		m.Shell = overlay.Shell
 	}
+	if overlay.Node.Enabled {
+		m.Node = overlay.Node
+	}
 	if overlay.Git.Enabled {
 		m.Git = overlay.Git
 	}

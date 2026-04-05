@@ -1,6 +1,8 @@
 extends: minimal
 
 modules:
+  node:
+    enabled: true
   workspace:
     enabled: true
   ai_tools:

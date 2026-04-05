@@ -9,6 +9,7 @@ func TestIsModuleEnabled(t *testing.T) {
 		Modules: ModulesConfig{
 			Packages:  ModuleToggle{Enabled: true},
 			Shell:     ShellConfig{Enabled: true},
+			Node:      ModuleToggle{Enabled: true},
 			Git:       GitConfig{Enabled: false},
 			SSH:       SSHModConfig{Enabled: true},
 			Terminal:  TermConfig{Enabled: false},
@@ -28,6 +29,7 @@ func TestIsModuleEnabled(t *testing.T) {
 	}{
 		{"packages", true},
 		{"shell", true},
+		{"node", true},
 		{"git", false},
 		{"ssh", true},
 		{"terminal", false},
@@ -127,6 +129,7 @@ func TestTemplateData_Keys(t *testing.T) {
 	data := cfg.TemplateData()
 
 	requiredKeys := []string{
+		"Home",
 		"Name", "Email", "GithubUser", "Timezone",
 		"OS", "Arch", "Hostname",
 		"IsDarwin", "IsLinux", "Profile",

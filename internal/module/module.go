@@ -49,6 +49,7 @@ type ApplyResult struct {
 var defaultOrder = []string{
 	"packages",
 	"shell",
+	"node",
 	"git",
 	"ssh",
 	"terminal",
@@ -71,6 +72,7 @@ func NewRegistry() *Registry {
 	r := &Registry{modules: make(map[string]Module)}
 	r.Register(&PackagesModule{})
 	r.Register(&ShellModule{})
+	r.Register(&NodeModule{})
 	r.Register(&GitModule{})
 	r.Register(&SSHModule{})
 	r.Register(&TerminalModule{})

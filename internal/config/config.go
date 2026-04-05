@@ -1,5 +1,7 @@
 package config
 
+import "os"
+
 // Config is the root configuration struct, mapped from profile YAML + user state.
 type Config struct {
 	Extends       string        `yaml:"extends,omitempty"`
@@ -19,6 +21,7 @@ type Config struct {
 type ModulesConfig struct {
 	Packages ModuleToggle  `yaml:"packages"`
 	Shell    ShellConfig   `yaml:"shell"`
+	Node     ModuleToggle  `yaml:"node"`
 	Git      GitConfig     `yaml:"git"`
 	SSH      SSHModConfig  `yaml:"ssh"`
 	Terminal TermConfig    `yaml:"terminal"`
@@ -86,6 +89,8 @@ func (c *Config) IsModuleEnabled(name string) bool {
 		return c.Modules.Packages.Enabled
 	case "shell":
 		return c.Modules.Shell.Enabled
+	case "node":
+		return c.Modules.Node.Enabled
 	case "git":
 		return c.Modules.Git.Enabled
 	case "ssh":
@@ -132,6 +137,8 @@ func (c *Config) AllPackages() []string {
 
 // TemplateData returns a map suitable for Go template rendering.
 func (c *Config) TemplateData() map[string]any {
+	home, _ := os.UserHomeDir()
+
 	isDarwin := false
 	isLinux := false
 	os := ""
@@ -159,6 +166,7 @@ func (c *Config) TemplateData() map[string]any {
 	}
 
 	return map[string]any{
+		"Home":            home,
 		"Name":            c.Name,
 		"Email":           c.Email,
 		"GithubUser":      c.GithubUser,
