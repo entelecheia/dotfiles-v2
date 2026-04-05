@@ -41,6 +41,7 @@ Also available as 'dot' for convenience. Workspace commands:
 	root.AddCommand(newUpgradeCmd(version))
 	root.AddCommand(newReconfigureCmd())
 	root.AddCommand(newVersionCmd(version, commit))
+	root.AddCommand(newConfigCmd())
 
 	// Workspace commands
 	root.AddCommand(newOpenCmd())
