@@ -43,6 +43,9 @@ Also available as 'dot' for convenience. Workspace commands:
 	root.AddCommand(newVersionCmd(version, commit))
 	root.AddCommand(newConfigCmd())
 
+	// Drive management commands
+	root.AddCommand(newDriveExcludeCmd())
+
 	// Workspace commands
 	root.AddCommand(newOpenCmd())
 	root.AddCommand(newStopCmd())
