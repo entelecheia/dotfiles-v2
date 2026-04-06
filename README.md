@@ -296,6 +296,40 @@ backup/id_ed25519_user.age  →  age -d  →  ~/.ssh/id_ed25519_user
 backup/90-secrets.sh.age    →  age -d  →  ~/.config/shell/90-secrets.sh
 ```
 
+### `dotfiles drive-exclude`
+
+Exclude heavy directories (node_modules, build caches, __pycache__) from Google Drive sync using macOS xattr.
+
+Google Drive 동기화에서 무거운 디렉토리(node_modules, 빌드 캐시, __pycache__)를 제외합니다 (macOS xattr 사용).
+
+Scan workspace for excludable directories | 제외 가능한 디렉토리 스캔:
+
+```bash
+dotfiles drive-exclude scan              # default: ~/ai-workspace
+dotfiles drive-exclude scan ~/projects   # custom path
+```
+
+Apply exclusion (set xattr) | 제외 적용 (xattr 설정):
+
+```bash
+dotfiles drive-exclude apply             # interactive confirmation
+dotfiles drive-exclude apply --yes       # skip confirmation
+dotfiles drive-exclude apply --dry-run   # preview only
+```
+
+Check current exclusion status | 현재 제외 상태 확인:
+
+```bash
+dotfiles drive-exclude status
+```
+
+Supported patterns | 지원 패턴:
+`node_modules`, `.pnpm`, `.next`, `.nuxt`, `.astro`, `.svelte-kit`, `.parcel-cache`, `.turbo`, `.angular`, `.webpack`, `.venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`
+
+> macOS only — uses `com.google.drivefs.ignorecontent` xattr. `--dry-run` works on all platforms.
+>
+> macOS 전용 — `com.google.drivefs.ignorecontent` xattr 사용. `--dry-run`은 모든 플랫폼에서 동작.
+
 ### `dotfiles version`
 
 Print version, commit, Go version, and OS/arch.
@@ -624,7 +658,7 @@ Locale, firewall, storage        Workspace, secrets, tmux
 dotfiles-v2/
 ├── cmd/dotfiles/main.go          # Entry point (ldflags: version, commit)
 ├── internal/
-│   ├── cli/                      # Cobra commands (12 files)
+│   ├── cli/                      # Cobra commands (14 files)
 │   │   ├── open.go               # dot open — workspace launcher
 │   │   └── workspace_cmds.go     # stop, list, register, unregister, layouts, doctor
 │   ├── config/                   # Config struct, loader, detector, state
@@ -668,7 +702,7 @@ dotfiles-v2/
 | **unit** | ubuntu-latest, macos-latest | Go unit tests + coverage | 유닛 테스트 + 커버리지 |
 | **integration** | ubuntu-{22.04,24.04} × {minimal,full,server} + GPU sim | Docker-based profile tests | Docker 기반 프로필 테스트 |
 | **module** | 8 modules × ubuntu-22.04 | Individual module tests | 개별 모듈 테스트 |
-| **scenario** | 7 E2E scenarios | dry-run, idempotency, server, upgrade, home-override, workspace | E2E 시나리오 테스트 |
+| **scenario** | 8 E2E scenarios | dry-run, idempotency, server, upgrade, home-override, workspace, drive-exclude | E2E 시나리오 테스트 |
 
 - **Release**: Triggered by `workflow_run` — only after Test succeeds on a `v*` tag. Uses GoReleaser for cross-platform builds (darwin/linux × amd64/arm64).
 
