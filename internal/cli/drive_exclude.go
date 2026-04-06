@@ -107,14 +107,14 @@ func newDriveExcludeApplyCmd() *cobra.Command {
 		Long:  "Set com.google.drivefs.ignorecontent on directories not yet excluded.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !driveexclude.IsDarwin() {
-				fmt.Println("drive-exclude apply is only supported on macOS.")
-				return nil
-			}
-
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			all, _ := cmd.Flags().GetBool("all")
 			yes, _ := cmd.Flags().GetBool("yes")
+
+			if !dryRun && !driveexclude.IsDarwin() {
+				fmt.Println("drive-exclude apply is only supported on macOS.")
+				return nil
+			}
 
 			root := defaultDriveRoot()
 			if len(args) > 0 {
@@ -153,6 +153,8 @@ func newDriveExcludeApplyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("all", false, "Apply to all pending without confirmation")
+	cmd.Flags().Bool("dry-run", false, "Show what would be excluded without applying")
+	cmd.Flags().Bool("yes", false, "Skip confirmation prompt")
 	return cmd
 }
 
