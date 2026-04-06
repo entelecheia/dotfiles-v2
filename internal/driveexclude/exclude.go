@@ -81,6 +81,13 @@ func NewScanner(root string) *Scanner {
 
 // Scan walks the root and finds directories matching exclude patterns.
 func (s *Scanner) Scan() ([]ScanResult, error) {
+	// Resolve symlinks in root — Go WalkDir does not reliably traverse
+	// Google Drive FUSE mounts accessed through a symlink.
+	root := s.Root
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+
 	patternSet := make(map[string]bool, len(s.Patterns))
 	for _, p := range s.Patterns {
 		patternSet[p] = true
@@ -88,7 +95,7 @@ func (s *Scanner) Scan() ([]ScanResult, error) {
 
 	var results []ScanResult
 
-	err := filepath.WalkDir(s.Root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if d != nil && d.IsDir() {
 				return fs.SkipDir

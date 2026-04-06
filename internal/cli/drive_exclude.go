@@ -22,6 +22,7 @@ from Google Drive sync using macOS xattr (com.google.drivefs.ignorecontent).`,
 	cmd.AddCommand(
 		newDriveExcludeScanCmd(),
 		newDriveExcludeApplyCmd(),
+		newDriveExcludeAddCmd(),
 		newDriveExcludeStatusCmd(),
 	)
 
@@ -158,6 +159,53 @@ func newDriveExcludeApplyCmd() *cobra.Command {
 	return cmd
 }
 
+// ── add (manual exclude) ──────────────────────────────────────────────────
+
+func newDriveExcludeAddCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "add <path> [path...]",
+		Short: "Manually exclude specific directories from Drive sync",
+		Long:  "Set com.google.drivefs.ignorecontent xattr on the given directories.",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+			if !dryRun && !driveexclude.IsDarwin() {
+				fmt.Println("drive-exclude add is only supported on macOS.")
+				return nil
+			}
+
+			for _, arg := range args {
+				path := absPath(arg)
+
+				info, err := os.Stat(path)
+				if err != nil {
+					fmt.Printf("  ✗ %s: %v\n", arg, err)
+					continue
+				}
+				if !info.IsDir() {
+					fmt.Printf("  ✗ %s: not a directory\n", arg)
+					continue
+				}
+
+				if dryRun {
+					fmt.Printf("  (dry-run) would exclude: %s\n", path)
+					continue
+				}
+
+				if err := driveexclude.ApplyXattr(path); err != nil {
+					fmt.Printf("  ✗ %s: %v\n", path, err)
+				} else {
+					fmt.Printf("  ✓ %s excluded\n", path)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().Bool("dry-run", false, "Show what would be excluded without applying")
+	return cmd
+}
+
 // ── status ─────────────────────────────────────────────────────────────────
 
 func newDriveExcludeStatusCmd() *cobra.Command {
@@ -183,13 +231,20 @@ const separator = "━━━━━━━━━━━━━━━━━━━━�
 
 func defaultDriveRoot() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "ai-workspace")
+	root := filepath.Join(home, "ai-workspace")
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		return resolved
+	}
+	return root
 }
 
 func absPath(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return p
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
 	}
 	return abs
 }
