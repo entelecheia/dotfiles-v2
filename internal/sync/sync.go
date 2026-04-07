@@ -114,7 +114,6 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 		"--max-lock", "5m",
 		"--tpslimit", "10",
 		"--log-file", cfg.LogFile,
-		"--log-level", "INFO",
 		"-v",
 	}
 
@@ -125,6 +124,22 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 		args = append(args, "--dry-run")
 	}
 
-	_, err := runner.Run(ctx, "rclone", args...)
+	result, err := runner.Run(ctx, "rclone", args...)
+	if err != nil && !resync {
+		// Check stderr and log file for missing baseline error
+		needsResync := false
+		if result != nil && strings.Contains(result.Stderr, "cannot find prior") {
+			needsResync = true
+		}
+		if !needsResync {
+			if logContent, lerr := os.ReadFile(cfg.LogFile); lerr == nil &&
+				strings.Contains(string(logContent), "cannot find prior") {
+				needsResync = true
+			}
+		}
+		if needsResync {
+			return fmt.Errorf("no prior sync baseline found — run 'dot sync setup' to initialize with --resync")
+		}
+	}
 	return err
 }
