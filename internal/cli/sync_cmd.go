@@ -1,0 +1,431 @@
+package cli
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	gosync "github.com/entelecheia/dotfiles-v2/internal/sync"
+	"github.com/entelecheia/dotfiles-v2/internal/template"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
+	"github.com/spf13/cobra"
+)
+
+func newSyncCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Sync workspace with Google Drive via rclone bisync",
+		Long: `Bidirectional sync between local workspace and Google Drive using rclone bisync.
+
+  dot sync          Trigger immediate bisync
+  dot sync status   Show sync status and scheduler state
+  dot sync setup    Install rclone, configure remote, deploy filter and scheduler
+  dot sync log      Show recent sync log entries
+  dot sync pause    Pause auto-sync scheduler
+  dot sync resume   Resume auto-sync scheduler`,
+		RunE: runSyncNow,
+	}
+
+	cmd.AddCommand(
+		newSyncStatusCmd(),
+		newSyncSetupCmd(),
+		newSyncLogCmd(),
+		newSyncPauseCmd(),
+		newSyncResumeCmd(),
+	)
+
+	return cmd
+}
+
+// syncBootstrap loads state, resolves config and paths for sync commands.
+func syncBootstrap(cmd *cobra.Command) (*config.UserState, *gosync.Config, *gosync.Paths, *exec.Runner, error) {
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	state, err := config.LoadState()
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("loading state: %w", err)
+	}
+
+	cfg, err := gosync.ResolveConfig(state)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	paths, err := gosync.ResolvePaths()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	runner := exec.NewRunner(dryRun, logger)
+
+	return state, cfg, paths, runner, nil
+}
+
+// ── sync (default) ────────────────────────────────────────────────────────
+
+func runSyncNow(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	if !runner.CommandExists("rclone") {
+		fmt.Println("rclone not installed. Run: dot sync setup")
+		return nil
+	}
+
+	if !runner.FileExists(cfg.FilterFile) {
+		fmt.Println("Filter file not found. Run: dot sync setup")
+		return nil
+	}
+
+	fmt.Printf("Syncing %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
+	if dryRun {
+		fmt.Println("(dry-run mode — no changes will be made)")
+	}
+
+	if err := gosync.Bisync(cmd.Context(), runner, cfg, false, dryRun); err != nil {
+		return fmt.Errorf("bisync failed: %w", err)
+	}
+
+	fmt.Println("Sync complete.")
+	return nil
+}
+
+// ── setup ─────────────────────────────────────────────────────────────────
+
+func newSyncSetupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup",
+		Short: "Install rclone, configure remote, and deploy sync infrastructure",
+		RunE:  runSyncSetup,
+	}
+}
+
+func runSyncSetup(cmd *cobra.Command, _ []string) error {
+	state, _, paths, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	yes, _ := cmd.Flags().GetBool("yes")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	ctx := cmd.Context()
+
+	// 1. Check / install rclone
+	fmt.Println("Checking rclone...")
+	ver, ok := gosync.CheckRclone(runner)
+	if ok {
+		fmt.Printf("  ✓ rclone installed (%s)\n", ver)
+	} else {
+		confirmed, err := ui.Confirm("rclone not found. Install it?", yes)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Println("Aborted. Install rclone manually: https://rclone.org/install/")
+			return nil
+		}
+		if err := gosync.InstallRclone(ctx, runner); err != nil {
+			return fmt.Errorf("installing rclone: %w", err)
+		}
+		ver, ok = gosync.CheckRclone(runner)
+		if !ok {
+			return fmt.Errorf("rclone installation failed — not found in PATH after install")
+		}
+		fmt.Printf("  ✓ rclone installed (%s)\n", ver)
+	}
+
+	// 2. Check / configure remote
+	remote := state.Modules.Sync.Remote
+	if remote == "" {
+		remote = "gdrive"
+	}
+
+	fmt.Printf("Checking remote '%s'...\n", remote)
+	if gosync.HasRemote(ctx, runner, remote) {
+		fmt.Printf("  ✓ remote '%s' configured\n", remote)
+	} else {
+		fmt.Printf("  ✗ remote '%s' not found\n", remote)
+		confirmed, err := ui.Confirm(fmt.Sprintf("Configure Google Drive remote '%s'?", remote), yes)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			fmt.Println("Aborted. Configure manually: rclone config")
+			return nil
+		}
+		if dryRun {
+			fmt.Printf("  (dry-run) would configure remote '%s'\n", remote)
+		} else {
+			if err := gosync.ConfigRemote(ctx, remote); err != nil {
+				return fmt.Errorf("configuring remote: %w", err)
+			}
+		}
+		if !dryRun {
+			if !gosync.HasRemote(ctx, runner, remote) {
+				return fmt.Errorf("remote '%s' still not configured after setup", remote)
+			}
+			fmt.Printf("  ✓ remote '%s' configured\n", remote)
+		}
+	}
+
+	// Verify remote access
+	if !dryRun {
+		fmt.Printf("Verifying access to %s:...\n", remote)
+		if err := gosync.CheckRemote(ctx, runner, remote); err != nil {
+			fmt.Printf("  ⚠ %v\n", err)
+			fmt.Println("  Continue anyway — you may need to re-authenticate later.")
+		} else {
+			fmt.Printf("  ✓ remote '%s' accessible\n", remote)
+		}
+	}
+
+	// 3. Configure paths
+	defaultLocal := state.Modules.Workspace.Path
+	if defaultLocal == "" {
+		home, _ := os.UserHomeDir()
+		defaultLocal = home + "/ai-workspace"
+	}
+	localPath, err := ui.Input("Local workspace path", defaultLocal, yes)
+	if err != nil {
+		return err
+	}
+
+	defaultRemotePath := state.Modules.Sync.Path
+	if defaultRemotePath == "" {
+		defaultRemotePath = "work"
+	}
+	remotePath, err := ui.Input("Remote path (on Drive)", defaultRemotePath, yes)
+	if err != nil {
+		return err
+	}
+
+	// Update state
+	state.Modules.Sync.Remote = remote
+	state.Modules.Sync.Path = remotePath
+	if state.Modules.Sync.Interval <= 0 {
+		state.Modules.Sync.Interval = 300
+	}
+	// Re-resolve config with updated state
+	state.Modules.Workspace.Path = localPath
+	cfg, err := gosync.ResolveConfig(state)
+	if err != nil {
+		return err
+	}
+
+	// 4. Deploy filter file
+	fmt.Println("Deploying filter file...")
+	engine := template.NewEngine()
+	filterContent, err := engine.ReadStatic("sync/workspace-filter.txt")
+	if err != nil {
+		return fmt.Errorf("reading filter template: %w", err)
+	}
+	filterDir := paths.FilterFile[:len(paths.FilterFile)-len("/workspace-filter.txt")]
+	if err := runner.MkdirAll(filterDir, 0755); err != nil {
+		return fmt.Errorf("creating rclone config dir: %w", err)
+	}
+	if err := runner.WriteFile(paths.FilterFile, filterContent, 0644); err != nil {
+		return fmt.Errorf("writing filter file: %w", err)
+	}
+	fmt.Printf("  ✓ %s\n", paths.FilterFile)
+
+	// 5. Deploy scheduler
+	fmt.Println("Deploying auto-sync scheduler...")
+	sched := gosync.NewScheduler(runner, paths, cfg, engine)
+	if err := sched.Install(ctx); err != nil {
+		return fmt.Errorf("installing scheduler: %w", err)
+	}
+	fmt.Println("  ✓ scheduler installed")
+
+	// 6. Initial resync
+	if !dryRun {
+		fmt.Println("\n⚠ First-time bisync requires --resync to establish baseline.")
+		fmt.Println("  This is a one-time operation. DO NOT run --resync again after this.")
+		confirmed, err := ui.Confirm("Run initial sync (--resync)?", yes)
+		if err != nil {
+			return err
+		}
+		if confirmed {
+			fmt.Printf("Running initial sync: %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
+			if err := gosync.Bisync(ctx, runner, cfg, true, false); err != nil {
+				return fmt.Errorf("initial bisync failed: %w", err)
+			}
+			fmt.Println("  ✓ initial sync complete")
+		} else {
+			fmt.Println("  Skipped. Run manually: rclone bisync <local> <remote> --resync")
+		}
+	}
+
+	// 7. Save state
+	if err := config.SaveState(state); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+	fmt.Println("\n✓ Sync setup complete.")
+	return nil
+}
+
+// ── status ────────────────────────────────────────────────────────────────
+
+func newSyncStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show current sync status",
+		RunE:  runSyncStatus,
+	}
+}
+
+func runSyncStatus(cmd *cobra.Command, _ []string) error {
+	_, cfg, paths, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+
+	engine := template.NewEngine()
+	sched := gosync.NewScheduler(runner, paths, cfg, engine)
+	st, err := gosync.GetStatus(cmd.Context(), sched, cfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Workspace Sync Status")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━")
+
+	if st.RcloneVersion != "" {
+		fmt.Printf("  rclone:     %s (%s)\n", st.RcloneVersion, st.RclonePath)
+	} else {
+		fmt.Println("  rclone:     not installed")
+	}
+
+	fmt.Printf("  Local:      %s\n", st.LocalPath)
+	fmt.Printf("  Remote:     %s\n", st.RemotePath)
+	fmt.Printf("  Filter:     %s\n", st.FilterFile)
+	fmt.Printf("  Interval:   %s\n", formatInterval(st.Interval))
+	fmt.Printf("  Scheduler:  %s\n", st.SchedulerState)
+
+	if st.LastSyncTime != nil {
+		ago := time.Since(*st.LastSyncTime).Truncate(time.Second)
+		fmt.Printf("  Last sync:  %s ago\n", ago)
+	} else {
+		fmt.Println("  Last sync:  (never)")
+	}
+
+	if st.LastError != "" {
+		fmt.Printf("  Last error: %s\n", st.LastError)
+	} else {
+		fmt.Println("  Last error: (none)")
+	}
+
+	return nil
+}
+
+// ── log ───────────────────────────────────────────────────────────────────
+
+func newSyncLogCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "log [lines]",
+		Short: "Show recent sync log entries",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  runSyncLog,
+	}
+}
+
+func runSyncLog(cmd *cobra.Command, args []string) error {
+	_, cfg, _, _, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+
+	n := 50
+	if len(args) > 0 {
+		if parsed, err := strconv.Atoi(args[0]); err == nil && parsed > 0 {
+			n = parsed
+		}
+	}
+
+	lines, err := gosync.TailLog(cfg.LogFile, n)
+	if err != nil {
+		fmt.Printf("No log file found at %s\n", cfg.LogFile)
+		return nil
+	}
+
+	fmt.Println(lines)
+	return nil
+}
+
+// ── pause / resume ────────────────────────────────────────────────────────
+
+func newSyncPauseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "pause",
+		Short: "Pause auto-sync scheduler",
+		RunE:  runSyncPause,
+	}
+}
+
+func runSyncPause(cmd *cobra.Command, _ []string) error {
+	_, cfg, paths, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+
+	engine := template.NewEngine()
+	sched := gosync.NewScheduler(runner, paths, cfg, engine)
+
+	if sched.State(cmd.Context()) == gosync.SchedulerNotInstalled {
+		fmt.Println("Scheduler not installed. Run: dot sync setup")
+		return nil
+	}
+
+	if err := sched.Pause(cmd.Context()); err != nil {
+		return fmt.Errorf("pausing scheduler: %w", err)
+	}
+	fmt.Println("Auto-sync paused.")
+	return nil
+}
+
+func newSyncResumeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "resume",
+		Short: "Resume auto-sync scheduler",
+		RunE:  runSyncResume,
+	}
+}
+
+func runSyncResume(cmd *cobra.Command, _ []string) error {
+	_, cfg, paths, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+
+	engine := template.NewEngine()
+	sched := gosync.NewScheduler(runner, paths, cfg, engine)
+
+	if sched.State(cmd.Context()) == gosync.SchedulerNotInstalled {
+		fmt.Println("Scheduler not installed. Run: dot sync setup")
+		return nil
+	}
+
+	if err := sched.Resume(cmd.Context()); err != nil {
+		return fmt.Errorf("resuming scheduler: %w", err)
+	}
+	fmt.Println("Auto-sync resumed.")
+	return nil
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────
+
+func formatInterval(seconds int) string {
+	if seconds >= 3600 && seconds%3600 == 0 {
+		return fmt.Sprintf("%dh", seconds/3600)
+	}
+	if seconds >= 60 && seconds%60 == 0 {
+		return fmt.Sprintf("%dm", seconds/60)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}

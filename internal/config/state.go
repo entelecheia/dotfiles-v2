@@ -26,6 +26,14 @@ type UserModulesState struct {
 	AITools   bool               `yaml:"ai_tools,omitempty"`
 	Warp      bool               `yaml:"warp,omitempty"`
 	Fonts     UserFontsState     `yaml:"fonts,omitempty"`
+	Sync      UserSyncState      `yaml:"sync,omitempty"`
+}
+
+// UserSyncState holds rclone bisync config from user state.
+type UserSyncState struct {
+	Remote   string `yaml:"remote,omitempty"`   // rclone remote name, default "gdrive"
+	Path     string `yaml:"path,omitempty"`     // remote path, default "work"
+	Interval int    `yaml:"interval,omitempty"` // sync interval in seconds, default 300
 }
 
 // UserWorkspaceState holds workspace config from user state.

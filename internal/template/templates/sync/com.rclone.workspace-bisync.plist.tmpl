@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.rclone.workspace-bisync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{.RclonePath}}</string>
+    <string>bisync</string>
+    <string>{{.LocalPath}}</string>
+    <string>{{.RemotePath}}</string>
+    <string>--filter-from</string>
+    <string>{{.FilterFile}}</string>
+    <string>--conflict-resolve</string>
+    <string>newer</string>
+    <string>--conflict-loser</string>
+    <string>num</string>
+    <string>--resilient</string>
+    <string>--recover</string>
+    <string>--max-lock</string>
+    <string>5m</string>
+    <string>--tpslimit</string>
+    <string>10</string>
+    <string>--log-file</string>
+    <string>{{.LogFile}}</string>
+    <string>--log-level</string>
+    <string>INFO</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>{{.Interval}}</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardErrorPath</key>
+  <string>{{.LogFile}}</string>
+</dict>
+</plist>

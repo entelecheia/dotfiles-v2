@@ -119,6 +119,7 @@ jobs:
           - home-override
           - workspace
           - drive-exclude
+          - sync
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

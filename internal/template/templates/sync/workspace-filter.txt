@@ -1,0 +1,58 @@
+# rclone bisync filter for ai-workspace/work/
+# Sync: documents, code, binaries (including non-git-tracked)
+# Exclude: regenerable heavy directories
+
+# === Node.js ===
+- node_modules/**
+- .pnpm/**
+- .npm/**
+
+# === Build caches ===
+- .astro/**
+- .next/**
+- .nuxt/**
+- .svelte-kit/**
+- .parcel-cache/**
+- .turbo/**
+- .angular/**
+- .webpack/**
+
+# === Python ===
+- .venv/**
+- venv/**
+- __pycache__/**
+- *.pyc
+- .mypy_cache/**
+- .pytest_cache/**
+- .ruff_cache/**
+
+# === Git internals ===
+- .git/**
+
+# === IDE / Editor ===
+- .vscode/**
+- .idea/**
+
+# === OS artifacts ===
+- .DS_Store
+- Thumbs.db
+- ._*
+
+# === Claude Code / OMC state ===
+- .omc/**
+- .omx/**
+- .claude/**
+
+# === Temp / Cache ===
+- .cache/**
+- *.tmp
+- *.swp
+- *.swo
+- *~
+
+# === Data / ML (too large) ===
+- *.parquet
+- *.pkl
+- *.pth
+- *.pt
+- *.onnx

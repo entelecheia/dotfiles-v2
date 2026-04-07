@@ -46,6 +46,9 @@ Also available as 'dot' for convenience. Workspace commands:
 	// Drive management commands
 	root.AddCommand(newDriveExcludeCmd())
 
+	// Sync commands
+	root.AddCommand(newSyncCmd())
+
 	// Workspace commands
 	root.AddCommand(newOpenCmd())
 	root.AddCommand(newStopCmd())
