@@ -63,10 +63,9 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		home, _ := os.UserHomeDir()
 		localPath = filepath.Join(home, localPath[2:])
 	}
-	// Resolve symlinks (Google Drive FUSE)
-	if resolved, err := filepath.EvalSymlinks(localPath); err == nil {
-		localPath = resolved
-	}
+	// Note: do NOT EvalSymlinks here — if the path points to a Google Drive
+	// FUSE mount that is unresponsive, EvalSymlinks will hang indefinitely.
+	// rclone handles symlinks natively.
 
 	// Remote: sync.remote -> "gdrive", sync.path -> "work"
 	remote := state.Modules.Sync.Remote
