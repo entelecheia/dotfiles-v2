@@ -27,7 +27,8 @@ func newSyncCmd() *cobra.Command {
   dot sync log      Show recent sync log entries
   dot sync pause    Pause auto-sync scheduler
   dot sync resume   Resume auto-sync scheduler`,
-		RunE: runSyncNow,
+		RunE:         runSyncNow,
+		SilenceUsage: true,
 	}
 
 	cmd.AddCommand(
@@ -102,9 +103,10 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 
 func newSyncSetupCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "setup",
-		Short: "Install rclone, configure remote, and deploy sync infrastructure",
-		RunE:  runSyncSetup,
+		Use:          "setup",
+		Short:        "Install rclone, configure remote, and deploy sync infrastructure",
+		RunE:         runSyncSetup,
+		SilenceUsage: true,
 	}
 }
 
@@ -176,6 +178,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Verify remote access
+	remoteAccessible := false
 	if !dryRun {
 		fmt.Printf("Verifying access to %s:...\n", remote)
 		if err := gosync.CheckRemote(ctx, runner, remote); err != nil {
@@ -183,6 +186,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 			fmt.Println("  Continue anyway — you may need to re-authenticate later.")
 		} else {
 			fmt.Printf("  ✓ remote '%s' accessible\n", remote)
+			remoteAccessible = true
 		}
 	}
 
@@ -243,8 +247,8 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Println("  ✓ scheduler installed")
 
-	// 6. Initial resync
-	if !dryRun {
+	// 6. Initial resync (only if remote is accessible)
+	if !dryRun && remoteAccessible {
 		fmt.Println("\n⚠ First-time bisync requires --resync to establish baseline.")
 		fmt.Println("  This is a one-time operation. DO NOT run --resync again after this.")
 		confirmed, err := ui.Confirm("Run initial sync (--resync)?", yes)
@@ -260,6 +264,10 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		} else {
 			fmt.Println("  Skipped. Run manually: rclone bisync <local> <remote> --resync")
 		}
+	} else if !dryRun && !remoteAccessible {
+		fmt.Println("\n⚠ Skipping initial sync — remote not accessible.")
+		fmt.Println("  Fix auth first: rclone config reconnect " + state.Modules.Sync.Remote + ":")
+		fmt.Println("  Then run: dot sync setup")
 	}
 
 	// 7. Save state

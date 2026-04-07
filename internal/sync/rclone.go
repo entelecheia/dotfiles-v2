@@ -7,6 +7,7 @@ import (
 	osexec "os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
@@ -88,10 +89,15 @@ func ConfigRemote(ctx context.Context, name string) error {
 	return cmd.Run()
 }
 
-// CheckRemote verifies that a remote is accessible.
+// CheckRemote verifies that a remote is accessible (with 15s timeout).
 func CheckRemote(ctx context.Context, runner *exec.Runner, remote string) error {
-	_, err := runner.Run(ctx, "rclone", "lsd", remote+":", "--max-depth", "0")
+	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, err := runner.Run(timeoutCtx, "rclone", "lsd", remote+":", "--max-depth", "0")
 	if err != nil {
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("remote %q timed out (15s) — check rclone auth: rclone config reconnect %s:", remote, remote)
+		}
 		return fmt.Errorf("remote %q not accessible: %w", remote, err)
 	}
 	return nil
