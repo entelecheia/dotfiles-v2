@@ -89,6 +89,16 @@ func ConfigRemote(ctx context.Context, name string) error {
 	return cmd.Run()
 }
 
+// ReconnectRemote runs interactive rclone config reconnect to refresh auth.
+// This requires a TTY — it attaches stdin/stdout/stderr directly.
+func ReconnectRemote(ctx context.Context, name string) error {
+	cmd := osexec.CommandContext(ctx, "rclone", "config", "reconnect", name+":")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 // CheckRemote verifies that a remote is accessible (with 15s timeout).
 func CheckRemote(ctx context.Context, runner *exec.Runner, remote string) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -96,7 +106,7 @@ func CheckRemote(ctx context.Context, runner *exec.Runner, remote string) error 
 	_, err := runner.Run(timeoutCtx, "rclone", "lsd", remote+":", "--max-depth", "0")
 	if err != nil {
 		if timeoutCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("remote %q timed out (15s) — check rclone auth: rclone config reconnect %s:", remote, remote)
+			return fmt.Errorf("remote %q timed out (15s) — run 'dot sync reconnect' to fix authentication", remote)
 		}
 		return fmt.Errorf("remote %q not accessible: %w", remote, err)
 	}

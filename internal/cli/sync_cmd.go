@@ -21,12 +21,19 @@ func newSyncCmd() *cobra.Command {
 		Short: "Sync workspace with Google Drive via rclone bisync",
 		Long: `Bidirectional sync between local workspace and Google Drive using rclone bisync.
 
-  dot sync          Trigger immediate bisync
-  dot sync status   Show sync status and scheduler state
-  dot sync setup    Install rclone, configure remote, deploy filter and scheduler
-  dot sync log      Show recent sync log entries
-  dot sync pause    Pause auto-sync scheduler
-  dot sync resume   Resume auto-sync scheduler`,
+Getting started:
+  dot sync setup       Full guided setup (install rclone, auth, filter, scheduler)
+  dot sync connect     Configure a new Google Drive remote
+  dot sync reconnect   Fix expired authentication
+
+Daily use:
+  dot sync             Trigger immediate sync
+  dot sync status      Show sync health, last run, scheduler state
+  dot sync log         View recent sync log entries
+
+Scheduler control:
+  dot sync pause       Temporarily stop auto-sync
+  dot sync resume      Restart auto-sync`,
 		RunE:         runSyncNow,
 		SilenceUsage: true,
 	}
@@ -34,6 +41,8 @@ func newSyncCmd() *cobra.Command {
 	cmd.AddCommand(
 		newSyncStatusCmd(),
 		newSyncSetupCmd(),
+		newSyncConnectCmd(),
+		newSyncReconnectCmd(),
 		newSyncLogCmd(),
 		newSyncPauseCmd(),
 		newSyncResumeCmd(),
@@ -77,12 +86,12 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 	if !runner.CommandExists("rclone") {
-		fmt.Println("rclone not installed. Run: dot sync setup")
+		fmt.Println("rclone is not installed. Run 'dot sync setup' to get started.")
 		return nil
 	}
 
 	if !runner.FileExists(cfg.FilterFile) {
-		fmt.Println("Filter file not found. Run: dot sync setup")
+		fmt.Println("Filter file not found. Run 'dot sync setup' to configure sync.")
 		return nil
 	}
 
@@ -266,8 +275,10 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		}
 	} else if !dryRun && !remoteAccessible {
 		fmt.Println("\n⚠ Skipping initial sync — remote not accessible.")
-		fmt.Println("  Fix auth first: rclone config reconnect " + state.Modules.Sync.Remote + ":")
-		fmt.Println("  Then run: dot sync setup")
+		fmt.Println("  To fix authentication:")
+		fmt.Println("    dot sync reconnect")
+		fmt.Println("  Then complete setup:")
+		fmt.Println("    dot sync setup")
 	}
 
 	// 7. Save state
@@ -366,6 +377,83 @@ func runSyncLog(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// ── connect / reconnect ───────────────────────────────────────────────────
+
+func newSyncConnectCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "connect [remote]",
+		Short:        "Configure a new Google Drive remote for rclone",
+		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, _, _, runner, err := syncBootstrap(cmd)
+			if err != nil {
+				return err
+			}
+
+			remote := state.Modules.Sync.Remote
+			if remote == "" {
+				remote = "gdrive"
+			}
+			if len(args) > 0 {
+				remote = args[0]
+			}
+
+			if gosync.HasRemote(cmd.Context(), runner, remote) {
+				fmt.Printf("Remote '%s' already exists. Use 'dot sync reconnect' to refresh auth.\n", remote)
+				return nil
+			}
+
+			fmt.Printf("Configuring Google Drive remote '%s'...\n", remote)
+			if err := gosync.ConfigRemote(cmd.Context(), remote); err != nil {
+				return fmt.Errorf("configuring remote: %w", err)
+			}
+
+			fmt.Printf("✓ Remote '%s' configured.\n", remote)
+
+			// Save remote name to state
+			state.Modules.Sync.Remote = remote
+			return config.SaveState(state)
+		},
+	}
+}
+
+func newSyncReconnectCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "reconnect [remote]",
+		Short:        "Refresh Google Drive authentication for rclone",
+		Args:         cobra.MaximumNArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			state, _, _, runner, err := syncBootstrap(cmd)
+			if err != nil {
+				return err
+			}
+
+			remote := state.Modules.Sync.Remote
+			if remote == "" {
+				remote = "gdrive"
+			}
+			if len(args) > 0 {
+				remote = args[0]
+			}
+
+			if !gosync.HasRemote(cmd.Context(), runner, remote) {
+				fmt.Printf("Remote '%s' not found. Use 'dot sync connect' to create it.\n", remote)
+				return nil
+			}
+
+			fmt.Printf("Reconnecting remote '%s'...\n", remote)
+			if err := gosync.ReconnectRemote(cmd.Context(), remote); err != nil {
+				return fmt.Errorf("reconnecting: %w", err)
+			}
+
+			fmt.Printf("✓ Remote '%s' reconnected.\n", remote)
+			return nil
+		},
+	}
+}
+
 // ── pause / resume ────────────────────────────────────────────────────────
 
 func newSyncPauseCmd() *cobra.Command {
@@ -386,7 +474,7 @@ func runSyncPause(cmd *cobra.Command, _ []string) error {
 	sched := gosync.NewScheduler(runner, paths, cfg, engine)
 
 	if sched.State(cmd.Context()) == gosync.SchedulerNotInstalled {
-		fmt.Println("Scheduler not installed. Run: dot sync setup")
+		fmt.Println("Scheduler not installed. Run 'dot sync setup' to configure auto-sync.")
 		return nil
 	}
 
@@ -415,7 +503,7 @@ func runSyncResume(cmd *cobra.Command, _ []string) error {
 	sched := gosync.NewScheduler(runner, paths, cfg, engine)
 
 	if sched.State(cmd.Context()) == gosync.SchedulerNotInstalled {
-		fmt.Println("Scheduler not installed. Run: dot sync setup")
+		fmt.Println("Scheduler not installed. Run 'dot sync setup' to configure auto-sync.")
 		return nil
 	}
 
