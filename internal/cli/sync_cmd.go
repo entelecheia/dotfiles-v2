@@ -38,6 +38,8 @@ Scheduler control:
 		SilenceUsage: true,
 	}
 
+	cmd.Flags().Bool("resync", false, "Force initial baseline sync (first-time only)")
+
 	cmd.AddCommand(
 		newSyncStatusCmd(),
 		newSyncSetupCmd(),
@@ -95,12 +97,17 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
+	resync, _ := cmd.Flags().GetBool("resync")
+
 	fmt.Printf("Syncing %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
+	if resync {
+		fmt.Println("(--resync mode — establishing initial baseline)")
+	}
 	if dryRun {
 		fmt.Println("(dry-run mode — no changes will be made)")
 	}
 
-	if err := gosync.Bisync(cmd.Context(), runner, cfg, false, dryRun); err != nil {
+	if err := gosync.Bisync(cmd.Context(), runner, cfg, resync, dryRun); err != nil {
 		return fmt.Errorf("bisync failed: %w", err)
 	}
 
