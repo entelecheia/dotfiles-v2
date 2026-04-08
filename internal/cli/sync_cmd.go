@@ -45,6 +45,7 @@ Scheduler control:
 		newSyncSetupCmd(),
 		newSyncConnectCmd(),
 		newSyncReconnectCmd(),
+		newSyncResetCmd(),
 		newSyncLogCmd(),
 		newSyncPauseCmd(),
 		newSyncResumeCmd(),
@@ -263,29 +264,23 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	}
 	fmt.Println("  ✓ scheduler installed")
 
-	// 6. Initial resync (only if remote is accessible)
+	// 6. Create bisync baseline (listing-based, avoids --resync pitfalls)
 	if !dryRun && remoteAccessible {
-		fmt.Println("\n⚠ First-time bisync requires --resync to establish baseline.")
-		fmt.Println("  This is a one-time operation. DO NOT run --resync again after this.")
-		confirmed, err := ui.Confirm("Run initial sync (--resync)?", yes)
-		if err != nil {
-			return err
-		}
-		if confirmed {
-			fmt.Printf("Running initial sync: %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
-			if err := gosync.Bisync(ctx, runner, cfg, true, false); err != nil {
-				return fmt.Errorf("initial bisync failed: %w", err)
-			}
-			fmt.Println("  ✓ initial sync complete")
+		if gosync.HasBaseline(paths, cfg) {
+			fmt.Println("\nBaseline already exists. Use 'dot sync reset' to recreate.")
 		} else {
-			fmt.Println("  Skipped. Run manually: rclone bisync <local> <remote> --resync")
+			fmt.Println("\nCreating bisync baseline...")
+			if err := gosync.CreateBaseline(ctx, runner, cfg, paths); err != nil {
+				fmt.Printf("  ⚠ Baseline creation failed: %v\n", err)
+				fmt.Println("  You can retry with: dot sync reset")
+			}
 		}
 	} else if !dryRun && !remoteAccessible {
-		fmt.Println("\n⚠ Skipping initial sync — remote not accessible.")
+		fmt.Println("\n⚠ Skipping baseline — remote not accessible.")
 		fmt.Println("  To fix authentication:")
 		fmt.Println("    dot sync reconnect")
-		fmt.Println("  Then complete setup:")
-		fmt.Println("    dot sync setup")
+		fmt.Println("  Then create baseline:")
+		fmt.Println("    dot sync reset")
 	}
 
 	// 7. Save state
@@ -382,6 +377,47 @@ func runSyncLog(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(lines)
 	return nil
+}
+
+// ── reset ─────────────────────────────────────────────────────────────────
+
+func newSyncResetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset",
+		Short: "Recreate bisync baseline from current file listings",
+		Long: `Generates fresh bisync baseline by listing files on both sides.
+
+This avoids the --resync flag which can fail on Google Drive workspaces
+with shared files (permission errors) or large file counts (quota errors).
+
+Use this when:
+  - Initial setup failed to create a baseline
+  - Bisync reports "cannot find prior Path1 or Path2 listings"
+  - You want to start fresh after sync issues`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, cfg, paths, runner, err := syncBootstrap(cmd)
+			if err != nil {
+				return err
+			}
+
+			if !runner.CommandExists("rclone") {
+				fmt.Println("rclone is not installed. Run 'dot sync setup' to get started.")
+				return nil
+			}
+
+			fmt.Println("Removing old baseline...")
+			gosync.RemoveBaseline(paths, cfg)
+
+			fmt.Println("Creating new bisync baseline...")
+			if err := gosync.CreateBaseline(cmd.Context(), runner, cfg, paths); err != nil {
+				return fmt.Errorf("baseline creation failed: %w", err)
+			}
+
+			fmt.Println("\n✓ Baseline recreated. Run 'dot sync' to start syncing.")
+			return nil
+		},
+	}
 }
 
 // ── connect / reconnect ───────────────────────────────────────────────────
