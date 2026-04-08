@@ -112,8 +112,10 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 		"--resilient",
 		"--recover",
 		"--max-lock", "15m",
-		"--tpslimit", "50",
+		"--tpslimit", "10",
+		"--retries", "5",
 		"--fast-list",
+		"--drive-skip-dangling-shortcuts",
 		"--log-file", cfg.LogFile,
 		"-v",
 	}
