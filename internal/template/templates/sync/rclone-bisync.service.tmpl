@@ -9,7 +9,8 @@ ExecStart={{.RclonePath}} bisync {{.LocalPath}} {{.RemotePath}} \
   --conflict-loser num \
   --resilient \
   --recover \
-  --max-lock 5m \
-  --tpslimit 10 \
+  --max-lock 15m \
+  --tpslimit 50 \
+  --fast-list \
   --log-file {{.LogFile}} \
   --log-level INFO
