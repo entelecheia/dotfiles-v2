@@ -121,7 +121,7 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 	}
 
 	if resync {
-		args = append(args, "--resync", "--resync-mode", "path1")
+		args = append(args, "--resync", "--resync-mode", "path1", "--ignore-errors")
 	}
 	if dryRun {
 		args = append(args, "--dry-run")
