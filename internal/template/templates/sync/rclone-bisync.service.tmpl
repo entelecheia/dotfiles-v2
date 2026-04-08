@@ -10,7 +10,8 @@ ExecStart={{.RclonePath}} bisync {{.LocalPath}} {{.RemotePath}} \
   --resilient \
   --recover \
   --max-lock 15m \
-  --tpslimit 50 \
+  --tpslimit 20 \
+  --retries 5 \
   --fast-list \
   --drive-skip-dangling-shortcuts \
   --log-file {{.LogFile}} \
