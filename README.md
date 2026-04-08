@@ -169,19 +169,47 @@ Supported patterns: `node_modules`, `.pnpm`, `.next`, `.nuxt`, `.astro`, `.svelt
 
 Bidirectional workspace sync with Google Drive via rclone bisync. Selective sync with `--filter-from` excludes node_modules, build caches, and other heavy directories.
 
+Getting started:
+
 ```bash
-dotfiles sync setup       # install rclone, configure remote, deploy filter & scheduler
+dotfiles sync setup       # full guided setup: install rclone, configure remote,
+                          # deploy filter, create baseline, start scheduler
 dotfiles sync             # trigger immediate bisync
-dotfiles sync status      # show sync status and scheduler state
-dotfiles sync log         # last 50 lines of sync log
-dotfiles sync log 100     # last 100 lines
-dotfiles sync pause       # pause auto-sync scheduler
-dotfiles sync resume      # resume auto-sync scheduler
 ```
 
-`setup` handles the full flow: rclone installation (via Homebrew), Google Drive remote configuration, filter file deployment, launchd/systemd scheduler registration, and optional initial `--resync`.
+Daily use:
 
-> Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux). Conflicts resolved with `--conflict-resolve newer`.
+```bash
+dotfiles sync             # sync now
+dotfiles sync status      # show sync health, last run, scheduler state
+dotfiles sync log         # last 50 lines of sync log
+dotfiles sync log 100     # last 100 lines
+```
+
+Authentication:
+
+```bash
+dotfiles sync connect     # configure a new Google Drive remote
+dotfiles sync reconnect   # refresh expired authentication
+```
+
+Troubleshooting:
+
+```bash
+dotfiles sync reset       # recreate bisync baseline from current file listings
+dotfiles sync --resync    # force full resync (fallback, may fail on shared files)
+```
+
+Scheduler control:
+
+```bash
+dotfiles sync pause       # temporarily stop auto-sync
+dotfiles sync resume      # restart auto-sync
+```
+
+`setup` handles the full flow: rclone installation (via Homebrew), Google Drive remote configuration, filter file deployment, baseline creation via `rclone lsl` (avoids `--resync` pitfalls with shared files), and launchd/systemd scheduler registration.
+
+> Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux). Conflicts resolved with `--conflict-resolve newer`. Uses `--fast-list` for efficient Google Drive API usage.
 
 ### `dotfiles version`
 
