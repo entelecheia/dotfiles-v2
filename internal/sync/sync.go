@@ -112,16 +112,14 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 		"--resilient",
 		"--recover",
 		"--max-lock", "15m",
-		"--tpslimit", "20",
-		"--retries", "5",
+		"--tpslimit", "50",
 		"--fast-list",
-		"--drive-skip-dangling-shortcuts",
 		"--log-file", cfg.LogFile,
 		"-v",
 	}
 
 	if resync {
-		args = append(args, "--resync", "--resync-mode", "path1", "--ignore-errors")
+		args = append(args, "--resync", "--resync-mode", "path1", "--ignore-errors", "--no-update-modtime")
 	}
 	if dryRun {
 		args = append(args, "--dry-run")
