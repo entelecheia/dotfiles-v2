@@ -12,5 +12,6 @@ ExecStart={{.RclonePath}} bisync {{.LocalPath}} {{.RemotePath}} \
   --max-lock 15m \
   --tpslimit 50 \
   --fast-list \
+  --drive-skip-dangling-shortcuts \
   --log-file {{.LogFile}} \
   --log-level INFO
