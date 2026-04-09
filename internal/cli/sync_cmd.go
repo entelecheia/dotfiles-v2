@@ -426,7 +426,7 @@ read-only access) are added to a skip list so they are not retried.`,
 				return err
 			}
 
-			if err := gosync.ClearSkipList(paths.SkipFile); err != nil {
+			if err := gosync.ClearSkipList(paths); err != nil {
 				return fmt.Errorf("clearing skip list: %w", err)
 			}
 			fmt.Println("Skip list cleared. All files will be retried on next sync.")

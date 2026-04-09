@@ -18,12 +18,13 @@ import (
 
 // Paths holds well-known file locations for sync artifacts.
 type Paths struct {
-	FilterFile     string
-	SkipFile       string
-	LogFile        string
-	LaunchdPlist   string
-	SystemdService string
-	SystemdTimer   string
+	FilterFile      string // static patterns (node_modules, etc.)
+	SkipFile        string // dynamic skip list (permission errors, symlinks)
+	BisyncFilter    string // combined filter for bisync (static + skip)
+	LogFile         string
+	LaunchdPlist    string
+	SystemdService  string
+	SystemdTimer    string
 }
 
 // ResolvePaths returns standard sync artifact paths.
@@ -32,9 +33,11 @@ func ResolvePaths() (*Paths, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolving home: %w", err)
 	}
+	rcloneDir := filepath.Join(home, ".config", "rclone")
 	return &Paths{
-		FilterFile:     filepath.Join(home, ".config", "rclone", "workspace-filter.txt"),
-		SkipFile:       filepath.Join(home, ".config", "rclone", "workspace-skip.txt"),
+		FilterFile:     filepath.Join(rcloneDir, "workspace-filter.txt"),
+		SkipFile:       filepath.Join(rcloneDir, "workspace-skip.txt"),
+		BisyncFilter:   filepath.Join(rcloneDir, "workspace-bisync-filter.txt"),
 		LogFile:        filepath.Join(home, ".local", "log", "rclone-bisync.log"),
 		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", "com.rclone.workspace-bisync.plist"),
 		SystemdService: filepath.Join(home, ".config", "systemd", "user", "rclone-bisync.service"),
@@ -69,7 +72,6 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		home, _ := os.UserHomeDir()
 		localPath = filepath.Join(home, localPath[2:])
 	}
-	// Do NOT EvalSymlinks — hangs on unresponsive Google Drive FUSE mounts.
 
 	remote := state.Modules.Sync.Remote
 	if remote == "" {
@@ -97,20 +99,29 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 	}, nil
 }
 
-// commonArgs returns rclone flags shared by all sync operations.
-func commonArgs(cfg *Config, paths *Paths) []string {
+// ── rclone args ───────────────────────────────────────────────────────────
+
+// driveArgs returns Google Drive-specific flags.
+func driveArgs() []string {
+	return []string{
+		"--drive-skip-dangling-shortcuts",
+		"--drive-skip-gdocs",
+		"--drive-pacer-min-sleep", "10ms",
+	}
+}
+
+// commonCopyArgs returns args for rclone copy --update mode.
+func commonCopyArgs(cfg *Config, paths *Paths) []string {
 	args := []string{
 		"--filter-from", cfg.FilterFile,
 		"--fast-list",
-		"--drive-skip-dangling-shortcuts",
-		"--drive-skip-gdocs",
 		"--tpslimit", "10",
-		"--retries", "5",
 		"--low-level-retries", "10",
 		"--log-file", cfg.LogFile,
 		"-v",
 	}
-	// Exclude files that previously failed with permission errors
+	args = append(args, driveArgs()...)
+	// Exclude known-bad files
 	if paths != nil && paths.SkipFile != "" {
 		if _, err := os.Stat(paths.SkipFile); err == nil {
 			args = append(args, "--exclude-from", paths.SkipFile)
@@ -122,23 +133,16 @@ func commonArgs(cfg *Config, paths *Paths) []string {
 	return args
 }
 
+// ── copy-based sync ───────────────────────────────────────────────────────
+
 // Sync performs bidirectional sync using rclone copy --update.
-//
-// Strategy:
-//  1. Download: remote → local (retries=5 for transient errors)
-//  2. Update skip list from permission errors in log
-//  3. Upload: local → remote (retries=1, skip list applied)
-//  4. Update skip list again from upload errors
-//
-// Permission errors are permanent (shared files), so retrying wastes
-// API quota. The skip list prevents future retries.
 func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, dryRun bool) error {
 	logDir := filepath.Dir(cfg.LogFile)
 	if err := runner.MkdirAll(logDir, 0755); err != nil {
 		return fmt.Errorf("creating log dir: %w", err)
 	}
 
-	baseArgs := commonArgs(cfg, paths)
+	baseArgs := commonCopyArgs(cfg, paths)
 	baseArgs = append(baseArgs, "--update")
 	if dryRun {
 		baseArgs = append(baseArgs, "--dry-run")
@@ -155,73 +159,151 @@ func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, d
 		return err
 	}
 
-	// Step 1: download (remote → local) — retries OK for transient errors
+	// Download (remote → local) — retries=5 for transient errors
 	if err := run(cfg.RemotePath, cfg.LocalPath, "Download", nil); err != nil {
 		fmt.Printf("  ⚠ Download errors (non-fatal): %v\n", err)
 	}
 
-	// Step 2: update skip list from download errors
+	// Update skip list between phases
 	if paths != nil && !dryRun {
 		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
-			fmt.Printf("  + %d file(s) added to skip list\n", added)
+			fmt.Printf("  + %d path(s) added to skip list\n", added)
 		}
 	}
 
-	// Step 3: upload (local → remote) — retries=1 (permission errors are permanent)
+	// Upload (local → remote) — retries=1 (permission errors are permanent)
 	if err := run(cfg.LocalPath, cfg.RemotePath, "Upload", []string{"--retries", "1"}); err != nil {
 		fmt.Printf("  ⚠ Upload errors (non-fatal): %v\n", err)
 	}
 
-	// Step 4: update skip list from upload errors
+	// Final skip list update
 	if paths != nil && !dryRun {
 		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
-			fmt.Printf("  + %d file(s) added to skip list\n", added)
+			fmt.Printf("  + %d path(s) added to skip list\n", added)
 		}
 	}
 
 	return nil
 }
 
-// Bisync runs rclone bisync with skip list applied.
-// Use for ongoing sync after initial copy-based sync has populated the skip list.
+// ── bisync ────────────────────────────────────────────────────────────────
+
+// Bisync runs rclone bisync with combined filter file.
+// Uses --filters-file (bisync-specific, MD5-tracked) for safe filter management.
 func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, resync, dryRun bool) error {
 	logDir := filepath.Dir(cfg.LogFile)
 	if err := runner.MkdirAll(logDir, 0755); err != nil {
 		return fmt.Errorf("creating log dir: %w", err)
 	}
 
+	// Generate combined filter file (static patterns + skip list)
+	if err := GenerateBisyncFilter(paths); err != nil {
+		return fmt.Errorf("generating bisync filter: %w", err)
+	}
+
 	args := []string{
 		"bisync",
 		cfg.LocalPath,
 		cfg.RemotePath,
-	}
-	args = append(args, commonArgs(cfg, paths)...)
-	args = append(args,
+		"--filters-file", paths.BisyncFilter,
+		"--fast-list",
+		"--tpslimit", "10",
+		"--retries", "3",
+		"--low-level-retries", "10",
 		"--conflict-resolve", "newer",
 		"--conflict-loser", "num",
 		"--resilient",
 		"--recover",
-		"--max-lock", "15m",
+		"--max-lock", "2m",
+		"--max-delete", "50",
 		"--no-update-modtime",
-	)
+		"--ignore-listing-checksum",
+		"--check-sync", "false",
+		"--log-file", cfg.LogFile,
+		"-v",
+	}
+	args = append(args, driveArgs()...)
 
 	if resync {
-		args = append(args, "--resync", "--resync-mode", "path1", "--ignore-errors")
+		args = append(args, "--resync", "--resync-mode", "path1")
 	}
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
+	if cfg.Verbose {
+		args = append(args, "--progress")
+	}
 
 	if cfg.Verbose {
-		return runner.RunAttached(ctx, "rclone", args...)
+		err := runner.RunAttached(ctx, "rclone", args...)
+		return classifyBisyncError(err, cfg.LogFile, resync)
 	}
+
 	_, err := runner.Run(ctx, "rclone", args...)
+	return classifyBisyncError(err, cfg.LogFile, resync)
+}
+
+// classifyBisyncError wraps bisync errors with actionable messages.
+func classifyBisyncError(err error, logFile string, resync bool) error {
+	if err == nil {
+		return nil
+	}
+	if resync {
+		return err
+	}
+
+	logContent := ""
+	if data, lerr := os.ReadFile(logFile); lerr == nil {
+		logContent = string(data)
+	}
+
+	if strings.Contains(logContent, "filters file has changed") ||
+		strings.Contains(logContent, "md5") {
+		return fmt.Errorf("filter changed — run 'dot sync --bisync --resync' to update baseline")
+	}
+	if strings.Contains(logContent, "cannot find prior") {
+		return fmt.Errorf("no baseline — run 'dot sync --bisync --resync' to create one")
+	}
+	if strings.Contains(logContent, "out of sync") {
+		return fmt.Errorf("paths out of sync — run 'dot sync --bisync --resync' to recover")
+	}
 	return err
 }
 
-// IsDarwin reports whether we're on macOS.
-func IsDarwin() bool {
-	return runtime.GOOS == "darwin"
+// GenerateBisyncFilter creates the combined bisync filter file from
+// the static filter and skip list. bisync tracks this file's MD5 and
+// requires --resync when it changes, which correctly handles skip list updates.
+func GenerateBisyncFilter(paths *Paths) error {
+	var sb strings.Builder
+
+	sb.WriteString("# Combined bisync filter (auto-generated)\n")
+	sb.WriteString("# DO NOT EDIT — regenerated from workspace-filter.txt + workspace-skip.txt\n\n")
+
+	// Read static filter
+	if data, err := os.ReadFile(paths.FilterFile); err == nil {
+		sb.WriteString("# === Static patterns ===\n")
+		sb.Write(data)
+		if !strings.HasSuffix(string(data), "\n") {
+			sb.WriteString("\n")
+		}
+	}
+
+	// Read skip list
+	if data, err := os.ReadFile(paths.SkipFile); err == nil {
+		lines := strings.Split(string(data), "\n")
+		hasEntries := false
+		for _, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "- ") {
+				if !hasEntries {
+					sb.WriteString("\n# === Skip list (permission errors, symlinks, shortcuts) ===\n")
+					hasEntries = true
+				}
+				sb.WriteString(strings.TrimSpace(line) + "\n")
+			}
+		}
+	}
+
+	return os.WriteFile(paths.BisyncFilter, []byte(sb.String()), 0644)
 }
 
 // ── skip list management ──────────────────────────────────────────────────
@@ -233,18 +315,15 @@ var (
 	googleDocRegex    = regexp.MustCompile(`ERROR : (.+): Failed to copy: can't update google document`)
 )
 
-const skipFileHeader = "# Auto-generated by dot sync — files skipped due to permission errors\n# Clear with: dot sync skip clear\n"
+const skipFileHeader = "# Auto-generated by dot sync — files skipped due to sync errors\n# Clear with: dot sync skip clear\n"
 
-// UpdateSkipList parses the log for permission errors and adds new paths to the skip list.
-// Returns the number of newly added entries.
+// UpdateSkipList parses the log for sync errors and adds new paths to the skip list.
 func UpdateSkipList(logFile, skipFile string) (int, error) {
-	// Parse log for all sync errors (permissions, symlinks, shortcuts, gdocs)
 	newPaths := parseSyncErrors(logFile)
 	if len(newPaths) == 0 {
 		return 0, nil
 	}
 
-	// Load existing skip list
 	existing := make(map[string]bool)
 	if data, err := os.ReadFile(skipFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -255,7 +334,6 @@ func UpdateSkipList(logFile, skipFile string) (int, error) {
 		}
 	}
 
-	// Merge new paths
 	added := 0
 	for _, p := range newPaths {
 		if !existing[p] {
@@ -268,7 +346,6 @@ func UpdateSkipList(logFile, skipFile string) (int, error) {
 		return 0, nil
 	}
 
-	// Write sorted skip list
 	var paths []string
 	for p := range existing {
 		paths = append(paths, p)
@@ -287,11 +364,9 @@ func UpdateSkipList(logFile, skipFile string) (int, error) {
 	if err := os.WriteFile(skipFile, []byte(sb.String()), 0644); err != nil {
 		return 0, fmt.Errorf("writing skip file: %w", err)
 	}
-
 	return added, nil
 }
 
-// parseSyncErrors extracts file paths from all error types in the log.
 func parseSyncErrors(logFile string) []string {
 	f, err := os.Open(logFile)
 	if err != nil {
@@ -348,10 +423,17 @@ func LoadSkipList(skipFile string) ([]string, error) {
 	return paths, nil
 }
 
-// ClearSkipList removes the skip list file.
-func ClearSkipList(skipFile string) error {
-	if err := os.Remove(skipFile); err != nil && !os.IsNotExist(err) {
-		return err
+// ClearSkipList removes the skip list and bisync filter files.
+func ClearSkipList(paths *Paths) error {
+	for _, f := range []string{paths.SkipFile, paths.BisyncFilter} {
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
+}
+
+// IsDarwin reports whether we're on macOS.
+func IsDarwin() bool {
+	return runtime.GOOS == "darwin"
 }
