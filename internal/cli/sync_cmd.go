@@ -122,10 +122,7 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 			if perr != nil {
 				return fmt.Errorf("bisync failed: %w", err)
 			}
-			fmt.Println("\nBaseline out of date. Syncing paths and recreating...")
-			if serr := gosync.SyncOnce(cmd.Context(), runner, cfg); serr != nil {
-				fmt.Printf("  ⚠ Path sync: %v\n", serr)
-			}
+			fmt.Println("\nBaseline out of date. Recreating...")
 			if berr := gosync.CreateBaseline(cmd.Context(), runner, cfg, paths); berr != nil {
 				return fmt.Errorf("baseline recreation failed: %w (original: %w)", berr, err)
 			}

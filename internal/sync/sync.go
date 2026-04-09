@@ -121,6 +121,8 @@ func bisyncArgs(cfg *Config) []string {
 		"--retries", "5",
 		"--fast-list",
 		"--drive-skip-dangling-shortcuts",
+		"--drive-skip-gdocs",
+		"--no-update-modtime",
 		"--log-file", cfg.LogFile,
 		"-v",
 	}
