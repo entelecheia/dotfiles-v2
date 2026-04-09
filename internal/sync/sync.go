@@ -174,9 +174,40 @@ func HasBaseline(paths *Paths, cfg *Config) bool {
 	return err1 == nil && err2 == nil
 }
 
+// SyncOnce runs a one-way rclone sync to make both paths match before
+// baseline creation. Downloads missing files from remote → local, then
+// uploads missing files from local → remote.
+func SyncOnce(ctx context.Context, runner *exec.Runner, cfg *Config) error {
+	commonArgs := []string{
+		"--filter-from", cfg.FilterFile,
+		"--fast-list",
+		"--drive-skip-dangling-shortcuts",
+		"--tpslimit", "10",
+		"--retries", "5",
+		"--no-update-modtime",
+		"--log-file", cfg.LogFile,
+		"-v",
+	}
+
+	// Step 1: remote → local (download missing files)
+	fmt.Println("  Downloading missing files from remote...")
+	dlArgs := append([]string{"copy", cfg.RemotePath, cfg.LocalPath}, commonArgs...)
+	if _, err := runner.Run(ctx, "rclone", dlArgs...); err != nil {
+		return fmt.Errorf("downloading from remote: %w", err)
+	}
+
+	// Step 2: local → remote (upload missing files)
+	fmt.Println("  Uploading missing files to remote...")
+	ulArgs := append([]string{"copy", cfg.LocalPath, cfg.RemotePath}, commonArgs...)
+	if _, err := runner.Run(ctx, "rclone", ulArgs...); err != nil {
+		return fmt.Errorf("uploading to remote: %w", err)
+	}
+
+	return nil
+}
+
 // CreateBaseline generates bisync baseline listing files without --resync.
-// This avoids the Google Drive permission/quota errors that plague --resync
-// on workspaces with shared files.
+// Optionally runs SyncOnce first to ensure both paths have the same files.
 //
 // Uses rclone lsf to get file info, then formats it into bisync v1 listing
 // format. This is safe because it only reads — no writes, no SetModTime.

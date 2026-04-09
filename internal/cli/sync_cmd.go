@@ -118,7 +118,10 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 			if perr != nil {
 				return fmt.Errorf("bisync failed: %w", err)
 			}
-			fmt.Println("\nBaseline out of date. Recreating...")
+			fmt.Println("\nBaseline out of date. Syncing paths and recreating...")
+			if serr := gosync.SyncOnce(cmd.Context(), runner, cfg); serr != nil {
+				fmt.Printf("  ⚠ Path sync: %v\n", serr)
+			}
 			if berr := gosync.CreateBaseline(cmd.Context(), runner, cfg, paths); berr != nil {
 				return fmt.Errorf("baseline recreation failed: %w (original: %w)", berr, err)
 			}
@@ -424,6 +427,11 @@ Use this when:
 			if !runner.CommandExists("rclone") {
 				fmt.Println("rclone is not installed. Run 'dot sync setup' to get started.")
 				return nil
+			}
+
+			fmt.Println("Syncing paths to match (one-way copy)...")
+			if err := gosync.SyncOnce(cmd.Context(), runner, cfg); err != nil {
+				fmt.Printf("  ⚠ Sync failed: %v\n  Continuing with baseline creation...\n", err)
 			}
 
 			fmt.Println("Removing old baseline...")
