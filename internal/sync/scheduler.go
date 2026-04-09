@@ -1,6 +1,8 @@
 package sync
 
 import (
+	osexec "os/exec"
+
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
@@ -27,12 +29,13 @@ func (s SchedulerState) String() string {
 
 // TemplateData holds data for rendering scheduler templates.
 type TemplateData struct {
-	RclonePath string
-	LocalPath  string
-	RemotePath string
-	FilterFile string
-	LogFile    string
-	Interval   int
+	DotfilesPath string
+	RclonePath   string
+	LocalPath    string
+	RemotePath   string
+	FilterFile   string
+	LogFile      string
+	Interval     int
 }
 
 // Scheduler manages the platform-specific periodic sync timer.
@@ -55,12 +58,18 @@ func NewScheduler(runner *exec.Runner, paths *Paths, cfg *Config, engine *templa
 
 // templateData returns the data struct for template rendering.
 func (s *Scheduler) templateData() TemplateData {
+	dotfilesPath, _ := osexec.LookPath("dotfiles")
+	if dotfilesPath == "" {
+		// fallback: try "dot" symlink
+		dotfilesPath, _ = osexec.LookPath("dot")
+	}
 	return TemplateData{
-		RclonePath: s.Config.RclonePath,
-		LocalPath:  s.Config.LocalPath,
-		RemotePath: s.Config.RemotePath,
-		FilterFile: s.Config.FilterFile,
-		LogFile:    s.Config.LogFile,
-		Interval:   s.Config.Interval,
+		DotfilesPath: dotfilesPath,
+		RclonePath:   s.Config.RclonePath,
+		LocalPath:    s.Config.LocalPath,
+		RemotePath:   s.Config.RemotePath,
+		FilterFile:   s.Config.FilterFile,
+		LogFile:      s.Config.LogFile,
+		Interval:     s.Config.Interval,
 	}
 }

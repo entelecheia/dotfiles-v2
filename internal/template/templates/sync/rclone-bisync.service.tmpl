@@ -1,20 +1,6 @@
 [Unit]
-Description=rclone bisync workspace to Google Drive
+Description=Sync workspace with Google Drive
 
 [Service]
 Type=oneshot
-ExecStart={{.RclonePath}} bisync {{.LocalPath}} {{.RemotePath}} \
-  --filter-from {{.FilterFile}} \
-  --conflict-resolve newer \
-  --conflict-loser num \
-  --resilient \
-  --recover \
-  --max-lock 15m \
-  --tpslimit 10 \
-  --retries 5 \
-  --fast-list \
-  --drive-skip-dangling-shortcuts \
-  --drive-skip-gdocs \
-  --no-update-modtime \
-  --log-file {{.LogFile}} \
-  --log-level INFO
+ExecStart={{.DotfilesPath}} sync

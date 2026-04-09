@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
@@ -19,8 +18,11 @@ import (
 func newSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "Sync workspace with Google Drive via rclone bisync",
-		Long: `Bidirectional sync between local workspace and Google Drive using rclone bisync.
+		Short: "Sync workspace with Google Drive via rclone",
+		Long: `Bidirectional sync between local workspace and Google Drive.
+
+Uses rclone copy --update in both directions: newer files win.
+No baseline or initialization required — just works.
 
 Getting started:
   dot sync setup       Full guided setup (install rclone, auth, filter, scheduler)
@@ -39,7 +41,6 @@ Scheduler control:
 		SilenceUsage: true,
 	}
 
-	cmd.Flags().Bool("resync", false, "Force initial baseline sync (first-time only)")
 	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rclone progress output")
 
 	cmd.AddCommand(
@@ -47,7 +48,6 @@ Scheduler control:
 		newSyncSetupCmd(),
 		newSyncConnectCmd(),
 		newSyncReconnectCmd(),
-		newSyncResetCmd(),
 		newSyncLogCmd(),
 		newSyncPauseCmd(),
 		newSyncResumeCmd(),
@@ -103,40 +103,16 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	resync, _ := cmd.Flags().GetBool("resync")
-
 	fmt.Printf("Syncing %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
-	if resync {
-		fmt.Println("(--resync mode — establishing initial baseline)")
-	}
 	if dryRun {
 		fmt.Println("(dry-run mode — no changes will be made)")
 	}
 
-	err = gosync.Bisync(cmd.Context(), runner, cfg, resync, dryRun)
-	if err != nil {
-		// Auto-recover from out-of-sync or missing baseline errors
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "out of sync") || strings.Contains(errMsg, "no sync baseline") {
-			paths, perr := gosync.ResolvePaths()
-			if perr != nil {
-				return fmt.Errorf("bisync failed: %w", err)
-			}
-			fmt.Println("\nBaseline out of date. Recreating...")
-			if berr := gosync.CreateBaseline(cmd.Context(), runner, cfg, paths); berr != nil {
-				return fmt.Errorf("baseline recreation failed: %w (original: %w)", berr, err)
-			}
-			fmt.Println("Retrying sync...")
-			if err2 := gosync.Bisync(cmd.Context(), runner, cfg, false, dryRun); err2 != nil {
-				return fmt.Errorf("bisync retry failed: %w", err2)
-			}
-			fmt.Println("Sync complete (after baseline refresh).")
-			return nil
-		}
-		return fmt.Errorf("bisync failed: %w", err)
+	if err := gosync.Sync(cmd.Context(), runner, cfg, dryRun); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	fmt.Println("Sync complete.")
+	fmt.Println("✓ Sync complete.")
 	return nil
 }
 
@@ -209,8 +185,6 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 			if err := gosync.ConfigRemote(ctx, remote); err != nil {
 				return fmt.Errorf("configuring remote: %w", err)
 			}
-		}
-		if !dryRun {
 			if !gosync.HasRemote(ctx, runner, remote) {
 				return fmt.Errorf("remote '%s' still not configured after setup", remote)
 			}
@@ -219,15 +193,13 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Verify remote access
-	remoteAccessible := false
 	if !dryRun {
 		fmt.Printf("Verifying access to %s:...\n", remote)
 		if err := gosync.CheckRemote(ctx, runner, remote); err != nil {
 			fmt.Printf("  ⚠ %v\n", err)
-			fmt.Println("  Continue anyway — you may need to re-authenticate later.")
+			fmt.Println("  Run 'dot sync reconnect' to fix authentication.")
 		} else {
 			fmt.Printf("  ✓ remote '%s' accessible\n", remote)
-			remoteAccessible = true
 		}
 	}
 
@@ -257,12 +229,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	if state.Modules.Sync.Interval <= 0 {
 		state.Modules.Sync.Interval = 300
 	}
-	// Re-resolve config with updated state
 	state.Modules.Workspace.Path = localPath
-	cfg, err := gosync.ResolveConfig(state)
-	if err != nil {
-		return err
-	}
 
 	// 4. Deploy filter file
 	fmt.Println("Deploying filter file...")
@@ -282,36 +249,22 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 
 	// 5. Deploy scheduler
 	fmt.Println("Deploying auto-sync scheduler...")
+	cfg, err := gosync.ResolveConfig(state)
+	if err != nil {
+		return err
+	}
 	sched := gosync.NewScheduler(runner, paths, cfg, engine)
 	if err := sched.Install(ctx); err != nil {
 		return fmt.Errorf("installing scheduler: %w", err)
 	}
 	fmt.Println("  ✓ scheduler installed")
 
-	// 6. Create bisync baseline (listing-based, avoids --resync pitfalls)
-	if !dryRun && remoteAccessible {
-		if gosync.HasBaseline(paths, cfg) {
-			fmt.Println("\nBaseline already exists. Use 'dot sync reset' to recreate.")
-		} else {
-			fmt.Println("\nCreating bisync baseline...")
-			if err := gosync.CreateBaseline(ctx, runner, cfg, paths); err != nil {
-				fmt.Printf("  ⚠ Baseline creation failed: %v\n", err)
-				fmt.Println("  You can retry with: dot sync reset")
-			}
-		}
-	} else if !dryRun && !remoteAccessible {
-		fmt.Println("\n⚠ Skipping baseline — remote not accessible.")
-		fmt.Println("  To fix authentication:")
-		fmt.Println("    dot sync reconnect")
-		fmt.Println("  Then create baseline:")
-		fmt.Println("    dot sync reset")
-	}
-
-	// 7. Save state
+	// 6. Save state
 	if err := config.SaveState(state); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
-	fmt.Println("\n✓ Sync setup complete.")
+
+	fmt.Println("\n✓ Sync setup complete. Run 'dot sync' to start syncing.")
 	return nil
 }
 
@@ -403,52 +356,6 @@ func runSyncLog(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// ── reset ─────────────────────────────────────────────────────────────────
-
-func newSyncResetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "reset",
-		Short: "Recreate bisync baseline from current file listings",
-		Long: `Generates fresh bisync baseline by listing files on both sides.
-
-This avoids the --resync flag which can fail on Google Drive workspaces
-with shared files (permission errors) or large file counts (quota errors).
-
-Use this when:
-  - Initial setup failed to create a baseline
-  - Bisync reports "cannot find prior Path1 or Path2 listings"
-  - You want to start fresh after sync issues`,
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, cfg, paths, runner, err := syncBootstrap(cmd)
-			if err != nil {
-				return err
-			}
-
-			if !runner.CommandExists("rclone") {
-				fmt.Println("rclone is not installed. Run 'dot sync setup' to get started.")
-				return nil
-			}
-
-			fmt.Println("Syncing paths to match (one-way copy)...")
-			if err := gosync.SyncOnce(cmd.Context(), runner, cfg); err != nil {
-				fmt.Printf("  ⚠ Sync failed: %v\n  Continuing with baseline creation...\n", err)
-			}
-
-			fmt.Println("Removing old baseline...")
-			gosync.RemoveBaseline(paths, cfg)
-
-			fmt.Println("Creating new bisync baseline...")
-			if err := gosync.CreateBaseline(cmd.Context(), runner, cfg, paths); err != nil {
-				return fmt.Errorf("baseline creation failed: %w", err)
-			}
-
-			fmt.Println("\n✓ Baseline recreated. Run 'dot sync' to start syncing.")
-			return nil
-		},
-	}
-}
-
 // ── connect / reconnect ───────────────────────────────────────────────────
 
 func newSyncConnectCmd() *cobra.Command {
@@ -482,8 +389,6 @@ func newSyncConnectCmd() *cobra.Command {
 			}
 
 			fmt.Printf("✓ Remote '%s' configured.\n", remote)
-
-			// Save remote name to state
 			state.Modules.Sync.Remote = remote
 			return config.SaveState(state)
 		},

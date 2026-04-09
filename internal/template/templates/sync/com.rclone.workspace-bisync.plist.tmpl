@@ -7,37 +7,15 @@
   <string>com.rclone.workspace-bisync</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{.RclonePath}}</string>
-    <string>bisync</string>
-    <string>{{.LocalPath}}</string>
-    <string>{{.RemotePath}}</string>
-    <string>--filter-from</string>
-    <string>{{.FilterFile}}</string>
-    <string>--conflict-resolve</string>
-    <string>newer</string>
-    <string>--conflict-loser</string>
-    <string>num</string>
-    <string>--resilient</string>
-    <string>--recover</string>
-    <string>--max-lock</string>
-    <string>15m</string>
-    <string>--tpslimit</string>
-    <string>10</string>
-    <string>--retries</string>
-    <string>5</string>
-    <string>--fast-list</string>
-    <string>--drive-skip-dangling-shortcuts</string>
-    <string>--drive-skip-gdocs</string>
-    <string>--no-update-modtime</string>
-    <string>--log-file</string>
-    <string>{{.LogFile}}</string>
-    <string>--log-level</string>
-    <string>INFO</string>
+    <string>{{.DotfilesPath}}</string>
+    <string>sync</string>
   </array>
   <key>StartInterval</key>
   <integer>{{.Interval}}</integer>
   <key>RunAtLoad</key>
   <true/>
+  <key>StandardOutPath</key>
+  <string>{{.LogFile}}</string>
   <key>StandardErrorPath</key>
   <string>{{.LogFile}}</string>
 </dict>
