@@ -8,10 +8,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+// timeNowUTC returns the current time in UTC (extracted for testability).
+var timeNowUTC = func() time.Time { return time.Now().UTC() }
 
 // Paths holds well-known file locations for sync artifacts.
 type Paths struct {
@@ -172,11 +176,8 @@ func HasBaseline(paths *Paths, cfg *Config) bool {
 // This avoids the Google Drive permission/quota errors that plague --resync
 // on workspaces with shared files.
 //
-// Strategy:
-//  1. rclone lsl <local> → path1.lst (local filesystem, fast)
-//  2. rclone lsl <remote> → path2.lst (Drive API with --fast-list)
-//  3. Remove any stale lock files
-//  4. bisync can then run incrementally without --resync
+// Uses rclone lsf to get file info, then formats it into bisync v1 listing
+// format. This is safe because it only reads — no writes, no SetModTime.
 func CreateBaseline(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths) error {
 	prefix := baselinePrefix(cfg)
 	cacheDir := paths.BisyncCache
@@ -189,34 +190,21 @@ func CreateBaseline(ctx context.Context, runner *exec.Runner, cfg *Config, paths
 	p2 := filepath.Join(cacheDir, prefix+".path2.lst")
 	lockFile := filepath.Join(cacheDir, prefix+".lck")
 
-	// Step 1: generate local listing
+	// Step 1: generate local listing in bisync v1 format
 	fmt.Println("  Generating local file listing...")
-	result1, err := runner.Run(ctx, "rclone", "lsl", cfg.LocalPath,
-		"--filter-from", cfg.FilterFile)
+	localCount, err := generateListing(ctx, runner, cfg.LocalPath, cfg.FilterFile, p1, nil)
 	if err != nil {
 		return fmt.Errorf("listing local path: %w", err)
 	}
-	if err := runner.WriteFile(p1, []byte(result1.Stdout), 0644); err != nil {
-		return fmt.Errorf("writing path1 listing: %w", err)
-	}
-	localCount := strings.Count(result1.Stdout, "\n")
 	fmt.Printf("  ✓ Local: %d files\n", localCount)
 
-	// Step 2: generate remote listing
+	// Step 2: generate remote listing in bisync v1 format
 	fmt.Println("  Generating remote file listing...")
-	result2, err := runner.Run(ctx, "rclone", "lsl", cfg.RemotePath,
-		"--filter-from", cfg.FilterFile,
-		"--fast-list",
-		"--drive-skip-dangling-shortcuts",
-		"--tpslimit", "10",
-		"--retries", "5")
+	extraArgs := []string{"--fast-list", "--drive-skip-dangling-shortcuts", "--tpslimit", "10", "--retries", "5"}
+	remoteCount, err := generateListing(ctx, runner, cfg.RemotePath, cfg.FilterFile, p2, extraArgs)
 	if err != nil {
 		return fmt.Errorf("listing remote path: %w", err)
 	}
-	if err := runner.WriteFile(p2, []byte(result2.Stdout), 0644); err != nil {
-		return fmt.Errorf("writing path2 listing: %w", err)
-	}
-	remoteCount := strings.Count(result2.Stdout, "\n")
 	fmt.Printf("  ✓ Remote: %d files\n", remoteCount)
 
 	// Step 3: remove stale lock file
@@ -226,6 +214,67 @@ func CreateBaseline(ctx context.Context, runner *exec.Runner, cfg *Config, paths
 
 	fmt.Printf("  ✓ Baseline created (%d local, %d remote)\n", localCount, remoteCount)
 	return nil
+}
+
+// generateListing creates a bisync v1 listing file from rclone lsf output.
+func generateListing(ctx context.Context, runner *exec.Runner, remotePath, filterFile, outPath string, extraArgs []string) (int, error) {
+	// rclone lsf -R --format "spt" --separator ";" --files-only
+	// gives: size;path;ISO8601_time
+	args := []string{
+		"lsf", "-R",
+		"--format", "spt",
+		"--separator", ";",
+		"--files-only",
+		"--filter-from", filterFile,
+		remotePath,
+	}
+	args = append(args, extraArgs...)
+
+	result, err := runner.Run(ctx, "rclone", args...)
+	if err != nil {
+		return 0, err
+	}
+
+	// Convert to bisync v1 format:
+	// # bisync listing v1 from <timestamp>
+	// - <size> - - <time> "<path>"
+	now := fmt.Sprintf("# bisync listing v1 from %s\n",
+		strings.ReplaceAll(fmt.Sprintf("%s", timeNowUTC().Format("2006-01-02T15:04:05.000000000-0700")), "+", "+"))
+
+	var sb strings.Builder
+	sb.WriteString(now)
+
+	count := 0
+	for _, line := range strings.Split(result.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ";", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		size := strings.TrimSpace(parts[0])
+		path := parts[1]
+		modtime := parts[2]
+
+		// bisync v1 format: - <size_padded> - - <modtime_ISO8601> "<path>"
+		sb.WriteString(fmt.Sprintf("- %s - - %s %q\n", padSize(size), modtime, path))
+		count++
+	}
+
+	if err := runner.WriteFile(outPath, []byte(sb.String()), 0644); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// padSize right-aligns a size string to 9 characters.
+func padSize(s string) string {
+	if len(s) >= 9 {
+		return s
+	}
+	return strings.Repeat(" ", 9-len(s)) + s
 }
 
 // RemoveBaseline removes bisync baseline files and lock, forcing re-creation.
@@ -253,7 +302,7 @@ func baselinePrefix(cfg *Config) string {
 	p1 := strings.ReplaceAll(cfg.LocalPath, "/", "_")
 	p1 = strings.TrimPrefix(p1, "_")
 
-	p2 := strings.ReplaceAll(cfg.RemotePath, ":", "")
+	p2 := strings.ReplaceAll(cfg.RemotePath, ":", "_")
 	p2 = strings.ReplaceAll(p2, "/", "_")
 
 	return p1 + ".." + p2
