@@ -40,6 +40,7 @@ Scheduler control:
 	}
 
 	cmd.Flags().Bool("resync", false, "Force initial baseline sync (first-time only)")
+	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rclone progress output")
 
 	cmd.AddCommand(
 		newSyncStatusCmd(),
@@ -68,6 +69,9 @@ func syncBootstrap(cmd *cobra.Command) (*config.UserState, *gosync.Config, *gosy
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+
+	verbose, _ := cmd.Flags().GetBool("verbose")
+	cfg.Verbose = verbose
 
 	paths, err := gosync.ResolvePaths()
 	if err != nil {

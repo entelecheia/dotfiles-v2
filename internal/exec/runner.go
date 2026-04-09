@@ -58,6 +58,27 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) (*Result,
 	return result, nil
 }
 
+// RunAttached executes a command with stdout/stderr connected to the terminal.
+// Use for long-running commands where the user needs to see progress.
+func (r *Runner) RunAttached(ctx context.Context, name string, args ...string) error {
+	cmdStr := name + " " + strings.Join(args, " ")
+
+	if r.DryRun {
+		r.Logger.Info("dry-run", "cmd", cmdStr)
+		return nil
+	}
+
+	r.Logger.Info("exec (attached)", "cmd", cmdStr)
+	cmd := osexec.CommandContext(ctx, name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("command %q failed: %w", cmdStr, err)
+	}
+	return nil
+}
+
 // RunShell executes a command via "sh -c" for pipes and redirects.
 func (r *Runner) RunShell(ctx context.Context, script string) (*Result, error) {
 	return r.Run(ctx, "sh", "-c", script)

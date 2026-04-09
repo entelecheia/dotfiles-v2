@@ -58,6 +58,7 @@ type Config struct {
 	LogFile    string
 	RclonePath string
 	Interval   int
+	Verbose    bool
 }
 
 // ResolveConfig merges UserState fields with defaults.
@@ -142,10 +143,29 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
+	if cfg.Verbose {
+		args = append(args, "--progress")
+	}
+
+	// Verbose: stream output to terminal; otherwise capture for error detection
+	if cfg.Verbose {
+		err := runner.RunAttached(ctx, "rclone", args...)
+		if err != nil && !resync {
+			if logContent, lerr := os.ReadFile(cfg.LogFile); lerr == nil {
+				lc := string(logContent)
+				if strings.Contains(lc, "cannot find prior") {
+					return fmt.Errorf("no sync baseline found — run 'dot sync reset' to create one")
+				}
+				if strings.Contains(lc, "out of sync") {
+					return fmt.Errorf("paths are out of sync — baseline needs refresh")
+				}
+			}
+		}
+		return err
+	}
 
 	result, err := runner.Run(ctx, "rclone", args...)
 	if err != nil && !resync {
-		// Check stderr and log for recoverable errors
 		combined := ""
 		if result != nil {
 			combined = result.Stderr
@@ -153,7 +173,6 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 		if logContent, lerr := os.ReadFile(cfg.LogFile); lerr == nil {
 			combined += string(logContent)
 		}
-
 		if strings.Contains(combined, "cannot find prior") {
 			return fmt.Errorf("no sync baseline found — run 'dot sync reset' to create one")
 		}
@@ -188,18 +207,29 @@ func SyncOnce(ctx context.Context, runner *exec.Runner, cfg *Config) error {
 		"--log-file", cfg.LogFile,
 		"-v",
 	}
+	if cfg.Verbose {
+		commonArgs = append(commonArgs, "--progress")
+	}
+
+	run := func(args []string) error {
+		if cfg.Verbose {
+			return runner.RunAttached(ctx, "rclone", args...)
+		}
+		_, err := runner.Run(ctx, "rclone", args...)
+		return err
+	}
 
 	// Step 1: remote → local (download missing files)
 	fmt.Println("  Downloading missing files from remote...")
 	dlArgs := append([]string{"copy", cfg.RemotePath, cfg.LocalPath}, commonArgs...)
-	if _, err := runner.Run(ctx, "rclone", dlArgs...); err != nil {
+	if err := run(dlArgs); err != nil {
 		return fmt.Errorf("downloading from remote: %w", err)
 	}
 
 	// Step 2: local → remote (upload missing files)
 	fmt.Println("  Uploading missing files to remote...")
 	ulArgs := append([]string{"copy", cfg.LocalPath, cfg.RemotePath}, commonArgs...)
-	if _, err := runner.Run(ctx, "rclone", ulArgs...); err != nil {
+	if err := run(ulArgs); err != nil {
 		return fmt.Errorf("uploading to remote: %w", err)
 	}
 
