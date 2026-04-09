@@ -46,6 +46,7 @@ Scheduler control:
 	cmd.AddCommand(
 		newSyncStatusCmd(),
 		newSyncSetupCmd(),
+		newSyncSkipCmd(),
 		newSyncConnectCmd(),
 		newSyncReconnectCmd(),
 		newSyncLogCmd(),
@@ -87,7 +88,7 @@ func syncBootstrap(cmd *cobra.Command) (*config.UserState, *gosync.Config, *gosy
 // ── sync (default) ────────────────────────────────────────────────────────
 
 func runSyncNow(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, runner, err := syncBootstrap(cmd)
+	_, cfg, paths, runner, err := syncBootstrap(cmd)
 	if err != nil {
 		return err
 	}
@@ -108,8 +109,15 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 		fmt.Println("(dry-run mode — no changes will be made)")
 	}
 
-	if err := gosync.Sync(cmd.Context(), runner, cfg, dryRun); err != nil {
+	if err := gosync.Sync(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
 		return fmt.Errorf("sync failed: %w", err)
+	}
+
+	// Auto-add permission-failed files to skip list
+	if !dryRun && paths != nil {
+		if added, err := gosync.UpdateSkipList(cfg.LogFile, paths.SkipFile); err == nil && added > 0 {
+			fmt.Printf("  + %d file(s) added to skip list (permission denied)\n", added)
+		}
 	}
 
 	fmt.Println("✓ Sync complete.")
@@ -354,6 +362,61 @@ func runSyncLog(cmd *cobra.Command, args []string) error {
 
 	fmt.Println(lines)
 	return nil
+}
+
+// ── skip ──────────────────────────────────────────────────────────────────
+
+func newSyncSkipCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "skip",
+		Short: "Manage files skipped due to permission errors",
+		Long: `View or clear the list of files automatically skipped during sync.
+
+Files that fail with Google Drive permission errors (shared files with
+read-only access) are added to a skip list so they are not retried.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, _, paths, _, err := syncBootstrap(cmd)
+			if err != nil {
+				return err
+			}
+
+			entries, err := gosync.LoadSkipList(paths.SkipFile)
+			if err != nil {
+				return err
+			}
+
+			if len(entries) == 0 {
+				fmt.Println("No files in skip list.")
+				return nil
+			}
+
+			fmt.Printf("Skipped files (%d):\n", len(entries))
+			for _, p := range entries {
+				fmt.Printf("  %s\n", p)
+			}
+			fmt.Printf("\nClear with: dot sync skip clear\n")
+			return nil
+		},
+	}
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "clear",
+		Short: "Remove all entries from the skip list",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, _, paths, _, err := syncBootstrap(cmd)
+			if err != nil {
+				return err
+			}
+
+			if err := gosync.ClearSkipList(paths.SkipFile); err != nil {
+				return fmt.Errorf("clearing skip list: %w", err)
+			}
+			fmt.Println("Skip list cleared. All files will be retried on next sync.")
+			return nil
+		},
+	})
+
+	return cmd
 }
 
 // ── connect / reconnect ───────────────────────────────────────────────────
