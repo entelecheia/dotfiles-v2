@@ -225,6 +225,7 @@ func generateListing(ctx context.Context, runner *exec.Runner, remotePath, filte
 		"--format", "spt",
 		"--separator", ";",
 		"--files-only",
+		"--time-format", "2006-01-02T15:04:05.000000000-0700",
 		"--filter-from", filterFile,
 		remotePath,
 	}
