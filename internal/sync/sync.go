@@ -225,7 +225,9 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths,
 	args = append(args, driveArgs()...)
 
 	if resync {
-		args = append(args, "--resync", "--resync-mode", "path1")
+		// path2 (remote) as source of truth — avoids upload permission errors
+		// on shared Google Drive folders during baseline creation
+		args = append(args, "--resync", "--resync-mode", "path2")
 	}
 	if dryRun {
 		args = append(args, "--dry-run")
