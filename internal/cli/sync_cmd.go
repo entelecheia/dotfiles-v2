@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
@@ -108,7 +109,26 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 		fmt.Println("(dry-run mode — no changes will be made)")
 	}
 
-	if err := gosync.Bisync(cmd.Context(), runner, cfg, resync, dryRun); err != nil {
+	err = gosync.Bisync(cmd.Context(), runner, cfg, resync, dryRun)
+	if err != nil {
+		// Auto-recover from out-of-sync or missing baseline errors
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "out of sync") || strings.Contains(errMsg, "no sync baseline") {
+			paths, perr := gosync.ResolvePaths()
+			if perr != nil {
+				return fmt.Errorf("bisync failed: %w", err)
+			}
+			fmt.Println("\nBaseline out of date. Recreating...")
+			if berr := gosync.CreateBaseline(cmd.Context(), runner, cfg, paths); berr != nil {
+				return fmt.Errorf("baseline recreation failed: %w (original: %w)", berr, err)
+			}
+			fmt.Println("Retrying sync...")
+			if err2 := gosync.Bisync(cmd.Context(), runner, cfg, false, dryRun); err2 != nil {
+				return fmt.Errorf("bisync retry failed: %w", err2)
+			}
+			fmt.Println("Sync complete (after baseline refresh).")
+			return nil
+		}
 		return fmt.Errorf("bisync failed: %w", err)
 	}
 

@@ -145,18 +145,20 @@ func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, resync, dryRu
 
 	result, err := runner.Run(ctx, "rclone", args...)
 	if err != nil && !resync {
-		needsBaseline := false
-		if result != nil && strings.Contains(result.Stderr, "cannot find prior") {
-			needsBaseline = true
+		// Check stderr and log for recoverable errors
+		combined := ""
+		if result != nil {
+			combined = result.Stderr
 		}
-		if !needsBaseline {
-			if logContent, lerr := os.ReadFile(cfg.LogFile); lerr == nil &&
-				strings.Contains(string(logContent), "cannot find prior") {
-				needsBaseline = true
-			}
+		if logContent, lerr := os.ReadFile(cfg.LogFile); lerr == nil {
+			combined += string(logContent)
 		}
-		if needsBaseline {
+
+		if strings.Contains(combined, "cannot find prior") {
 			return fmt.Errorf("no sync baseline found — run 'dot sync reset' to create one")
+		}
+		if strings.Contains(combined, "out of sync") {
+			return fmt.Errorf("paths are out of sync — baseline needs refresh")
 		}
 	}
 	return err
