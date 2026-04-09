@@ -123,30 +123,31 @@ func commonArgs(cfg *Config, paths *Paths) []string {
 }
 
 // Sync performs bidirectional sync using rclone copy --update.
-// This is more robust than bisync for Google Drive workspaces with
-// shared files, Google Docs, and permission restrictions.
 //
 // Strategy:
-//  1. rclone copy remote → local --update (download newer/missing files)
-//  2. rclone copy local → remote --update (upload newer/missing files)
+//  1. Download: remote → local (retries=5 for transient errors)
+//  2. Update skip list from permission errors in log
+//  3. Upload: local → remote (retries=1, skip list applied)
+//  4. Update skip list again from upload errors
 //
-// --update ensures newer files win. Permission errors on individual
-// files are logged but don't abort the entire sync.
+// Permission errors are permanent (shared files), so retrying wastes
+// API quota. The skip list prevents future retries.
 func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, dryRun bool) error {
 	logDir := filepath.Dir(cfg.LogFile)
 	if err := runner.MkdirAll(logDir, 0755); err != nil {
 		return fmt.Errorf("creating log dir: %w", err)
 	}
 
-	args := commonArgs(cfg, paths)
-	args = append(args, "--update")
+	baseArgs := commonArgs(cfg, paths)
+	baseArgs = append(baseArgs, "--update")
 	if dryRun {
-		args = append(args, "--dry-run")
+		baseArgs = append(baseArgs, "--dry-run")
 	}
 
-	run := func(src, dst string, label string) error {
+	run := func(src, dst, label string, extraArgs []string) error {
 		fmt.Printf("  %s: %s → %s\n", label, src, dst)
-		cmdArgs := append([]string{"copy", src, dst}, args...)
+		cmdArgs := append([]string{"copy", src, dst}, baseArgs...)
+		cmdArgs = append(cmdArgs, extraArgs...)
 		if cfg.Verbose {
 			return runner.RunAttached(ctx, "rclone", cmdArgs...)
 		}
@@ -154,14 +155,28 @@ func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, d
 		return err
 	}
 
-	// Step 1: download (remote → local)
-	if err := run(cfg.RemotePath, cfg.LocalPath, "Download"); err != nil {
+	// Step 1: download (remote → local) — retries OK for transient errors
+	if err := run(cfg.RemotePath, cfg.LocalPath, "Download", nil); err != nil {
 		fmt.Printf("  ⚠ Download errors (non-fatal): %v\n", err)
 	}
 
-	// Step 2: upload (local → remote)
-	if err := run(cfg.LocalPath, cfg.RemotePath, "Upload"); err != nil {
+	// Step 2: update skip list from download errors
+	if paths != nil && !dryRun {
+		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
+			fmt.Printf("  + %d file(s) added to skip list\n", added)
+		}
+	}
+
+	// Step 3: upload (local → remote) — retries=1 (permission errors are permanent)
+	if err := run(cfg.LocalPath, cfg.RemotePath, "Upload", []string{"--retries", "1"}); err != nil {
 		fmt.Printf("  ⚠ Upload errors (non-fatal): %v\n", err)
+	}
+
+	// Step 4: update skip list from upload errors
+	if paths != nil && !dryRun {
+		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
+			fmt.Printf("  + %d file(s) added to skip list\n", added)
+		}
 	}
 
 	return nil

@@ -113,13 +113,6 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("sync failed: %w", err)
 	}
 
-	// Auto-add permission-failed files to skip list
-	if !dryRun && paths != nil {
-		if added, err := gosync.UpdateSkipList(cfg.LogFile, paths.SkipFile); err == nil && added > 0 {
-			fmt.Printf("  + %d file(s) added to skip list (permission denied)\n", added)
-		}
-	}
-
 	fmt.Println("✓ Sync complete.")
 	return nil
 }
