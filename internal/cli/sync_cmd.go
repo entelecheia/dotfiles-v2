@@ -41,6 +41,8 @@ Scheduler control:
 		SilenceUsage: true,
 	}
 
+	cmd.Flags().Bool("bisync", false, "Use rclone bisync (bidirectional with delete propagation)")
+	cmd.Flags().Bool("resync", false, "Force bisync baseline reset (use with --bisync)")
 	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rclone progress output")
 
 	cmd.AddCommand(
@@ -104,13 +106,36 @@ func runSyncNow(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
+	bisyncMode, _ := cmd.Flags().GetBool("bisync")
+	resync, _ := cmd.Flags().GetBool("resync")
+
 	fmt.Printf("Syncing %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
+	if bisyncMode {
+		fmt.Print("  mode: bisync")
+		if resync {
+			fmt.Print(" (--resync)")
+		}
+		fmt.Println()
+	}
 	if dryRun {
-		fmt.Println("(dry-run mode — no changes will be made)")
+		fmt.Println("  (dry-run — no changes)")
 	}
 
-	if err := gosync.Sync(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
-		return fmt.Errorf("sync failed: %w", err)
+	if bisyncMode {
+		if err := gosync.Bisync(cmd.Context(), runner, cfg, paths, resync, dryRun); err != nil {
+			return fmt.Errorf("bisync failed: %w", err)
+		}
+	} else {
+		if err := gosync.Sync(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
+			return fmt.Errorf("sync failed: %w", err)
+		}
+	}
+
+	// Update skip list from errors
+	if !dryRun && paths != nil {
+		if added, _ := gosync.UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
+			fmt.Printf("  + %d path(s) added to skip list\n", added)
+		}
 	}
 
 	fmt.Println("✓ Sync complete.")
