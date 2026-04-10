@@ -8,7 +8,12 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
-// NodeModule manages npm/pnpm configuration to relocate stores outside Google Drive.
+// globalNpmPackages are installed globally when npm is available.
+var globalNpmPackages = []string{
+	"@tobilu/qmd", // local search engine for markdown/docs
+}
+
+// NodeModule manages npm/pnpm configuration and global tools.
 type NodeModule struct{}
 
 func (m *NodeModule) Name() string { return "node" }
@@ -43,7 +48,28 @@ func (m *NodeModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, e
 		}
 	}
 
+	// Global npm packages (only if npm is available)
+	if rc.Runner.CommandExists("npm") {
+		for _, pkg := range globalNpmPackages {
+			if !isNpmPackageInstalled(rc, pkg) {
+				changes = append(changes, Change{
+					Description: fmt.Sprintf("install global npm package: %s", pkg),
+					Command:     fmt.Sprintf("npm install -g %s", pkg),
+				})
+			}
+		}
+	}
+
 	return &CheckResult{Satisfied: len(changes) == 0, Changes: changes}, nil
+}
+
+// isNpmPackageInstalled checks if a global npm package is installed.
+func isNpmPackageInstalled(rc *RunContext, pkg string) bool {
+	result, err := rc.Runner.Run(context.Background(), "npm", "list", "-g", "--depth=0", pkg)
+	if err != nil {
+		return false
+	}
+	return result.ExitCode == 0
 }
 
 func (m *NodeModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
@@ -76,6 +102,22 @@ func (m *NodeModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, e
 	}
 	if written {
 		messages = append(messages, fmt.Sprintf("wrote %s", npmrcDest))
+	}
+
+	// Install global npm packages
+	if rc.Runner.CommandExists("npm") {
+		for _, pkg := range globalNpmPackages {
+			if isNpmPackageInstalled(rc, pkg) {
+				continue
+			}
+			if _, err := rc.Runner.Run(ctx, "npm", "install", "-g", pkg); err != nil {
+				messages = append(messages, fmt.Sprintf("⚠ failed to install %s: %v", pkg, err))
+			} else {
+				messages = append(messages, fmt.Sprintf("installed global npm: %s", pkg))
+			}
+		}
+	} else {
+		messages = append(messages, "⚠ npm not found — skipping global package install (install node via fnm first)")
 	}
 
 	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
