@@ -150,6 +150,7 @@ Manage age-encrypted secrets (SSH keys, shell secrets).
 
 ```bash
 dotfiles secrets init              # encrypt SSH key + shell secrets
+dotfiles secrets init --scaffold   # also create empty 90-secrets.sh (0600) if missing
 dotfiles secrets backup <dir>      # copy .age files to backup dir
 dotfiles secrets restore <dir>     # decrypt from backup
 dotfiles secrets status            # check decrypted + encrypted files

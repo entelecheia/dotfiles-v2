@@ -15,6 +15,17 @@ import (
 
 const secretsDir = ".local/share/dotfiles-secrets"
 
+const shellSecretsTemplate = `# Shell secrets — sourced by zsh at login via zshrc.
+# Add environment exports for API keys, tokens, and other secrets.
+# This file is encrypted by 'dotfiles secrets init' into
+#   ~/.local/share/dotfiles-secrets/90-secrets.sh.age
+# Never commit the plaintext version to git or sync it to Drive.
+#
+# export OPENAI_API_KEY=sk-...
+# export ANTHROPIC_API_KEY=sk-...
+# export GITHUB_TOKEN=ghp_...
+`
+
 func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
@@ -51,7 +62,8 @@ func secretsStorePath() (string, error) {
 
 // newSecretsInitCmd encrypts local secrets files with age.
 func newSecretsInitCmd() *cobra.Command {
-	return &cobra.Command{
+	var scaffold bool
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Encrypt SSH key and shell secrets with age",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -107,6 +119,20 @@ func newSecretsInitCmd() *cobra.Command {
 
 			// Encrypt shell secrets if they exist.
 			shellSecrets := filepath.Join(home, ".config", "shell", "90-secrets.sh")
+			if scaffold && !runner.FileExists(shellSecrets) {
+				dryRun, _ := cmd.Flags().GetBool("dry-run")
+				if dryRun {
+					fmt.Printf("  [dry-run] Would scaffold: %s (0600)\n", shellSecrets)
+				} else {
+					if err := os.MkdirAll(filepath.Dir(shellSecrets), 0755); err != nil {
+						return fmt.Errorf("creating shell config dir: %w", err)
+					}
+					if err := os.WriteFile(shellSecrets, []byte(shellSecretsTemplate), 0600); err != nil {
+						return fmt.Errorf("scaffolding shell secrets: %w", err)
+					}
+					fmt.Printf("  Scaffolded: %s (0600)\n", shellSecrets)
+				}
+			}
 			if runner.FileExists(shellSecrets) {
 				dest := filepath.Join(storeDir, "90-secrets.sh.age")
 				args := append([]string{"-e"}, recipientArgs...)
@@ -123,6 +149,8 @@ func newSecretsInitCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&scaffold, "scaffold", false, "Create empty ~/.config/shell/90-secrets.sh template (0600) if missing")
+	return cmd
 }
 
 // newSecretsBackupCmd copies *.age files to a destination directory.

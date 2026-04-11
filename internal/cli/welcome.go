@@ -161,8 +161,10 @@ func printUsecases() {
 	section("6. Secrets management (age encryption)",
 		"Encrypt SSH keys and shell secrets with age.",
 		[]usecase{
+			{"dotfiles secrets init --scaffold",
+				"Create empty shell secrets template (0600), then encrypt SSH key + any shell secrets"},
 			{"dotfiles secrets init",
-				"Encrypt SSH key + shell secrets"},
+				"Encrypt existing SSH key + shell secrets"},
 			{"dotfiles secrets status",
 				"Show decrypted/encrypted file status"},
 			{"dotfiles secrets backup ~/backup",
