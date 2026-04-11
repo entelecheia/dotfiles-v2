@@ -1,47 +1,79 @@
 package ui
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
 
-// ConfigureIdentity prompts for identity fields. Returns updated state.
+// printSection prints a styled section header.
+func printSection(title string) {
+	fmt.Println()
+	fmt.Println(StyleSection.Render("▸ " + title))
+}
+
+// ConfigureIdentity prompts for identity fields with system detection.
 func ConfigureIdentity(state *config.UserState, yes bool) error {
+	printSection("Identity")
+
+	// Name: state → git config → system user
+	nameDefault, nameDetected := state.Name, false
+	if nameDefault == "" {
+		if v := detectGitConfig("user.name"); v != "" {
+			nameDefault, nameDetected = v, true
+		} else if v := os.Getenv("USER"); v != "" {
+			nameDefault, nameDetected = v, true
+		}
+	}
 	var err error
-
-	fmt.Println("\n--- Identity ---")
-
-	state.Name, err = Input("Full name", state.Name, yes)
+	state.Name, err = InputWithDetected("Full name", nameDefault, nameDetected, yes)
 	if err != nil {
 		return err
 	}
 
-	state.Email, err = Input("Email address", state.Email, yes)
+	// Email: state → git config
+	emailDefault, emailDetected := state.Email, false
+	if emailDefault == "" {
+		if v := detectGitConfig("user.email"); v != "" {
+			emailDefault, emailDetected = v, true
+		}
+	}
+	state.Email, err = InputWithDetected("Email address", emailDefault, emailDetected, yes)
 	if err != nil {
 		return err
 	}
 
-	state.GithubUser, err = Input("GitHub username", state.GithubUser, yes)
+	// GitHub user: state → gh CLI → guess from email
+	ghDefault, ghDetected := state.GithubUser, false
+	if ghDefault == "" {
+		if v := detectGithubUser(); v != "" {
+			ghDefault, ghDetected = v, true
+		}
+	}
+	state.GithubUser, err = InputWithDetected("GitHub username", ghDefault, ghDetected, yes)
 	if err != nil {
 		return err
 	}
 
-	tz := state.Timezone
-	if tz == "" {
-		tz = "Asia/Seoul"
+	// Timezone: state → /etc/localtime → $TZ → Asia/Seoul
+	tzDefault, tzDetected := state.Timezone, false
+	if tzDefault == "" {
+		if v := detectTimezone(); v != "" {
+			tzDefault, tzDetected = v, true
+		} else {
+			tzDefault = "Asia/Seoul"
+		}
 	}
-	state.Timezone, err = Input("Timezone", tz, yes)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	state.Timezone, err = InputWithDetected("Timezone", tzDefault, tzDetected, yes)
+	return err
 }
 
 // ConfigureProfile prompts for profile selection. Returns updated state.
@@ -58,9 +90,8 @@ func ConfigureProfile(state *config.UserState, suggested string, yes bool) error
 
 // ConfigureSSH prompts for SSH key name with auto-detection of existing keys.
 func ConfigureSSH(state *config.UserState, yes bool) error {
-	fmt.Println("\n--- SSH ---")
+	printSection("SSH")
 
-	// Detect existing SSH keys
 	keys := detectSSHKeys()
 
 	sshKeyDefault := state.SSH.KeyName
@@ -73,18 +104,15 @@ func ConfigureSSH(state *config.UserState, yes bool) error {
 	}
 
 	if len(keys) > 0 && !yes {
-		fmt.Printf("  Found %d SSH key(s):\n", len(keys))
+		fmt.Println(StyleHint.Render(fmt.Sprintf("  Found %d SSH key(s):", len(keys))))
 		for _, k := range keys {
-			fmt.Printf("    %s\n", k)
+			fmt.Println(StyleHint.Render("    • " + k))
 		}
-		fmt.Println()
 
-		// Build selection list: detected keys + custom option
 		options := make([]string, len(keys))
 		copy(options, keys)
 		options = append(options, "(enter custom name)")
 
-		// Set default to current config or best match
 		selectDefault := sshKeyDefault
 		if !contains(options, selectDefault) {
 			selectDefault = keys[0]
@@ -117,13 +145,12 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		return nil
 	}
 
-	fmt.Println("\n--- Workspace ---")
+	printSection("Workspace")
 
 	enableWorkspace, err := ConfirmBool("Enable workspace module?", state.Modules.Workspace.Path != "", yes)
 	if err != nil {
 		return err
 	}
-
 	if !enableWorkspace {
 		state.Modules.Workspace.Path = ""
 		state.Modules.Workspace.Gdrive = ""
@@ -131,30 +158,40 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		return nil
 	}
 
-	workspacePath := state.Modules.Workspace.Path
-	if workspacePath == "" {
-		workspacePath = "~/ai-workspace"
+	// Workspace path: state → detected local → default
+	wsDefault, wsDetected := state.Modules.Workspace.Path, false
+	if wsDefault == "" {
+		if v := detectWorkspacePath(); v != "" {
+			wsDefault, wsDetected = v, true
+		} else {
+			wsDefault = "~/ai-workspace"
+		}
 	}
-	state.Modules.Workspace.Path, err = Input("Workspace path", workspacePath, yes)
+	state.Modules.Workspace.Path, err = InputWithDetected("Workspace path", wsDefault, wsDetected, yes)
 	if err != nil {
 		return err
 	}
 
 	if runtime.GOOS == "darwin" {
-		state.Modules.Workspace.Gdrive, err = Input("Google Drive path (leave blank to skip)", state.Modules.Workspace.Gdrive, yes)
+		// Google Drive path: state → detected
+		gdDefault, gdDetected := state.Modules.Workspace.Gdrive, false
+		if gdDefault == "" {
+			if v := detectGoogleDrivePath(); v != "" {
+				gdDefault, gdDetected = v, true
+			}
+		}
+		state.Modules.Workspace.Gdrive, err = InputWithDetected("Google Drive path (blank to skip)", gdDefault, gdDetected, yes)
 		if err != nil {
 			return err
 		}
 	}
 
-	// Symlink target: detect existing symlink or prompt
 	expandedPath := expandHome(state.Modules.Workspace.Path)
 	if !yes {
 		currentTarget := readSymlinkTarget(expandedPath)
 		if currentTarget != "" {
-			fmt.Printf("  Current symlink: %s -> %s\n", state.Modules.Workspace.Path, currentTarget)
+			fmt.Println(StyleHint.Render(fmt.Sprintf("  Current symlink: %s → %s", state.Modules.Workspace.Path, currentTarget)))
 
-			// Offer to keep or change
 			keepCurrent, err := ConfirmBool("Keep existing symlink?", true, false)
 			if err != nil {
 				return err
@@ -169,18 +206,17 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		if symlinkDefault == "" && state.Modules.Workspace.Gdrive != "" {
 			symlinkDefault = state.Modules.Workspace.Gdrive
 		}
-		state.Modules.Workspace.Symlink, err = Input("Symlink target (leave blank to skip)", symlinkDefault, false)
+		state.Modules.Workspace.Symlink, err = Input("Symlink target (blank to skip)", symlinkDefault, false)
 		if err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
 // ConfigureAITools prompts for AI tools toggle.
 func ConfigureAITools(state *config.UserState, yes bool) error {
-	fmt.Println("\n--- AI Tools ---")
+	printSection("AI Tools")
 
 	aiDefault := state.Modules.AITools
 	if state.Name == "" {
@@ -198,12 +234,11 @@ func ConfigureTerminal(state *config.UserState, profile string, yes bool) error 
 		state.Modules.Warp = false
 		return nil
 	}
-
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
 
-	fmt.Println("\n--- Terminal ---")
+	printSection("Terminal")
 
 	var err error
 	state.Modules.Warp, err = ConfirmBool("Enable Warp terminal?", state.Modules.Warp, yes)
@@ -216,7 +251,7 @@ func ConfigureFonts(state *config.UserState, profile string, yes bool) error {
 		return nil
 	}
 
-	fmt.Println("\n--- Fonts ---")
+	printSection("Fonts")
 
 	fontFamily := state.Modules.Fonts.Family
 	if fontFamily == "" {
@@ -234,14 +269,13 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 		return nil
 	}
 
-	fmt.Println("\n--- Secrets (age encryption) ---")
+	printSection("Secrets (age encryption)")
 
-	// Detect existing age keys
 	ageKeys := detectAgeKeys()
 
 	if len(ageKeys) == 0 && state.Secrets.AgeIdentity == "" {
-		fmt.Println("  No age keys found. Skipping secrets configuration.")
-		fmt.Println("  (Create one later with: age-keygen -o ~/.ssh/age_key)")
+		fmt.Println(StyleHint.Render("  No age keys found. Skipping secrets configuration."))
+		fmt.Println(StyleHint.Render("  Create one later with: age-keygen -o ~/.ssh/age_key"))
 		return nil
 	}
 
@@ -255,18 +289,16 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 		return nil
 	}
 
-	// Age identity (private key)
 	identityDefault := state.Secrets.AgeIdentity
 	if identityDefault == "" && len(ageKeys) > 0 {
 		identityDefault = ageKeys[0]
 	}
 
 	if len(ageKeys) > 0 && !yes {
-		fmt.Printf("  Found %d age key(s):\n", len(ageKeys))
+		fmt.Println(StyleHint.Render(fmt.Sprintf("  Found %d age key(s):", len(ageKeys))))
 		for _, k := range ageKeys {
-			fmt.Printf("    %s\n", k)
+			fmt.Println(StyleHint.Render("    • " + k))
 		}
-		fmt.Println()
 
 		options := make([]string, len(ageKeys))
 		copy(options, ageKeys)
@@ -297,7 +329,6 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 		}
 	}
 
-	// Age recipient (public key) — try to read from .pub file
 	recipientDefault := ""
 	if len(state.Secrets.AgeRecipients) > 0 {
 		recipientDefault = state.Secrets.AgeRecipients[0]
@@ -307,10 +338,10 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 	}
 
 	if recipientDefault != "" {
-		fmt.Printf("  Public key: %s\n", recipientDefault)
+		fmt.Println(StyleHint.Render(fmt.Sprintf("  Public key: %s", recipientDefault)))
 		state.Secrets.AgeRecipients = []string{recipientDefault}
 	} else if !yes {
-		recipient, err := Input("Age recipient (public key, leave blank to skip)", "", false)
+		recipient, err := Input("Age recipient (public key, blank to skip)", "", false)
 		if err != nil {
 			return err
 		}
@@ -322,40 +353,155 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 	return nil
 }
 
-// PrintStateSummary displays the current configuration summary.
+// PrintStateSummary displays the current configuration summary with styled output.
 func PrintStateSummary(state *config.UserState) {
-	fmt.Println("\n=== Summary ===")
-	fmt.Printf("  Profile:      %s\n", state.Profile)
-	fmt.Printf("  Name:         %s\n", state.Name)
-	fmt.Printf("  Email:        %s\n", state.Email)
-	fmt.Printf("  GitHub:       %s\n", state.GithubUser)
-	fmt.Printf("  Timezone:     %s\n", state.Timezone)
-	fmt.Printf("  SSH key:      %s\n", state.SSH.KeyName)
-	fmt.Printf("  AI tools:     %v\n", state.Modules.AITools)
+	fmt.Println()
+	fmt.Println(StyleHeader.Render(" Configuration Summary "))
+	fmt.Println()
+
+	printKV("Profile", state.Profile)
+	printKV("Name", state.Name)
+	printKV("Email", state.Email)
+	printKV("GitHub", state.GithubUser)
+	printKV("Timezone", state.Timezone)
+	printKV("SSH key", state.SSH.KeyName)
+	printKV("AI tools", formatBool(state.Modules.AITools))
 	if state.Modules.Warp {
-		fmt.Printf("  Warp:         %v\n", state.Modules.Warp)
+		printKV("Warp", formatBool(state.Modules.Warp))
 	}
 	if state.Modules.Workspace.Path != "" {
-		fmt.Printf("  Workspace:    %s\n", state.Modules.Workspace.Path)
+		printKV("Workspace", state.Modules.Workspace.Path)
 		if state.Modules.Workspace.Gdrive != "" {
-			fmt.Printf("  GDrive:       %s\n", state.Modules.Workspace.Gdrive)
+			printKV("GDrive", state.Modules.Workspace.Gdrive)
 		}
 		if state.Modules.Workspace.Symlink != "" {
-			fmt.Printf("  Symlink:      %s -> %s\n", state.Modules.Workspace.Path, state.Modules.Workspace.Symlink)
+			printKV("Symlink", state.Modules.Workspace.Path+" → "+state.Modules.Workspace.Symlink)
 		}
 	}
 	if state.Modules.Fonts.Family != "" {
-		fmt.Printf("  Font family:  %s\n", state.Modules.Fonts.Family)
+		printKV("Font family", state.Modules.Fonts.Family)
 	}
 	if state.Secrets.AgeIdentity != "" {
-		fmt.Printf("  Age identity: %s\n", state.Secrets.AgeIdentity)
+		printKV("Age identity", state.Secrets.AgeIdentity)
 		if len(state.Secrets.AgeRecipients) > 0 {
-			fmt.Printf("  Age pubkey:   %s\n", state.Secrets.AgeRecipients[0])
+			printKV("Age pubkey", state.Secrets.AgeRecipients[0])
 		}
 	}
+	fmt.Println()
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────
+func printKV(key, value string) {
+	if value == "" {
+		value = lipgloss.NewStyle().Foreground(lipgloss.Color("#565F89")).Render("(unset)")
+	} else {
+		value = StyleValue.Render(value)
+	}
+	fmt.Printf("  %s  %s\n", StyleKey.Render(key+":"), value)
+}
+
+func formatBool(v bool) string {
+	if v {
+		return StyleSuccess.Render("✓") + " enabled"
+	}
+	return StyleHint.Render("✗ disabled")
+}
+
+// ── system detection ──────────────────────────────────────────────────────
+
+// detectGitConfig reads a value from git config (global).
+func detectGitConfig(key string) string {
+	cmd := osexec.Command("git", "config", "--global", "--get", key)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// detectGithubUser attempts to get the current user from gh CLI.
+func detectGithubUser() string {
+	if _, err := osexec.LookPath("gh"); err != nil {
+		return ""
+	}
+	cmd := osexec.Command("gh", "api", "user", "--jq", ".login")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// detectTimezone reads the system timezone.
+func detectTimezone() string {
+	// Try /etc/localtime symlink (Linux + macOS)
+	if target, err := os.Readlink("/etc/localtime"); err == nil {
+		// e.g., /var/db/timezone/zoneinfo/Asia/Seoul or /usr/share/zoneinfo/Asia/Seoul
+		for _, prefix := range []string{"/var/db/timezone/zoneinfo/", "/usr/share/zoneinfo/"} {
+			if strings.HasPrefix(target, prefix) {
+				return strings.TrimPrefix(target, prefix)
+			}
+		}
+		// Fallback: take last 2 segments
+		parts := strings.Split(target, "/")
+		if len(parts) >= 2 {
+			return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+		}
+	}
+	// Try $TZ env
+	if tz := os.Getenv("TZ"); tz != "" {
+		return tz
+	}
+	// Try /etc/timezone (Debian/Ubuntu)
+	if data, err := os.ReadFile("/etc/timezone"); err == nil {
+		return strings.TrimSpace(string(data))
+	}
+	return ""
+}
+
+// detectWorkspacePath checks common workspace locations.
+func detectWorkspacePath() string {
+	home, _ := os.UserHomeDir()
+	candidates := []string{
+		filepath.Join(home, "ai-workspace"),
+		filepath.Join(home, "workspace"),
+		filepath.Join(home, "work"),
+	}
+	for _, c := range candidates {
+		if fi, err := os.Lstat(c); err == nil && fi.IsDir() || fi != nil && fi.Mode()&os.ModeSymlink != 0 {
+			// Return with ~ prefix for portability
+			return "~/" + filepath.Base(c)
+		}
+	}
+	return ""
+}
+
+// detectGoogleDrivePath finds a Google Drive mount on macOS.
+func detectGoogleDrivePath() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	// Check common Drive paths
+	if entries, err := os.ReadDir(home); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, "My Drive") || strings.Contains(name, "GoogleDrive") {
+				return filepath.Join(home, name)
+			}
+		}
+	}
+	// Check /Volumes for mounted Drives
+	if entries, err := os.ReadDir("/Volumes"); err == nil {
+		for _, e := range entries {
+			if strings.Contains(e.Name(), "GoogleDrive") || strings.Contains(e.Name(), "Google Drive") {
+				return filepath.Join("/Volumes", e.Name())
+			}
+		}
+	}
+	return ""
+}
+
+// ── existing detection helpers ────────────────────────────────────────────
 
 // detectSSHKeys finds existing SSH key names in ~/.ssh/.
 func detectSSHKeys() []string {
@@ -373,7 +519,6 @@ func detectSSHKeys() []string {
 	seen := make(map[string]bool)
 	for _, e := range entries {
 		name := e.Name()
-		// Skip directories, public keys, known files
 		if e.IsDir() || strings.HasSuffix(name, ".pub") || strings.HasSuffix(name, ".age") {
 			continue
 		}
@@ -383,7 +528,6 @@ func detectSSHKeys() []string {
 			strings.HasPrefix(name, "age_key") {
 			continue
 		}
-		// Must have a matching .pub file to be a key pair
 		if !fileExists(filepath.Join(sshDir, name+".pub")) {
 			continue
 		}
@@ -393,7 +537,6 @@ func detectSSHKeys() []string {
 		}
 	}
 
-	// Sort: ed25519 first, then rsa
 	sort.Slice(keys, func(i, j int) bool {
 		iEd := strings.Contains(keys[i], "ed25519")
 		jEd := strings.Contains(keys[j], "ed25519")
@@ -436,19 +579,17 @@ func detectAgeKeys() []string {
 func readAgePublicKey(identityPath string) string {
 	expanded := expandHome(identityPath)
 	pubPath := expanded + ".pub"
-	data, err := os.ReadFile(pubPath)
+	f, err := os.Open(pubPath)
 	if err != nil {
 		return ""
 	}
-	line := strings.TrimSpace(string(data))
-	if strings.HasPrefix(line, "age1") {
-		return line
-	}
-	// Multi-line: find the age1... line
-	for _, l := range strings.Split(line, "\n") {
-		l = strings.TrimSpace(l)
-		if strings.HasPrefix(l, "age1") {
-			return l
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "age1") {
+			return line
 		}
 	}
 	return ""

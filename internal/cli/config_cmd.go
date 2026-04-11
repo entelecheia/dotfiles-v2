@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -52,37 +53,38 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 
 	config.ApplyStateToConfig(cfg, state)
 
-	// Profile
-	fmt.Printf("Profile: %s\n", profileName)
-	fmt.Printf("Config:  %s\n\n", config.StatePath())
+	fmt.Println()
+	fmt.Println(ui.StyleHeader.Render(" dotfiles Configuration "))
+	fmt.Println()
+	printKV("Profile", profileName)
+	printKV("Config", config.StatePath())
 
-	// System
-	fmt.Println("System:")
-	fmt.Printf("  OS:       %s/%s\n", sysInfo.OS, sysInfo.Arch)
-	fmt.Printf("  Hostname: %s\n", sysInfo.Hostname)
-	fmt.Printf("  Shell:    %s\n", sysInfo.Shell)
+	fmt.Println(ui.StyleSection.Render("▸ System"))
+	printKV("OS", sysInfo.OS+"/"+sysInfo.Arch)
+	printKV("Hostname", sysInfo.Hostname)
+	printKV("Shell", sysInfo.Shell)
 	if sysInfo.HasBrew {
-		fmt.Printf("  Brew:     %s\n", sysInfo.BrewPath)
+		printKV("Brew", sysInfo.BrewPath)
 	}
 	if sysInfo.HasGit {
-		fmt.Printf("  Git:      %s\n", sysInfo.GitVersion)
+		printKV("Git", sysInfo.GitVersion)
 	}
 	if sysInfo.HasNVIDIAGPU {
-		fmt.Printf("  GPU:      %s\n", sysInfo.GPUModel)
+		printKV("GPU", sysInfo.GPUModel)
 	}
 	if sysInfo.HasCUDA {
-		fmt.Printf("  CUDA:     %s\n", sysInfo.CUDAHome)
+		printKV("CUDA", sysInfo.CUDAHome)
 	}
 
-	// User
-	fmt.Println("\nUser:")
-	fmt.Printf("  Name:     %s\n", cfg.Name)
-	fmt.Printf("  Email:    %s\n", cfg.Email)
-	fmt.Printf("  GitHub:   %s\n", cfg.GithubUser)
-	fmt.Printf("  Timezone: %s\n", cfg.Timezone)
+	fmt.Println()
+	fmt.Println(ui.StyleSection.Render("▸ User"))
+	printKV("Name", cfg.Name)
+	printKV("Email", cfg.Email)
+	printKV("GitHub", cfg.GithubUser)
+	printKV("Timezone", cfg.Timezone)
 
-	// Modules
-	fmt.Println("\nModules:")
+	fmt.Println()
+	fmt.Println(ui.StyleSection.Render("▸ Modules"))
 	allModules := []struct {
 		name    string
 		enabled bool
@@ -103,31 +105,36 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		{"secrets", cfg.Modules.Secrets.Enabled, ""},
 	}
 
-	var enabled, disabled []string
 	for _, m := range allModules {
+		mark := ui.StyleHint.Render("✗")
+		detail := ""
 		if m.enabled {
-			entry := m.name
+			mark = ui.StyleSuccess.Render("✓")
 			if m.detail != "" {
-				entry += " (" + m.detail + ")"
+				detail = ui.StyleHint.Render("  (" + m.detail + ")")
 			}
-			enabled = append(enabled, entry)
-		} else {
-			disabled = append(disabled, m.name)
 		}
+		fmt.Printf("  %s  %s%s\n", mark, ui.StyleValue.Render(m.name), detail)
 	}
 
-	fmt.Printf("  Enabled:  %s\n", strings.Join(enabled, ", "))
-	if len(disabled) > 0 {
-		fmt.Printf("  Disabled: %s\n", strings.Join(disabled, ", "))
-	}
-
-	// Packages
 	pkgs := cfg.AllPackages()
 	if len(pkgs) > 0 {
-		fmt.Printf("\nPackages (%d): %s\n", len(pkgs), strings.Join(pkgs, ", "))
+		fmt.Println()
+		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Packages (%d)", len(pkgs))))
+		fmt.Printf("  %s\n", ui.StyleHint.Render(strings.Join(pkgs, ", ")))
 	}
+	fmt.Println()
 
 	return nil
+}
+
+func printKV(key, value string) {
+	if value == "" {
+		value = ui.StyleHint.Render("(unset)")
+	} else {
+		value = ui.StyleValue.Render(value)
+	}
+	fmt.Printf("  %s  %s\n", ui.StyleKey.Render(key+":"), value)
 }
 
 func fmtIf(cond bool, label string) string {
