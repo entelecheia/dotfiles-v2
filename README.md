@@ -19,15 +19,17 @@ curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/script
 ### Setup
 
 ```bash
+dotfiles            # welcome screen with next-step guidance
 dotfiles init       # interactive TUI — name, email, profile, modules
 dotfiles apply      # apply all enabled modules
+dotfiles usecase    # detailed workflow examples
 ```
 
 ### Workspace
 
 ```bash
-dot myproject       # launch or resume a multi-panel tmux workspace
-dot myproject       # SSH dropped? just run it again — resumes exactly
+dotfiles open myproject   # launch or resume a multi-panel tmux workspace
+dotfiles open myproject   # SSH dropped? just run it again — resumes exactly
 ```
 
 ### Build from source
@@ -43,6 +45,19 @@ make install        # → ~/.local/bin/dotfiles + ~/.local/bin/dot (symlink)
 ## Commands
 
 > `dotfiles` and `dot` are interchangeable — `dot` is a convenience symlink.
+> Run `dotfiles` with no arguments for a welcome screen; `dotfiles usecase` for detailed workflows.
+
+### `dotfiles` (no args) — welcome screen
+
+Prints a friendly getting-started guide. Detects whether you've configured dotfiles and shows next steps. Pass no arguments to any invocation of `dotfiles` to see it.
+
+### `dotfiles usecase`
+
+Walk through 9 detailed workflows: first-time setup, safe apply, daily workspace, Google Drive sync, drive-exclude, secrets, updates, GPU server, troubleshooting.
+
+```bash
+dotfiles usecase
+```
 
 ### `dotfiles init`
 
@@ -167,43 +182,61 @@ Supported patterns: `node_modules`, `.pnpm`, `.next`, `.nuxt`, `.astro`, `.svelt
 
 ### `dotfiles sync`
 
-Bidirectional workspace sync with Google Drive via rclone bisync. Selective sync with `--filter-from` excludes node_modules, build caches, and other heavy directories.
+Safe workspace sync with Google Drive via `rclone copy --update`. Default is **pull only** (safe for consumer machines). Explicit `push` or `all` for uploads.
 
 ```bash
-dotfiles sync setup       # install rclone, configure remote, deploy filter & scheduler
-dotfiles sync             # trigger immediate bisync
-dotfiles sync status      # show sync status and scheduler state
-dotfiles sync log         # last 50 lines of sync log
-dotfiles sync log 100     # last 100 lines
-dotfiles sync pause       # pause auto-sync scheduler
-dotfiles sync resume      # resume auto-sync scheduler
+dotfiles sync setup           # install rclone, configure remote, deploy filter & scheduler
+dotfiles sync                 # pull only: remote → local (default, safe)
+dotfiles sync pull            # pull only (explicit)
+dotfiles sync push            # push only: local → remote
+dotfiles sync all             # pull then push (bidirectional)
+dotfiles sync status          # show sync state, mount status, last stats
+dotfiles sync log [N]         # tail last N sync log lines (default 50)
+dotfiles sync skip            # list files auto-skipped due to permission errors
+dotfiles sync skip clear      # reset skip list to retry all files
+dotfiles sync connect         # configure a new Google Drive remote
+dotfiles sync reconnect       # refresh expired authentication
+dotfiles sync mount           # mount remote as FUSE filesystem (live, no local storage)
+dotfiles sync mount --unmount # unmount the FUSE filesystem
+dotfiles sync pause           # pause auto-sync scheduler
+dotfiles sync resume          # resume auto-sync scheduler
 ```
 
-`setup` handles the full flow: rclone installation (via Homebrew), Google Drive remote configuration, filter file deployment, launchd/systemd scheduler registration, and optional initial `--resync`.
+**Key features:**
+- **Skip list**: files that fail with permission errors (shared Drive files) are auto-added to `~/.config/rclone/workspace-skip.txt` and excluded from future syncs
+- **`--drive-skip-shared-with-me`**: avoids read-only shared folders entirely
+- **`--drive-skip-gdocs`**: skips Google Docs native files
+- **Download retries 5, upload retries 1**: permission errors are permanent so we don't waste quota retrying them
+- **`-V` / `--verbose`**: streams rclone progress to terminal
 
-> Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux). Conflicts resolved with `--conflict-resolve newer`.
+> Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux). Conflicts resolved with `--update` (newer wins).
 
 ### `dotfiles version`
+
+Shows version, git commit, Go version, and OS/arch. For dev builds (no ldflags), falls back to Go's embedded VCS info with `-dirty` suffix if the working tree has uncommitted changes.
 
 ```bash
 dotfiles version
 ```
 
 ```
-dotfiles v0.9.0 (47d7aa7)
+dotfiles v0.14.0 (9fc1890)        # release build
+dotfiles dev (d1877ee-dirty)      # dev build with uncommitted changes
   go:   go1.23.0
   os:   darwin/arm64
 ```
 
-### `dotfiles open` / `dot <project>`
+### `dotfiles open <project>`
 
 Launch or resume a tmux workspace. Auto-registers unregistered project names.
 
 ```bash
-dot myproject                         # implicit: dot open myproject
-dot open myproject --layout claude    # override layout
-dot open myproject --theme dracula    # override theme
+dotfiles open myproject                         # launch or resume
+dotfiles open myproject --layout claude         # override layout
+dotfiles open myproject --theme dracula         # override theme
 ```
+
+> Explicit `open` is required — running `dotfiles <unknown>` no longer auto-routes to `open`. This prevents typos like `dotfiles aply` from silently creating a bogus project.
 
 ### `dotfiles register` / `dotfiles unregister`
 
