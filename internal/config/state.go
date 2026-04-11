@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -53,6 +54,43 @@ type UserSSHState struct {
 	KeyName string `yaml:"key_name,omitempty"`
 }
 
+// validProfiles lists the allowed profile names.
+var validProfiles = []string{"minimal", "full", "server"}
+
+// Validate performs lightweight sanity checks on critical fields.
+// Returns an error with a clear message for invalid values.
+func (s *UserState) Validate() error {
+	if s.Profile != "" {
+		valid := false
+		for _, p := range validProfiles {
+			if s.Profile == p {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return fmt.Errorf("invalid profile %q (must be one of: %s)", s.Profile, strings.Join(validProfiles, ", "))
+		}
+	}
+	if s.Email != "" && !strings.Contains(s.Email, "@") {
+		return fmt.Errorf("invalid email %q (missing @)", s.Email)
+	}
+	if s.GithubUser != "" {
+		if len(s.GithubUser) > 39 {
+			return fmt.Errorf("invalid github_user %q (max 39 characters)", s.GithubUser)
+		}
+		for _, r := range s.GithubUser {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-') {
+				return fmt.Errorf("invalid github_user %q (alphanumeric + hyphens only)", s.GithubUser)
+			}
+		}
+	}
+	if s.Modules.Sync.Interval != 0 && (s.Modules.Sync.Interval < 60 || s.Modules.Sync.Interval > 86400) {
+		return fmt.Errorf("sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Sync.Interval)
+	}
+	return nil
+}
+
 // StateDir returns the path to the dotfiles config directory.
 func StateDir() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
@@ -68,8 +106,14 @@ func StatePath() string {
 }
 
 // LoadState reads user state from disk.
+// Returns an empty state on missing file, an error on parse failure.
+// Validation warnings are printed to stderr but do not fail the load
+// (so users can recover by running 'dotfiles reconfigure').
 func LoadState() (*UserState, error) {
-	path := StatePath()
+	return loadStateAt(StatePath())
+}
+
+func loadStateAt(path string) (*UserState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -82,12 +126,28 @@ func LoadState() (*UserState, error) {
 	if err := yaml.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parsing state: %w", err)
 	}
+	if err := state.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: state file has invalid values: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  Run 'dotfiles reconfigure' to fix.")
+	}
 	return &state, nil
 }
 
-// SaveState writes user state to disk.
+// SaveState writes user state to disk atomically.
+// Validates before writing — invalid state is never persisted.
 func SaveState(state *UserState) error {
-	dir := StateDir()
+	return saveStateAt(StatePath(), state)
+}
+
+// saveStateAt performs an atomic write: marshal → temp file → fsync → rename.
+// On POSIX filesystems, rename is atomic, so partial writes cannot corrupt
+// the existing config file.
+func saveStateAt(path string, state *UserState) error {
+	if err := state.Validate(); err != nil {
+		return fmt.Errorf("refusing to save invalid state: %w", err)
+	}
+
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating state dir: %w", err)
 	}
@@ -97,9 +157,35 @@ func SaveState(state *UserState) error {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
 
-	path := StatePath()
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("writing state: %w", err)
+	// Write to temp file in the same directory (same filesystem → rename is atomic)
+	tmpFile, err := os.CreateTemp(dir, ".config.yaml.*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return fmt.Errorf("writing temp file: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return fmt.Errorf("syncing temp file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		cleanup()
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
 }
@@ -116,39 +202,12 @@ func StatePathForHome(homeDir string) string {
 
 // LoadStateForHome reads user state from a specific home directory.
 func LoadStateForHome(homeDir string) (*UserState, error) {
-	path := StatePathForHome(homeDir)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &UserState{}, nil
-		}
-		return nil, fmt.Errorf("reading state: %w", err)
-	}
-
-	var state UserState
-	if err := yaml.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("parsing state: %w", err)
-	}
-	return &state, nil
+	return loadStateAt(StatePathForHome(homeDir))
 }
 
-// SaveStateForHome writes user state to a specific home directory.
+// SaveStateForHome writes user state to a specific home directory atomically.
 func SaveStateForHome(homeDir string, state *UserState) error {
-	dir := StateDirForHome(homeDir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating state dir: %w", err)
-	}
-
-	data, err := yaml.Marshal(state)
-	if err != nil {
-		return fmt.Errorf("marshaling state: %w", err)
-	}
-
-	path := StatePathForHome(homeDir)
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("writing state: %w", err)
-	}
-	return nil
+	return saveStateAt(StatePathForHome(homeDir), state)
 }
 
 // ApplyStateToConfig merges user state into a Config loaded from a profile.

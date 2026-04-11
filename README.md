@@ -112,13 +112,13 @@ dotfiles diff
 dotfiles diff --module git
 ```
 
-### `dotfiles upgrade`
+### `dotfiles update`
 
-Self-upgrading binary. Downloads the latest release from GitHub.
+Self-updating binary. Downloads the latest release from GitHub. (`upgrade` is an alias.)
 
 ```bash
-dotfiles upgrade          # download & install
-dotfiles upgrade --check  # check only
+dotfiles update          # download & install
+dotfiles update --check  # check only
 ```
 
 ### `dotfiles reconfigure`

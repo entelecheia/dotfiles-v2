@@ -170,12 +170,12 @@ func printUsecases() {
 				"Decrypt from backup on new machine"},
 		})
 
-	section("7. Upgrades and reconfiguration",
+	section("7. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
-			{"dotfiles upgrade --check",
+			{"dotfiles update --check",
 				"Check for newer version"},
-			{"dotfiles upgrade",
+			{"dotfiles update",
 				"Download and install latest release"},
 			{"dotfiles reconfigure",
 				"Re-run init prompts with current values as defaults"},

@@ -138,9 +138,12 @@ func runOpen(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("  Opening workspace: %s (layout=%s, theme=%s)\n", name, layout, theme)
-	return syscall.Exec(bashPath, []string{
+	if err := syscall.Exec(bashPath, []string{
 		"bash", launcher, name, proj.Path, layout, theme,
-	}, os.Environ())
+	}, os.Environ()); err != nil {
+		return fmt.Errorf("exec %s %s: %w", bashPath, launcher, err)
+	}
+	return nil
 }
 
 func findBash() (string, error) {

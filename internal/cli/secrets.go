@@ -31,12 +31,14 @@ func newSecretsCmd() *cobra.Command {
 	return cmd
 }
 
-// secretsRunner returns a non-dry-run runner suitable for secrets operations.
-func secretsRunner() *exec.Runner {
+// secretsRunner returns a runner suitable for secrets operations.
+// Honors the global --dry-run flag: when dry-run, commands are printed but not executed.
+func secretsRunner(cmd *cobra.Command) *exec.Runner {
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
-	return exec.NewRunner(false, logger)
+	return exec.NewRunner(dryRun, logger)
 }
 
 func secretsStorePath() (string, error) {
@@ -77,7 +79,7 @@ func newSecretsInitCmd() *cobra.Command {
 				return fmt.Errorf("creating secrets dir: %w", err)
 			}
 
-			runner := secretsRunner()
+			runner := secretsRunner(cmd)
 
 			// Build common recipient args.
 			recipientArgs := make([]string, 0, len(state.Secrets.AgeRecipients)*2)
@@ -142,7 +144,7 @@ func newSecretsBackupCmd() *cobra.Command {
 				return err
 			}
 
-			runner := secretsRunner()
+			runner := secretsRunner(cmd)
 
 			entries, err := os.ReadDir(storeDir)
 			if err != nil {
@@ -210,7 +212,7 @@ func newSecretsRestoreCmd() *cobra.Command {
 				identity = filepath.Join(home, identity[1:])
 			}
 
-			runner := secretsRunner()
+			runner := secretsRunner(cmd)
 
 			keyName := state.SSH.KeyName
 			if keyName == "" {
@@ -285,7 +287,7 @@ func newSecretsStatusCmd() *cobra.Command {
 				keyName = "id_ed25519"
 			}
 
-			runner := secretsRunner()
+			runner := secretsRunner(cmd)
 			checkFile := func(label, path string) {
 				exists := runner.FileExists(path)
 				mark := "missing"
