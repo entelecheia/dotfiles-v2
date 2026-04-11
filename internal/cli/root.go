@@ -26,7 +26,8 @@ Also available as 'dot' for convenience.`,
 			return nil
 		},
 	}
-	root.Version = version + " (" + commit + ")"
+	resolvedVer, resolvedCommit := ResolveVersion(version, commit)
+	root.Version = resolvedVer + " (" + resolvedCommit + ")"
 
 	// Persistent flags for all subcommands
 	root.PersistentFlags().Bool("yes", false, "Unattended mode (skip all prompts)")
