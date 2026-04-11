@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 // Config is the root configuration struct, mapped from profile YAML + user state.
 type Config struct {
@@ -78,8 +81,16 @@ type FontsConfig struct {
 
 // SecretsUserConfig holds user-specific secrets configuration.
 type SecretsUserConfig struct {
-	AgeIdentity  string   `yaml:"age_identity,omitempty"`
-	AgeRecipients []string `yaml:"age_recipients,omitempty"`
+	AgeIdentity   string        `yaml:"age_identity,omitempty"`
+	AgeRecipients []string      `yaml:"age_recipients,omitempty"`
+	LastBackup    *BackupRecord `yaml:"last_backup,omitempty"`
+}
+
+// BackupRecord records the most recent successful secrets backup.
+type BackupRecord struct {
+	Path  string    `yaml:"path"`
+	Time  time.Time `yaml:"time"`
+	Files int       `yaml:"files"`
 }
 
 // IsModuleEnabled returns whether a given module name is enabled in this config.

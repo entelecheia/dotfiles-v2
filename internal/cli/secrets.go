@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -202,8 +203,31 @@ func newSecretsBackupCmd() *cobra.Command {
 
 			if copied == 0 {
 				fmt.Println("No .age files found to backup.")
-			} else {
-				fmt.Printf("Backup complete: %d file(s) -> %s\n", copied, dest)
+				return nil
+			}
+			fmt.Printf("Backup complete: %d file(s) -> %s\n", copied, dest)
+
+			// Record last-backup location (skip in dry-run — runner.Run didn't copy).
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			if dryRun {
+				return nil
+			}
+			absDest, err := filepath.Abs(dest)
+			if err != nil {
+				absDest = dest
+			}
+			state, err := config.LoadState()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not load state to record backup: %v\n", err)
+				return nil
+			}
+			state.Secrets.LastBackup = &config.BackupRecord{
+				Path:  absDest,
+				Time:  time.Now(),
+				Files: copied,
+			}
+			if err := config.SaveState(state); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not save last-backup record: %v\n", err)
 			}
 			return nil
 		},
@@ -349,8 +373,35 @@ func newSecretsStatusCmd() *cobra.Command {
 				fmt.Println("  Age recipients: (none configured)")
 			}
 
+			fmt.Println()
+			if lb := state.Secrets.LastBackup; lb != nil && lb.Path != "" {
+				fmt.Println("Last backup:")
+				fmt.Printf("  Path:  %s\n", lb.Path)
+				fmt.Printf("  When:  %s (%s ago)\n", lb.Time.Format(time.RFC3339), humanDuration(time.Since(lb.Time)))
+				fmt.Printf("  Files: %d\n", lb.Files)
+			} else {
+				fmt.Println("Last backup: (none recorded)")
+			}
+
 			return nil
 		},
+	}
+}
+
+// humanDuration formats a duration as a short human-readable string.
+func humanDuration(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 }
 
