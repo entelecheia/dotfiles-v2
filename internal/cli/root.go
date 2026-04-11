@@ -13,13 +13,17 @@ func NewRootCmd(version, commit string) *cobra.Command {
 		Short: "User environment & workspace management tool",
 		Long: `dotfiles-v2: Declarative user environment configuration with modular profiles.
 
-Also available as 'dot' for convenience. Workspace commands:
-  dotfiles open <project>   Launch or resume a tmux workspace
-  dotfiles list             Show registered projects and active sessions
-  dotfiles register <name>  Register current directory as a project
-  dotfiles layouts          List available workspace layouts
-  dotfiles doctor           Check tool installation status`,
-		Aliases: []string{"dot"},
+Run without arguments to see a getting-started guide.
+Run 'dotfiles usecase' for detailed workflow examples.
+Also available as 'dot' for convenience.`,
+		Aliases:       []string{"dot"},
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// No subcommand → show friendly welcome screen
+			printWelcome(version, commit)
+			return nil
+		},
 	}
 	root.Version = version + " (" + commit + ")"
 
@@ -42,6 +46,7 @@ Also available as 'dot' for convenience. Workspace commands:
 	root.AddCommand(newReconfigureCmd())
 	root.AddCommand(newVersionCmd(version, commit))
 	root.AddCommand(newConfigCmd())
+	root.AddCommand(newUsecaseCmd())
 
 	// Drive management commands
 	root.AddCommand(newDriveExcludeCmd())
