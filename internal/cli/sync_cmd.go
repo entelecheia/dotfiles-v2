@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -356,8 +357,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("reading filter template: %w", err)
 	}
-	filterDir := paths.FilterFile[:len(paths.FilterFile)-len("/workspace-filter.txt")]
-	if err := runner.MkdirAll(filterDir, 0755); err != nil {
+	if err := runner.MkdirAll(filepath.Dir(paths.FilterFile), 0755); err != nil {
 		return fmt.Errorf("creating rclone config dir: %w", err)
 	}
 	if err := runner.WriteFile(paths.FilterFile, filterContent, 0644); err != nil {
@@ -424,11 +424,23 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	fmt.Printf("  Interval:   %s\n", formatInterval(st.Interval))
 	fmt.Printf("  Scheduler:  %s\n", st.SchedulerState)
 
+	if st.MountPoint != "" {
+		mountState := "not mounted"
+		if st.Mounted {
+			mountState = "mounted"
+		}
+		fmt.Printf("  Mount:      %s (%s)\n", st.MountPoint, mountState)
+	}
+
 	if st.LastSyncTime != nil {
 		ago := time.Since(*st.LastSyncTime).Truncate(time.Second)
 		fmt.Printf("  Last sync:  %s ago\n", ago)
 	} else {
 		fmt.Println("  Last sync:  (never)")
+	}
+
+	if st.LastStats != "" {
+		fmt.Printf("  Last stats: %s\n", st.LastStats)
 	}
 
 	if st.LastError != "" {

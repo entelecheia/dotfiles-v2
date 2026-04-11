@@ -28,12 +28,9 @@ func (s SchedulerState) String() string {
 }
 
 // TemplateData holds data for rendering scheduler templates.
+// Only fields actually used by templates are included.
 type TemplateData struct {
 	DotfilesPath string
-	RclonePath   string
-	LocalPath    string
-	RemotePath   string
-	FilterFile   string
 	LogFile      string
 	Interval     int
 }
@@ -65,10 +62,6 @@ func (s *Scheduler) templateData() TemplateData {
 	}
 	return TemplateData{
 		DotfilesPath: dotfilesPath,
-		RclonePath:   s.Config.RclonePath,
-		LocalPath:    s.Config.LocalPath,
-		RemotePath:   s.Config.RemotePath,
-		FilterFile:   s.Config.FilterFile,
 		LogFile:      s.Config.LogFile,
 		Interval:     s.Config.Interval,
 	}
