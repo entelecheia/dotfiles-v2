@@ -18,13 +18,13 @@ import (
 
 // Paths holds well-known file locations for sync artifacts.
 type Paths struct {
-	FilterFile      string // static patterns (node_modules, etc.)
-	SkipFile        string // dynamic skip list (permission errors, symlinks)
-	BisyncFilter    string // combined filter for bisync (static + skip)
-	LogFile         string
-	LaunchdPlist    string
-	SystemdService  string
-	SystemdTimer    string
+	FilterFile     string
+	SkipFile       string
+	LogFile        string
+	MountPoint     string
+	LaunchdPlist   string
+	SystemdService string
+	SystemdTimer   string
 }
 
 // ResolvePaths returns standard sync artifact paths.
@@ -37,8 +37,8 @@ func ResolvePaths() (*Paths, error) {
 	return &Paths{
 		FilterFile:     filepath.Join(rcloneDir, "workspace-filter.txt"),
 		SkipFile:       filepath.Join(rcloneDir, "workspace-skip.txt"),
-		BisyncFilter:   filepath.Join(rcloneDir, "workspace-bisync-filter.txt"),
 		LogFile:        filepath.Join(home, ".local", "log", "rclone-bisync.log"),
+		MountPoint:     filepath.Join(home, "gdrive-mount"),
 		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", "com.rclone.workspace-bisync.plist"),
 		SystemdService: filepath.Join(home, ".config", "systemd", "user", "rclone-bisync.service"),
 		SystemdTimer:   filepath.Join(home, ".config", "systemd", "user", "rclone-bisync.timer"),
@@ -102,26 +102,30 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 // ── rclone args ───────────────────────────────────────────────────────────
 
 // driveArgs returns Google Drive-specific flags.
+// --drive-skip-shared-with-me avoids files shared TO the user (read-only)
+// which cause insufficientFilePermissions on upload.
 func driveArgs() []string {
 	return []string{
 		"--drive-skip-dangling-shortcuts",
 		"--drive-skip-gdocs",
+		"--drive-skip-shared-with-me",
 		"--drive-pacer-min-sleep", "10ms",
 	}
 }
 
-// commonCopyArgs returns args for rclone copy --update mode.
-func commonCopyArgs(cfg *Config, paths *Paths) []string {
+// copyArgs returns standard args for rclone copy --update.
+func copyArgs(cfg *Config, paths *Paths) []string {
 	args := []string{
 		"--filter-from", cfg.FilterFile,
+		"--update",
 		"--fast-list",
 		"--tpslimit", "10",
+		"--retries", "3",
 		"--low-level-retries", "10",
 		"--log-file", cfg.LogFile,
 		"-v",
 	}
 	args = append(args, driveArgs()...)
-	// Exclude known-bad files
 	if paths != nil && paths.SkipFile != "" {
 		if _, err := os.Stat(paths.SkipFile); err == nil {
 			args = append(args, "--exclude-from", paths.SkipFile)
@@ -133,179 +137,125 @@ func commonCopyArgs(cfg *Config, paths *Paths) []string {
 	return args
 }
 
-// ── copy-based sync ───────────────────────────────────────────────────────
+// ── pull / push / sync ────────────────────────────────────────────────────
 
-// Sync performs bidirectional sync using rclone copy --update.
-func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, dryRun bool) error {
-	logDir := filepath.Dir(cfg.LogFile)
-	if err := runner.MkdirAll(logDir, 0755); err != nil {
-		return fmt.Errorf("creating log dir: %w", err)
-	}
-
-	baseArgs := commonCopyArgs(cfg, paths)
-	baseArgs = append(baseArgs, "--update")
-	if dryRun {
-		baseArgs = append(baseArgs, "--dry-run")
-	}
-
-	run := func(src, dst, label string, extraArgs []string) error {
-		fmt.Printf("  %s: %s → %s\n", label, src, dst)
-		cmdArgs := append([]string{"copy", src, dst}, baseArgs...)
-		cmdArgs = append(cmdArgs, extraArgs...)
-		if cfg.Verbose {
-			return runner.RunAttached(ctx, "rclone", cmdArgs...)
-		}
-		_, err := runner.Run(ctx, "rclone", cmdArgs...)
+// Pull downloads newer files from remote to local (rclone copy remote → local --update).
+// Safe: never writes to remote, avoids all upload permission errors.
+func Pull(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, dryRun bool) error {
+	if err := ensureLogDir(runner, cfg.LogFile); err != nil {
 		return err
 	}
 
-	// Download (remote → local) — retries=5 for transient errors
-	if err := run(cfg.RemotePath, cfg.LocalPath, "Download", nil); err != nil {
-		fmt.Printf("  ⚠ Download errors (non-fatal): %v\n", err)
-	}
-
-	// Update skip list between phases
-	if paths != nil && !dryRun {
-		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
-			fmt.Printf("  + %d path(s) added to skip list\n", added)
-		}
-	}
-
-	// Upload (local → remote) — retries=1 (permission errors are permanent)
-	if err := run(cfg.LocalPath, cfg.RemotePath, "Upload", []string{"--retries", "1"}); err != nil {
-		fmt.Printf("  ⚠ Upload errors (non-fatal): %v\n", err)
-	}
-
-	// Final skip list update
-	if paths != nil && !dryRun {
-		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
-			fmt.Printf("  + %d path(s) added to skip list\n", added)
-		}
-	}
-
-	return nil
-}
-
-// ── bisync ────────────────────────────────────────────────────────────────
-
-// Bisync runs rclone bisync with combined filter file.
-// Uses --filters-file (bisync-specific, MD5-tracked) for safe filter management.
-func Bisync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, resync, dryRun bool) error {
-	logDir := filepath.Dir(cfg.LogFile)
-	if err := runner.MkdirAll(logDir, 0755); err != nil {
-		return fmt.Errorf("creating log dir: %w", err)
-	}
-
-	// Generate combined filter file (static patterns + skip list)
-	if err := GenerateBisyncFilter(paths); err != nil {
-		return fmt.Errorf("generating bisync filter: %w", err)
-	}
-
-	args := []string{
-		"bisync",
-		cfg.LocalPath,
-		cfg.RemotePath,
-		"--filters-file", paths.BisyncFilter,
-		"--fast-list",
-		"--tpslimit", "10",
-		"--retries", "3",
-		"--low-level-retries", "10",
-		"--conflict-resolve", "newer",
-		"--conflict-loser", "num",
-		"--resilient",
-		"--recover",
-		"--max-lock", "15m",
-		"--max-delete", "50",
-		"--no-update-modtime",
-		"--ignore-listing-checksum",
-		"--check-sync", "false",
-		"--log-file", cfg.LogFile,
-		"-v",
-	}
-	args = append(args, driveArgs()...)
-
-	if resync {
-		// path2 (remote) as source of truth — avoids upload permission errors
-		// on shared Google Drive folders during baseline creation
-		args = append(args, "--resync", "--resync-mode", "path2")
-	}
+	args := append([]string{"copy", cfg.RemotePath, cfg.LocalPath}, copyArgs(cfg, paths)...)
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
-	if cfg.Verbose {
-		args = append(args, "--progress")
+
+	fmt.Printf("  Pull: %s → %s\n", cfg.RemotePath, cfg.LocalPath)
+	if err := runRclone(ctx, runner, cfg, args); err != nil {
+		fmt.Printf("  ⚠ Pull errors (non-fatal): %v\n", err)
 	}
 
-	if cfg.Verbose {
-		err := runner.RunAttached(ctx, "rclone", args...)
-		return classifyBisyncError(err, cfg.LogFile, resync)
+	if paths != nil && !dryRun {
+		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
+			fmt.Printf("  + %d path(s) added to skip list\n", added)
+		}
 	}
-
-	_, err := runner.Run(ctx, "rclone", args...)
-	return classifyBisyncError(err, cfg.LogFile, resync)
+	return nil
 }
 
-// classifyBisyncError wraps bisync errors with actionable messages.
-func classifyBisyncError(err error, logFile string, resync bool) error {
-	if err == nil {
-		return nil
-	}
-	if resync {
+// Push uploads newer files from local to remote (rclone copy local → remote --update).
+// Uses retries=1 because permission errors on shared files are permanent.
+func Push(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, dryRun bool) error {
+	if err := ensureLogDir(runner, cfg.LogFile); err != nil {
 		return err
 	}
 
-	logContent := ""
-	if data, lerr := os.ReadFile(logFile); lerr == nil {
-		logContent = string(data)
+	args := append([]string{"copy", cfg.LocalPath, cfg.RemotePath}, copyArgs(cfg, paths)...)
+	args = append(args, "--retries", "1")
+	if dryRun {
+		args = append(args, "--dry-run")
 	}
 
-	if strings.Contains(logContent, "filters file has changed") ||
-		strings.Contains(logContent, "md5") {
-		return fmt.Errorf("filter changed — run 'dot sync --bisync --resync' to update baseline")
+	fmt.Printf("  Push: %s → %s\n", cfg.LocalPath, cfg.RemotePath)
+	if err := runRclone(ctx, runner, cfg, args); err != nil {
+		fmt.Printf("  ⚠ Push errors (non-fatal): %v\n", err)
 	}
-	if strings.Contains(logContent, "cannot find prior") {
-		return fmt.Errorf("no baseline — run 'dot sync --bisync --resync' to create one")
+
+	if paths != nil && !dryRun {
+		if added, _ := UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
+			fmt.Printf("  + %d path(s) added to skip list\n", added)
+		}
 	}
-	if strings.Contains(logContent, "out of sync") {
-		return fmt.Errorf("paths out of sync — run 'dot sync --bisync --resync' to recover")
+	return nil
+}
+
+// Sync runs Pull then Push (bidirectional).
+// Default `dot sync` uses Pull only for consumer safety.
+func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, dryRun bool) error {
+	if err := Pull(ctx, runner, cfg, paths, dryRun); err != nil {
+		return err
 	}
+	return Push(ctx, runner, cfg, paths, dryRun)
+}
+
+// Mount mounts the remote as a FUSE filesystem at paths.MountPoint.
+// Runs in foreground (blocking) — use daemon mode or scheduler for persistence.
+func Mount(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, daemon bool) error {
+	if err := runner.MkdirAll(paths.MountPoint, 0755); err != nil {
+		return fmt.Errorf("creating mount point: %w", err)
+	}
+
+	args := []string{
+		"mount",
+		cfg.RemotePath,
+		paths.MountPoint,
+		"--vfs-cache-mode", "writes",
+		"--vfs-cache-max-age", "24h",
+		"--dir-cache-time", "30s",
+		"--poll-interval", "15s",
+	}
+	args = append(args, driveArgs()...)
+	if daemon {
+		args = append(args, "--daemon")
+	}
+
+	fmt.Printf("Mounting %s at %s\n", cfg.RemotePath, paths.MountPoint)
+	return runner.RunAttached(ctx, "rclone", args...)
+}
+
+// Unmount unmounts the FUSE filesystem.
+func Unmount(ctx context.Context, runner *exec.Runner, paths *Paths) error {
+	var cmd string
+	if runtime.GOOS == "darwin" {
+		cmd = "umount"
+	} else {
+		cmd = "fusermount"
+	}
+
+	if runtime.GOOS == "linux" {
+		_, err := runner.Run(ctx, cmd, "-u", paths.MountPoint)
+		return err
+	}
+	_, err := runner.Run(ctx, cmd, paths.MountPoint)
 	return err
 }
 
-// GenerateBisyncFilter creates the combined bisync filter file from
-// the static filter and skip list. bisync tracks this file's MD5 and
-// requires --resync when it changes, which correctly handles skip list updates.
-func GenerateBisyncFilter(paths *Paths) error {
-	var sb strings.Builder
+// ── helpers ───────────────────────────────────────────────────────────────
 
-	sb.WriteString("# Combined bisync filter (auto-generated)\n")
-	sb.WriteString("# DO NOT EDIT — regenerated from workspace-filter.txt + workspace-skip.txt\n\n")
-
-	// Read static filter
-	if data, err := os.ReadFile(paths.FilterFile); err == nil {
-		sb.WriteString("# === Static patterns ===\n")
-		sb.Write(data)
-		if !strings.HasSuffix(string(data), "\n") {
-			sb.WriteString("\n")
-		}
+func ensureLogDir(runner *exec.Runner, logFile string) error {
+	if err := runner.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
+		return fmt.Errorf("creating log dir: %w", err)
 	}
+	return nil
+}
 
-	// Read skip list
-	if data, err := os.ReadFile(paths.SkipFile); err == nil {
-		lines := strings.Split(string(data), "\n")
-		hasEntries := false
-		for _, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), "- ") {
-				if !hasEntries {
-					sb.WriteString("\n# === Skip list (permission errors, symlinks, shortcuts) ===\n")
-					hasEntries = true
-				}
-				sb.WriteString(strings.TrimSpace(line) + "\n")
-			}
-		}
+func runRclone(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
+	if cfg.Verbose {
+		return runner.RunAttached(ctx, "rclone", args...)
 	}
-
-	return os.WriteFile(paths.BisyncFilter, []byte(sb.String()), 0644)
+	_, err := runner.Run(ctx, "rclone", args...)
+	return err
 }
 
 // ── skip list management ──────────────────────────────────────────────────
@@ -425,12 +375,10 @@ func LoadSkipList(skipFile string) ([]string, error) {
 	return paths, nil
 }
 
-// ClearSkipList removes the skip list and bisync filter files.
+// ClearSkipList removes the skip list file.
 func ClearSkipList(paths *Paths) error {
-	for _, f := range []string{paths.SkipFile, paths.BisyncFilter} {
-		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+	if err := os.Remove(paths.SkipFile); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

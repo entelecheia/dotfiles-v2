@@ -19,33 +19,40 @@ func newSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Sync workspace with Google Drive via rclone",
-		Long: `Bidirectional sync between local workspace and Google Drive.
+		Long: `Safe workspace sync with Google Drive using rclone copy --update.
 
-Uses rclone copy --update in both directions: newer files win.
-No baseline or initialization required — just works.
+Default is PULL ONLY (consumer mode) — safe for Ubuntu/shared machines.
+Use 'dot sync push' or 'dot sync all' for upload.
 
 Getting started:
   dot sync setup       Full guided setup (install rclone, auth, filter, scheduler)
   dot sync connect     Configure a new Google Drive remote
   dot sync reconnect   Fix expired authentication
 
-Daily use:
-  dot sync             Trigger immediate sync
+Sync operations:
+  dot sync             Pull only: remote → local (default, safe)
+  dot sync pull        Pull only: remote → local (explicit)
+  dot sync push        Push only: local → remote
+  dot sync all         Bidirectional: pull then push
+  dot sync mount       Mount remote as FUSE filesystem
+
+Maintenance:
   dot sync status      Show sync health, last run, scheduler state
   dot sync log         View recent sync log entries
-
-Scheduler control:
+  dot sync skip        Manage skipped-file list
   dot sync pause       Temporarily stop auto-sync
   dot sync resume      Restart auto-sync`,
-		RunE:         runSyncNow,
+		RunE:         runSyncPull,
 		SilenceUsage: true,
 	}
 
-	cmd.Flags().Bool("bisync", false, "Use rclone bisync (bidirectional with delete propagation)")
-	cmd.Flags().Bool("resync", false, "Force bisync baseline reset (use with --bisync)")
 	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rclone progress output")
 
 	cmd.AddCommand(
+		newSyncPullCmd(),
+		newSyncPushCmd(),
+		newSyncAllCmd(),
+		newSyncMountCmd(),
 		newSyncStatusCmd(),
 		newSyncSetupCmd(),
 		newSyncSkipCmd(),
@@ -87,59 +94,144 @@ func syncBootstrap(cmd *cobra.Command) (*config.UserState, *gosync.Config, *gosy
 	return state, cfg, paths, runner, nil
 }
 
-// ── sync (default) ────────────────────────────────────────────────────────
+// ── pull / push / all / mount ─────────────────────────────────────────────
 
-func runSyncNow(cmd *cobra.Command, _ []string) error {
+// syncPreflight validates rclone + filter file before any sync operation.
+func syncPreflight(cfg *gosync.Config, runner *exec.Runner) bool {
+	if !runner.CommandExists("rclone") {
+		fmt.Println("rclone is not installed. Run 'dot sync setup' to get started.")
+		return false
+	}
+	if !runner.FileExists(cfg.FilterFile) {
+		fmt.Println("Filter file not found. Run 'dot sync setup' to configure sync.")
+		return false
+	}
+	return true
+}
+
+func newSyncPullCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "pull",
+		Short:        "Pull from remote: download newer files (safe, read-only on remote)",
+		RunE:         runSyncPull,
+		SilenceUsage: true,
+	}
+}
+
+func runSyncPull(cmd *cobra.Command, _ []string) error {
 	_, cfg, paths, runner, err := syncBootstrap(cmd)
 	if err != nil {
 		return err
 	}
+	if !syncPreflight(cfg, runner) {
+		return nil
+	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
+	fmt.Printf("Pulling %s → %s\n", cfg.RemotePath, cfg.LocalPath)
+	if dryRun {
+		fmt.Println("  (dry-run — no changes)")
+	}
+	if err := gosync.Pull(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
+		return fmt.Errorf("pull failed: %w", err)
+	}
+	fmt.Println("✓ Pull complete.")
+	return nil
+}
+
+func newSyncPushCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "push",
+		Short:        "Push to remote: upload newer files (writes to remote)",
+		RunE:         runSyncPush,
+		SilenceUsage: true,
+	}
+}
+
+func runSyncPush(cmd *cobra.Command, _ []string) error {
+	_, cfg, paths, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	if !syncPreflight(cfg, runner) {
+		return nil
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	fmt.Printf("Pushing %s → %s\n", cfg.LocalPath, cfg.RemotePath)
+	if dryRun {
+		fmt.Println("  (dry-run — no changes)")
+	}
+	if err := gosync.Push(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
+		return fmt.Errorf("push failed: %w", err)
+	}
+	fmt.Println("✓ Push complete.")
+	return nil
+}
+
+func newSyncAllCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "all",
+		Short:        "Bidirectional: pull then push",
+		RunE:         runSyncAll,
+		SilenceUsage: true,
+	}
+}
+
+func runSyncAll(cmd *cobra.Command, _ []string) error {
+	_, cfg, paths, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	if !syncPreflight(cfg, runner) {
+		return nil
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	fmt.Printf("Syncing %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
+	if dryRun {
+		fmt.Println("  (dry-run — no changes)")
+	}
+	if err := gosync.Sync(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
+	}
+	fmt.Println("✓ Sync complete.")
+	return nil
+}
+
+func newSyncMountCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "mount",
+		Short:        "Mount remote as FUSE filesystem (live, no local storage)",
+		RunE:         runSyncMount,
+		SilenceUsage: true,
+	}
+	cmd.Flags().Bool("daemon", false, "Run in background (daemon mode)")
+	cmd.Flags().Bool("unmount", false, "Unmount instead of mounting")
+	return cmd
+}
+
+func runSyncMount(cmd *cobra.Command, _ []string) error {
+	_, cfg, paths, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
 	if !runner.CommandExists("rclone") {
 		fmt.Println("rclone is not installed. Run 'dot sync setup' to get started.")
 		return nil
 	}
 
-	if !runner.FileExists(cfg.FilterFile) {
-		fmt.Println("Filter file not found. Run 'dot sync setup' to configure sync.")
+	unmount, _ := cmd.Flags().GetBool("unmount")
+	if unmount {
+		if err := gosync.Unmount(cmd.Context(), runner, paths); err != nil {
+			return fmt.Errorf("unmount failed: %w", err)
+		}
+		fmt.Printf("✓ Unmounted %s\n", paths.MountPoint)
 		return nil
 	}
 
-	bisyncMode, _ := cmd.Flags().GetBool("bisync")
-	resync, _ := cmd.Flags().GetBool("resync")
-
-	fmt.Printf("Syncing %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
-	if bisyncMode {
-		fmt.Print("  mode: bisync")
-		if resync {
-			fmt.Print(" (--resync)")
-		}
-		fmt.Println()
-	}
-	if dryRun {
-		fmt.Println("  (dry-run — no changes)")
-	}
-
-	if bisyncMode {
-		if err := gosync.Bisync(cmd.Context(), runner, cfg, paths, resync, dryRun); err != nil {
-			return fmt.Errorf("bisync failed: %w", err)
-		}
-	} else {
-		if err := gosync.Sync(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
-			return fmt.Errorf("sync failed: %w", err)
-		}
-	}
-
-	// Update skip list from errors
-	if !dryRun && paths != nil {
-		if added, _ := gosync.UpdateSkipList(cfg.LogFile, paths.SkipFile); added > 0 {
-			fmt.Printf("  + %d path(s) added to skip list\n", added)
-		}
-	}
-
-	fmt.Println("✓ Sync complete.")
-	return nil
+	daemon, _ := cmd.Flags().GetBool("daemon")
+	return gosync.Mount(cmd.Context(), runner, cfg, paths, daemon)
 }
 
 // ── setup ─────────────────────────────────────────────────────────────────
