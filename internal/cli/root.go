@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -86,14 +87,21 @@ func knownSubcommands(cmd *cobra.Command) map[string]bool {
 func Execute(version, commit string) error {
 	cmd := NewRootCmd(version, commit)
 
-	// Implicit project routing: if the first arg is not a known subcommand
-	// or flag, prepend "open" so `dot myproject` works as `dot open myproject`.
+	// If the first arg is not a known subcommand or flag, show an error
+	// guiding the user to `dotfiles open <project>` (explicit is safer than
+	// implicit routing which could mask typos as project launches).
 	if len(os.Args) > 1 {
 		first := os.Args[1]
 		if first != "" && first[0] != '-' {
 			known := knownSubcommands(cmd)
 			if !known[first] {
-				os.Args = append([]string{os.Args[0], "open"}, os.Args[1:]...)
+				fmt.Fprintf(os.Stderr, "Unknown command %q\n", first)
+				fmt.Fprintln(os.Stderr, "")
+				fmt.Fprintf(os.Stderr, "If you meant to launch a workspace, use:\n")
+				fmt.Fprintf(os.Stderr, "  dotfiles open %s\n", first)
+				fmt.Fprintln(os.Stderr, "")
+				fmt.Fprintln(os.Stderr, "See 'dotfiles help' for available commands, or 'dotfiles usecase' for examples.")
+				os.Exit(1)
 			}
 		}
 	}

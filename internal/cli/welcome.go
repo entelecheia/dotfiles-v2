@@ -42,9 +42,10 @@ func printWelcome(version, commit string) {
 	printWelcomeCmd("dotfiles check", "Show pending changes without applying")
 	printWelcomeCmd("dotfiles config", "Display current config")
 	printWelcomeCmd("dotfiles sync", "Sync workspace with Google Drive")
-	printWelcomeCmd("dot <project>", "Launch/resume a tmux workspace")
-	printWelcomeCmd("dot list", "Show registered projects")
+	printWelcomeCmd("dotfiles open <project>", "Launch/resume a tmux workspace")
+	printWelcomeCmd("dotfiles list", "Show registered projects")
 	fmt.Println()
+	fmt.Println(ui.StyleHint.Render("  Tip: 'dot' is an alias for 'dotfiles' (e.g., 'dot apply')"))
 	fmt.Println(ui.StyleHint.Render("  See 'dotfiles usecase' for detailed workflows"))
 	fmt.Println(ui.StyleHint.Render("  See 'dotfiles help' for all commands"))
 	fmt.Println()
@@ -72,6 +73,9 @@ func newUsecaseCmd() *cobra.Command {
 func printUsecases() {
 	fmt.Println()
 	fmt.Println(ui.StyleHeader.Render(" dotfiles Use Cases "))
+	fmt.Println()
+	fmt.Println(ui.StyleHint.Render("  Note: 'dot' is a shorthand alias for 'dotfiles'."))
+	fmt.Println(ui.StyleHint.Render("  Examples below use 'dotfiles' — substitute 'dot' if you prefer."))
 	fmt.Println()
 
 	section("1. First-time setup on a new machine",
@@ -103,51 +107,53 @@ func printUsecases() {
 		})
 
 	section("3. Daily workspace — tmux + AI tools",
-		"Launch multi-panel dev workspaces.",
+		"Launch multi-panel dev workspaces. ('dot' is an alias for 'dotfiles')",
 		[]usecase{
-			{"dot myproject",
+			{"dotfiles open myproject",
 				"Auto-register current dir and launch tmux workspace"},
-			{"dot register myproject ~/dev/app --layout claude",
-				"Register project with specific layout"},
-			{"dot list",
+			{"dotfiles open myproject --layout claude",
+				"Launch with specific layout override"},
+			{"dotfiles register myproject ~/dev/app --layout claude",
+				"Register project path with default layout"},
+			{"dotfiles list",
 				"Show all registered projects and active sessions"},
-			{"dot layouts",
+			{"dotfiles layouts",
 				"Show available pane layouts (dev, claude, monitor)"},
-			{"dot doctor",
+			{"dotfiles doctor",
 				"Check which workspace tools are installed"},
-			{"dot stop myproject",
+			{"dotfiles stop myproject",
 				"Stop a running tmux session"},
 		})
 
 	section("4. Google Drive sync",
 		"Keep workspace synced across machines via rclone.",
 		[]usecase{
-			{"dot sync setup",
+			{"dotfiles sync setup",
 				"One-time setup: install rclone, configure remote, deploy filter & scheduler"},
-			{"dot sync",
+			{"dotfiles sync",
 				"Pull from remote (safe, read-only on remote)"},
-			{"dot sync push",
+			{"dotfiles sync push",
 				"Push local changes to remote"},
-			{"dot sync all",
+			{"dotfiles sync all",
 				"Bidirectional sync (pull then push)"},
-			{"dot sync status",
+			{"dotfiles sync status",
 				"Show sync health, last run, scheduler state"},
-			{"dot sync skip",
+			{"dotfiles sync skip",
 				"View files auto-skipped due to permission errors"},
-			{"dot sync mount",
+			{"dotfiles sync mount",
 				"Mount remote as FUSE filesystem (live, no local storage)"},
 		})
 
 	section("5. Google Drive exclusions (macOS)",
 		"Exclude heavy directories (node_modules, build caches) from Drive sync.",
 		[]usecase{
-			{"dot drive-exclude scan",
+			{"dotfiles drive-exclude scan",
 				"Find excludable directories under ~/ai-workspace"},
-			{"dot drive-exclude apply --dry-run",
+			{"dotfiles drive-exclude apply --dry-run",
 				"Preview exclusions"},
-			{"dot drive-exclude apply --yes",
+			{"dotfiles drive-exclude apply --yes",
 				"Apply xattr to all pending directories"},
-			{"dot drive-exclude add ~/myproject/node_modules",
+			{"dotfiles drive-exclude add ~/myproject/node_modules",
 				"Manually exclude a specific path"},
 		})
 
@@ -195,11 +201,11 @@ func printUsecases() {
 				"Check workspace tool installation"},
 			{"dotfiles config",
 				"Show loaded configuration and system info"},
-			{"dot sync reconnect",
+			{"dotfiles sync reconnect",
 				"Fix expired Google Drive authentication"},
-			{"dot sync log 100",
+			{"dotfiles sync log 100",
 				"View recent sync log entries"},
-			{"dot sync skip clear",
+			{"dotfiles sync skip clear",
 				"Reset skip list to retry failed files"},
 		})
 
