@@ -10,8 +10,9 @@ import (
 
 // printWelcome shows a friendly getting-started guide when invoked without args.
 func printWelcome(version, commit string) {
+	v, c := ResolveVersion(version, commit)
 	fmt.Println()
-	fmt.Println(ui.StyleHeader.Render(" dotfiles " + version + " "))
+	fmt.Println(ui.StyleHeader.Render(" dotfiles " + v + " (" + c + ") "))
 	fmt.Println()
 	fmt.Println("  " + ui.StyleValue.Render("Declarative user environment & workspace manager."))
 	fmt.Println()
