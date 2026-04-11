@@ -51,7 +51,7 @@ func (m *NodeModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, e
 	// Global npm packages (only if npm is available)
 	if rc.Runner.CommandExists("npm") {
 		for _, pkg := range globalNpmPackages {
-			if !isNpmPackageInstalled(rc, pkg) {
+			if !isNpmPackageInstalled(ctx, rc, pkg) {
 				changes = append(changes, Change{
 					Description: fmt.Sprintf("install global npm package: %s", pkg),
 					Command:     fmt.Sprintf("npm install -g %s", pkg),
@@ -64,8 +64,8 @@ func (m *NodeModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, e
 }
 
 // isNpmPackageInstalled checks if a global npm package is installed.
-func isNpmPackageInstalled(rc *RunContext, pkg string) bool {
-	result, err := rc.Runner.Run(context.Background(), "npm", "list", "-g", "--depth=0", pkg)
+func isNpmPackageInstalled(ctx context.Context, rc *RunContext, pkg string) bool {
+	result, err := rc.Runner.Run(ctx, "npm", "list", "-g", "--depth=0", pkg)
 	if err != nil {
 		return false
 	}
@@ -107,7 +107,7 @@ func (m *NodeModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, e
 	// Install global npm packages
 	if rc.Runner.CommandExists("npm") {
 		for _, pkg := range globalNpmPackages {
-			if isNpmPackageInstalled(rc, pkg) {
+			if isNpmPackageInstalled(ctx, rc, pkg) {
 				continue
 			}
 			if _, err := rc.Runner.Run(ctx, "npm", "install", "-g", pkg); err != nil {

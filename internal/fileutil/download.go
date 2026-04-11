@@ -18,6 +18,32 @@ import (
 
 const refreshFile = ".dotfiles-refresh"
 
+// httpGetWithRetry performs an HTTP GET with exponential backoff on transient failures.
+// Retries on network errors and 5xx responses. 4xx responses returned immediately.
+func httpGetWithRetry(ctx context.Context, url string, attempts int) (*http.Response, error) {
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			if resp.StatusCode < 500 {
+				return resp, nil
+			}
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if i < attempts-1 {
+			time.Sleep(time.Duration(1<<i) * time.Second)
+		}
+	}
+	return nil, fmt.Errorf("after %d attempts: %w", attempts, lastErr)
+}
+
 // DownloadAndExtractTarGz downloads a .tar.gz archive and extracts it.
 func DownloadAndExtractTarGz(ctx context.Context, runner *exec.Runner, url, destDir string, stripComponents int) error {
 	if runner.DryRun {
@@ -25,12 +51,7 @@ func DownloadAndExtractTarGz(ctx context.Context, runner *exec.Runner, url, dest
 		return nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpGetWithRetry(ctx, url, 3)
 	if err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)
 	}
@@ -109,12 +130,7 @@ func DownloadAndExtractZip(ctx context.Context, runner *exec.Runner, url, destDi
 	}
 
 	// Download to temp file
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpGetWithRetry(ctx, url, 3)
 	if err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)
 	}
