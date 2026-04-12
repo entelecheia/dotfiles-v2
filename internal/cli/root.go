@@ -40,6 +40,7 @@ Also available as 'dot' for convenience.`,
 	// Existing dotfiles commands
 	root.AddCommand(newApplyCmd())
 	root.AddCommand(newCheckCmd())
+	root.AddCommand(newStatusCmd())
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newDiffCmd())
 	root.AddCommand(newPreflightCmd())

@@ -39,6 +39,7 @@ func printWelcome(version, commit string) {
 
 	fmt.Println(ui.StyleSection.Render("▸ Common commands"))
 	fmt.Println()
+	printWelcomeCmd("dotfiles status", "Full environment status at a glance")
 	printWelcomeCmd("dotfiles apply", "Apply configuration")
 	printWelcomeCmd("dotfiles check", "Show pending changes without applying")
 	printWelcomeCmd("dotfiles config", "Display current config")
