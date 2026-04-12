@@ -3,21 +3,75 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 func newConfigCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Show current configuration",
 		Long:  "Display active profile, system info, enabled modules, and user settings.",
 		RunE:  runConfig,
 	}
+	cmd.AddCommand(newConfigExportCmd())
+	return cmd
+}
+
+func newConfigExportCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "export [path]",
+		Short: "Export configuration to a portable YAML file",
+		Long: `Export the current dotfiles configuration to stdout or a file.
+The exported file can be used on another machine with 'dotfiles init --from <file>'.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runConfigExport,
+	}
+}
+
+func runConfigExport(cmd *cobra.Command, args []string) error {
+	homeOverride, _ := cmd.Flags().GetString("home")
+
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
+	if err != nil {
+		return fmt.Errorf("loading state: %w", err)
+	}
+
+	if state.Name == "" {
+		return fmt.Errorf("no configuration found — run 'dotfiles init' first")
+	}
+
+	data, err := yaml.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if len(args) == 0 {
+		fmt.Print(string(data))
+		return nil
+	}
+
+	path := args[0]
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("creating directory: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("writing file: %w", err)
+	}
+	fmt.Printf("Configuration exported to %s\n", path)
+	return nil
 }
 
 func runConfig(cmd *cobra.Command, _ []string) error {

@@ -211,6 +211,23 @@ func StatePathForHome(homeDir string) string {
 	return filepath.Join(StateDirForHome(homeDir), "config.yaml")
 }
 
+// LoadStateFrom reads user state from an arbitrary file path.
+// Unlike LoadState, it returns an error if the file does not exist.
+func LoadStateFrom(path string) (*UserState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading config: %w", err)
+	}
+	var state UserState
+	if err := yaml.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if err := state.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: imported config has invalid values: %v\n", err)
+	}
+	return &state, nil
+}
+
 // LoadStateForHome reads user state from a specific home directory.
 func LoadStateForHome(homeDir string) (*UserState, error) {
 	return loadStateAt(StatePathForHome(homeDir))

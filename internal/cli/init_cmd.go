@@ -10,31 +10,52 @@ import (
 )
 
 func newInitCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Interactive setup for dotfiles",
-		Long:  "Collect user preferences and save them to the dotfiles state file.",
-		RunE:  runInit,
+		Long: `Collect user preferences and save them to the dotfiles state file.
+
+Use --from to import settings from another machine's exported config:
+  dotfiles init --from ~/ai-workspace/secrets/dotfiles-config.yaml`,
+		RunE: runInit,
 	}
+	cmd.Flags().String("from", "", "Import settings from an exported config file (identity & preferences as defaults)")
+	return cmd
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	homeOverride, _ := cmd.Flags().GetString("home")
+	fromPath, _ := cmd.Flags().GetString("from")
 
 	var state *config.UserState
 	var err error
-	if homeOverride != "" {
+
+	if fromPath != "" {
+		// Import from external config file — use as defaults for interactive prompts
+		state, err = config.LoadStateFrom(fromPath)
+		if err != nil {
+			return fmt.Errorf("importing config from %s: %w", fromPath, err)
+		}
+		fmt.Printf("Imported settings from %s\n", fromPath)
+		ui.PrintStateSummary(state)
+		fmt.Println()
+		fmt.Println("Machine-specific settings (workspace, terminal) will be confirmed interactively.")
+		fmt.Println()
+	} else if homeOverride != "" {
 		state, err = config.LoadStateForHome(homeOverride)
+		if err != nil {
+			return fmt.Errorf("loading state: %w", err)
+		}
 	} else {
 		state, err = config.LoadState()
-	}
-	if err != nil {
-		return fmt.Errorf("loading state: %w", err)
+		if err != nil {
+			return fmt.Errorf("loading state: %w", err)
+		}
 	}
 
-	// If state already has data, ask whether to reconfigure.
-	if state.Name != "" && !yes {
+	// If state already has data (not from --from), ask whether to reconfigure.
+	if state.Name != "" && !yes && fromPath == "" {
 		fmt.Printf("Current configuration:\n")
 		ui.PrintStateSummary(state)
 		fmt.Println()

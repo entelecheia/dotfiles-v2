@@ -28,8 +28,9 @@ esac
 
 info "Detected ${OS}/${ARCH}"
 
-# --- Step 2: Ensure Homebrew (macOS only) ---
-# Homebrew's installer also handles Xcode Command Line Tools automatically.
+# --- Step 2: Ensure Homebrew ---
+# macOS: Homebrew's installer also handles Xcode Command Line Tools automatically.
+# Linux: Linuxbrew provides consistent package management for dot apply.
 
 if [[ "$OS" == "darwin" ]]; then
   if [[ "$ARCH" == "arm64" ]]; then
@@ -37,20 +38,26 @@ if [[ "$OS" == "darwin" ]]; then
   else
     BREW_PREFIX="/usr/local"
   fi
+elif [[ "$OS" == "linux" ]]; then
+  BREW_PREFIX="/home/linuxbrew/.linuxbrew"
+fi
 
-  if command -v brew &>/dev/null; then
-    info "Homebrew: $(brew --version 2>/dev/null | head -1)"
-  elif [[ -x "$BREW_PREFIX/bin/brew" ]]; then
-    eval "$("$BREW_PREFIX/bin/brew" shellenv)"
-    info "Homebrew: $(brew --version 2>/dev/null | head -1)"
-  else
+if command -v brew &>/dev/null; then
+  info "Homebrew: $(brew --version 2>/dev/null | head -1)"
+elif [[ -n "${BREW_PREFIX:-}" ]] && [[ -x "$BREW_PREFIX/bin/brew" ]]; then
+  eval "$("$BREW_PREFIX/bin/brew" shellenv)"
+  info "Homebrew: $(brew --version 2>/dev/null | head -1)"
+elif [[ -n "${BREW_PREFIX:-}" ]]; then
+  if [[ "$OS" == "darwin" ]]; then
     info "Installing Homebrew (includes Xcode Command Line Tools)..."
-    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    if [[ -x "$BREW_PREFIX/bin/brew" ]]; then
-      eval "$("$BREW_PREFIX/bin/brew" shellenv)"
-    fi
-    info "Homebrew installed"
+  else
+    info "Installing Homebrew (Linuxbrew)..."
   fi
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  if [[ -x "$BREW_PREFIX/bin/brew" ]]; then
+    eval "$("$BREW_PREFIX/bin/brew" shellenv)"
+  fi
+  info "Homebrew installed"
 fi
 
 # --- Step 3: Download dot binary ---

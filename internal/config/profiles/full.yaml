@@ -25,6 +25,7 @@ modules:
 packages_extra:
   - btop
   - lazygit
+  - rclone
   - yazi
   - glow
   - csvlens

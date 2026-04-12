@@ -16,6 +16,11 @@ A single Go binary. macOS + Linux + GPU servers. Modular, profile-based, AI-read
 curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash
 ```
 
+The installer handles prerequisites automatically:
+- **macOS**: Installs Homebrew (which includes Xcode Command Line Tools)
+- **Linux**: Installs Linuxbrew for consistent package management
+- Downloads the `dot` binary and configures PATH
+
 ### Setup
 
 ```bash
@@ -23,6 +28,17 @@ dotfiles            # welcome screen with next-step guidance
 dotfiles init       # interactive TUI — name, email, profile, modules
 dotfiles apply      # apply all enabled modules
 dotfiles usecase    # detailed workflow examples
+```
+
+### Migrate from another machine
+
+```bash
+# On the existing machine — export config
+dotfiles config export ~/ai-workspace/secrets/dotfiles-config.yaml
+
+# On the new machine — import and review
+dotfiles init --from ~/ai-workspace/secrets/dotfiles-config.yaml
+dotfiles apply
 ```
 
 ### Workspace
@@ -64,8 +80,12 @@ dotfiles usecase
 Interactive TUI setup. Collects user info and saves to `~/.config/dotfiles/config.yaml`.
 
 ```bash
-dotfiles init
+dotfiles init                                              # fresh setup
+dotfiles init --from ~/ai-workspace/secrets/config.yaml    # import from another machine
+dotfiles init --yes                                        # unattended with defaults
 ```
+
+Use `--from` to import settings from another machine's exported config. Identity fields (name, email, SSH key) are pre-populated; machine-specific settings (workspace path, terminal) are confirmed interactively.
 
 Prompts for:
 - Name, Email, GitHub username
@@ -135,6 +155,18 @@ Self-updating binary. Downloads the latest release from GitHub. (`upgrade` is an
 dotfiles update          # download & install
 dotfiles update --check  # check only
 ```
+
+### `dotfiles config`
+
+Show current configuration (profile, system, modules, packages).
+
+```bash
+dotfiles config
+dotfiles config export                                       # print to stdout
+dotfiles config export ~/ai-workspace/secrets/config.yaml    # save to file
+```
+
+`config export` produces a portable YAML file that can be used on another machine with `dotfiles init --from <file>`.
 
 ### `dotfiles reconfigure`
 
@@ -380,11 +412,11 @@ workspace → ai-tools → fonts → conda → gpg → secrets
 
 ### Packages
 
-**minimal** (15):
-`git`, `git-lfs`, `gh`, `age`, `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`, `direnv`, `zoxide`, `eza`, `starship`, `curl`
+**minimal** (16):
+`git`, `git-lfs`, `gh`, `age`, `rsync`, `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`, `direnv`, `zoxide`, `eza`, `starship`, `curl`
 
-**full** adds (+11):
-`btop`, `lazygit`, `yazi`, `glow`, `csvlens`, `chafa`, `fnm`, `uv`, `pipx`, `tmux`, `gnupg`
+**full** adds (+12):
+`btop`, `lazygit`, `rclone`, `yazi`, `glow`, `csvlens`, `chafa`, `fnm`, `uv`, `pipx`, `tmux`, `gnupg`
 
 ---
 
@@ -476,9 +508,9 @@ Profiles use YAML inheritance. `full` extends `minimal`.
 
 | Profile | Modules | Packages | Use Case |
 |---------|---------|----------|----------|
-| **minimal** | 5 | 15 | Lightweight dev setup |
-| **full** | 13 | 26+ | Complete workstation |
-| **server** | 8 | 19 | GPU/DGX server |
+| **minimal** | 5 | 16 | Lightweight dev setup |
+| **full** | 13 | 28 | Complete workstation |
+| **server** | 8 | 20 | GPU/DGX server |
 
 **server**: Extends `minimal` + tmux, ai-tools, conda. Disables workspace, fonts, gpg, secrets. Auto-suggested when NVIDIA GPU or CUDA is detected.
 
@@ -633,7 +665,14 @@ On a fresh DGX or GPU server — auto-detects NVIDIA GPU + CUDA:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash
 dotfiles init --yes     # auto-selects 'server' profile
-dotfiles apply --yes    # packages, shell, git, ssh, terminal, tmux, ai-tools, conda
+dotfiles apply --yes    # packages (incl. rsync), shell, git, ssh, terminal, tmux, ai-tools, conda
+```
+
+Or import config from your workstation:
+
+```bash
+dotfiles init --from ~/workspace/secrets/dotfiles-config.yaml
+dotfiles apply --yes
 ```
 
 Detection: `nvidia-smi` (GPU model), `/usr/local/cuda` (CUDA home), `/etc/dgx-release` (DGX).
