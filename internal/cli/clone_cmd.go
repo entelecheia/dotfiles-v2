@@ -31,7 +31,7 @@ Getting started:
   dot clone reconnect   Fix expired authentication
 
 Sync operations:
-  dot sync             Pull only: remote → local (default, safe)
+  dot clone            Pull only: remote → local (default, safe)
   dot clone pull        Pull only: remote → local (explicit)
   dot clone push        Push only: local → remote
   dot clone all         Bidirectional: pull then push

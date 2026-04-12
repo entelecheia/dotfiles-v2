@@ -225,6 +225,9 @@ func LoadStateFrom(path string) (*UserState, error) {
 	if err := state.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: imported config has invalid values: %v\n", err)
 	}
+	if state.Name == "" && state.Profile == "" {
+		return nil, fmt.Errorf("imported config is empty (no name or profile set)")
+	}
 	return &state, nil
 }
 

@@ -106,6 +106,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	config.ApplyStateToConfig(cfg, state)
+	config.ApplyEnvOverrides(cfg)
 
 	fmt.Println()
 	fmt.Println(ui.StyleHeader.Render(" dotfiles Configuration "))

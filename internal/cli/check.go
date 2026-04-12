@@ -58,6 +58,7 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	}
 
 	config.ApplyStateToConfig(cfg, state)
+	config.ApplyEnvOverrides(cfg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelWarn,

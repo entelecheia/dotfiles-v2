@@ -398,7 +398,7 @@ workspace → ai-tools → fonts → conda → gpg → secrets
 |--------|---------|-------------|
 | **packages** | minimal | Homebrew formula installation |
 | **shell** | minimal | zsh, Oh My Zsh, plugins, config files |
-| **node** | minimal | .npmrc, pnpm store relocation outside Google Drive |
+| **node** | full | .npmrc, pnpm store relocation outside Google Drive |
 | **git** | minimal | git config, aliases, global ignore |
 | **ssh** | minimal | SSH config, config.d includes |
 | **terminal** | minimal | starship prompt, Warp theme (macOS) |

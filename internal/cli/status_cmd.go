@@ -111,6 +111,7 @@ func statusPrintModules(cmd *cobra.Command, state *config.UserState, sysInfo *co
 		return
 	}
 	config.ApplyStateToConfig(cfg, state)
+	config.ApplyEnvOverrides(cfg)
 
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))

@@ -52,6 +52,11 @@ elif [[ -n "${BREW_PREFIX:-}" ]]; then
     info "Installing Homebrew (includes Xcode Command Line Tools)..."
   else
     info "Installing Homebrew (Linuxbrew)..."
+    if command -v apt-get &>/dev/null; then
+      info "Installing Linuxbrew prerequisites..."
+      sudo apt-get update -qq
+      sudo apt-get install -y build-essential procps curl file git
+    fi
   fi
   NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   if [[ -x "$BREW_PREFIX/bin/brew" ]]; then

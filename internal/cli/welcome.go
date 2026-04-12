@@ -200,7 +200,18 @@ func printUsecases() {
 				"Decrypt from backup on new machine"},
 		})
 
-	section("9. Updates and reconfiguration",
+	section("9. Cross-machine migration",
+		"Move your config to a new Mac, Mac Pro, or Ubuntu server.",
+		[]usecase{
+			{"dotfiles config export ~/ai-workspace/secrets/dotfiles-config.yaml",
+				"Export current config to a portable YAML file"},
+			{"dotfiles init --from ~/ai-workspace/secrets/dotfiles-config.yaml",
+				"Import config on new machine (identity pre-filled, machine settings confirmed)"},
+			{"dotfiles apply",
+				"Apply imported config — installs packages, configures environment"},
+		})
+
+	section("10. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
 			{"dotfiles update --check",
@@ -213,7 +224,7 @@ func printUsecases() {
 				"Show installed version and build info"},
 		})
 
-	section("10. GPU server / DGX provisioning",
+	section("11. GPU server / DGX provisioning",
 		"Deploy on a fresh GPU server — auto-detects NVIDIA + CUDA.",
 		[]usecase{
 			{"curl -fsSL .../install.sh | bash",
@@ -224,7 +235,7 @@ func printUsecases() {
 				"Apply server profile (no workspace, fonts, gpg, secrets)"},
 		})
 
-	section("11. Troubleshooting",
+	section("12. Troubleshooting",
 		"Diagnose and recover from issues.",
 		[]usecase{
 			{"dotfiles doctor",

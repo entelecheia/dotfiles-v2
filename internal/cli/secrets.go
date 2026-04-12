@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -93,6 +94,10 @@ func newSecretsInitCmd() *cobra.Command {
 			}
 
 			runner := secretsRunner(cmd)
+
+			if !runner.CommandExists("age") {
+				return fmt.Errorf("age is not installed — run 'dotfiles apply' to install it")
+			}
 
 			// Build common recipient args.
 			recipientArgs := make([]string, 0, len(state.Secrets.AgeRecipients)*2)
@@ -259,12 +264,18 @@ func newSecretsRestoreCmd() *cobra.Command {
 			if identity == "" {
 				identity = filepath.Join(home, ".ssh", "id_ed25519")
 			}
-			// Expand $HOME in identity path.
-			if len(identity) > 0 && identity[0] == '~' {
-				identity = filepath.Join(home, identity[1:])
+			// Expand tilde in identity path.
+			if strings.HasPrefix(identity, "~/") {
+				identity = filepath.Join(home, identity[2:])
+			} else if identity == "~" {
+				identity = home
 			}
 
 			runner := secretsRunner(cmd)
+
+			if !runner.CommandExists("age") {
+				return fmt.Errorf("age is not installed — run 'dotfiles apply' to install it")
+			}
 
 			keyName := state.SSH.KeyName
 			if keyName == "" {

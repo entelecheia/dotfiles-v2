@@ -31,7 +31,6 @@ func Load(profileName, customPath string, sysInfo *SystemInfo) (*Config, error) 
 		return nil, err
 	}
 
-	ApplyEnvOverrides(cfg)
 	cfg.System = sysInfo
 	return cfg, nil
 }
