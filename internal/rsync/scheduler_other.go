@@ -1,6 +1,6 @@
 //go:build !darwin
 
-package sync
+package rsync
 
 import (
 	"context"
@@ -13,14 +13,12 @@ import (
 func (s *Scheduler) Install(ctx context.Context) error {
 	data := s.templateData()
 
-	// Render service
-	svcContent, err := s.Engine.Render("sync/rclone-bisync.service.tmpl", data)
+	svcContent, err := s.Engine.Render("rsync/dotfiles-sync.service.tmpl", data)
 	if err != nil {
 		return fmt.Errorf("rendering service: %w", err)
 	}
 
-	// Render timer
-	timerContent, err := s.Engine.Render("sync/rclone-bisync.timer.tmpl", data)
+	timerContent, err := s.Engine.Render("rsync/dotfiles-sync.timer.tmpl", data)
 	if err != nil {
 		return fmt.Errorf("rendering timer: %w", err)
 	}
@@ -41,7 +39,7 @@ func (s *Scheduler) Install(ctx context.Context) error {
 		return fmt.Errorf("daemon-reload: %w", err)
 	}
 
-	if _, err := s.Runner.Run(ctx, "systemctl", "--user", "enable", "--now", "rclone-bisync.timer"); err != nil {
+	if _, err := s.Runner.Run(ctx, "systemctl", "--user", "enable", "--now", "dotfiles-sync.timer"); err != nil {
 		return fmt.Errorf("enabling timer: %w", err)
 	}
 
@@ -50,7 +48,7 @@ func (s *Scheduler) Install(ctx context.Context) error {
 
 // Uninstall disables the timer and removes unit files.
 func (s *Scheduler) Uninstall(ctx context.Context) error {
-	_, _ = s.Runner.Run(ctx, "systemctl", "--user", "disable", "--now", "rclone-bisync.timer")
+	_, _ = s.Runner.Run(ctx, "systemctl", "--user", "disable", "--now", "dotfiles-sync.timer")
 	_ = s.Runner.Remove(s.Paths.SystemdTimer)
 	_ = s.Runner.Remove(s.Paths.SystemdService)
 	_, _ = s.Runner.Run(ctx, "systemctl", "--user", "daemon-reload")
@@ -59,13 +57,13 @@ func (s *Scheduler) Uninstall(ctx context.Context) error {
 
 // Pause stops the auto-sync timer.
 func (s *Scheduler) Pause(ctx context.Context) error {
-	_, err := s.Runner.Run(ctx, "systemctl", "--user", "stop", "rclone-bisync.timer")
+	_, err := s.Runner.Run(ctx, "systemctl", "--user", "stop", "dotfiles-sync.timer")
 	return err
 }
 
 // Resume starts the auto-sync timer.
 func (s *Scheduler) Resume(ctx context.Context) error {
-	_, err := s.Runner.Run(ctx, "systemctl", "--user", "start", "rclone-bisync.timer")
+	_, err := s.Runner.Run(ctx, "systemctl", "--user", "start", "dotfiles-sync.timer")
 	return err
 }
 
@@ -74,7 +72,7 @@ func (s *Scheduler) State(ctx context.Context) SchedulerState {
 	if !s.Runner.FileExists(s.Paths.SystemdTimer) {
 		return SchedulerNotInstalled
 	}
-	result, err := s.Runner.Run(ctx, "systemctl", "--user", "is-active", "rclone-bisync.timer")
+	result, err := s.Runner.Run(ctx, "systemctl", "--user", "is-active", "dotfiles-sync.timer")
 	if err != nil || result.ExitCode != 0 {
 		return SchedulerStopped
 	}

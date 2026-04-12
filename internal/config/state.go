@@ -28,6 +28,14 @@ type UserModulesState struct {
 	Warp      bool               `yaml:"warp,omitempty"`
 	Fonts     UserFontsState     `yaml:"fonts,omitempty"`
 	Sync      UserSyncState      `yaml:"sync,omitempty"`
+	Rsync     UserRsyncState     `yaml:"rsync,omitempty"`
+}
+
+// UserRsyncState holds rsync sync config from user state.
+type UserRsyncState struct {
+	RemoteHost string `yaml:"remote_host,omitempty"` // user@host (SSH)
+	RemotePath string `yaml:"remote_path,omitempty"` // remote workspace path
+	Interval   int    `yaml:"interval,omitempty"`    // sync interval in seconds, default 300
 }
 
 // UserSyncState holds rclone bisync config from user state.
@@ -87,6 +95,9 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.Sync.Interval != 0 && (s.Modules.Sync.Interval < 60 || s.Modules.Sync.Interval > 86400) {
 		return fmt.Errorf("sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Sync.Interval)
+	}
+	if s.Modules.Rsync.Interval != 0 && (s.Modules.Rsync.Interval < 60 || s.Modules.Rsync.Interval > 86400) {
+		return fmt.Errorf("rsync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Rsync.Interval)
 	}
 	return nil
 }

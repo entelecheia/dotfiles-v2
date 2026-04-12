@@ -15,7 +15,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/module"
-	gosync "github.com/entelecheia/dotfiles-v2/internal/sync"
+	"github.com/entelecheia/dotfiles-v2/internal/rsync"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/workspace"
@@ -210,18 +210,23 @@ func statusPrintSecrets(state *config.UserState) {
 	}
 }
 
-// statusPrintSync prints a compact sync summary.
+// statusPrintSync prints a compact rsync sync summary.
 func statusPrintSync(state *config.UserState) {
 	fmt.Println()
 	fmt.Println(ui.StyleSection.Render("▸ Sync"))
 
-	syncCfg, err := gosync.ResolveConfig(state)
-	if err != nil {
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(not configured)"))
+	if state.Modules.Rsync.RemoteHost == "" {
+		fmt.Printf("  %s\n", ui.StyleHint.Render("(not configured — run 'dotfiles sync setup')"))
 		return
 	}
 
-	paths, err := gosync.ResolvePaths()
+	syncCfg, err := rsync.ResolveConfig(state)
+	if err != nil {
+		fmt.Printf("  %s\n", ui.StyleHint.Render("(config error: "+err.Error()+")"))
+		return
+	}
+
+	paths, err := rsync.ResolvePaths()
 	if err != nil {
 		fmt.Printf("  %s\n", ui.StyleHint.Render("(cannot resolve paths)"))
 		return
@@ -230,14 +235,15 @@ func statusPrintSync(state *config.UserState) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	runner := exec.NewRunner(true, logger)
 	engine := template.NewEngine()
-	sched := gosync.NewScheduler(runner, paths, syncCfg, engine)
+	sched := rsync.NewScheduler(runner, paths, syncCfg, engine)
 
-	st, err := gosync.GetStatus(context.Background(), sched, syncCfg)
+	st, err := rsync.GetStatus(context.Background(), sched, syncCfg)
 	if err != nil {
 		fmt.Printf("  %s\n", ui.StyleHint.Render("(status unavailable: "+err.Error()+")"))
 		return
 	}
 
+	printKV("Remote", st.RemoteHost+":"+st.RemotePath)
 	printKV("Scheduler", st.SchedulerState.String())
 
 	if st.LastSyncTime != nil {
@@ -246,16 +252,8 @@ func statusPrintSync(state *config.UserState) {
 		printKV("Last sync", "(never)")
 	}
 
-	if st.MountPoint != "" {
-		mountState := "not mounted"
-		if st.Mounted {
-			mountState = "mounted"
-		}
-		printKV("Mount", st.MountPoint+" ("+mountState+")")
-	}
-
-	if st.LastError != "" {
-		printKV("Last error", st.LastError)
+	if st.LastResult != "" {
+		printKV("Last result", st.LastResult)
 	}
 }
 

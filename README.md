@@ -177,37 +177,85 @@ dotfiles drive-exclude add <path>...     # manually exclude specific dirs
 dotfiles drive-exclude status            # show current exclusion status
 ```
 
-Supported patterns: `node_modules`, `.pnpm`, `.next`, `.nuxt`, `.astro`, `.svelte-kit`, `.parcel-cache`, `.turbo`, `.angular`, `.webpack`, `.venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`
+Supported patterns: `node_modules`, `.pnpm`, `.npm`, `.next`, `.nuxt`, `.astro`, `.svelte-kit`, `.parcel-cache`, `.turbo`, `.angular`, `.webpack`, `dist`, `build`, `out`, `target`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.pixi`, `.cache`
 
 > macOS only for real xattr. `--dry-run` works on all platforms.
 
-### `dotfiles sync`
+### `dotfiles status`
 
-Safe workspace sync with Google Drive via `rclone copy --update`. Default is **pull only** (safe for consumer machines). Explicit `push` or `all` for uploads.
+Unified dashboard showing system, user, modules, secrets, sync, and workspace status at a glance.
 
 ```bash
-dotfiles sync setup           # install rclone, configure remote, deploy filter & scheduler
-dotfiles sync                 # pull only: remote → local (default, safe)
-dotfiles sync pull            # pull only (explicit)
-dotfiles sync push            # push only: local → remote
-dotfiles sync all             # pull then push (bidirectional)
-dotfiles sync status          # show sync state, mount status, last stats
+dotfiles status
+```
+
+### `dotfiles clean`
+
+Remove junk directories that waste disk space and cause Google Drive sync problems. The `_sys/` subtree is always protected.
+
+```bash
+dotfiles clean                # scan and preview (no deletion)
+dotfiles clean --yes          # actually delete
+dotfiles clean --all --yes    # include risky patterns (dist/, build/, out/, target/)
+dotfiles clean ~/projects     # custom path (default: ~/ai-workspace/work)
+```
+
+**Safe patterns** (always scanned): `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.venv`, `venv`, `env` (with pyvenv.cfg), `.next`, `.cache`, `.DS_Store`
+
+**Risky patterns** (`--all` required): `dist`, `build`, `out`, `target`
+
+> Alias: `dotfiles gc`
+
+### `dotfiles sync`
+
+Binary-only workspace sync with a remote server over SSH using `rsync`. Text files use git exclusively. Default is **pull-then-push**: pull newer binaries from remote, then push local binaries (local is authoritative).
+
+```bash
+dotfiles sync setup           # install rsync, configure SSH, deploy extensions & scheduler
+dotfiles sync                 # pull then push (default)
+dotfiles sync pull            # pull only: remote → local (--update, safe)
+dotfiles sync push            # push only: local → remote (--delete-after)
+dotfiles sync status          # show sync state, scheduler, last result
 dotfiles sync log [N]         # tail last N sync log lines (default 50)
-dotfiles sync skip            # list files auto-skipped due to permission errors
-dotfiles sync skip clear      # reset skip list to retry all files
-dotfiles sync connect         # configure a new Google Drive remote
-dotfiles sync reconnect       # refresh expired authentication
-dotfiles sync mount           # mount remote as FUSE filesystem (live, no local storage)
-dotfiles sync mount --unmount # unmount the FUSE filesystem
 dotfiles sync pause           # pause auto-sync scheduler
 dotfiles sync resume          # resume auto-sync scheduler
 ```
 
 **Key features:**
-- **Skip list**: files that fail with permission errors (shared Drive files) are auto-added to `~/.config/rclone/workspace-skip.txt` and excluded from future syncs
+- **Binary-only**: syncs via `--include-from` binary extensions file (pdf, hwp, docx, images, video, archives, ML data)
+- **Pull-then-push**: pull phase uses `--update` (safe), push phase uses `--delete-after` (local authority). Remote-created files are pulled first, so push never deletes them.
+- **POSIX lock**: `mkdir`-based atomic lock prevents concurrent syncs (macOS compatible, no `flock` needed)
+- **Log rotation**: auto-trims log at 2000 lines
+- **`-V` / `--verbose`**: streams rsync progress to terminal
+
+> Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux).
+
+### `dotfiles clone`
+
+Safe workspace sync with Google Drive via `rclone copy --update`. Default is **pull only** (safe for consumer machines). Explicit `push` or `all` for uploads.
+
+```bash
+dotfiles clone setup           # install rclone, configure remote, deploy filter & scheduler
+dotfiles clone                 # pull only: remote → local (default, safe)
+dotfiles clone pull            # pull only (explicit)
+dotfiles clone push            # push only: local → remote
+dotfiles clone all             # pull then push (bidirectional)
+dotfiles clone status          # show sync state, mount status, last stats
+dotfiles clone log [N]         # tail last N sync log lines (default 50)
+dotfiles clone skip            # list files auto-skipped due to permission errors
+dotfiles clone skip clear      # reset skip list to retry all files
+dotfiles clone connect         # configure a new Google Drive remote
+dotfiles clone reconnect       # refresh expired authentication
+dotfiles clone mount           # mount remote as FUSE filesystem (live, no local storage)
+dotfiles clone mount --unmount # unmount the FUSE filesystem
+dotfiles clone pause           # pause auto-sync scheduler
+dotfiles clone resume          # resume auto-sync scheduler
+```
+
+**Key features:**
+- **Skip list**: files that fail with permission errors are auto-added to skip list
 - **`--drive-skip-shared-with-me`**: avoids read-only shared folders entirely
 - **`--drive-skip-gdocs`**: skips Google Docs native files
-- **Download retries 5, upload retries 1**: permission errors are permanent so we don't waste quota retrying them
 - **`-V` / `--verbose`**: streams rclone progress to terminal
 
 > Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux). Conflicts resolved with `--update` (newer wins).
@@ -458,6 +506,10 @@ modules:
     remote: "gdrive"
     path: "work"
     interval: 300
+  rsync:
+    remote_host: "user@ubuntu-server"
+    remote_path: "~/workspace/work/"
+    interval: 300
 ssh:
   key_name: "id_ed25519_entelecheia"
 secrets:
@@ -499,22 +551,33 @@ Locale, firewall, storage        Workspace, secrets, sync, tmux
 dotfiles-v2/
 ├── cmd/dotfiles/main.go          # Entry point (ldflags: version, commit)
 ├── internal/
-│   ├── cli/                      # Cobra commands (15 files)
+│   ├── cli/                      # Cobra commands
 │   │   ├── open.go               # dot open — workspace launcher
-│   │   ├── sync_cmd.go           # dot sync — rclone bisync management
+│   │   ├── sync_cmd.go           # dot sync — rsync binary sync
+│   │   ├── clone_cmd.go          # dot clone — rclone Google Drive sync
+│   │   ├── clean_cmd.go          # dot clean — workspace junk cleanup
+│   │   ├── status_cmd.go         # dot status — unified dashboard
 │   │   ├── drive_exclude.go      # dot drive-exclude — xattr management
 │   │   └── workspace_cmds.go     # stop, list, register, unregister, layouts, doctor
 │   ├── config/                   # Config struct, loader, detector, state
 │   │   └── profiles/             # Embedded YAML profiles (go:embed)
+│   ├── clean/                    # Workspace cleanup scanner + deletion
 │   ├── driveexclude/             # Google Drive xattr exclusion logic
 │   ├── exec/                     # Runner (dry-run), Brew wrapper
 │   ├── module/                   # 13 module implementations
-│   ├── sync/                     # rclone bisync: runner, scheduler, status
-│   │   ├── sync.go               # Config resolution, Bisync runner
+│   ├── rclone/                   # rclone Google Drive sync (used by clone)
+│   │   ├── sync.go               # Config, pull/push/mount
 │   │   ├── rclone.go             # Install, remote config, access check
 │   │   ├── scheduler.go          # Scheduler types
 │   │   ├── scheduler_darwin.go   # macOS launchd
-│   │   └── scheduler_other.go   # Linux systemd
+│   │   └── scheduler_other.go    # Linux systemd
+│   ├── rsync/                    # rsync binary sync (used by sync)
+│   │   ├── rsync.go              # Config, pull/push, lock
+│   │   ├── helpers.go            # Install, SSH check
+│   │   ├── status.go             # Status, log parsing
+│   │   ├── scheduler.go          # Scheduler types
+│   │   ├── scheduler_darwin.go   # macOS launchd
+│   │   └── scheduler_other.go    # Linux systemd
 │   ├── workspace/                # Workspace management
 │   │   ├── config.go             # Project config, YAML load/save
 │   │   ├── deploy.go             # Shell script deployer (go:embed)

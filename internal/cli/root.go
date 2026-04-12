@@ -51,11 +51,17 @@ Also available as 'dot' for convenience.`,
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newUsecaseCmd())
 
+	// Workspace cleanup
+	root.AddCommand(newCleanCmd())
+
 	// Drive management commands
 	root.AddCommand(newDriveExcludeCmd())
 
-	// Sync commands
+	// Sync (rsync binary sync to remote server)
 	root.AddCommand(newSyncCmd())
+
+	// Clone (rclone Google Drive sync)
+	root.AddCommand(newCloneCmd())
 
 	// Workspace commands
 	root.AddCommand(newOpenCmd())

@@ -43,7 +43,9 @@ func printWelcome(version, commit string) {
 	printWelcomeCmd("dotfiles apply", "Apply configuration")
 	printWelcomeCmd("dotfiles check", "Show pending changes without applying")
 	printWelcomeCmd("dotfiles config", "Display current config")
-	printWelcomeCmd("dotfiles sync", "Sync workspace with Google Drive")
+	printWelcomeCmd("dotfiles clean", "Remove junk directories (node_modules, caches)")
+	printWelcomeCmd("dotfiles sync", "Sync binaries with remote server via rsync")
+	printWelcomeCmd("dotfiles clone", "Sync workspace with Google Drive via rclone")
 	printWelcomeCmd("dotfiles open <project>", "Launch/resume a tmux workspace")
 	printWelcomeCmd("dotfiles list", "Show registered projects")
 	fmt.Println()
@@ -127,26 +129,50 @@ func printUsecases() {
 				"Stop a running tmux session"},
 		})
 
-	section("4. Google Drive sync",
-		"Keep workspace synced across machines via rclone.",
+	section("4. Workspace cleanup",
+		"Remove junk that wastes disk and breaks Drive sync. _sys/ is always protected.",
 		[]usecase{
-			{"dotfiles sync setup",
-				"One-time setup: install rclone, configure remote, deploy filter & scheduler"},
-			{"dotfiles sync",
-				"Pull from remote (safe, read-only on remote)"},
-			{"dotfiles sync push",
-				"Push local changes to remote"},
-			{"dotfiles sync all",
-				"Bidirectional sync (pull then push)"},
-			{"dotfiles sync status",
-				"Show sync health, last run, scheduler state"},
-			{"dotfiles sync skip",
-				"View files auto-skipped due to permission errors"},
-			{"dotfiles sync mount",
-				"Mount remote as FUSE filesystem (live, no local storage)"},
+			{"dotfiles clean",
+				"Scan and preview (node_modules, __pycache__, .venv, .cache, .DS_Store)"},
+			{"dotfiles clean --yes",
+				"Actually delete safe patterns"},
+			{"dotfiles clean --all --yes",
+				"Include risky patterns (dist/, build/, out/, target/)"},
+			{"dotfiles status",
+				"Full environment dashboard (system, modules, secrets, sync, workspace)"},
 		})
 
-	section("5. Google Drive exclusions (macOS)",
+	section("5. Remote server sync (rsync)",
+		"Sync binary files with Ubuntu server over SSH. Text files use git only.",
+		[]usecase{
+			{"dotfiles sync setup",
+				"One-time setup: rsync, SSH key, remote host, binary extensions, scheduler"},
+			{"dotfiles sync",
+				"Pull-then-push (default): pull newer binaries, then push local"},
+			{"dotfiles sync pull",
+				"Pull only: remote → local (--update, safe)"},
+			{"dotfiles sync push",
+				"Push only: local → remote (--delete-after, local is authority)"},
+			{"dotfiles sync status",
+				"Show sync health, scheduler state, last result"},
+		})
+
+	section("6. Google Drive sync (rclone)",
+		"Keep workspace synced across Macs via rclone.",
+		[]usecase{
+			{"dotfiles clone setup",
+				"One-time setup: install rclone, configure remote, deploy filter & scheduler"},
+			{"dotfiles clone",
+				"Pull from remote (safe, read-only on remote)"},
+			{"dotfiles clone push",
+				"Push local changes to remote"},
+			{"dotfiles clone all",
+				"Bidirectional sync (pull then push)"},
+			{"dotfiles clone status",
+				"Show sync health, last run, scheduler state"},
+		})
+
+	section("7. Google Drive exclusions (macOS)",
 		"Exclude heavy directories (node_modules, build caches) from Drive sync.",
 		[]usecase{
 			{"dotfiles drive-exclude scan",
@@ -159,7 +185,7 @@ func printUsecases() {
 				"Manually exclude a specific path"},
 		})
 
-	section("6. Secrets management (age encryption)",
+	section("8. Secrets management (age encryption)",
 		"Encrypt SSH keys and shell secrets with age.",
 		[]usecase{
 			{"dotfiles secrets init --scaffold",
@@ -174,7 +200,7 @@ func printUsecases() {
 				"Decrypt from backup on new machine"},
 		})
 
-	section("7. Updates and reconfiguration",
+	section("9. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
 			{"dotfiles update --check",
@@ -187,7 +213,7 @@ func printUsecases() {
 				"Show installed version and build info"},
 		})
 
-	section("8. GPU server / DGX provisioning",
+	section("10. GPU server / DGX provisioning",
 		"Deploy on a fresh GPU server — auto-detects NVIDIA + CUDA.",
 		[]usecase{
 			{"curl -fsSL .../install.sh | bash",
@@ -198,19 +224,21 @@ func printUsecases() {
 				"Apply server profile (no workspace, fonts, gpg, secrets)"},
 		})
 
-	section("9. Troubleshooting",
+	section("11. Troubleshooting",
 		"Diagnose and recover from issues.",
 		[]usecase{
 			{"dotfiles doctor",
 				"Check workspace tool installation"},
+			{"dotfiles status",
+				"Full environment dashboard at a glance"},
 			{"dotfiles config",
 				"Show loaded configuration and system info"},
-			{"dotfiles sync reconnect",
+			{"dotfiles clone reconnect",
 				"Fix expired Google Drive authentication"},
+			{"dotfiles clone log 100",
+				"View recent rclone sync log entries"},
 			{"dotfiles sync log 100",
-				"View recent sync log entries"},
-			{"dotfiles sync skip clear",
-				"Reset skip list to retry failed files"},
+				"View recent rsync sync log entries"},
 		})
 
 	fmt.Println(ui.StyleSection.Render("▸ Global flags (work with most commands)"))

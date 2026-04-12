@@ -48,6 +48,7 @@ var DefaultExcludePatterns = []string{
 	// Node.js
 	"node_modules",
 	".pnpm",
+	".npm",
 	// Build caches
 	".astro",
 	".next",
@@ -55,14 +56,23 @@ var DefaultExcludePatterns = []string{
 	".svelte-kit",
 	".parcel-cache",
 	".turbo",
+	".angular",
+	".webpack",
+	// Build outputs
+	"dist",
+	"build",
+	"out",
+	"target",
 	// Python
 	".venv",
+	"venv",
 	"__pycache__",
 	".mypy_cache",
 	".pytest_cache",
-	// Misc
-	".angular",
-	".webpack",
+	".ruff_cache",
+	".pixi",
+	// Cache
+	".cache",
 }
 
 // Scanner finds excludable directories within a Drive-synced path.

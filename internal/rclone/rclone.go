@@ -1,4 +1,4 @@
-package sync
+package rclone
 
 import (
 	"context"
@@ -106,7 +106,7 @@ func CheckRemote(ctx context.Context, runner *exec.Runner, remote string) error 
 	_, err := runner.Run(timeoutCtx, "rclone", "lsd", remote+":", "--max-depth", "0")
 	if err != nil {
 		if timeoutCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("remote %q timed out (15s) — run 'dot sync reconnect' to fix authentication", remote)
+			return fmt.Errorf("remote %q timed out (15s) — run 'dot clone reconnect' to fix authentication", remote)
 		}
 		return fmt.Errorf("remote %q not accessible: %w", remote, err)
 	}

@@ -1,4 +1,4 @@
-package sync
+package rclone
 
 import (
 	"bufio"
@@ -156,7 +156,7 @@ func Pull(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, d
 		return err
 	}
 	if _, err := os.Stat(cfg.FilterFile); err != nil {
-		return fmt.Errorf("filter file missing: %s — run 'dot sync setup'", cfg.FilterFile)
+		return fmt.Errorf("filter file missing: %s — run 'dot clone setup'", cfg.FilterFile)
 	}
 
 	args := append([]string{"copy", cfg.RemotePath, cfg.LocalPath}, copyArgs(cfg, paths)...)
@@ -185,7 +185,7 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, paths *Paths, d
 		return err
 	}
 	if _, err := os.Stat(cfg.FilterFile); err != nil {
-		return fmt.Errorf("filter file missing: %s — run 'dot sync setup'", cfg.FilterFile)
+		return fmt.Errorf("filter file missing: %s — run 'dot clone setup'", cfg.FilterFile)
 	}
 
 	args := append([]string{"copy", cfg.LocalPath, cfg.RemotePath}, copyArgs(cfg, paths)...)

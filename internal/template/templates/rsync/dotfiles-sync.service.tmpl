@@ -1,0 +1,6 @@
+[Unit]
+Description=Sync workspace binaries with remote server
+
+[Service]
+Type=oneshot
+ExecStart={{.DotfilesPath}} sync

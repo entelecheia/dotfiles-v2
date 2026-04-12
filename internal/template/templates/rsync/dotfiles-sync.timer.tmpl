@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic rsync workspace sync
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec={{.Interval}}s
+Unit=dotfiles-sync.service
+
+[Install]
+WantedBy=timers.target
