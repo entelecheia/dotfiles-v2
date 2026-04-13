@@ -74,19 +74,9 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 		})
 	}
 
-	// workspace/work/.vault → workspace/vault
-	vaultPath := filepath.Join(workspacePath, "vault")
+	// workspace/work/.gdrive → gdrive_symlink/work
 	workDir := filepath.Join(workspacePath, "work")
 	if rc.Runner.IsDir(workDir) {
-		vaultXref := filepath.Join(workDir, ".vault")
-		if m.targetReachable(rc, vaultPath) && !m.pathUsable(rc, vaultXref) {
-			changes = append(changes, Change{
-				Description: fmt.Sprintf("symlink %s -> %s", vaultXref, vaultPath),
-				Command:     fmt.Sprintf("ln -sfn %q %q", vaultPath, vaultXref),
-			})
-		}
-
-		// workspace/work/.gdrive → gdrive_symlink/work
 		if gdriveSymlink != "" {
 			gdriveWork := filepath.Join(gdriveSymlink, "work")
 			gdriveXref := filepath.Join(workDir, ".gdrive")
@@ -113,17 +103,6 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 					}
 				}
 			}
-		}
-	}
-
-	// workspace/vault/.work → workspace/work
-	if m.targetReachable(rc, vaultPath) {
-		workXref := filepath.Join(vaultPath, ".work")
-		if rc.Runner.IsDir(workDir) && !m.pathUsable(rc, workXref) {
-			changes = append(changes, Change{
-				Description: fmt.Sprintf("symlink %s -> %s", workXref, workDir),
-				Command:     fmt.Sprintf("ln -sfn %q %q", workDir, workXref),
-			})
 		}
 	}
 
@@ -224,19 +203,9 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		}
 	}
 
-	// workspace/work/.vault → workspace/vault
-	vaultPath := filepath.Join(workspacePath, "vault")
+	// workspace/work/.gdrive → gdrive_symlink/work
 	workDir := filepath.Join(workspacePath, "work")
 	if rc.Runner.IsDir(workDir) {
-		vaultXref := filepath.Join(workDir, ".vault")
-		if m.targetReachable(rc, vaultPath) && !m.pathUsable(rc, vaultXref) {
-			if err := rc.Runner.Symlink(vaultPath, vaultXref); err != nil {
-				return nil, fmt.Errorf("symlinking work/.vault: %w", err)
-			}
-			messages = append(messages, fmt.Sprintf("symlinked %s -> %s", vaultXref, vaultPath))
-		}
-
-		// workspace/work/.gdrive → gdrive_symlink/work
 		if gdriveSymlink != "" {
 			gdriveWork := filepath.Join(gdriveSymlink, "work")
 			gdriveXref := filepath.Join(workDir, ".gdrive")
@@ -263,17 +232,6 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 					}
 				}
 			}
-		}
-	}
-
-	// workspace/vault/.work → workspace/work
-	if m.targetReachable(rc, vaultPath) {
-		workXref := filepath.Join(vaultPath, ".work")
-		if rc.Runner.IsDir(workDir) && !m.pathUsable(rc, workXref) {
-			if err := rc.Runner.Symlink(workDir, workXref); err != nil {
-				return nil, fmt.Errorf("symlinking vault/.work: %w", err)
-			}
-			messages = append(messages, fmt.Sprintf("symlinked %s -> %s", workXref, workDir))
 		}
 	}
 
