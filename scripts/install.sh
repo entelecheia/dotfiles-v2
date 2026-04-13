@@ -67,14 +67,36 @@ fi
 
 # --- Step 3: Download dot binary ---
 
-# Support GITHUB_TOKEN for API rate limits
-AUTH_HEADER=()
-if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  AUTH_HEADER=(-H "Authorization: token $GITHUB_TOKEN")
-fi
+# Fetch latest release tag with fallback chain:
+#   1. GitHub API with GITHUB_TOKEN (if set)
+#   2. GitHub API without auth
+#   3. GitHub redirect URL (no API needed)
+fetch_latest_tag() {
+  local tag=""
 
-LATEST=$(curl -fsSL "${AUTH_HEADER[@]}" "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+  # Try with token first (if set)
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    tag=$(curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
+      "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+      | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || true
+  fi
+
+  # Fallback: API without auth
+  if [[ -z "$tag" ]]; then
+    tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+      | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || true
+  fi
+
+  # Fallback: parse redirect URL (no API rate limit)
+  if [[ -z "$tag" ]]; then
+    tag=$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null \
+      | grep -i '^location:' | sed -E 's|.*/tag/([^ ]+).*|\1|' | tr -d '\r') || true
+  fi
+
+  echo "$tag"
+}
+
+LATEST=$(fetch_latest_tag)
 
 if [[ -z "$LATEST" ]]; then
   err "Failed to fetch latest release from GitHub"
