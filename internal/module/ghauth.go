@@ -16,7 +16,7 @@ var ghAuthScopes = []string{
 
 // ghAuthenticated checks if gh CLI is authenticated to github.com.
 func ghAuthenticated(rc *RunContext) bool {
-	result, err := rc.Runner.Run(context.Background(), "gh", "auth", "status")
+	result, err := rc.Runner.RunQuery(context.Background(), "gh", "auth", "status")
 	return err == nil && result.ExitCode == 0
 }
 

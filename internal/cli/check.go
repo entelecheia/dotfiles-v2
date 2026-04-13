@@ -92,13 +92,16 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	fmt.Printf("%-15s %-10s %s\n", "MODULE", "STATUS", "CHANGES")
 	fmt.Printf("%-15s %-10s %s\n", "------", "------", "-------")
 
-	allSatisfied := true
+	okCount, pendingCount, totalChanges := 0, 0, 0
 	for _, m := range modules {
 		r := results[m.Name()]
 		status := "OK"
 		if !r.Satisfied {
 			status = "PENDING"
-			allSatisfied = false
+			pendingCount++
+			totalChanges += len(r.Changes)
+		} else {
+			okCount++
 		}
 		changeCount := len(r.Changes)
 		fmt.Printf("%-15s %-10s %d change(s)\n", m.Name(), status, changeCount)
@@ -108,9 +111,11 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	}
 
 	fmt.Println()
-	if allSatisfied {
-		fmt.Println("All modules satisfied.")
+	if pendingCount == 0 {
+		fmt.Printf("All %d modules satisfied.\n", okCount)
 	} else {
+		fmt.Printf("%d/%d modules satisfied, %d pending (%d change(s)).\n",
+			okCount, okCount+pendingCount, pendingCount, totalChanges)
 		fmt.Println("Run 'dotfiles apply' to apply pending changes.")
 	}
 

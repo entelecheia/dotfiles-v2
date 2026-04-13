@@ -26,7 +26,7 @@ func (b *Brew) IsAvailable() bool {
 
 // IsInstalled checks if a formula is installed.
 func (b *Brew) IsInstalled(formula string) bool {
-	result, err := b.Runner.Run(context.Background(), "brew", "list", "--formula", formula)
+	result, err := b.Runner.RunQuery(context.Background(), "brew", "list", "--formula", formula)
 	if err != nil {
 		return false
 	}
@@ -35,7 +35,7 @@ func (b *Brew) IsInstalled(formula string) bool {
 
 // IsCaskInstalled checks if a cask is installed.
 func (b *Brew) IsCaskInstalled(cask string) bool {
-	result, err := b.Runner.Run(context.Background(), "brew", "list", "--cask", cask)
+	result, err := b.Runner.RunQuery(context.Background(), "brew", "list", "--cask", cask)
 	if err != nil {
 		return false
 	}
@@ -94,7 +94,7 @@ func (b *Brew) RefreshPath() {
 // MissingFormulas returns formulas from the list that are not installed.
 func (b *Brew) MissingFormulas(formulas []string) []string {
 	// Use brew list --formula -1 to get all installed formulas at once
-	result, err := b.Runner.Run(context.Background(), "brew", "list", "--formula", "-1")
+	result, err := b.Runner.RunQuery(context.Background(), "brew", "list", "--formula", "-1")
 	if err != nil {
 		return formulas // assume all missing if we can't check
 	}
