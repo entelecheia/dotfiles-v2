@@ -138,6 +138,24 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	printKV("GitHub", cfg.GithubUser)
 	printKV("Timezone", cfg.Timezone)
 
+	if cfg.Modules.Workspace.Enabled {
+		fmt.Println()
+		fmt.Println(ui.StyleSection.Render("▸ Workspace"))
+		printKV("Path", cfg.Modules.Workspace.Path)
+		if cfg.Modules.Workspace.Gdrive != "" {
+			printKV("GDrive", cfg.Modules.Workspace.Gdrive)
+		}
+		if cfg.Modules.Workspace.GdriveSymlink != "" {
+			printKV("GDrive link", cfg.Modules.Workspace.GdriveSymlink)
+		}
+		if cfg.Modules.Workspace.Symlink != "" {
+			printKV("Symlink", cfg.Modules.Workspace.Symlink)
+		}
+		for _, repo := range cfg.Modules.Workspace.Repos {
+			printKV(repo.Name+" repo", repo.Remote)
+		}
+	}
+
 	fmt.Println()
 	fmt.Println(ui.StyleSection.Render("▸ Modules"))
 	allModules := []struct {
