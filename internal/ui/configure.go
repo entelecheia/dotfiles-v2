@@ -143,6 +143,7 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		state.Modules.Workspace.Gdrive = ""
 		state.Modules.Workspace.GdriveSymlink = ""
 		state.Modules.Workspace.Symlink = ""
+		state.Modules.Workspace.Repos = nil
 		return nil
 	}
 
@@ -157,6 +158,7 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		state.Modules.Workspace.Gdrive = ""
 		state.Modules.Workspace.GdriveSymlink = ""
 		state.Modules.Workspace.Symlink = ""
+		state.Modules.Workspace.Repos = nil
 		return nil
 	}
 
@@ -226,6 +228,39 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		state.Modules.Workspace.Symlink, err = Input("Symlink target (blank to skip)", symlinkDefault, false)
 		if err != nil {
 			return err
+		}
+	}
+
+	// --- Workspace git repos (optional) ---
+	if !yes {
+		configureRepos, err := ConfirmBool("Configure workspace git repos?", len(state.Modules.Workspace.Repos) > 0, false)
+		if err != nil {
+			return err
+		}
+		if configureRepos {
+			oldRepos := state.Modules.Workspace.Repos
+			state.Modules.Workspace.Repos = nil
+			for _, name := range []string{"work", "vault"} {
+				existingRemote := ""
+				for _, r := range oldRepos {
+					if r.Name == name {
+						existingRemote = r.Remote
+						break
+					}
+				}
+				remote, err := Input(
+					fmt.Sprintf("Git remote for %s/%s (blank to skip)", state.Modules.Workspace.Path, name),
+					existingRemote, false)
+				if err != nil {
+					return err
+				}
+				if remote != "" {
+					state.Modules.Workspace.Repos = append(state.Modules.Workspace.Repos, config.RepoConfig{
+						Name:   name,
+						Remote: remote,
+					})
+				}
+			}
 		}
 	}
 	return nil
@@ -396,6 +431,9 @@ func PrintStateSummary(state *config.UserState) {
 		}
 		if state.Modules.Workspace.Symlink != "" {
 			printKV("Symlink", state.Modules.Workspace.Path+" → "+state.Modules.Workspace.Symlink)
+		}
+		for _, repo := range state.Modules.Workspace.Repos {
+			printKV(repo.Name+" repo", repo.Remote)
 		}
 	}
 	if state.Modules.Fonts.Family != "" {

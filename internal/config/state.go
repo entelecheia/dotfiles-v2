@@ -45,12 +45,19 @@ type UserSyncState struct {
 	Interval int    `yaml:"interval,omitempty"` // sync interval in seconds, default 300
 }
 
+// RepoConfig describes a git repository to clone into the workspace.
+type RepoConfig struct {
+	Name   string `yaml:"name"`             // subdirectory name: "work" or "vault"
+	Remote string `yaml:"remote,omitempty"` // git remote URL (HTTPS or SSH)
+}
+
 // UserWorkspaceState holds workspace config from user state.
 type UserWorkspaceState struct {
-	Path          string `yaml:"path,omitempty"`
-	Gdrive        string `yaml:"gdrive,omitempty"`
-	GdriveSymlink string `yaml:"gdrive_symlink,omitempty"` // symlink name for Drive (e.g. ~/gdrive-workspace)
-	Symlink       string `yaml:"symlink,omitempty"`        // explicit symlink target for Path
+	Path          string       `yaml:"path,omitempty"`
+	Gdrive        string       `yaml:"gdrive,omitempty"`
+	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for Drive (e.g. ~/gdrive-workspace)
+	Symlink       string       `yaml:"symlink,omitempty"`        // explicit symlink target for Path
+	Repos         []RepoConfig `yaml:"repos,omitempty"`          // git repos to clone into workspace
 }
 
 // UserFontsState holds font config from user state.
@@ -99,6 +106,19 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.Rsync.Interval != 0 && (s.Modules.Rsync.Interval < 60 || s.Modules.Rsync.Interval > 86400) {
 		return fmt.Errorf("rsync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Rsync.Interval)
+	}
+	seen := make(map[string]bool)
+	for _, repo := range s.Modules.Workspace.Repos {
+		if repo.Name != "work" && repo.Name != "vault" {
+			return fmt.Errorf("invalid workspace repo name %q (must be \"work\" or \"vault\")", repo.Name)
+		}
+		if repo.Remote == "" {
+			return fmt.Errorf("workspace repo %q has empty remote URL", repo.Name)
+		}
+		if seen[repo.Name] {
+			return fmt.Errorf("duplicate workspace repo name %q", repo.Name)
+		}
+		seen[repo.Name] = true
 	}
 	return nil
 }
@@ -256,6 +276,7 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 		cfg.Modules.Workspace.Gdrive = state.Modules.Workspace.Gdrive
 		cfg.Modules.Workspace.GdriveSymlink = state.Modules.Workspace.GdriveSymlink
 		cfg.Modules.Workspace.Symlink = state.Modules.Workspace.Symlink
+		cfg.Modules.Workspace.Repos = state.Modules.Workspace.Repos
 	}
 	if state.Modules.AITools {
 		cfg.Modules.AITools.Enabled = true

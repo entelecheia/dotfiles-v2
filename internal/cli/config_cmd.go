@@ -152,7 +152,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		{"ssh", cfg.Modules.SSH.Enabled, cfg.Modules.SSH.KeyName},
 		{"terminal", cfg.Modules.Terminal.Enabled, fmtIf(cfg.Modules.Terminal.Warp, "warp")},
 		{"tmux", cfg.Modules.Tmux.Enabled, ""},
-		{"workspace", cfg.Modules.Workspace.Enabled, cfg.Modules.Workspace.Path},
+		{"workspace", cfg.Modules.Workspace.Enabled, workspaceDetail(cfg)},
 		{"ai-tools", cfg.Modules.AITools.Enabled, ""},
 		{"fonts", cfg.Modules.Fonts.Enabled, cfg.Modules.Fonts.Family},
 		{"conda", cfg.Modules.Conda.Enabled, ""},
@@ -190,6 +190,14 @@ func printKV(key, value string) {
 		value = ui.StyleValue.Render(value)
 	}
 	fmt.Printf("  %s  %s\n", ui.StyleKey.Render(key+":"), value)
+}
+
+func workspaceDetail(cfg *config.Config) string {
+	detail := cfg.Modules.Workspace.Path
+	if n := len(cfg.Modules.Workspace.Repos); n > 0 {
+		detail += fmt.Sprintf(" (%d repo(s))", n)
+	}
+	return detail
 }
 
 func fmtIf(cond bool, label string) string {

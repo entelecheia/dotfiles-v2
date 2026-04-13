@@ -71,7 +71,8 @@ type WorkConfig struct {
 	Path          string `yaml:"path,omitempty"`            // workspace root (e.g. ~/workspace)
 	Gdrive        string `yaml:"gdrive,omitempty"`          // Google Drive physical path
 	GdriveSymlink string `yaml:"gdrive_symlink,omitempty"`  // symlink name for Drive (e.g. ~/gdrive-workspace)
-	Symlink       string `yaml:"symlink,omitempty"`         // explicit symlink target for Path (if set, Path → Symlink)
+	Symlink       string       `yaml:"symlink,omitempty"`         // explicit symlink target for Path (if set, Path → Symlink)
+	Repos         []RepoConfig `yaml:"repos,omitempty"`           // git repos to clone into workspace
 }
 
 // FontsConfig configures the fonts module.
@@ -195,6 +196,7 @@ func (c *Config) TemplateData() map[string]any {
 		"WorkspacePath":   c.Modules.Workspace.Path,
 		"WorkspaceGdrive":  c.Modules.Workspace.Gdrive,
 		"GdriveSymlink":    c.Modules.Workspace.GdriveSymlink,
+		"WorkRepos":        c.Modules.Workspace.Repos,
 		"SSHKeyName":      c.Modules.SSH.KeyName,
 		"GitSigning":      c.Modules.Git.Signing,
 		"FontFamily":      c.Modules.Fonts.Family,
