@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
@@ -23,6 +24,14 @@ type WorkspaceModule struct{}
 
 func (m *WorkspaceModule) Name() string { return "workspace" }
 
+// expandHome replaces a leading ~/ with the user's home directory.
+func (m *WorkspaceModule) expandHome(rc *RunContext, path string) string {
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(rc.HomeDir, path[2:])
+	}
+	return path
+}
+
 func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
 	var changes []Change
 	cfg := rc.Config.Modules.Workspace
@@ -31,21 +40,25 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 		return &CheckResult{Satisfied: true}, nil
 	}
 
-	workspacePath := cfg.Path
+	// Expand ~ in all config paths for filesystem operations
+	workspacePath := m.expandHome(rc, cfg.Path)
+	symlink := m.expandHome(rc, cfg.Symlink)
+	gdrive := m.expandHome(rc, cfg.Gdrive)
+	gdriveSymlink := m.expandHome(rc, cfg.GdriveSymlink)
 
 	// workspace symlink: only if explicit symlink target is configured
-	if cfg.Symlink != "" && !m.pathUsable(rc, workspacePath) {
+	if symlink != "" && !m.pathUsable(rc, workspacePath) {
 		changes = append(changes, Change{
-			Description: fmt.Sprintf("symlink %s -> %s", workspacePath, cfg.Symlink),
-			Command:     fmt.Sprintf("ln -sfn %s %s", cfg.Symlink, workspacePath),
+			Description: fmt.Sprintf("symlink %s -> %s", cfg.Path, cfg.Symlink),
+			Command:     fmt.Sprintf("ln -sfn %q %q", symlink, workspacePath),
 		})
 	}
 
 	// Google Drive symlink: gdrive_symlink → gdrive
-	if cfg.GdriveSymlink != "" && cfg.Gdrive != "" && !m.pathUsable(rc, cfg.GdriveSymlink) {
+	if gdriveSymlink != "" && gdrive != "" && !m.pathUsable(rc, gdriveSymlink) {
 		changes = append(changes, Change{
 			Description: fmt.Sprintf("symlink %s -> %s", cfg.GdriveSymlink, cfg.Gdrive),
-			Command:     fmt.Sprintf("ln -sfn %q %s", cfg.Gdrive, cfg.GdriveSymlink),
+			Command:     fmt.Sprintf("ln -sfn %q %q", gdrive, gdriveSymlink),
 		})
 	}
 
@@ -57,33 +70,33 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 		if m.targetReachable(rc, vaultPath) && !m.pathUsable(rc, vaultXref) {
 			changes = append(changes, Change{
 				Description: fmt.Sprintf("symlink %s -> %s", vaultXref, vaultPath),
-				Command:     fmt.Sprintf("ln -sfn %s %s", vaultPath, vaultXref),
+				Command:     fmt.Sprintf("ln -sfn %q %q", vaultPath, vaultXref),
 			})
 		}
 
 		// workspace/work/.gdrive → gdrive_symlink/work
-		if cfg.GdriveSymlink != "" {
-			gdriveWork := filepath.Join(cfg.GdriveSymlink, "work")
+		if gdriveSymlink != "" {
+			gdriveWork := filepath.Join(gdriveSymlink, "work")
 			gdriveXref := filepath.Join(workDir, ".gdrive")
 			if m.targetReachable(rc, gdriveWork) && !m.pathUsable(rc, gdriveXref) {
 				changes = append(changes, Change{
 					Description: fmt.Sprintf("symlink %s -> %s", gdriveXref, gdriveWork),
-					Command:     fmt.Sprintf("ln -sfn %s %s", gdriveWork, gdriveXref),
+					Command:     fmt.Sprintf("ln -sfn %q %q", gdriveWork, gdriveXref),
 				})
 			}
 		}
 
 		// inbox symlinks: work/inbox/{downloads,incoming} → gdrive/work/inbox/{downloads,incoming}
-		if cfg.GdriveSymlink != "" {
+		if gdriveSymlink != "" {
 			inboxDir := filepath.Join(workDir, "inbox")
 			if rc.Runner.IsDir(inboxDir) {
 				for _, sub := range []string{"downloads", "incoming"} {
 					linkPath := filepath.Join(inboxDir, sub)
-					gdriveTarget := filepath.Join(cfg.GdriveSymlink, "work", "inbox", sub)
+					gdriveTarget := filepath.Join(gdriveSymlink, "work", "inbox", sub)
 					if m.targetReachable(rc, gdriveTarget) && !m.pathUsable(rc, linkPath) {
 						changes = append(changes, Change{
 							Description: fmt.Sprintf("symlink %s -> %s", linkPath, gdriveTarget),
-							Command:     fmt.Sprintf("ln -sfn %s %s", gdriveTarget, linkPath),
+							Command:     fmt.Sprintf("ln -sfn %q %q", gdriveTarget, linkPath),
 						})
 					}
 				}
@@ -97,7 +110,7 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 		if rc.Runner.IsDir(workDir) && !m.pathUsable(rc, workXref) {
 			changes = append(changes, Change{
 				Description: fmt.Sprintf("symlink %s -> %s", workXref, workDir),
-				Command:     fmt.Sprintf("ln -sfn %s %s", workDir, workXref),
+				Command:     fmt.Sprintf("ln -sfn %q %q", workDir, workXref),
 			})
 		}
 	}
@@ -126,28 +139,32 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		return &ApplyResult{Changed: false, Messages: []string{"workspace path not configured"}}, nil
 	}
 
-	workspacePath := cfg.Path
+	// Expand ~ in all config paths for filesystem operations
+	workspacePath := m.expandHome(rc, cfg.Path)
+	symlink := m.expandHome(rc, cfg.Symlink)
+	gdrive := m.expandHome(rc, cfg.Gdrive)
+	gdriveSymlink := m.expandHome(rc, cfg.GdriveSymlink)
 
 	// workspace symlink: only create if explicit target is set and path doesn't exist
-	if cfg.Symlink != "" {
+	if symlink != "" {
 		if !m.pathUsable(rc, workspacePath) {
-			if !m.targetReachable(rc, cfg.Symlink) {
+			if !m.targetReachable(rc, symlink) {
 				return nil, fmt.Errorf("symlink target does not exist: %s", cfg.Symlink)
 			}
-			if err := rc.Runner.Symlink(cfg.Symlink, workspacePath); err != nil {
+			if err := rc.Runner.Symlink(symlink, workspacePath); err != nil {
 				return nil, fmt.Errorf("symlinking workspace: %w", err)
 			}
-			messages = append(messages, fmt.Sprintf("symlinked %s -> %s", workspacePath, cfg.Symlink))
+			messages = append(messages, fmt.Sprintf("symlinked %s -> %s", cfg.Path, cfg.Symlink))
 		}
 	}
 
 	// Google Drive symlink
-	if cfg.GdriveSymlink != "" && cfg.Gdrive != "" {
-		if !m.pathUsable(rc, cfg.GdriveSymlink) {
-			if !m.targetReachable(rc, cfg.Gdrive) {
+	if gdriveSymlink != "" && gdrive != "" {
+		if !m.pathUsable(rc, gdriveSymlink) {
+			if !m.targetReachable(rc, gdrive) {
 				return nil, fmt.Errorf("gdrive target does not exist: %s", cfg.Gdrive)
 			}
-			if err := rc.Runner.Symlink(cfg.Gdrive, cfg.GdriveSymlink); err != nil {
+			if err := rc.Runner.Symlink(gdrive, gdriveSymlink); err != nil {
 				return nil, fmt.Errorf("symlinking gdrive: %w", err)
 			}
 			messages = append(messages, fmt.Sprintf("symlinked %s -> %s", cfg.GdriveSymlink, cfg.Gdrive))
@@ -167,8 +184,8 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		}
 
 		// workspace/work/.gdrive → gdrive_symlink/work
-		if cfg.GdriveSymlink != "" {
-			gdriveWork := filepath.Join(cfg.GdriveSymlink, "work")
+		if gdriveSymlink != "" {
+			gdriveWork := filepath.Join(gdriveSymlink, "work")
 			gdriveXref := filepath.Join(workDir, ".gdrive")
 			if m.targetReachable(rc, gdriveWork) && !m.pathUsable(rc, gdriveXref) {
 				if err := rc.Runner.Symlink(gdriveWork, gdriveXref); err != nil {
@@ -179,12 +196,12 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		}
 
 		// inbox symlinks
-		if cfg.GdriveSymlink != "" {
+		if gdriveSymlink != "" {
 			inboxDir := filepath.Join(workDir, "inbox")
 			if rc.Runner.IsDir(inboxDir) {
 				for _, sub := range []string{"downloads", "incoming"} {
 					linkPath := filepath.Join(inboxDir, sub)
-					gdriveTarget := filepath.Join(cfg.GdriveSymlink, "work", "inbox", sub)
+					gdriveTarget := filepath.Join(gdriveSymlink, "work", "inbox", sub)
 					if m.targetReachable(rc, gdriveTarget) && !m.pathUsable(rc, linkPath) {
 						if err := rc.Runner.Symlink(gdriveTarget, linkPath); err != nil {
 							return nil, fmt.Errorf("symlinking inbox/%s: %w", sub, err)

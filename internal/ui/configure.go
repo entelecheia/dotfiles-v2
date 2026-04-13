@@ -141,6 +141,7 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 	if profile == "server" {
 		state.Modules.Workspace.Path = ""
 		state.Modules.Workspace.Gdrive = ""
+		state.Modules.Workspace.GdriveSymlink = ""
 		state.Modules.Workspace.Symlink = ""
 		return nil
 	}
@@ -154,6 +155,7 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 	if !enableWorkspace {
 		state.Modules.Workspace.Path = ""
 		state.Modules.Workspace.Gdrive = ""
+		state.Modules.Workspace.GdriveSymlink = ""
 		state.Modules.Workspace.Symlink = ""
 		return nil
 	}
@@ -184,6 +186,20 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		if err != nil {
 			return err
 		}
+
+		// GDrive symlink: convenience symlink for the Drive path
+		if state.Modules.Workspace.Gdrive != "" {
+			gsDefault := state.Modules.Workspace.GdriveSymlink
+			if gsDefault == "" {
+				gsDefault = "~/gdrive-workspace"
+			}
+			state.Modules.Workspace.GdriveSymlink, err = Input("GDrive symlink name (blank to skip)", gsDefault, yes)
+			if err != nil {
+				return err
+			}
+		} else {
+			state.Modules.Workspace.GdriveSymlink = ""
+		}
 	}
 
 	expandedPath := expandHome(state.Modules.Workspace.Path)
@@ -203,7 +219,8 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		}
 
 		symlinkDefault := state.Modules.Workspace.Symlink
-		if symlinkDefault == "" && state.Modules.Workspace.Gdrive != "" {
+		if symlinkDefault == "" && state.Modules.Workspace.Gdrive != "" && state.Modules.Workspace.GdriveSymlink == "" {
+			// Only default to Gdrive when no separate GdriveSymlink is configured
 			symlinkDefault = state.Modules.Workspace.Gdrive
 		}
 		state.Modules.Workspace.Symlink, err = Input("Symlink target (blank to skip)", symlinkDefault, false)
@@ -374,6 +391,9 @@ func PrintStateSummary(state *config.UserState) {
 		if state.Modules.Workspace.Gdrive != "" {
 			printKV("GDrive", state.Modules.Workspace.Gdrive)
 		}
+		if state.Modules.Workspace.GdriveSymlink != "" {
+			printKV("GDrive link", state.Modules.Workspace.GdriveSymlink+" → "+state.Modules.Workspace.Gdrive)
+		}
 		if state.Modules.Workspace.Symlink != "" {
 			printKV("Symlink", state.Modules.Workspace.Path+" → "+state.Modules.Workspace.Symlink)
 		}
@@ -463,7 +483,7 @@ func detectWorkspacePath() string {
 	home, _ := os.UserHomeDir()
 	candidates := []string{
 		filepath.Join(home, "workspace"),
-		filepath.Join(home, "workspace"),
+		filepath.Join(home, "Workspace"),
 		filepath.Join(home, "work"),
 	}
 	for _, c := range candidates {
