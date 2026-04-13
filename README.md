@@ -36,9 +36,12 @@ dotfiles usecase    # detailed workflow examples
 # On the existing machine — export config
 dotfiles config export ~/workspace/secrets/dotfiles-config.yaml
 
-# On the new machine — import and review
+# On the new machine — import and apply
 dotfiles init --from ~/workspace/secrets/dotfiles-config.yaml
 dotfiles apply
+# → gh auth login (if private repos configured)
+# → git clone work/vault repos
+# → symlink federation, shell config, packages...
 ```
 
 ### Workspace
@@ -94,6 +97,8 @@ Prompts for:
 - GPU/CUDA auto-detection (suggests `server` when NVIDIA GPU detected)
 - Module opt-ins: workspace, AI tools, Warp, fonts
 - SSH key name (auto-derived from GitHub username)
+- Workspace git repos: remote URLs for `work` and `vault` directories (optional)
+- GitHub authentication via `gh auth login` with broad scopes (optional, for private repos)
 
 ### `dotfiles apply`
 
@@ -403,7 +408,7 @@ workspace → ai-tools → fonts → conda → gpg → secrets
 | **ssh** | minimal | SSH config, config.d includes |
 | **terminal** | minimal | starship prompt, Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
-| **workspace** | full | Dual-workspace symlink federation (git ↔ Google Drive, vault xrefs, inbox) |
+| **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
 | **ai-tools** | full | Claude Code config, GitHub Models aliases |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **conda** | full | Conda/Mamba shell initialization |
@@ -531,6 +536,11 @@ modules:
     path: "~/workspace"
     gdrive: "~/My Drive (hello@jeju.ai)"
     gdrive_symlink: "~/gdrive-workspace"
+    repos:
+      - name: work
+        remote: "git@github.com:user/work.git"
+      - name: vault
+        remote: "git@github.com:user/vault.git"
   ai_tools: true
   warp: false
   fonts:
