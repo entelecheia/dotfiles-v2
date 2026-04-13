@@ -40,6 +40,9 @@ jobs:
         run: go build -o bin/dotfiles ./cmd/dotfiles/
       - run: ./bin/dotfiles --help
       - run: ./bin/dotfiles version
+      - name: Install shellcheck (macOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
       - name: Shellcheck install script
         run: shellcheck scripts/install.sh
       - name: Bash syntax check install script
