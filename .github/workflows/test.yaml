@@ -9,6 +9,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "Makefile"
+      - "scripts/**"
       - "tests/**"
       - ".github/workflows/**"
       - ".goreleaser.yaml"
@@ -19,6 +20,7 @@ on:
       - "internal/**"
       - "go.mod"
       - "go.sum"
+      - "scripts/**"
       - "tests/**"
 
 jobs:
@@ -38,6 +40,10 @@ jobs:
         run: go build -o bin/dotfiles ./cmd/dotfiles/
       - run: ./bin/dotfiles --help
       - run: ./bin/dotfiles version
+      - name: Shellcheck install script
+        run: shellcheck scripts/install.sh
+      - name: Bash syntax check install script
+        run: bash -n scripts/install.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
@@ -120,6 +126,7 @@ jobs:
           - workspace
           - drive-exclude
           - sync
+          - install-script
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
