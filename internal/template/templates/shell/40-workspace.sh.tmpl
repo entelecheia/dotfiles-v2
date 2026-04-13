@@ -3,13 +3,36 @@
 export WORKSPACE="{{ replace .WorkspacePath "~" "$HOME" }}"
 export WORK="$WORKSPACE/work"
 export VAULT="$WORKSPACE/vault"
+{{ if .GdriveSymlink -}}
+export GDRIVE_WORKSPACE="{{ replace .GdriveSymlink "~" "$HOME" }}"
+export GDRIVE_WORK="$GDRIVE_WORKSPACE/work"
+{{ end -}}
 
 # 빠른 이동
 alias work="cd $WORK"
 alias vault="cd $VAULT"
-alias brain="cd $VAULT"
+{{ if .GdriveSymlink -}}
+alias gwork="cd $GDRIVE_WORK"
+{{ end -}}
 
 # 프로젝트 이동
 proj()  { cd "$WORK/projects/${1:-}" 2>/dev/null || echo "Not found: $1"; }
 teach() { cd "$WORK/teaching/${1:-}" 2>/dev/null || echo "Not found: $1"; }
+
+{{ if .GdriveSymlink -}}
+# workspace 간 대응 폴더 이동
+# ~/workspace/work/projects/rise → ~/gdrive-workspace/work/projects/rise (역방향도 동일)
+ws() {
+  local current="$PWD"
+  if [[ "$current" == "$WORK"* ]]; then
+    local rel="${current#$WORK}"
+    cd "$GDRIVE_WORK$rel" 2>/dev/null || echo "No matching folder: $GDRIVE_WORK$rel"
+  elif [[ "$current" == "$GDRIVE_WORK"* ]]; then
+    local rel="${current#$GDRIVE_WORK}"
+    cd "$WORK$rel" 2>/dev/null || echo "No matching folder: $WORK$rel"
+  else
+    echo "Not in a workspace directory"
+  fi
+}
+{{ end -}}
 {{ end -}}

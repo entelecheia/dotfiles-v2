@@ -176,7 +176,7 @@ func printUsecases() {
 		"Exclude heavy directories (node_modules, build caches) from Drive sync.",
 		[]usecase{
 			{"dotfiles drive-exclude scan",
-				"Find excludable directories under ~/ai-workspace"},
+				"Find excludable directories under ~/workspace"},
 			{"dotfiles drive-exclude apply --dry-run",
 				"Preview exclusions"},
 			{"dotfiles drive-exclude apply --yes",
@@ -203,9 +203,9 @@ func printUsecases() {
 	section("9. Cross-machine migration",
 		"Move your config to a new Mac, Mac Pro, or Ubuntu server.",
 		[]usecase{
-			{"dotfiles config export ~/ai-workspace/secrets/dotfiles-config.yaml",
+			{"dotfiles config export ~/workspace/secrets/dotfiles-config.yaml",
 				"Export current config to a portable YAML file"},
-			{"dotfiles init --from ~/ai-workspace/secrets/dotfiles-config.yaml",
+			{"dotfiles init --from ~/workspace/secrets/dotfiles-config.yaml",
 				"Import config on new machine (identity pre-filled, machine settings confirmed)"},
 			{"dotfiles apply",
 				"Apply imported config — installs packages, configures environment"},

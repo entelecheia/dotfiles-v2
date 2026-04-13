@@ -72,7 +72,7 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 	localPath := state.Modules.Workspace.Path
 	if localPath == "" {
 		home, _ := os.UserHomeDir()
-		localPath = filepath.Join(home, "ai-workspace")
+		localPath = filepath.Join(home, "gdrive-workspace")
 	}
 	if strings.HasPrefix(localPath, "~/") {
 		home, _ := os.UserHomeDir()

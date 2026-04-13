@@ -326,7 +326,7 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 	defaultLocal := state.Modules.Workspace.Path
 	if defaultLocal == "" {
 		home, _ := os.UserHomeDir()
-		defaultLocal = home + "/ai-workspace"
+		defaultLocal = home + "/gdrive-workspace"
 	}
 	localPath, err := ui.Input("Local workspace path", defaultLocal, yes)
 	if err != nil {

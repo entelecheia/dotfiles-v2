@@ -67,10 +67,11 @@ type TermConfig struct {
 
 // WorkConfig configures the workspace module.
 type WorkConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Path    string `yaml:"path,omitempty"`     // workspace root (e.g. ~/ai-workspace)
-	Gdrive  string `yaml:"gdrive,omitempty"`   // Google Drive path (for shell env only)
-	Symlink string `yaml:"symlink,omitempty"`  // explicit symlink target for Path (if set, Path → Symlink)
+	Enabled       bool   `yaml:"enabled"`
+	Path          string `yaml:"path,omitempty"`            // workspace root (e.g. ~/workspace)
+	Gdrive        string `yaml:"gdrive,omitempty"`          // Google Drive physical path
+	GdriveSymlink string `yaml:"gdrive_symlink,omitempty"`  // symlink name for Drive (e.g. ~/gdrive-workspace)
+	Symlink       string `yaml:"symlink,omitempty"`         // explicit symlink target for Path (if set, Path → Symlink)
 }
 
 // FontsConfig configures the fonts module.
@@ -192,7 +193,8 @@ func (c *Config) TemplateData() map[string]any {
 		"EnableAITools":   c.Modules.AITools.Enabled,
 		"EnableWarp":      c.Modules.Terminal.Warp,
 		"WorkspacePath":   c.Modules.Workspace.Path,
-		"WorkspaceGdrive": c.Modules.Workspace.Gdrive,
+		"WorkspaceGdrive":  c.Modules.Workspace.Gdrive,
+		"GdriveSymlink":    c.Modules.Workspace.GdriveSymlink,
 		"SSHKeyName":      c.Modules.SSH.KeyName,
 		"GitSigning":      c.Modules.Git.Signing,
 		"FontFamily":      c.Modules.Fonts.Family,

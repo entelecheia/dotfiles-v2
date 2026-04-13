@@ -164,7 +164,7 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		if v := detectWorkspacePath(); v != "" {
 			wsDefault, wsDetected = v, true
 		} else {
-			wsDefault = "~/ai-workspace"
+			wsDefault = "~/workspace"
 		}
 	}
 	state.Modules.Workspace.Path, err = InputWithDetected("Workspace path", wsDefault, wsDetected, yes)
@@ -462,7 +462,7 @@ func detectTimezone() string {
 func detectWorkspacePath() string {
 	home, _ := os.UserHomeDir()
 	candidates := []string{
-		filepath.Join(home, "ai-workspace"),
+		filepath.Join(home, "workspace"),
 		filepath.Join(home, "workspace"),
 		filepath.Join(home, "work"),
 	}

@@ -288,7 +288,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	defaultLocal := state.Modules.Workspace.Path
 	if defaultLocal == "" {
 		home, _ := os.UserHomeDir()
-		defaultLocal = filepath.Join(home, "ai-workspace", "work")
+		defaultLocal = filepath.Join(home, "workspace", "work")
 	}
 	localPath, err := ui.Input("Local workspace path", defaultLocal, yes)
 	if err != nil {

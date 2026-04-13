@@ -231,7 +231,7 @@ const separator = "━━━━━━━━━━━━━━━━━━━━�
 
 func defaultDriveRoot() string {
 	home, _ := os.UserHomeDir()
-	root := filepath.Join(home, "ai-workspace")
+	root := filepath.Join(home, "gdrive-workspace")
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		return resolved
 	}

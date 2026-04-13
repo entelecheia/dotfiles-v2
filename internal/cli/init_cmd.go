@@ -16,7 +16,7 @@ func newInitCmd() *cobra.Command {
 		Long: `Collect user preferences and save them to the dotfiles state file.
 
 Use --from to import settings from another machine's exported config:
-  dotfiles init --from ~/ai-workspace/secrets/dotfiles-config.yaml`,
+  dotfiles init --from ~/workspace/secrets/dotfiles-config.yaml`,
 		RunE: runInit,
 	}
 	cmd.Flags().String("from", "", "Import settings from an exported config file (identity & preferences as defaults)")
