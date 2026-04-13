@@ -172,6 +172,10 @@ echo "--- config export/import roundtrip ---"
 if command -v dotfiles &>/dev/null; then
   EXPORT_HOME=$(mktemp -d)
 
+  # Set up minimal git config (Docker/CI may not have one)
+  git config --global user.name "Test User" 2>/dev/null || true
+  git config --global user.email "test@example.com" 2>/dev/null || true
+
   # Init with defaults
   dotfiles init --yes --home "$EXPORT_HOME"
   assert_file_exists "$EXPORT_HOME/.config/dotfiles/config.yaml" "Init creates config"
