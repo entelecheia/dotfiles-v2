@@ -7,6 +7,7 @@ RUN useradd -m -s /bin/bash testuser \
     && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 COPY dotfiles /usr/local/bin/dotfiles
 RUN chmod +x /usr/local/bin/dotfiles
+COPY scripts/ /scripts/
 COPY tests/ /tests/
 RUN chmod +x /tests/*.sh && find /tests/scenarios -name '*.sh' -exec chmod +x {} +
 USER testuser
