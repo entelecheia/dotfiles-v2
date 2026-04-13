@@ -71,28 +71,28 @@ fi
 #   1. GitHub API with GITHUB_TOKEN (if set)
 #   2. GitHub API without auth
 #   3. GitHub redirect URL (no API needed)
+# Uses -sL (no -f) to avoid pipefail interaction, separates curl from grep.
 fetch_latest_tag() {
-  local tag=""
+  local body="" tag=""
 
   # Try with token first (if set)
   if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    tag=$(curl -fsSL -H "Authorization: token $GITHUB_TOKEN" \
-      "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-      | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || true
+    body=$(curl -sL --no-netrc -H "Authorization: token $GITHUB_TOKEN" \
+      "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null) || true
+    tag=$(echo "$body" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || true
+    if [[ -n "$tag" ]]; then echo "$tag"; return; fi
   fi
 
   # Fallback: API without auth
-  if [[ -z "$tag" ]]; then
-    tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-      | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || true
-  fi
+  body=$(curl -sL --no-netrc \
+    "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null) || true
+  tag=$(echo "$body" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || true
+  if [[ -n "$tag" ]]; then echo "$tag"; return; fi
 
-  # Fallback: parse redirect URL (no API rate limit)
-  if [[ -z "$tag" ]]; then
-    tag=$(curl -fsSI "https://github.com/${REPO}/releases/latest" 2>/dev/null \
-      | grep -i '^location:' | sed -E 's|.*/tag/([^ ]+).*|\1|' | tr -d '\r') || true
-  fi
-
+  # Fallback: parse redirect URL (no API, no rate limit)
+  tag=$(curl -sIL --no-netrc -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPO}/releases/latest" 2>/dev/null \
+    | sed -E 's|.*/tag/||') || true
   echo "$tag"
 }
 
@@ -105,6 +105,16 @@ fi
 
 VERSION="${LATEST#v}"
 
+# Download helper — uses --no-netrc to prevent stale credential interference
+download_binary() {
+  local url="$1" dest="$2"
+  if ! curl -fSL --no-netrc "$url" | tar xz -C "$dest" dotfiles; then
+    err "Download failed: $url"
+    exit 1
+  fi
+  chmod +x "$dest/dotfiles"
+}
+
 # Skip download if already at latest version
 if [[ -x "$INSTALL_DIR/dotfiles" ]]; then
   CURRENT=$("$INSTALL_DIR/dotfiles" --version 2>/dev/null || echo "")
@@ -112,16 +122,12 @@ if [[ -x "$INSTALL_DIR/dotfiles" ]]; then
     info "dotfiles v${VERSION} already installed, skipping download"
   else
     info "Upgrading dotfiles to v${VERSION}..."
-    URL="https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz"
-    curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" dotfiles
-    chmod +x "$INSTALL_DIR/dotfiles"
+    download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
   fi
 else
   info "Installing dotfiles v${VERSION}..."
-  URL="https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz"
   mkdir -p "$INSTALL_DIR"
-  curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" dotfiles
-  chmod +x "$INSTALL_DIR/dotfiles"
+  download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
 fi
 
 # Create 'dot' convenience symlink
