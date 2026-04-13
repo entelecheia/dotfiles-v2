@@ -34,10 +34,10 @@ dotfiles usecase    # detailed workflow examples
 
 ```bash
 # On the existing machine — export config
-dotfiles config export ~/ai-workspace/secrets/dotfiles-config.yaml
+dotfiles config export ~/workspace/secrets/dotfiles-config.yaml
 
 # On the new machine — import and review
-dotfiles init --from ~/ai-workspace/secrets/dotfiles-config.yaml
+dotfiles init --from ~/workspace/secrets/dotfiles-config.yaml
 dotfiles apply
 ```
 
@@ -81,7 +81,7 @@ Interactive TUI setup. Collects user info and saves to `~/.config/dotfiles/confi
 
 ```bash
 dotfiles init                                              # fresh setup
-dotfiles init --from ~/ai-workspace/secrets/config.yaml    # import from another machine
+dotfiles init --from ~/workspace/secrets/config.yaml    # import from another machine
 dotfiles init --yes                                        # unattended with defaults
 ```
 
@@ -163,7 +163,7 @@ Show current configuration (profile, system, modules, packages).
 ```bash
 dotfiles config
 dotfiles config export                                       # print to stdout
-dotfiles config export ~/ai-workspace/secrets/config.yaml    # save to file
+dotfiles config export ~/workspace/secrets/config.yaml    # save to file
 ```
 
 `config export` produces a portable YAML file that can be used on another machine with `dotfiles init --from <file>`.
@@ -200,7 +200,7 @@ Encryption flow:
 Exclude heavy directories from Google Drive sync using macOS xattr (`com.google.drivefs.ignorecontent`).
 
 ```bash
-dotfiles drive-exclude scan              # scan ~/ai-workspace (default)
+dotfiles drive-exclude scan              # scan ~/workspace (default)
 dotfiles drive-exclude scan ~/projects   # custom path
 dotfiles drive-exclude apply             # interactive confirmation
 dotfiles drive-exclude apply --yes       # skip confirmation
@@ -229,7 +229,7 @@ Remove junk directories that waste disk space and cause Google Drive sync proble
 dotfiles clean                # scan and preview (no deletion)
 dotfiles clean --yes          # actually delete
 dotfiles clean --all --yes    # include risky patterns (dist/, build/, out/, target/)
-dotfiles clean ~/projects     # custom path (default: ~/ai-workspace/work)
+dotfiles clean ~/projects     # custom path (default: ~/workspace/work)
 ```
 
 **Safe patterns** (always scanned): `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.venv`, `venv`, `env` (with pyvenv.cfg), `.next`, `.cache`, `.DS_Store`
@@ -301,7 +301,7 @@ dotfiles version
 ```
 
 ```
-dotfiles v0.14.0 (9fc1890)        # release build
+dotfiles v0.20.0 (1e5900a)        # release build
 dotfiles dev (d1877ee-dirty)      # dev build with uncommitted changes
   go:   go1.23.0
   os:   darwin/arm64
@@ -403,7 +403,7 @@ workspace → ai-tools → fonts → conda → gpg → secrets
 | **ssh** | minimal | SSH config, config.d includes |
 | **terminal** | minimal | starship prompt, Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
-| **workspace** | full | Symlink federation (Google Drive, vault) |
+| **workspace** | full | Dual-workspace symlink federation (git ↔ Google Drive, vault xrefs, inbox) |
 | **ai-tools** | full | Claude Code config, GitHub Models aliases |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **conda** | full | Conda/Mamba shell initialization |
@@ -528,8 +528,9 @@ timezone: "Asia/Seoul"
 profile: "full"
 modules:
   workspace:
-    path: "~/ai-workspace"
+    path: "~/workspace"
     gdrive: "~/My Drive (hello@jeju.ai)"
+    gdrive_symlink: "~/gdrive-workspace"
   ai_tools: true
   warp: false
   fonts:
@@ -561,7 +562,7 @@ secrets:
 | `DOTFILES_WORKSPACE_PATH` | Override workspace path |
 | `DOTFILES_REPO_DIR` | Dotfiles repo directory |
 | `DOTFILES_HOME` | Override home directory |
-| `GITHUB_TOKEN` | GitHub API token for `upgrade` |
+| `GITHUB_TOKEN` | GitHub API token for `update` |
 
 ---
 
