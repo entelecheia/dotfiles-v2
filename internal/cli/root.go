@@ -72,6 +72,14 @@ Also available as 'dot' for convenience.`,
 	root.AddCommand(newLayoutsCmd())
 	root.AddCommand(newDoctorCmd())
 
+	// Dual-workspace ops
+	root.AddCommand(newWorkspaceDualCmd())
+	root.AddCommand(newWsMkdirAliasCmd())
+	root.AddCommand(newWsMvAliasCmd())
+	root.AddCommand(newWsRmAliasCmd())
+	root.AddCommand(newWsAuditAliasCmd())
+	root.AddCommand(newWsReconcileAliasCmd())
+
 	return root
 }
 
