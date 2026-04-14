@@ -375,6 +375,30 @@ Workspace tool status:
   ✓ eza          /opt/homebrew/bin/eza
 ```
 
+### `dotfiles ws` — Dual-Workspace Folder Ops
+
+Operate on both `~/workspace/work/` (git-tracked text) and `~/gdrive-workspace/work/` (Drive binaries) simultaneously to keep their folder structures in sync.
+
+```bash
+dotfiles ws mkdir projects/rise-y2        # create on both sides
+dotfiles ws mv projects/rise projects/rise-y1  # rename on both sides
+dotfiles ws rm scratch --recursive        # remove from both sides
+dotfiles ws audit                         # report structural mismatches
+dotfiles ws audit projects                # limit scope
+dotfiles ws reconcile                     # interactive resolve (copy/delete/skip)
+dotfiles ws reconcile --yes               # bulk copy (never deletes)
+```
+
+Top-level aliases: `dot ws-mkdir`, `dot ws-mv`, `dot ws-rm`, `dot ws-audit`, `dot ws-reconcile`.
+
+**Safety:**
+- Rejects absolute paths, `..`, and workspace root refs
+- Never overwrites existing directories
+- Symlinks (e.g. `inbox/downloads`) auto-excluded from audit
+- `rm` of non-empty dir requires `--recursive`
+- `reconcile --yes` only copies — deletion always needs interactive confirmation
+- Ignore patterns: `.git`, `node_modules`, `.venv`, `__pycache__`, `.next`, `.cache`, `_sys`
+
 ### Global Flags
 
 | Flag | Description |
