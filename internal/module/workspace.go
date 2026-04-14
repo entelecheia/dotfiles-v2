@@ -53,7 +53,7 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 		if !rc.Runner.IsDir(repoPath) {
 			changes = append(changes, Change{
 				Description: fmt.Sprintf("clone %s into %s/%s", repo.Remote, cfg.Path, repo.Name),
-				Command:     fmt.Sprintf("git clone %s %s", repo.Remote, repoPath),
+				Command:     fmt.Sprintf("git clone --recurse-submodules %s %s", repo.Remote, repoPath),
 			})
 		}
 	}
@@ -165,7 +165,7 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		// Clone each repo
 		for _, repo := range toClone {
 			repoPath := filepath.Join(workspacePath, repo.Name)
-			result, err := rc.Runner.Run(ctx, "git", "clone", repo.Remote, repoPath)
+			result, err := rc.Runner.Run(ctx, "git", "clone", "--recurse-submodules", repo.Remote, repoPath)
 			if err != nil {
 				fmt.Printf("  ⚠ workspace: clone %s failed: %v (continuing)\n", repo.Name, err)
 				if result != nil && result.Stderr != "" {

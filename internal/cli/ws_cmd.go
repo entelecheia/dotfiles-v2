@@ -25,18 +25,90 @@ func newWorkspaceDualCmd() *cobra.Command {
 		Long: `Operate on both ~/workspace/work/ and ~/gdrive-workspace/work/ simultaneously.
 
 Subcommands keep the two trees in structural sync:
+  init       Clone configured workspace repos (recursive)
   mkdir      Create a folder on both sides
   mv         Rename/move on both sides
   rm         Remove on both sides (use --recursive for non-empty)
   audit      Report structural mismatches (read-only)
   reconcile  Interactively resolve mismatches`,
 	}
+	cmd.AddCommand(newWsInitCmd())
 	cmd.AddCommand(newWsMkdirCmd())
 	cmd.AddCommand(newWsMvCmd())
 	cmd.AddCommand(newWsRmCmd())
 	cmd.AddCommand(newWsAuditCmd())
 	cmd.AddCommand(newWsReconcileCmd())
 	return cmd
+}
+
+// wsInitBootstrap loads state for `ws init`. Unlike wsBootstrap it does not
+// require the dual-workspace roots to exist — init may need to create them.
+func wsInitBootstrap(cmd *cobra.Command) (workspacePath string, repos []config.RepoConfig, runner *exec.Runner, yes bool, err error) {
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	yes, _ = cmd.Flags().GetBool("yes")
+	homeOverride, _ := cmd.Flags().GetString("home")
+
+	var state *config.UserState
+	if homeOverride != "" {
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
+	if err != nil {
+		return "", nil, nil, false, fmt.Errorf("loading state: %w", err)
+	}
+
+	cfgPath := state.Modules.Workspace.Path
+	if cfgPath == "" {
+		return "", nil, nil, false, fmt.Errorf("workspace.path not configured; run 'dotfiles reconfigure'")
+	}
+
+	home, _ := os.UserHomeDir()
+	if homeOverride != "" {
+		home = homeOverride
+	}
+	if strings.HasPrefix(cfgPath, "~/") {
+		cfgPath = filepath.Join(home, cfgPath[2:])
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	runner = exec.NewRunner(dryRun, logger)
+	return cfgPath, state.Modules.Workspace.Repos, runner, yes, nil
+}
+
+func newWsInitCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Clone configured workspace repos recursively",
+		Long: `Clone each configured workspace repo (e.g. work, vault) into <workspace.path>/<name>
+with --recurse-submodules.
+
+Targets that are missing, empty, or contain only a .gdrive symlink are cloned
+without --force (the .gdrive symlink is preserved). Populated targets are
+skipped unless --force is given, in which case contents are deleted and the
+repo is re-cloned.`,
+		Args: cobra.NoArgs,
+		RunE: runWsInit,
+	}
+	cmd.Flags().Bool("force", false, "Re-clone over populated targets (destructive)")
+	return cmd
+}
+
+func runWsInit(cmd *cobra.Command, args []string) error {
+	workspacePath, repos, runner, yes, err := wsInitBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	force, _ := cmd.Flags().GetBool("force")
+
+	msgs, err := ws.Init(context.Background(), runner, workspacePath, repos, ws.InitOptions{
+		Force: force,
+		Yes:   yes,
+	})
+	for _, m := range msgs {
+		fmt.Println(m)
+	}
+	return err
 }
 
 // wsBootstrap loads workspace config and builds a Runner.

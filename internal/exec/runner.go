@@ -173,6 +173,16 @@ func (r *Runner) Remove(path string) error {
 	return os.Remove(path)
 }
 
+// RemoveAll removes a path and any children it contains. Respects dry-run.
+func (r *Runner) RemoveAll(path string) error {
+	if r.DryRun {
+		r.Logger.Info("dry-run: remove-all", "path", path)
+		return nil
+	}
+	r.Logger.Info("remove-all", "path", path)
+	return os.RemoveAll(path)
+}
+
 // Readlink reads a symlink target (never dry-run gated).
 func (r *Runner) Readlink(path string) (string, error) {
 	return os.Readlink(path)

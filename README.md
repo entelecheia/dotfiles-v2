@@ -380,6 +380,8 @@ Workspace tool status:
 Operate on both `~/workspace/work/` (git-tracked text) and `~/gdrive-workspace/work/` (Drive binaries) simultaneously to keep their folder structures in sync.
 
 ```bash
+dotfiles ws init                          # clone configured repos (work, vault) recursively
+dotfiles ws init --force                  # re-clone over populated targets (destructive; prompts)
 dotfiles ws mkdir projects/rise-y2        # create on both sides
 dotfiles ws mv projects/rise projects/rise-y1  # rename on both sides
 dotfiles ws rm scratch --recursive        # remove from both sides
@@ -390,6 +392,8 @@ dotfiles ws reconcile --yes               # bulk copy (never deletes)
 ```
 
 Top-level aliases: `dot ws-mkdir`, `dot ws-mv`, `dot ws-rm`, `dot ws-audit`, `dot ws-reconcile`.
+
+**`ws init`** clones each configured repo (from user state `workspace.repos`) into `<workspace.path>/<name>` using `git clone --recurse-submodules`. Targets that are missing, empty, or contain only a `.gdrive` symlink are cloned without `--force` (the symlink is preserved). Populated targets are skipped unless `--force` is given.
 
 **Safety:**
 - Rejects absolute paths, `..`, and workspace root refs
