@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
+	"github.com/entelecheia/dotfiles-v2/internal/ws"
 )
 
 // WorkspaceModule manages workspace symlink federation and shell config.
@@ -136,44 +136,19 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 	gdrive := m.expandHome(rc, cfg.Gdrive)
 	gdriveSymlink := m.expandHome(rc, cfg.GdriveSymlink)
 
-	// Git repo cloning (before symlinks — dirs must exist first)
-	var toClone []config.RepoConfig
-	for _, repo := range cfg.Repos {
-		repoPath := filepath.Join(workspacePath, repo.Name)
-		if !rc.Runner.IsDir(repoPath) {
-			toClone = append(toClone, repo)
+	// Git repo cloning (before symlinks — dirs must exist first). Delegates to
+	// ws.Init which handles gh auth, .gdrive symlink preservation, and fresh vs
+	// populated detection. Non-fatal: errors here don't block symlink setup.
+	if len(cfg.Repos) > 0 {
+		initMsgs, err := ws.Init(ctx, rc.Runner, workspacePath, cfg.Repos, ws.InitOptions{
+			Force: false,
+			Yes:   rc.Yes,
+		})
+		for _, m := range initMsgs {
+			messages = append(messages, m)
 		}
-	}
-	if len(toClone) > 0 {
-		// Ensure gh is authenticated before cloning (private repos need auth)
-		if rc.Runner.CommandExists("gh") && !ghAuthenticated(rc) {
-			fmt.Println("  GitHub authentication required for private repos.")
-			if rc.Yes {
-				fmt.Println("  ⚠ Skipping gh auth in --yes mode (run 'gh auth login' manually)")
-			} else if !rc.DryRun {
-				if err := ghLogin(ctx, rc); err != nil {
-					fmt.Printf("  ⚠ gh auth login failed: %v (clone may fail for private repos)\n", err)
-				}
-			}
-		}
-		// Ensure workspace root exists
-		if !rc.Runner.IsDir(workspacePath) {
-			if err := rc.Runner.MkdirAll(workspacePath, 0755); err != nil {
-				fmt.Printf("  ⚠ workspace: cannot create %s: %v\n", workspacePath, err)
-			}
-		}
-		// Clone each repo
-		for _, repo := range toClone {
-			repoPath := filepath.Join(workspacePath, repo.Name)
-			result, err := rc.Runner.Run(ctx, "git", "clone", "--recurse-submodules", repo.Remote, repoPath)
-			if err != nil {
-				fmt.Printf("  ⚠ workspace: clone %s failed: %v (continuing)\n", repo.Name, err)
-				if result != nil && result.Stderr != "" {
-					fmt.Printf("    %s\n", result.Stderr)
-				}
-				continue
-			}
-			messages = append(messages, fmt.Sprintf("cloned %s into %s", repo.Remote, repoPath))
+		if err != nil {
+			fmt.Printf("  ⚠ workspace: ws.Init: %v (continuing)\n", err)
 		}
 	}
 
