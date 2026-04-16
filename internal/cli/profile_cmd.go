@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/profilesnap"
@@ -33,11 +34,110 @@ Each snapshot captures:
 The shared backup root is resolved via --to/--from, the user state
 (BackupRoot), an auto-detected Drive "secrets" folder, or a local default.`,
 	}
+	cmd.AddCommand(newProfileRootCmd())
 	cmd.AddCommand(newProfileBackupCmd())
 	cmd.AddCommand(newProfileRestoreCmd())
 	cmd.AddCommand(newProfileListCmd())
 	cmd.AddCommand(newProfilePruneCmd())
 	return cmd
+}
+
+// --- root ---
+
+func newProfileRootCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "root [path]",
+		Short: "Show or set the shared backup root for profiles and app-settings",
+		Long: `Display or change the backup root directory.
+
+With no arguments, prints the current effective root (state → auto-detect → default).
+With a path argument, saves it to state. Use --detect to auto-discover a Google Drive
+secrets folder, or --reset to clear the saved value and fall back to auto-detection.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runProfileRoot,
+	}
+	c.Flags().Bool("detect", false, "Auto-detect Google Drive secrets folder and save")
+	c.Flags().Bool("reset", false, "Clear saved root (revert to auto-detect / default)")
+	return c
+}
+
+func runProfileRoot(cmd *cobra.Command, args []string) error {
+	homeOverride, _ := cmd.Flags().GetString("home")
+	detect, _ := cmd.Flags().GetBool("detect")
+	reset, _ := cmd.Flags().GetBool("reset")
+
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
+	home, _ := os.UserHomeDir()
+	if homeOverride != "" {
+		home = homeOverride
+	}
+
+	switch {
+	case reset:
+		state.Modules.MacApps.BackupRoot = ""
+		if err := persistProfileState(cmd, state); err != nil {
+			return err
+		}
+		effective := resolveBackupRoot(cmd, state, home)
+		fmt.Println(ui.StyleSuccess.Render("✓ backup root cleared"))
+		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Effective:"), ui.StyleValue.Render(effective))
+
+	case detect:
+		drive := appsettings.DetectDriveCandidate(home)
+		if drive == "" {
+			return fmt.Errorf("no Google Drive secrets folder detected under %s", home)
+		}
+		state.Modules.MacApps.BackupRoot = drive
+		if err := persistProfileState(cmd, state); err != nil {
+			return err
+		}
+		fmt.Println(ui.StyleSuccess.Render("✓ backup root set (auto-detected)"))
+		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(drive))
+
+	case len(args) == 1:
+		path := args[0]
+		state.Modules.MacApps.BackupRoot = path
+		if err := persistProfileState(cmd, state); err != nil {
+			return err
+		}
+		fmt.Println(ui.StyleSuccess.Render("✓ backup root set"))
+		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(path))
+
+	default:
+		// Show current
+		effective := resolveBackupRoot(cmd, state, home)
+		saved := state.Modules.MacApps.BackupRoot
+		source := "default"
+		if saved != "" {
+			source = "state"
+		} else if d := appsettings.DetectDriveCandidate(home); d != "" {
+			source = "auto-detected (Drive)"
+		}
+		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(effective))
+		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Source:"), ui.StyleHint.Render(source))
+		if saved != "" {
+			fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Saved:"), ui.StyleHint.Render(saved))
+		}
+	}
+	return nil
+}
+
+func persistProfileState(cmd *cobra.Command, state *config.UserState) error {
+	homeOverride, _ := cmd.Flags().GetString("home")
+	if homeOverride != "" {
+		return config.SaveStateForHome(homeOverride, state)
+	}
+	return config.SaveState(state)
 }
 
 // --- shared helpers ---
