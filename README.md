@@ -32,6 +32,26 @@ dotfiles usecase    # detailed workflow examples
 
 ### Migrate from another machine
 
+**Option A — profile snapshot (recommended on macOS):**
+
+```bash
+# On the existing machine
+dotfiles profile backup --tag "pre-migration" --include-secrets
+dotfiles apps backup                       # also snapshot per-app settings
+
+# On the new machine (Drive already mounted)
+dotfiles profile restore --include-secrets # restores ~/.config/dotfiles + ~/.ssh/age_key*
+dotfiles apply                             # brew formulas + casks from install list
+dotfiles apps restore                      # plists, Application Support, containers
+```
+
+The shared backup root lives in a single Drive folder
+(`<drive>/secrets/dotfiles-backup` by default) and holds every snapshot the
+user has taken across machines. `profile list` shows every version, and
+`profile restore --version <id>` rolls back to any specific one.
+
+**Option B — plain YAML export:**
+
 ```bash
 # On the existing machine — export config
 dotfiles config export ~/workspace/secrets/dotfiles-config.yaml
@@ -393,6 +413,101 @@ dotfiles ws reconcile --yes               # bulk copy (never deletes)
 
 Top-level aliases: `dot ws-mkdir`, `dot ws-mv`, `dot ws-rm`, `dot ws-audit`, `dot ws-reconcile`.
 
+### `dotfiles apps` — macOS Cask Install + Settings Backup/Restore
+
+Manage macOS cask applications and their per-app settings (plists, `Application Support/`,
+sandbox `Containers`, `Group Containers`). macOS-only; no-ops on Linux.
+
+```bash
+dotfiles apps list                         # show catalog: groups + ★ defaults + ✓ installed
+dotfiles apps install                      # interactive MultiSelect + optional "save to state"
+dotfiles apps install raycast obsidian     # explicit tokens (skip picker)
+dotfiles apps install --defaults           # catalog's default set
+dotfiles apps install --all                # every cask in the catalog
+dotfiles apps install --select             # force picker even when state has a list
+dotfiles apps install --no-save            # one-off install without persisting selection
+dotfiles apps status                       # install ✓/· + backup path counts per app
+dotfiles apps backup                       # snapshot settings for BackupApps ∩ manifest
+dotfiles apps backup raycast hazel         # explicit tokens
+dotfiles apps backup --all --to <root>     # override backup root, back up every entry
+dotfiles apps restore                      # restore from the configured root (confirms first)
+dotfiles apps restore --from <root> moom
+```
+
+**Two independent lists** on the user state:
+
+- **Install list** (`modules.macapps.casks` + `casks_extra`) — drives `dotfiles apps install`.
+- **Backup list** (`modules.macapps.backup_apps`) — scopes `apps backup/restore`. Empty
+  means "manifest ∩ installed casks".
+
+**Archive layout** under the shared backup root:
+
+```
+<BackupRoot>/app-settings/<hostname>/<cask>/<Library-relative-path>...
+```
+
+Excludes `Caches/`, `GPUCache/`, `Code Cache/`, `IndexedDB/`, `Local Storage/`,
+`Service Worker/`, `Logs/`, `*.log`, `*.lock`, `Singleton*`, and `.DS_Store`.
+Before overwriting live files on restore, originals are snapshotted to
+`~/.local/share/dotfiles/backup/`. `killall cfprefsd` runs after restore so
+re-launched apps read the new plists.
+
+The embedded cask catalog (`internal/config/catalog/macos-apps.yaml`) groups ~60
+apps across Security, Knowledge, Browsers, Terminal & Editor, AI, Communication,
+Productivity utilities, Capture & Dictation, Files, Media, Dev, System, Writing.
+The `defaults:` section defines the preselected 20-app bootstrap set.
+
+### `dotfiles profile` — Versioned Profile Snapshots
+
+Snapshot the user-level profile (`~/.config/dotfiles/config.yaml`, install / backup
+cask lists, and optionally `~/.ssh/age_key*`) into host-scoped, timestamped
+version directories under the shared backup root.
+
+```bash
+dotfiles profile backup                            # new snapshot
+dotfiles profile backup --tag "pre-migration"      # with label
+dotfiles profile backup --include-secrets          # also copy ~/.ssh/age_key*
+dotfiles profile list                              # newest-first; ★ marks latest
+dotfiles profile restore                           # restore the latest version
+dotfiles profile restore --version 20260416T000856Z
+dotfiles profile restore --include-secrets         # include ~/.ssh/age_key*
+dotfiles profile restore --no-state                # skip config.yaml copy
+dotfiles profile prune --keep 5                    # delete older snapshots
+dotfiles profile backup --to <root>                # override backup root
+```
+
+**Layout** (one Drive folder holds both app settings and profile snapshots):
+
+```
+<BackupRoot>/
+├── app-settings/<hostname>/<cask>/Library/<rel-path>...
+└── profiles/<hostname>/
+    ├── latest.txt                       # points at current version
+    ├── 20260416T000829Z/
+    │   ├── meta.yaml                    # version, tag, hostname, timestamp, user
+    │   ├── config.yaml                  # ~/.config/dotfiles/config.yaml
+    │   ├── apps/install.yaml            # casks + casks_extra
+    │   ├── apps/backup.yaml             # backup_apps + backup_root
+    │   └── secrets/age_key*             # only with --include-secrets
+    └── 20260416T000856Z-2/              # back-to-back runs get a -N suffix
+```
+
+Versions are UTC `YYYYMMDDTHHMMSSZ`. The `latest.txt` pointer is what `restore`
+reads by default; pass `--version` to pick any earlier snapshot. On a fresh
+machine the first `profile restore` boots state before you've run `dotfiles init`.
+
+### Backup-root resolution (shared by `apps` and `profile`)
+
+Precedence, highest wins:
+
+1. `--to <path>` / `--from <path>` flag.
+2. `modules.macapps.backup_root` in user state.
+3. Auto-detected Drive secrets folder (`<drive>/secrets/dotfiles-backup`).
+4. Local fallback: `~/.local/share/dotfiles/backup`.
+
+Set it once in `dotfiles init` — both subcommands read the same value so your
+Drive folder holds everything.
+
 **`ws init`** clones each configured repo (from user state `workspace.repos`) into `<workspace.path>/<name>` using `git clone --recurse-submodules`. Targets that are missing, empty, or contain only a `.gdrive` symlink are cloned without `--force` (the symlink is preserved). Populated targets are skipped unless `--force` is given.
 
 **Safety:**
@@ -422,7 +537,7 @@ Top-level aliases: `dot ws-mkdir`, `dot ws-mv`, `dot ws-rm`, `dot ws-audit`, `do
 
 ```
 packages → shell → node → git → ssh → terminal → tmux →
-workspace → ai-tools → fonts → conda → gpg → secrets
+workspace → ai-tools → fonts → macapps → conda → gpg → secrets
 ```
 
 ### Module Details
@@ -439,6 +554,7 @@ workspace → ai-tools → fonts → conda → gpg → secrets
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
 | **ai-tools** | full | Claude Code config, GitHub Models aliases |
 | **fonts** | full | Nerd Font download from GitHub Releases |
+| **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |
 | **conda** | full | Conda/Mamba shell initialization |
 | **gpg** | full | GPG agent + git commit signing |
 | **secrets** | full | Age-encrypted SSH keys and shell secrets |
@@ -542,10 +658,10 @@ Profiles use YAML inheritance. `full` extends `minimal`.
 | Profile | Modules | Packages | Use Case |
 |---------|---------|----------|----------|
 | **minimal** | 5 | 16 | Lightweight dev setup |
-| **full** | 13 | 28 | Complete workstation |
+| **full** | 14 | 28 | Complete workstation (macapps enabled on darwin) |
 | **server** | 8 | 20 | GPU/DGX server |
 
-**server**: Extends `minimal` + tmux, ai-tools, conda. Disables workspace, fonts, gpg, secrets. Auto-suggested when NVIDIA GPU or CUDA is detected.
+**server**: Extends `minimal` + tmux, ai-tools, conda. Disables workspace, fonts, macapps, gpg, secrets. Auto-suggested when NVIDIA GPU or CUDA is detected.
 
 ---
 
@@ -573,6 +689,18 @@ modules:
   warp: false
   fonts:
     family: "FiraCode"
+  macapps:
+    enabled: true
+    casks:          # install list (catalog tokens)
+      - 1password
+      - raycast
+      - obsidian
+    casks_extra:    # install list (free-form additions)
+      - maccy
+    backup_apps:    # backup/restore scope; empty = manifest ∩ installed
+      - raycast
+      - obsidian
+    backup_root: "~/Library/CloudStorage/GoogleDrive-*/My Drive/secrets/dotfiles-backup"
   sync:
     remote: "gdrive"
     path: "work"
@@ -635,7 +763,7 @@ dotfiles-v2/
 │   ├── clean/                    # Workspace cleanup scanner + deletion
 │   ├── driveexclude/             # Google Drive xattr exclusion logic
 │   ├── exec/                     # Runner (dry-run), Brew wrapper
-│   ├── module/                   # 13 module implementations
+│   ├── module/                   # 14 module implementations (macapps darwin-only)
 │   ├── rclone/                   # rclone Google Drive sync (used by clone)
 │   │   ├── sync.go               # Config, pull/push/mount
 │   │   ├── rclone.go             # Install, remote config, access check
