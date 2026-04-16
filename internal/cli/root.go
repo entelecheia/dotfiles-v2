@@ -75,6 +75,9 @@ Also available as 'dot' for convenience.`,
 	// macOS apps + settings backup/restore
 	root.AddCommand(newAppsCmd())
 
+	// Profile snapshots (config + app lists + optional secrets)
+	root.AddCommand(newProfileCmd())
+
 	// Dual-workspace ops
 	root.AddCommand(newWorkspaceDualCmd())
 	root.AddCommand(newWsMkdirAliasCmd())
