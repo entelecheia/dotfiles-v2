@@ -46,6 +46,9 @@ func printWelcome(version, commit string) {
 	printWelcomeCmd("dotfiles clean", "Remove junk directories (node_modules, caches)")
 	printWelcomeCmd("dotfiles sync", "Sync binaries with remote server via rsync")
 	printWelcomeCmd("dotfiles clone", "Sync workspace with Google Drive via rclone")
+	printWelcomeCmd("dotfiles apps install", "Install macOS cask apps (interactive picker)")
+	printWelcomeCmd("dotfiles apps backup", "Snapshot macOS app settings")
+	printWelcomeCmd("dotfiles profile backup", "Version-snapshot config + app lists + secrets")
 	printWelcomeCmd("dotfiles open <project>", "Launch/resume a tmux workspace")
 	printWelcomeCmd("dotfiles list", "Show registered projects")
 	fmt.Println()
@@ -200,18 +203,69 @@ func printUsecases() {
 				"Decrypt from backup on new machine"},
 		})
 
-	section("9. Cross-machine migration",
-		"Move your config to a new Mac, Mac Pro, or Ubuntu server.",
+	section("9. macOS app management (cask install + settings backup)",
+		"Install apps from an embedded catalog; back up and restore per-app settings.",
 		[]usecase{
-			{"dotfiles config export ~/workspace/secrets/dotfiles-config.yaml",
-				"Export current config to a portable YAML file"},
-			{"dotfiles init --from ~/workspace/secrets/dotfiles-config.yaml",
-				"Import config on new machine (identity pre-filled, machine settings confirmed)"},
-			{"dotfiles apply",
-				"Apply imported config — installs packages, configures environment"},
+			{"dotfiles apps list",
+				"Browse the cask catalog (★ defaults, ✓ installed)"},
+			{"dotfiles apps install",
+				"Interactive checkbox picker → save selection → install missing casks"},
+			{"dotfiles apps install raycast obsidian",
+				"Install specific casks by token"},
+			{"dotfiles apps install --defaults",
+				"Install the catalog's 20-app default set"},
+			{"dotfiles apps status",
+				"Show install + backup presence for each tracked app"},
+			{"dotfiles apps backup",
+				"Snapshot per-app settings (plists, Application Support) to backup root"},
+			{"dotfiles apps backup moom hazel --to ~/backup",
+				"Back up specific apps to a custom path"},
+			{"dotfiles apps restore",
+				"Restore all backed-up settings (confirms first, flushes cfprefsd)"},
 		})
 
-	section("10. Updates and reconfiguration",
+	section("10. Profile snapshots (versioned config backup)",
+		"Snapshot config.yaml, cask lists, and optional secrets into timestamped versions.",
+		[]usecase{
+			{"dotfiles profile backup",
+				"Create a new version snapshot under <backup-root>/profiles/<host>/"},
+			{"dotfiles profile backup --tag pre-migration --include-secrets",
+				"Tag the snapshot and include ~/.ssh/age_key*"},
+			{"dotfiles profile list",
+				"List all snapshots for this host (★ marks latest)"},
+			{"dotfiles profile restore",
+				"Restore the latest snapshot (config.yaml → ~/.config/dotfiles/)"},
+			{"dotfiles profile restore --version 20260416T083412Z --include-secrets",
+				"Restore a specific version including age keys"},
+			{"dotfiles profile prune --keep 5",
+				"Delete snapshots older than the 5 most recent"},
+		})
+
+	section("11. Cross-machine migration",
+		"Move your full setup to a new Mac in minutes.",
+		[]usecase{
+			{"dotfiles profile backup --tag pre-migration --include-secrets",
+				"[old machine] Snapshot config + age keys to Drive"},
+			{"dotfiles apps backup",
+				"[old machine] Snapshot per-app settings to Drive"},
+			{"dotfiles profile restore --include-secrets",
+				"[new machine] Restore config.yaml + age keys from latest snapshot"},
+			{"dotfiles apply",
+				"[new machine] Apply: packages, shell, git, cask installs, workspace…"},
+			{"dotfiles apps restore",
+				"[new machine] Restore plists and app settings"},
+		})
+
+	section("12. Prompt style",
+		"Switch between a minimal and a rich Starship prompt.",
+		[]usecase{
+			{"dotfiles reconfigure",
+				"Re-run init (Prompt style: minimal / rich)"},
+			{"dotfiles apply --module terminal",
+				"Deploy the selected starship.toml immediately"},
+		})
+
+	section("13. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
 			{"dotfiles update --check",
@@ -224,7 +278,7 @@ func printUsecases() {
 				"Show installed version and build info"},
 		})
 
-	section("11. GPU server / DGX provisioning",
+	section("14. GPU server / DGX provisioning",
 		"Deploy on a fresh GPU server — auto-detects NVIDIA + CUDA.",
 		[]usecase{
 			{"curl -fsSL .../install.sh | bash",
@@ -235,7 +289,7 @@ func printUsecases() {
 				"Apply server profile (no workspace, fonts, gpg, secrets)"},
 		})
 
-	section("12. Troubleshooting",
+	section("15. Troubleshooting",
 		"Diagnose and recover from issues.",
 		[]usecase{
 			{"dotfiles doctor",
