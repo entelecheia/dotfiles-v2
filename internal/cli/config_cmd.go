@@ -168,11 +168,12 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		{"node", cfg.Modules.Node.Enabled, ""},
 		{"git", cfg.Modules.Git.Enabled, fmtIf(cfg.Modules.Git.Signing, "signing")},
 		{"ssh", cfg.Modules.SSH.Enabled, cfg.Modules.SSH.KeyName},
-		{"terminal", cfg.Modules.Terminal.Enabled, fmtIf(cfg.Modules.Terminal.Warp, "warp")},
+		{"terminal", cfg.Modules.Terminal.Enabled, terminalDetail(cfg)},
 		{"tmux", cfg.Modules.Tmux.Enabled, ""},
 		{"workspace", cfg.Modules.Workspace.Enabled, workspaceDetail(cfg)},
 		{"ai-tools", cfg.Modules.AITools.Enabled, ""},
 		{"fonts", cfg.Modules.Fonts.Enabled, cfg.Modules.Fonts.Family},
+		{"macapps", cfg.Modules.MacApps.Enabled, macappsDetail(state)},
 		{"conda", cfg.Modules.Conda.Enabled, ""},
 		{"gpg", cfg.Modules.GPG.Enabled, ""},
 		{"secrets", cfg.Modules.Secrets.Enabled, ""},
@@ -196,8 +197,68 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Packages (%d)", len(pkgs))))
 		fmt.Printf("  %s\n", ui.StyleHint.Render(strings.Join(pkgs, ", ")))
 	}
-	fmt.Println()
 
+	casks := cfg.AllCasks()
+	if len(casks) > 0 {
+		fmt.Println()
+		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Casks — install list (%d)", len(casks))))
+		fmt.Printf("  %s\n", ui.StyleHint.Render(strings.Join(casks, ", ")))
+	}
+
+	if len(state.Modules.MacApps.BackupApps) > 0 {
+		fmt.Println()
+		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Casks — backup list (%d)", len(state.Modules.MacApps.BackupApps))))
+		fmt.Printf("  %s\n", ui.StyleHint.Render(strings.Join(state.Modules.MacApps.BackupApps, ", ")))
+	}
+
+	if state.Modules.MacApps.BackupRoot != "" {
+		fmt.Println()
+		fmt.Println(ui.StyleSection.Render("▸ Backup"))
+		printKV("Root", state.Modules.MacApps.BackupRoot)
+		if state.Modules.MacApps.LastBackup != nil {
+			lb := state.Modules.MacApps.LastBackup
+			printKV("Last backup", fmt.Sprintf("%s (%d files)", lb.Time.Format("2006-01-02 15:04"), lb.Files))
+			printKV("Path", lb.Path)
+		}
+	}
+
+	if state.Secrets.AgeIdentity != "" {
+		fmt.Println()
+		fmt.Println(ui.StyleSection.Render("▸ Secrets"))
+		printKV("Age identity", state.Secrets.AgeIdentity)
+		for i, r := range state.Secrets.AgeRecipients {
+			printKV(fmt.Sprintf("Recipient %d", i+1), r)
+		}
+		if state.Secrets.LastBackup != nil {
+			lb := state.Secrets.LastBackup
+			printKV("Last backup", fmt.Sprintf("%s (%d files)", lb.Time.Format("2006-01-02 15:04"), lb.Files))
+		}
+	}
+
+	if state.Modules.Sync.Remote != "" || state.Modules.Rsync.RemoteHost != "" {
+		fmt.Println()
+		fmt.Println(ui.StyleSection.Render("▸ Sync"))
+		if state.Modules.Sync.Remote != "" {
+			printKV("rclone remote", state.Modules.Sync.Remote)
+			if state.Modules.Sync.Path != "" {
+				printKV("rclone path", state.Modules.Sync.Path)
+			}
+			if state.Modules.Sync.Interval > 0 {
+				printKV("rclone interval", fmt.Sprintf("%ds", state.Modules.Sync.Interval))
+			}
+		}
+		if state.Modules.Rsync.RemoteHost != "" {
+			printKV("rsync host", state.Modules.Rsync.RemoteHost)
+			if state.Modules.Rsync.RemotePath != "" {
+				printKV("rsync path", state.Modules.Rsync.RemotePath)
+			}
+			if state.Modules.Rsync.Interval > 0 {
+				printKV("rsync interval", fmt.Sprintf("%ds", state.Modules.Rsync.Interval))
+			}
+		}
+	}
+
+	fmt.Println()
 	return nil
 }
 
@@ -216,6 +277,25 @@ func workspaceDetail(cfg *config.Config) string {
 		detail += fmt.Sprintf(" (%d repo(s))", n)
 	}
 	return detail
+}
+
+func terminalDetail(cfg *config.Config) string {
+	parts := []string{}
+	if cfg.Modules.Terminal.PromptStyle != "" {
+		parts = append(parts, "prompt="+cfg.Modules.Terminal.PromptStyle)
+	}
+	if cfg.Modules.Terminal.Warp {
+		parts = append(parts, "warp")
+	}
+	return strings.Join(parts, ", ")
+}
+
+func macappsDetail(state *config.UserState) string {
+	n := len(state.Modules.MacApps.Casks) + len(state.Modules.MacApps.CasksExtra)
+	if n == 0 {
+		return "defaults"
+	}
+	return fmt.Sprintf("%d casks", n)
 }
 
 func fmtIf(cond bool, label string) string {
