@@ -1,17 +1,8 @@
-format = """
-$time\
- with $username\
- in $directory\
- at $hostname\
- on $git_branch\
-$git_status\
-$golang\
-$python\
-$nodejs\
-$rust\
-$cmd_duration\
-$line_break\
-$character"""
+# Rich prompt: time, user, path, host, branch+status, language versions, duration.
+# All first-line modules on a single line to avoid TOML line-continuation
+# stripping the literal " with ", " in ", " at ", " on " separators.
+
+format = "$time with $username in $directory at $hostname on $git_branch$git_status$golang$python$nodejs$rust$cmd_duration$line_break$character"
 
 [time]
 disabled = false
@@ -22,7 +13,8 @@ time_format = "%H:%M:%S"
 [username]
 show_always = true
 format = "[$user]($style)"
-style = "bold yellow"
+style_user = "bold yellow"
+style_root = "bold red"
 
 [directory]
 truncation_length = 3
@@ -41,7 +33,7 @@ format = "[$symbol$branch]($style)"
 style = "bold purple"
 
 [git_status]
-format = ' ([$all_status$ahead_behind]($style))'
+format = ' [$all_status$ahead_behind]($style)'
 style = "bold red"
 
 [golang]
