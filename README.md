@@ -115,6 +115,7 @@ Prompts for:
 - Timezone (default: `Asia/Seoul`)
 - Profile (`minimal` / `full` / `server`)
 - GPU/CUDA auto-detection (suggests `server` when NVIDIA GPU detected)
+- Prompt style (`minimal` / `rich`) — see below
 - Module opt-ins: workspace, AI tools, Warp, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
@@ -549,7 +550,7 @@ workspace → ai-tools → fonts → macapps → conda → gpg → secrets
 | **node** | full | .npmrc, pnpm store relocation outside Google Drive |
 | **git** | minimal | git config, aliases, global ignore |
 | **ssh** | minimal | SSH config, config.d includes |
-| **terminal** | minimal | starship prompt, Warp theme (macOS) |
+| **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
 | **ai-tools** | full | Claude Code config, GitHub Models aliases |
@@ -558,6 +559,23 @@ workspace → ai-tools → fonts → macapps → conda → gpg → secrets
 | **conda** | full | Conda/Mamba shell initialization |
 | **gpg** | full | GPG agent + git commit signing |
 | **secrets** | full | Age-encrypted SSH keys and shell secrets |
+
+### Prompt Styles
+
+The terminal module deploys a Starship prompt config. Two styles are selectable
+during `dotfiles init` or `dotfiles reconfigure`:
+
+| Style | Default for | Character | Info shown |
+|-------|-------------|-----------|------------|
+| **minimal** | minimal, server | `>` | truncated path, branch, dirty marker |
+| **rich** | full | `→` | time, user, path, host, branch+status, language versions, duration |
+
+```bash
+dotfiles apply --module terminal     # deploys the selected style
+dotfiles reconfigure                 # switch between minimal ↔ rich
+```
+
+Config key: `modules.terminal.prompt_style` (state: `modules.prompt_style`).
 
 ### Packages
 
@@ -687,6 +705,7 @@ modules:
         remote: "git@github.com:user/vault.git"
   ai_tools: true
   warp: false
+  prompt_style: rich    # "minimal" or "rich"
   fonts:
     family: "FiraCode"
   macapps:

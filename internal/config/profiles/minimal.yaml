@@ -11,6 +11,7 @@ modules:
   terminal:
     enabled: true
     warp: false
+    prompt_style: minimal
 
 packages:
   - git

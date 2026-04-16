@@ -1,0 +1,69 @@
+format = """
+$time\
+ with $username\
+ in $directory\
+ at $hostname\
+ on $git_branch\
+$git_status\
+$golang\
+$python\
+$nodejs\
+$rust\
+$cmd_duration\
+$line_break\
+$character"""
+
+[time]
+disabled = false
+format = "[$time]($style)"
+style = "bold cyan"
+time_format = "%H:%M:%S"
+
+[username]
+show_always = true
+format = "[$user]($style)"
+style = "bold yellow"
+
+[directory]
+truncation_length = 3
+truncation_symbol = ".../"
+format = "[$path]($style)"
+style = "bold cyan"
+
+[hostname]
+ssh_only = false
+format = "[$hostname]($style)"
+style = "bold green"
+
+[git_branch]
+symbol = " "
+format = "[$symbol$branch]($style)"
+style = "bold purple"
+
+[git_status]
+format = ' ([$all_status$ahead_behind]($style))'
+style = "bold red"
+
+[golang]
+symbol = "🐹 "
+format = " via [$symbol$version]($style)"
+
+[python]
+symbol = " "
+format = " via [$symbol$version]($style)"
+
+[nodejs]
+symbol = " "
+format = " via [$symbol$version]($style)"
+
+[rust]
+symbol = " "
+format = " via [$symbol$version]($style)"
+
+[cmd_duration]
+min_time = 2_000
+format = " [$duration]($style)"
+
+[character]
+success_symbol = "[→](bold green)"
+error_symbol = "[→](bold red)"

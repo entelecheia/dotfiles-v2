@@ -23,13 +23,14 @@ type UserState struct {
 
 // UserModulesState holds module opt-in/config from user state.
 type UserModulesState struct {
-	Workspace UserWorkspaceState `yaml:"workspace,omitempty"`
-	AITools   bool               `yaml:"ai_tools,omitempty"`
-	Warp      bool               `yaml:"warp,omitempty"`
-	Fonts     UserFontsState     `yaml:"fonts,omitempty"`
-	Sync      UserSyncState      `yaml:"sync,omitempty"`
-	Rsync     UserRsyncState     `yaml:"rsync,omitempty"`
-	MacApps   UserMacAppsState   `yaml:"macapps,omitempty"`
+	Workspace   UserWorkspaceState `yaml:"workspace,omitempty"`
+	AITools     bool               `yaml:"ai_tools,omitempty"`
+	Warp        bool               `yaml:"warp,omitempty"`
+	PromptStyle string             `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Fonts       UserFontsState     `yaml:"fonts,omitempty"`
+	Sync        UserSyncState      `yaml:"sync,omitempty"`
+	Rsync       UserRsyncState     `yaml:"rsync,omitempty"`
+	MacApps     UserMacAppsState   `yaml:"macapps,omitempty"`
 }
 
 // UserMacAppsState holds user selections for the macapps module.
@@ -300,6 +301,9 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	}
 	if state.Modules.Warp {
 		cfg.Modules.Terminal.Warp = true
+	}
+	if state.Modules.PromptStyle != "" {
+		cfg.Modules.Terminal.PromptStyle = state.Modules.PromptStyle
 	}
 	if state.Modules.Fonts.Family != "" {
 		cfg.Modules.Fonts.Family = state.Modules.Fonts.Family

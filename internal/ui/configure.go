@@ -282,8 +282,28 @@ func ConfigureAITools(state *config.UserState, yes bool) error {
 	return err
 }
 
-// ConfigureTerminal prompts for terminal settings. Skipped for server profile.
+// ConfigureTerminal prompts for prompt style and Warp toggle.
+// Prompt style applies on all platforms; Warp is macOS-only.
 func ConfigureTerminal(state *config.UserState, profile string, yes bool) error {
+	printSection("Terminal")
+
+	// Prompt style — useful on every platform including servers.
+	promptDefault := state.Modules.PromptStyle
+	if promptDefault == "" {
+		if profile == "server" || profile == "minimal" {
+			promptDefault = "minimal"
+		} else {
+			promptDefault = "rich"
+		}
+	}
+	var err error
+	state.Modules.PromptStyle, err = Select("Prompt style",
+		[]string{"minimal", "rich"}, promptDefault, yes)
+	if err != nil {
+		return err
+	}
+
+	// Warp — macOS non-server only.
 	if profile == "server" {
 		state.Modules.Warp = false
 		return nil
@@ -291,10 +311,6 @@ func ConfigureTerminal(state *config.UserState, profile string, yes bool) error 
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-
-	printSection("Terminal")
-
-	var err error
 	state.Modules.Warp, err = ConfirmBool("Enable Warp terminal?", state.Modules.Warp, yes)
 	return err
 }

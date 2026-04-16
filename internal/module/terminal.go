@@ -13,10 +13,18 @@ type TerminalModule struct{}
 
 func (m *TerminalModule) Name() string { return "terminal" }
 
+func (m *TerminalModule) starshipTemplate(rc *RunContext) string {
+	style := rc.Config.Modules.Terminal.PromptStyle
+	if style == "" {
+		style = "minimal"
+	}
+	return fmt.Sprintf("starship/starship-%s.toml", style)
+}
+
 func (m *TerminalModule) managedFiles(rc *RunContext) []shellFile {
 	files := []shellFile{
 		{
-			templatePath: "starship/starship.toml",
+			templatePath: m.starshipTemplate(rc),
 			destPath:     filepath.Join(rc.HomeDir, ".config", "starship.toml"),
 			isTemplate:   false,
 		},

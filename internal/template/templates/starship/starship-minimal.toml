@@ -1,0 +1,23 @@
+format = """
+$directory\
+  $git_branch\
+$git_status\
+$line_break\
+$character"""
+
+[directory]
+truncation_length = 2
+truncation_symbol = ".../"
+style = "bold #7c6f64"
+
+[git_branch]
+format = "[$branch]($style) "
+style = "bold #a9b665"
+
+[git_status]
+format = '[$all_status]($style)'
+style = "bold #d8a657"
+
+[character]
+success_symbol = "[>](bold #7c6f64)"
+error_symbol = "[>](bold red)"

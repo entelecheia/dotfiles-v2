@@ -70,8 +70,9 @@ type SSHModConfig struct {
 
 // TermConfig configures the terminal module.
 type TermConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Warp    bool `yaml:"warp"`
+	Enabled     bool   `yaml:"enabled"`
+	Warp        bool   `yaml:"warp"`
+	PromptStyle string `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
 }
 
 // WorkConfig configures the workspace module.
@@ -223,6 +224,7 @@ func (c *Config) TemplateData() map[string]any {
 		"EnableWorkspace": c.Modules.Workspace.Enabled,
 		"EnableAITools":   c.Modules.AITools.Enabled,
 		"EnableWarp":      c.Modules.Terminal.Warp,
+		"PromptStyle":     c.Modules.Terminal.PromptStyle,
 		"WorkspacePath":   c.Modules.Workspace.Path,
 		"WorkspaceGdrive":  c.Modules.Workspace.Gdrive,
 		"GdriveSymlink":    c.Modules.Workspace.GdriveSymlink,
