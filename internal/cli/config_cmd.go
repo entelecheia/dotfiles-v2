@@ -239,21 +239,21 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		fmt.Println()
 		fmt.Println(ui.StyleSection.Render("▸ Sync"))
 		if state.Modules.Sync.Remote != "" {
-			printKV("rclone remote", state.Modules.Sync.Remote)
+			printKV("rclone", state.Modules.Sync.Remote)
 			if state.Modules.Sync.Path != "" {
-				printKV("rclone path", state.Modules.Sync.Path)
+				printKV("  path", state.Modules.Sync.Path)
 			}
 			if state.Modules.Sync.Interval > 0 {
-				printKV("rclone interval", fmt.Sprintf("%ds", state.Modules.Sync.Interval))
+				printKV("  interval", fmt.Sprintf("%ds", state.Modules.Sync.Interval))
 			}
 		}
 		if state.Modules.Rsync.RemoteHost != "" {
-			printKV("rsync host", state.Modules.Rsync.RemoteHost)
+			printKV("rsync", state.Modules.Rsync.RemoteHost)
 			if state.Modules.Rsync.RemotePath != "" {
-				printKV("rsync path", state.Modules.Rsync.RemotePath)
+				printKV("  path", state.Modules.Rsync.RemotePath)
 			}
 			if state.Modules.Rsync.Interval > 0 {
-				printKV("rsync interval", fmt.Sprintf("%ds", state.Modules.Rsync.Interval))
+				printKV("  interval", fmt.Sprintf("%ds", state.Modules.Rsync.Interval))
 			}
 		}
 	}
