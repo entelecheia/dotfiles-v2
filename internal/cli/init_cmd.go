@@ -114,6 +114,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// --- macOS Apps ---
+	if err := ui.ConfigureMacApps(state, state.Profile, yes); err != nil {
+		return err
+	}
+
 	// --- Persist ---
 	if homeOverride != "" {
 		if err := config.SaveStateForHome(homeOverride, state); err != nil {

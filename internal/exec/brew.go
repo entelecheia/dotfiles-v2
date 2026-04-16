@@ -112,3 +112,34 @@ func (b *Brew) MissingFormulas(formulas []string) []string {
 	}
 	return missing
 }
+
+// InstalledCasks returns the set of all currently installed casks.
+func (b *Brew) InstalledCasks() map[string]bool {
+	installed := make(map[string]bool)
+	result, err := b.Runner.RunQuery(context.Background(), "brew", "list", "--cask", "-1")
+	if err != nil {
+		return installed
+	}
+	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			installed[s] = true
+		}
+	}
+	return installed
+}
+
+// MissingCasks returns casks from the list that are not installed.
+func (b *Brew) MissingCasks(casks []string) []string {
+	installed := b.InstalledCasks()
+	if len(installed) == 0 && len(casks) > 0 {
+		// Query failed; assume all missing so caller can attempt install.
+		return casks
+	}
+	var missing []string
+	for _, c := range casks {
+		if !installed[c] {
+			missing = append(missing, c)
+		}
+	}
+	return missing
+}

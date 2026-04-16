@@ -20,6 +20,7 @@ func TestIsModuleEnabled(t *testing.T) {
 			Conda:     ModuleToggle{Enabled: true},
 			GPG:       ModuleToggle{Enabled: false},
 			Secrets:   ModuleToggle{Enabled: true},
+			MacApps:   MacAppsConfig{Enabled: true},
 		},
 	}
 
@@ -40,6 +41,7 @@ func TestIsModuleEnabled(t *testing.T) {
 		{"conda", true},
 		{"gpg", false},
 		{"secrets", true},
+		{"macapps", true},
 		{"unknown", false},
 	}
 
@@ -102,6 +104,23 @@ func TestAllPackages_EmptyExtra(t *testing.T) {
 	all := cfg.AllPackages()
 	if len(all) != 2 {
 		t.Errorf("AllPackages with no extra: expected 2, got %d", len(all))
+	}
+}
+
+func TestAllCasks_DeduplicatesAndPreservesOrder(t *testing.T) {
+	cfg := &Config{
+		Casks:      []string{"raycast", "obsidian", "arc"},
+		CasksExtra: []string{"obsidian", "slack", "arc", "zed"},
+	}
+	all := cfg.AllCasks()
+	expected := []string{"raycast", "obsidian", "arc", "slack", "zed"}
+	if len(all) != len(expected) {
+		t.Fatalf("AllCasks: expected %d, got %d: %v", len(expected), len(all), all)
+	}
+	for i, v := range expected {
+		if all[i] != v {
+			t.Errorf("AllCasks[%d] = %q, want %q", i, all[i], v)
+		}
 	}
 }
 

@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
 )
 
 // printSection prints a styled section header.
@@ -405,6 +407,193 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 	return nil
 }
 
+// ConfigureMacApps prompts for macOS cask selection and backup destination.
+// Skipped on non-darwin. Mutates state.Modules.MacApps in place.
+func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
+	if runtime.GOOS != "darwin" {
+		state.Modules.MacApps = config.UserMacAppsState{}
+		return nil
+	}
+	if profile == "server" {
+		state.Modules.MacApps = config.UserMacAppsState{}
+		return nil
+	}
+
+	printSection("macOS Apps")
+
+	cat, err := catalog.LoadMacApps()
+	if err != nil {
+		fmt.Println(StyleWarning.Render("  catalog load failed: " + err.Error()))
+		return nil
+	}
+
+	enableDefault := state.Modules.MacApps.Enabled || len(state.Modules.MacApps.Casks) > 0
+	if state.Name == "" {
+		// Fresh install defaults to enabled on darwin non-server profiles.
+		enableDefault = true
+	}
+	enable, err := ConfirmBool("Manage macOS cask apps?", enableDefault, yes)
+	if err != nil {
+		return err
+	}
+	if !enable {
+		state.Modules.MacApps = config.UserMacAppsState{}
+		return nil
+	}
+	state.Modules.MacApps.Enabled = true
+
+	// MultiSelect presented in grouped sections. Build a single flattened list
+	// so huh renders group separators as disabled-looking labels.
+	tokens := cat.AllTokens()
+	// Preselect: existing state → profile defaults.
+	preselect := state.Modules.MacApps.Casks
+	if len(preselect) == 0 {
+		preselect = cat.Defaults
+	}
+	// Filter preselect to tokens that actually exist in the catalog.
+	seen := make(map[string]bool)
+	for _, t := range tokens {
+		seen[t] = true
+	}
+	var valid []string
+	for _, t := range preselect {
+		if seen[t] {
+			valid = append(valid, t)
+		}
+	}
+
+	if !yes {
+		fmt.Println(StyleHint.Render(fmt.Sprintf("  Catalog: %d apps across %d groups", len(tokens), len(cat.Groups))))
+	}
+	selected, err := MultiSelect("Select apps to install", tokens, valid, yes)
+	if err != nil {
+		return err
+	}
+	state.Modules.MacApps.Casks = selected
+
+	// Free-form additions
+	extraDefault := strings.Join(state.Modules.MacApps.CasksExtra, " ")
+	extraStr, err := Input("Additional casks (space-separated, optional)", extraDefault, yes)
+	if err != nil {
+		return err
+	}
+	state.Modules.MacApps.CasksExtra = splitCaskList(extraStr)
+
+	// Backup list: default to the install list, but let the user trim it down.
+	backupDefault := state.Modules.MacApps.BackupApps
+	if len(backupDefault) == 0 {
+		backupDefault = selected
+	}
+	sameAsInstall, err := ConfirmBool("Use the same list for settings backup?",
+		len(state.Modules.MacApps.BackupApps) == 0 || sameSlice(state.Modules.MacApps.BackupApps, selected),
+		yes)
+	if err != nil {
+		return err
+	}
+	if sameAsInstall {
+		state.Modules.MacApps.BackupApps = nil // defer to install list at runtime
+	} else {
+		backupSel, err := MultiSelect("Select apps whose settings to back up", selected, backupDefault, yes)
+		if err != nil {
+			return err
+		}
+		state.Modules.MacApps.BackupApps = backupSel
+	}
+
+	// Backup root (shared by app-settings/ + profiles/)
+	rootDefault := state.Modules.MacApps.BackupRoot
+	detected := false
+	if rootDefault == "" {
+		if drive := appsettings.DetectDriveCandidate(expandHome("~")); drive != "" {
+			rootDefault = drive
+			detected = true
+		} else {
+			home, _ := os.UserHomeDir()
+			rootDefault = appsettings.DefaultBackupRoot(home)
+		}
+	}
+	choice, err := Select("Backup root",
+		[]string{"drive (auto-detected)", "local", "custom"},
+		pickBackupChoice(rootDefault, detected),
+		yes)
+	if err != nil {
+		return err
+	}
+	switch choice {
+	case "drive (auto-detected)":
+		if detected {
+			state.Modules.MacApps.BackupRoot = rootDefault
+		} else {
+			path, inputErr := Input("Drive backup root", rootDefault, yes)
+			if inputErr != nil {
+				return inputErr
+			}
+			state.Modules.MacApps.BackupRoot = path
+		}
+	case "local":
+		home, _ := os.UserHomeDir()
+		state.Modules.MacApps.BackupRoot = appsettings.DefaultBackupRoot(home)
+	case "custom":
+		path, inputErr := Input("Backup root path", rootDefault, yes)
+		if inputErr != nil {
+			return inputErr
+		}
+		state.Modules.MacApps.BackupRoot = path
+	}
+
+	return nil
+}
+
+func sameSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, v := range a {
+		seen[v]++
+	}
+	for _, v := range b {
+		seen[v]--
+	}
+	for _, c := range seen {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func splitCaskList(s string) []string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+func pickBackupChoice(path string, detectedDrive bool) string {
+	if detectedDrive {
+		return "drive (auto-detected)"
+	}
+	if strings.Contains(path, "/.local/share/dotfiles/") {
+		return "local"
+	}
+	if path != "" {
+		return "custom"
+	}
+	return "local"
+}
+
 // PrintStateSummary displays the current configuration summary with styled output.
 func PrintStateSummary(state *config.UserState) {
 	fmt.Println()
@@ -443,6 +632,18 @@ func PrintStateSummary(state *config.UserState) {
 		printKV("Age identity", state.Secrets.AgeIdentity)
 		if len(state.Secrets.AgeRecipients) > 0 {
 			printKV("Age pubkey", state.Secrets.AgeRecipients[0])
+		}
+	}
+	if state.Modules.MacApps.Enabled || len(state.Modules.MacApps.Casks) > 0 {
+		printKV("Install list", fmt.Sprintf("%d selected + %d extra",
+			len(state.Modules.MacApps.Casks), len(state.Modules.MacApps.CasksExtra)))
+		if len(state.Modules.MacApps.BackupApps) > 0 {
+			printKV("Backup list", fmt.Sprintf("%d apps", len(state.Modules.MacApps.BackupApps)))
+		} else {
+			printKV("Backup list", "(same as install list)")
+		}
+		if state.Modules.MacApps.BackupRoot != "" {
+			printKV("Backup root", state.Modules.MacApps.BackupRoot)
 		}
 	}
 	fmt.Println()

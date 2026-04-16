@@ -97,6 +97,13 @@ func mergeConfigs(base, overlay *Config) *Config {
 	}
 	merged.PackagesExtra = append(base.PackagesExtra, overlay.PackagesExtra...)
 
+	// Casks: keep base, overlay replaces if set; extras accumulate.
+	merged.Casks = base.Casks
+	if len(overlay.Casks) > 0 {
+		merged.Casks = overlay.Casks
+	}
+	merged.CasksExtra = append(base.CasksExtra, overlay.CasksExtra...)
+
 	// Modules: overlay wins per-module if explicitly set
 	merged.Modules = mergeModules(base.Modules, overlay.Modules)
 
@@ -146,6 +153,9 @@ func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	}
 	if overlay.Secrets.Enabled {
 		m.Secrets = overlay.Secrets
+	}
+	if overlay.MacApps.Enabled {
+		m.MacApps = overlay.MacApps
 	}
 	return m
 }

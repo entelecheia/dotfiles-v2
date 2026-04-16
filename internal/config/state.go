@@ -29,6 +29,23 @@ type UserModulesState struct {
 	Fonts     UserFontsState     `yaml:"fonts,omitempty"`
 	Sync      UserSyncState      `yaml:"sync,omitempty"`
 	Rsync     UserRsyncState     `yaml:"rsync,omitempty"`
+	MacApps   UserMacAppsState   `yaml:"macapps,omitempty"`
+}
+
+// UserMacAppsState holds user selections for the macapps module.
+//
+// Install vs. backup are separated: Casks/CasksExtra drive `dotfiles apps install`,
+// while BackupApps scopes `dotfiles apps backup/restore`. BackupRoot is shared
+// with `dotfiles profile backup/restore` so a single folder (typically a Drive
+// secrets dir) holds both app-settings snapshots and profile snapshots.
+type UserMacAppsState struct {
+	Enabled    bool     `yaml:"enabled,omitempty"`
+	Casks      []string `yaml:"casks,omitempty"`       // install list (catalog selections)
+	CasksExtra []string `yaml:"casks_extra,omitempty"` // install list (free-form additions)
+	BackupApps []string `yaml:"backup_apps,omitempty"` // backup/restore scope (empty = manifest ∩ installed)
+	BackupRoot string   `yaml:"backup_root,omitempty"` // single backup root; app-settings/ + profiles/ live below it
+
+	LastBackup *BackupRecord `yaml:"last_backup,omitempty"`
 }
 
 // UserRsyncState holds rsync sync config from user state.
@@ -289,5 +306,18 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	}
 	if state.SSH.KeyName != "" {
 		cfg.Modules.SSH.KeyName = state.SSH.KeyName
+	}
+	// MacApps: user state toggles the module and overlays cask selections.
+	if state.Modules.MacApps.Enabled {
+		cfg.Modules.MacApps.Enabled = true
+	}
+	if state.Modules.MacApps.BackupRoot != "" {
+		cfg.Modules.MacApps.BackupRoot = state.Modules.MacApps.BackupRoot
+	}
+	if len(state.Modules.MacApps.Casks) > 0 {
+		cfg.Casks = state.Modules.MacApps.Casks
+	}
+	if len(state.Modules.MacApps.CasksExtra) > 0 {
+		cfg.CasksExtra = append(cfg.CasksExtra, state.Modules.MacApps.CasksExtra...)
 	}
 }

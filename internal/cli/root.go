@@ -72,6 +72,9 @@ Also available as 'dot' for convenience.`,
 	root.AddCommand(newLayoutsCmd())
 	root.AddCommand(newDoctorCmd())
 
+	// macOS apps + settings backup/restore
+	root.AddCommand(newAppsCmd())
+
 	// Dual-workspace ops
 	root.AddCommand(newWorkspaceDualCmd())
 	root.AddCommand(newWsMkdirAliasCmd())

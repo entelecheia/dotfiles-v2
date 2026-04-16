@@ -1,0 +1,127 @@
+# macOS cask catalog consumed by `dotfiles apps install` and the init wizard.
+# Groups keep the checkbox list navigable; tokens are Homebrew cask identifiers.
+# `defaults` is the preselected set surfaced to users on a fresh machine.
+
+defaults:
+  - 1password
+  - raycast
+  - obsidian
+  - fantastical
+  - arc
+  - cmux
+  - cursor
+  - chatgpt
+  - claude
+  - slack
+  - bartender
+  - one-switch
+  - popclip
+  - shottr
+  - wispr-flow
+  - forklift
+  - yoink
+  - hazel
+  - termius
+  - keyboard-maestro
+
+groups:
+  - name: "Security & Launcher"
+    apps:
+      - {token: 1password,         name: "1Password"}
+      - {token: raycast,           name: "Raycast"}
+      - {token: alfred,            name: "Alfred"}
+
+  - name: "Knowledge & Calendar"
+    apps:
+      - {token: obsidian,          name: "Obsidian"}
+      - {token: fantastical,       name: "Fantastical"}
+      - {token: notion-mail,       name: "Notion Mail"}
+      - {token: fsnotes,           name: "FSNotes"}
+      - {token: marked-app,        name: "Marked 2"}
+
+  - name: "Browsers"
+    apps:
+      - {token: arc,               name: "Arc"}
+      - {token: google-chrome,     name: "Google Chrome"}
+      - {token: microsoft-edge,    name: "Microsoft Edge"}
+
+  - name: "Terminal & Editor"
+    apps:
+      - {token: cmux,              name: "cmux"}
+      - {token: ghostty,           name: "Ghostty"}
+      - {token: cursor,            name: "Cursor"}
+      - {token: zed,               name: "Zed"}
+      - {token: visual-studio-code, name: "Visual Studio Code"}
+      - {token: sublime-text,      name: "Sublime Text"}
+      - {token: sublime-merge,     name: "Sublime Merge"}
+
+  - name: "AI"
+    apps:
+      - {token: claude,            name: "Claude"}
+      - {token: chatgpt,           name: "ChatGPT"}
+      - {token: chatgpt-atlas,     name: "ChatGPT Atlas"}
+      - {token: codex-app,         name: "Codex"}
+      - {token: antigravity,       name: "Antigravity"}
+
+  - name: "Communication"
+    apps:
+      - {token: slack,             name: "Slack"}
+      - {token: discord,           name: "Discord"}
+      - {token: telegram-desktop,  name: "Telegram"}
+      - {token: whatsapp,          name: "WhatsApp"}
+
+  - name: "Productivity utilities"
+    apps:
+      - {token: bartender,         name: "Bartender"}
+      - {token: one-switch,        name: "One Switch"}
+      - {token: popclip,           name: "PopClip"}
+      - {token: keyboard-maestro,  name: "Keyboard Maestro"}
+      - {token: hazel,             name: "Hazel"}
+      - {token: default-folder-x,  name: "Default Folder X"}
+      - {token: contexts,          name: "Contexts"}
+      - {token: dockmate,          name: "DockMate"}
+
+  - name: "Capture & Dictation"
+    apps:
+      - {token: shottr,            name: "Shottr"}
+      - {token: textsniper,        name: "TextSniper"}
+      - {token: wispr-flow,        name: "Wispr Flow"}
+
+  - name: "Files & Drag-drop"
+    apps:
+      - {token: forklift,          name: "ForkLift"}
+      - {token: yoink,             name: "Yoink"}
+      - {token: commander-one,     name: "Commander One"}
+      - {token: path-finder,       name: "Path Finder"}
+      - {token: transmit,          name: "Transmit"}
+
+  - name: "Media & Design"
+    apps:
+      - {token: downie,            name: "Downie"}
+      - {token: permute,           name: "Permute"}
+      - {token: movist-pro,        name: "Movist Pro"}
+      - {token: capcut,            name: "CapCut"}
+      - {token: canva,             name: "Canva"}
+      - {token: figma,             name: "Figma"}
+
+  - name: "Dev & Remote"
+    apps:
+      - {token: gitkraken,         name: "GitKraken"}
+      - {token: termius,           name: "Termius"}
+      - {token: redis-insight,     name: "Redis Insight"}
+      - {token: jump-desktop,      name: "Jump Desktop"}
+      - {token: vnc-viewer,        name: "VNC Viewer"}
+
+  - name: "System"
+    apps:
+      - {token: istat-menus,       name: "iStat Menus"}
+      - {token: aldente,           name: "AlDente"}
+      - {token: app-tamer,         name: "App Tamer"}
+      - {token: jettison,          name: "Jettison"}
+      - {token: macpilot,          name: "MacPilot"}
+
+  - name: "Writing & Research"
+    apps:
+      - {token: scrivener,         name: "Scrivener"}
+      - {token: bookends,          name: "Bookends"}
+      - {token: texifier,          name: "Texifier"}

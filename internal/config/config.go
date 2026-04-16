@@ -11,6 +11,8 @@ type Config struct {
 	Modules       ModulesConfig `yaml:"modules"`
 	Packages      []string      `yaml:"packages"`
 	PackagesExtra []string      `yaml:"packages_extra"`
+	Casks         []string      `yaml:"casks,omitempty"`
+	CasksExtra    []string      `yaml:"casks_extra,omitempty"`
 	// Populated from user state, not profile YAML
 	Name       string `yaml:"-"`
 	Email      string `yaml:"-"`
@@ -35,6 +37,13 @@ type ModulesConfig struct {
 	Conda    ModuleToggle  `yaml:"conda"`
 	GPG      ModuleToggle  `yaml:"gpg"`
 	Secrets  ModuleToggle  `yaml:"secrets"`
+	MacApps  MacAppsConfig `yaml:"macapps"`
+}
+
+// MacAppsConfig configures the macapps module.
+type MacAppsConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	BackupRoot string `yaml:"backup_root,omitempty"` // shared root for app-settings/ + profiles/ snapshots
 }
 
 // ModuleToggle is a simple enabled/disabled toggle.
@@ -124,6 +133,8 @@ func (c *Config) IsModuleEnabled(name string) bool {
 		return c.Modules.GPG.Enabled
 	case "secrets":
 		return c.Modules.Secrets.Enabled
+	case "macapps":
+		return c.Modules.MacApps.Enabled
 	default:
 		return false
 	}
@@ -140,6 +151,25 @@ func (c *Config) AllPackages() []string {
 		}
 	}
 	for _, p := range c.PackagesExtra {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// AllCasks returns the merged cask list (base + extra), de-duplicated.
+func (c *Config) AllCasks() []string {
+	seen := make(map[string]bool, len(c.Casks)+len(c.CasksExtra))
+	var result []string
+	for _, p := range c.Casks {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+	}
+	for _, p := range c.CasksExtra {
 		if !seen[p] {
 			seen[p] = true
 			result = append(result, p)

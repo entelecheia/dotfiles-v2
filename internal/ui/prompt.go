@@ -112,6 +112,37 @@ func InputWithDetected(message, defaultVal string, detected bool, unattended boo
 	return Input(message, defaultVal, unattended)
 }
 
+// MultiSelect presents a checkbox-style multi-select. Returns defaultVals
+// unchanged if unattended. Options pre-selected where they appear in defaultVals.
+func MultiSelect(message string, options, defaultVals []string, unattended bool) ([]string, error) {
+	if unattended {
+		return defaultVals, nil
+	}
+	selected := append([]string(nil), defaultVals...)
+	opts := make([]huh.Option[string], len(options))
+	for i, o := range options {
+		opts[i] = huh.NewOption(o, o).Selected(containsString(defaultVals, o))
+	}
+	err := huh.NewMultiSelect[string]().
+		Title(message).
+		Options(opts...).
+		Value(&selected).
+		Run()
+	if err != nil {
+		return defaultVals, err
+	}
+	return selected, nil
+}
+
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // ConfirmBool asks for a bool. Returns defaultVal if unattended.
 func ConfirmBool(message string, defaultVal, unattended bool) (bool, error) {
 	if unattended {

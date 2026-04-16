@@ -57,6 +57,7 @@ var defaultOrder = []string{
 	"workspace",
 	"ai-tools",
 	"fonts",
+	"macapps",
 	"conda",
 	"gpg",
 	"secrets",
@@ -80,6 +81,7 @@ func NewRegistry() *Registry {
 	r.Register(&WorkspaceModule{})
 	r.Register(&AIToolsModule{})
 	r.Register(&FontsModule{})
+	r.Register(&MacAppsModule{})
 	r.Register(&CondaModule{})
 	r.Register(&GPGModule{})
 	r.Register(&SecretsModule{})
