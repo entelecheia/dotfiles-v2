@@ -11,34 +11,25 @@ import (
 func printWelcome(cmd *cobra.Command, version, commit string) {
 	p := printerFrom(cmd)
 	v, c := ResolveVersion(version, commit)
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" dotfiles "+v+" ("+c+") "))
-	p.Line("")
+	p.Header("dotfiles " + v + " (" + c + ")")
 	p.Line("  %s", ui.StyleValue.Render("Declarative user environment & workspace manager."))
-	p.Line("")
 
 	// Detect status
 	state, _ := config.LoadState()
 	initialized := state != nil && state.Name != ""
 
 	if !initialized {
-		p.Line("%s", ui.StyleSection.Render("▸ Not configured yet"))
-		p.Line("")
+		p.Section("Not configured yet")
 		p.Line("  %s  %s", ui.StyleKey.Render("1."), ui.StyleValue.Render("dotfiles init"))
 		p.Line("     %s", ui.StyleHint.Render("Interactive setup — asks for name, email, profile, modules"))
-		p.Line("")
 		p.Line("  %s  %s", ui.StyleKey.Render("2."), ui.StyleValue.Render("dotfiles apply"))
 		p.Line("     %s", ui.StyleHint.Render("Apply configuration to the system"))
-		p.Line("")
 	} else {
-		p.Line("%s", ui.StyleSection.Render("▸ Current configuration"))
-		p.Line("")
-		p.Line("  %s  %s  %s", ui.StyleKey.Render("Profile:"), ui.StyleValue.Render(state.Profile), ui.StyleHint.Render("("+state.Name+")"))
-		p.Line("")
+		p.Section("Current configuration")
+		p.KV("Profile", state.Profile+" ("+state.Name+")")
 	}
 
-	p.Line("%s", ui.StyleSection.Render("▸ Common commands"))
-	p.Line("")
+	p.Section("Common commands")
 	printWelcomeCmd(p, "dotfiles status", "Full environment status at a glance")
 	printWelcomeCmd(p, "dotfiles apply", "Apply configuration")
 	printWelcomeCmd(p, "dotfiles check", "Show pending changes without applying")
@@ -51,11 +42,12 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	printWelcomeCmd(p, "dotfiles profile backup", "Version-snapshot config + app lists + secrets")
 	printWelcomeCmd(p, "dotfiles open <project>", "Launch/resume a tmux workspace")
 	printWelcomeCmd(p, "dotfiles list", "Show registered projects")
-	p.Line("")
+
+	p.Blank()
 	p.Line("  %s", ui.StyleHint.Render("Tip: 'dot' is an alias for 'dotfiles' (e.g., 'dot apply')"))
 	p.Line("  %s", ui.StyleHint.Render("See 'dotfiles usecase' for detailed workflows"))
 	p.Line("  %s", ui.StyleHint.Render("See 'dotfiles help' for all commands"))
-	p.Line("")
+	p.Blank()
 }
 
 func printWelcomeCmd(p *Printer, cmd, desc string) {
@@ -79,12 +71,9 @@ func newUsecaseCmd() *cobra.Command {
 
 func printUsecases(cmd *cobra.Command) {
 	p := printerFrom(cmd)
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" dotfiles Use Cases "))
-	p.Line("")
+	p.Header("dotfiles Use Cases")
 	p.Line("  %s", ui.StyleHint.Render("Note: 'dot' is a shorthand alias for 'dotfiles'."))
 	p.Line("  %s", ui.StyleHint.Render("Examples below use 'dotfiles' — substitute 'dot' if you prefer."))
-	p.Line("")
 
 	section(p, "1. First-time setup on a new machine",
 		"Fresh install — get from zero to productive in minutes.",
@@ -307,18 +296,17 @@ func printUsecases(cmd *cobra.Command) {
 				"View recent rsync sync log entries"},
 		})
 
-	p.Line("%s", ui.StyleSection.Render("▸ Global flags (work with most commands)"))
-	p.Line("")
+	p.Section("Global flags (work with most commands)")
 	printFlag(p, "--yes", "Unattended mode, skip all prompts")
 	printFlag(p, "--dry-run", "Preview without making changes")
 	printFlag(p, "--profile", "Override profile (minimal|full|server)")
 	printFlag(p, "--module", "Run specific modules only (repeatable)")
 	printFlag(p, "--config", "Custom config YAML path")
 	printFlag(p, "--home", "Override home directory (admin setup)")
-	p.Line("")
 
+	p.Blank()
 	p.Line("  %s", ui.StyleHint.Render("Run 'dotfiles <command> --help' for detailed options"))
-	p.Line("")
+	p.Blank()
 }
 
 type usecase struct {
@@ -327,14 +315,12 @@ type usecase struct {
 }
 
 func section(p *Printer, title, intro string, cases []usecase) {
-	p.Line("%s", ui.StyleSection.Render("▸ "+title))
+	p.Section(title)
 	p.Line("  %s", ui.StyleHint.Render(intro))
-	p.Line("")
 	for _, c := range cases {
 		p.Line("  $ %s", ui.StyleValue.Bold(true).Render(c.cmd))
 		p.Line("    %s", ui.StyleHint.Render(c.desc))
 	}
-	p.Line("")
 }
 
 func printFlag(p *Printer, flag, desc string) {

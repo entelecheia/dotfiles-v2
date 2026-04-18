@@ -72,29 +72,28 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 	}
 
 	p := printerFrom(cmd)
-	p.Line("%s", ui.StyleHeader.Render(" macOS Cask Catalog "))
+	p.Header("macOS Cask Catalog")
 	for _, g := range cat.Groups {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render("▸ "+g.Name))
+		p.Section(g.Name)
 		for _, a := range g.Apps {
 			marks := []string{}
 			if defaults[a.Token] {
-				marks = append(marks, ui.StyleSuccess.Render("★"))
+				marks = append(marks, ui.StyleSuccess.Render(ui.MarkStarred))
 			}
 			if installed != nil && installed[a.Token] {
-				marks = append(marks, ui.StyleSuccess.Render("✓"))
+				marks = append(marks, ui.StyleSuccess.Render(ui.MarkPresent))
 			}
-			prefix := strings.Join(marks, " ")
-			if prefix != "" {
-				prefix += " "
-			} else {
-				prefix = "  "
+			marker := strings.Join(marks, " ")
+			if marker == "" {
+				marker = " "
 			}
-			p.Line("  %s%s  %s", prefix, ui.StyleValue.Render(a.Token), ui.StyleHint.Render(a.Name))
+			p.Bullet(marker, fmt.Sprintf("%s  %s",
+				ui.StyleValue.Render(a.Token),
+				ui.StyleHint.Render(a.Name)))
 		}
 	}
-	p.Line("")
-	p.Line("  %s", ui.StyleHint.Render("★ default preselection   ✓ installed"))
+	p.Blank()
+	p.Line("  %s", ui.StyleHint.Render(ui.MarkStarred+" default preselection   "+ui.MarkPresent+" installed"))
 	return nil
 }
 
@@ -554,15 +553,14 @@ func intersectManifest(tokens []string, mf *appsettings.Manifest) []string {
 }
 
 func printAppSummary(p *Printer, label string, sum *appsettings.Summary) {
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(fmt.Sprintf(" %s Summary ", label)))
-	p.Line("")
+	p.Header(label + " Summary")
 	for _, a := range sum.Apps {
-		p.Line("  %s  paths: %d copied / %d missing  files: %d  bytes: %d",
-			ui.StyleValue.Render(a.Token), a.Copied, a.Missing, a.Files, a.Bytes)
+		p.Bullet(ui.StyleHint.Render(ui.MarkPartial),
+			fmt.Sprintf("%s  paths: %d copied / %d missing  files: %d  bytes: %d",
+				ui.StyleValue.Render(a.Token), a.Copied, a.Missing, a.Files, a.Bytes))
 	}
-	p.Line("")
-	p.Line("Total: %d file(s), %d byte(s)", sum.Files, sum.Bytes)
+	p.Blank()
+	p.Line("  Total: %d file(s), %d byte(s)", sum.Files, sum.Bytes)
 }
 
 // recordLastBackup stamps state.Modules.MacApps.LastBackup with the timestamp + counts.
