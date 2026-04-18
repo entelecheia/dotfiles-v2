@@ -98,13 +98,13 @@ func cloneBootstrap(cmd *cobra.Command) (*config.UserState, *rclone.Config, *rcl
 // ── pull / push / all / mount ─────────────────────────────────────────────
 
 // clonePreflight validates rclone + filter file before any sync operation.
-func clonePreflight(cfg *rclone.Config, runner *exec.Runner) bool {
+func clonePreflight(p *Printer, cfg *rclone.Config, runner *exec.Runner) bool {
 	if !runner.CommandExists("rclone") {
-		fmt.Println("rclone is not installed. Run 'dot clone setup' to get started.")
+		p.Line("rclone is not installed. Run 'dot clone setup' to get started.")
 		return false
 	}
 	if !runner.FileExists(cfg.FilterFile) {
-		fmt.Println("Filter file not found. Run 'dot clone setup' to configure sync.")
+		p.Line("Filter file not found. Run 'dot clone setup' to configure sync.")
 		return false
 	}
 	return true
@@ -124,19 +124,20 @@ func runClonePull(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if !clonePreflight(cfg, runner) {
+	p := printerFrom(cmd)
+	if !clonePreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-	fmt.Printf("Pulling %s → %s\n", cfg.RemotePath, cfg.LocalPath)
+	p.Line("Pulling %s → %s", cfg.RemotePath, cfg.LocalPath)
 	if dryRun {
-		fmt.Println("  (dry-run — no changes)")
+		p.Line("  (dry-run — no changes)")
 	}
 	if err := rclone.Pull(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
 		return fmt.Errorf("pull failed: %w", err)
 	}
-	fmt.Println("✓ Pull complete.")
+	p.Line("✓ Pull complete.")
 	return nil
 }
 
@@ -154,19 +155,20 @@ func runClonePush(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if !clonePreflight(cfg, runner) {
+	p := printerFrom(cmd)
+	if !clonePreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-	fmt.Printf("Pushing %s → %s\n", cfg.LocalPath, cfg.RemotePath)
+	p.Line("Pushing %s → %s", cfg.LocalPath, cfg.RemotePath)
 	if dryRun {
-		fmt.Println("  (dry-run — no changes)")
+		p.Line("  (dry-run — no changes)")
 	}
 	if err := rclone.Push(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
 		return fmt.Errorf("push failed: %w", err)
 	}
-	fmt.Println("✓ Push complete.")
+	p.Line("✓ Push complete.")
 	return nil
 }
 
@@ -184,19 +186,20 @@ func runCloneAll(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if !clonePreflight(cfg, runner) {
+	p := printerFrom(cmd)
+	if !clonePreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-	fmt.Printf("Syncing %s ⟷ %s\n", cfg.LocalPath, cfg.RemotePath)
+	p.Line("Syncing %s ⟷ %s", cfg.LocalPath, cfg.RemotePath)
 	if dryRun {
-		fmt.Println("  (dry-run — no changes)")
+		p.Line("  (dry-run — no changes)")
 	}
 	if err := rclone.Sync(cmd.Context(), runner, cfg, paths, dryRun); err != nil {
 		return fmt.Errorf("sync failed: %w", err)
 	}
-	fmt.Println("✓ Sync complete.")
+	p.Line("✓ Sync complete.")
 	return nil
 }
 
@@ -217,8 +220,9 @@ func runCloneMount(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	p := printerFrom(cmd)
 	if !runner.CommandExists("rclone") {
-		fmt.Println("rclone is not installed. Run 'dot clone setup' to get started.")
+		p.Line("rclone is not installed. Run 'dot clone setup' to get started.")
 		return nil
 	}
 
@@ -227,7 +231,7 @@ func runCloneMount(cmd *cobra.Command, _ []string) error {
 		if err := rclone.Unmount(cmd.Context(), runner, paths); err != nil {
 			return fmt.Errorf("unmount failed: %w", err)
 		}
-		fmt.Printf("✓ Unmounted %s\n", paths.MountPoint)
+		p.Line("✓ Unmounted %s", paths.MountPoint)
 		return nil
 	}
 
@@ -254,19 +258,20 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	ctx := cmd.Context()
+	p := printerFrom(cmd)
 
 	// 1. Check / install rclone
-	fmt.Println("Checking rclone...")
+	p.Line("Checking rclone...")
 	ver, ok := rclone.CheckRclone(runner)
 	if ok {
-		fmt.Printf("  ✓ rclone installed (%s)\n", ver)
+		p.Line("  ✓ rclone installed (%s)", ver)
 	} else {
 		confirmed, err := ui.Confirm("rclone not found. Install it?", yes)
 		if err != nil {
 			return err
 		}
 		if !confirmed {
-			fmt.Println("Aborted. Install rclone manually: https://rclone.org/install/")
+			p.Line("Aborted. Install rclone manually: https://rclone.org/install/")
 			return nil
 		}
 		if err := rclone.InstallRclone(ctx, runner); err != nil {
@@ -276,7 +281,7 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 		if !ok {
 			return fmt.Errorf("rclone installation failed — not found in PATH after install")
 		}
-		fmt.Printf("  ✓ rclone installed (%s)\n", ver)
+		p.Line("  ✓ rclone installed (%s)", ver)
 	}
 
 	// 2. Check / configure remote
@@ -285,21 +290,21 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 		remote = "gdrive"
 	}
 
-	fmt.Printf("Checking remote '%s'...\n", remote)
+	p.Line("Checking remote '%s'...", remote)
 	if rclone.HasRemote(ctx, runner, remote) {
-		fmt.Printf("  ✓ remote '%s' configured\n", remote)
+		p.Line("  ✓ remote '%s' configured", remote)
 	} else {
-		fmt.Printf("  ✗ remote '%s' not found\n", remote)
+		p.Line("  ✗ remote '%s' not found", remote)
 		confirmed, err := ui.Confirm(fmt.Sprintf("Configure Google Drive remote '%s'?", remote), yes)
 		if err != nil {
 			return err
 		}
 		if !confirmed {
-			fmt.Println("Aborted. Configure manually: rclone config")
+			p.Line("Aborted. Configure manually: rclone config")
 			return nil
 		}
 		if dryRun {
-			fmt.Printf("  (dry-run) would configure remote '%s'\n", remote)
+			p.Line("  (dry-run) would configure remote '%s'", remote)
 		} else {
 			if err := rclone.ConfigRemote(ctx, runner, remote); err != nil {
 				return fmt.Errorf("configuring remote: %w", err)
@@ -307,18 +312,18 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 			if !rclone.HasRemote(ctx, runner, remote) {
 				return fmt.Errorf("remote '%s' still not configured after setup", remote)
 			}
-			fmt.Printf("  ✓ remote '%s' configured\n", remote)
+			p.Line("  ✓ remote '%s' configured", remote)
 		}
 	}
 
 	// Verify remote access
 	if !dryRun {
-		fmt.Printf("Verifying access to %s:...\n", remote)
+		p.Line("Verifying access to %s:...", remote)
 		if err := rclone.CheckRemote(ctx, runner, remote); err != nil {
-			fmt.Printf("  ⚠ %v\n", err)
-			fmt.Println("  Run 'dot clone reconnect' to fix authentication.")
+			p.Line("  ⚠ %v", err)
+			p.Line("  Run 'dot clone reconnect' to fix authentication.")
 		} else {
-			fmt.Printf("  ✓ remote '%s' accessible\n", remote)
+			p.Line("  ✓ remote '%s' accessible", remote)
 		}
 	}
 
@@ -351,7 +356,7 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 	state.Modules.Workspace.Path = localPath
 
 	// 4. Deploy filter file
-	fmt.Println("Deploying filter file...")
+	p.Line("Deploying filter file...")
 	engine := template.NewEngine()
 	filterContent, err := engine.ReadStatic("sync/workspace-filter.txt")
 	if err != nil {
@@ -363,10 +368,10 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 	if err := runner.WriteFile(paths.FilterFile, filterContent, 0644); err != nil {
 		return fmt.Errorf("writing filter file: %w", err)
 	}
-	fmt.Printf("  ✓ %s\n", paths.FilterFile)
+	p.Line("  ✓ %s", paths.FilterFile)
 
 	// 5. Deploy scheduler
-	fmt.Println("Deploying auto-sync scheduler...")
+	p.Line("Deploying auto-sync scheduler...")
 	cfg, err := rclone.ResolveConfig(state)
 	if err != nil {
 		return err
@@ -375,14 +380,14 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 	if err := sched.Install(ctx); err != nil {
 		return fmt.Errorf("installing scheduler: %w", err)
 	}
-	fmt.Println("  ✓ scheduler installed")
+	p.Line("  ✓ scheduler installed")
 
 	// 6. Save state
 	if err := config.SaveState(state); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
-	fmt.Println("\n✓ Sync setup complete. Run 'dot clone' to start syncing.")
+	p.Line("\n✓ Sync setup complete. Run 'dot clone' to start syncing.")
 	return nil
 }
 
@@ -477,13 +482,14 @@ func runCloneLog(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	p := printerFrom(cmd)
 	lines, err := rclone.TailLog(cfg.LogFile, n)
 	if err != nil {
-		fmt.Printf("No log file found at %s\n", cfg.LogFile)
+		p.Line("No log file found at %s", cfg.LogFile)
 		return nil
 	}
 
-	fmt.Println(lines)
+	p.Line("%s", lines)
 	return nil
 }
 
@@ -508,16 +514,17 @@ read-only access) are added to a skip list so they are not retried.`,
 				return err
 			}
 
+			pr := printerFrom(cmd)
 			if len(entries) == 0 {
-				fmt.Println("No files in skip list.")
+				pr.Line("No files in skip list.")
 				return nil
 			}
 
-			fmt.Printf("Skipped files (%d):\n", len(entries))
-			for _, p := range entries {
-				fmt.Printf("  %s\n", p)
+			pr.Line("Skipped files (%d):", len(entries))
+			for _, e := range entries {
+				pr.Line("  %s", e)
 			}
-			fmt.Printf("\nClear with: dot clone skip clear\n")
+			pr.Line("\nClear with: dot clone skip clear")
 			return nil
 		},
 	}
@@ -534,7 +541,7 @@ read-only access) are added to a skip list so they are not retried.`,
 			if err := rclone.ClearSkipList(paths); err != nil {
 				return fmt.Errorf("clearing skip list: %w", err)
 			}
-			fmt.Println("Skip list cleared. All files will be retried on next sync.")
+			printerFrom(cmd).Line("Skip list cleared. All files will be retried on next sync.")
 			return nil
 		},
 	})
@@ -564,17 +571,18 @@ func newCloneConnectCmd() *cobra.Command {
 				remote = args[0]
 			}
 
+			p := printerFrom(cmd)
 			if rclone.HasRemote(cmd.Context(), runner, remote) {
-				fmt.Printf("Remote '%s' already exists. Use 'dot clone reconnect' to refresh auth.\n", remote)
+				p.Line("Remote '%s' already exists. Use 'dot clone reconnect' to refresh auth.", remote)
 				return nil
 			}
 
-			fmt.Printf("Configuring Google Drive remote '%s'...\n", remote)
+			p.Line("Configuring Google Drive remote '%s'...", remote)
 			if err := rclone.ConfigRemote(cmd.Context(), runner, remote); err != nil {
 				return fmt.Errorf("configuring remote: %w", err)
 			}
 
-			fmt.Printf("✓ Remote '%s' configured.\n", remote)
+			p.Line("✓ Remote '%s' configured.", remote)
 			state.Modules.Sync.Remote = remote
 			return config.SaveState(state)
 		},
@@ -601,17 +609,18 @@ func newCloneReconnectCmd() *cobra.Command {
 				remote = args[0]
 			}
 
+			p := printerFrom(cmd)
 			if !rclone.HasRemote(cmd.Context(), runner, remote) {
-				fmt.Printf("Remote '%s' not found. Use 'dot clone connect' to create it.\n", remote)
+				p.Line("Remote '%s' not found. Use 'dot clone connect' to create it.", remote)
 				return nil
 			}
 
-			fmt.Printf("Reconnecting remote '%s'...\n", remote)
+			p.Line("Reconnecting remote '%s'...", remote)
 			if err := rclone.ReconnectRemote(cmd.Context(), runner, remote); err != nil {
 				return fmt.Errorf("reconnecting: %w", err)
 			}
 
-			fmt.Printf("✓ Remote '%s' reconnected.\n", remote)
+			p.Line("✓ Remote '%s' reconnected.", remote)
 			return nil
 		},
 	}
