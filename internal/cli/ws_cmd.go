@@ -273,18 +273,16 @@ func runWsAudit(cmd *cobra.Command, args []string) error {
 	}
 
 	p := printerFrom(cmd)
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" Workspace Audit "))
-	p.Line("")
-	p.Line("  %s  %s", ui.StyleKey.Render("Work:"), ui.StyleValue.Render(roots.Work))
-	p.Line("  %s  %s", ui.StyleKey.Render("GDrive:"), ui.StyleValue.Render(roots.Gdrive))
+	p.Header("Workspace Audit")
+	p.KV("Work", roots.Work)
+	p.KV("GDrive", roots.Gdrive)
 	if scope != "" {
-		p.Line("  %s  %s", ui.StyleKey.Render("Scope:"), ui.StyleValue.Render(scope))
+		p.KV("Scope", scope)
 	}
-	p.Line("")
 
 	if len(mismatches) == 0 {
-		p.Line("%s", ui.StyleSuccess.Render("✓ Trees are in sync."))
+		p.Blank()
+		p.Success("%s Trees are in sync.", ui.MarkPresent)
 		return nil
 	}
 
@@ -298,20 +296,19 @@ func runWsAudit(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(workOnly) > 0 {
-		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Only on work (%d)", len(workOnly))))
+		p.Section(fmt.Sprintf("Only on work (%d)", len(workOnly)))
 		for _, m := range workOnly {
 			printMismatch(p, m)
 		}
-		p.Line("")
 	}
 	if len(gdriveOnly) > 0 {
-		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Only on gdrive (%d)", len(gdriveOnly))))
+		p.Section(fmt.Sprintf("Only on gdrive (%d)", len(gdriveOnly)))
 		for _, m := range gdriveOnly {
 			printMismatch(p, m)
 		}
-		p.Line("")
 	}
-	p.Line("%d mismatch(es). Run 'dotfiles ws reconcile' to resolve.", len(mismatches))
+	p.Blank()
+	p.Line("  %d mismatch(es). Run 'dotfiles ws reconcile' to resolve.", len(mismatches))
 	return nil
 }
 
@@ -320,7 +317,8 @@ func printMismatch(p *Printer, m ws.Mismatch) {
 	if !m.IsEmpty {
 		tag = ui.StyleHint.Render(fmt.Sprintf("(%s)", ws.FormatSize(m.Size)))
 	}
-	p.Line("  %s  %s", ui.StyleValue.Render(m.RelPath), tag)
+	p.Bullet(ui.StyleHint.Render(ui.MarkPartial),
+		fmt.Sprintf("%s  %s", ui.StyleValue.Render(m.RelPath), tag))
 }
 
 func newWsReconcileCmd() *cobra.Command {
@@ -357,14 +355,12 @@ func runWsReconcile(cmd *cobra.Command, args []string) error {
 	for i, m := range mismatches {
 		srcSide := m.OnlyOn
 		otherSide := srcSide.Other()
-		p.Line("")
 		tag := "empty"
 		if !m.IsEmpty {
 			tag = ws.FormatSize(m.Size)
 		}
-		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf(
-			"[%d/%d] %s — only on %s (%s)",
-			i+1, len(mismatches), m.RelPath, srcSide.Name(), tag)))
+		p.Section(fmt.Sprintf("[%d/%d] %s — only on %s (%s)",
+			i+1, len(mismatches), m.RelPath, srcSide.Name(), tag))
 
 		copyLabel := fmt.Sprintf("Copy to %s", otherSide.Name())
 		deleteLabel := fmt.Sprintf("Delete from %s", srcSide.Name())

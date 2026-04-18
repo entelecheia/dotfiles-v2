@@ -31,9 +31,7 @@ func newStatusCmd() *cobra.Command {
 
 func runStatus(cmd *cobra.Command, _ []string) error {
 	p := printerFrom(cmd)
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" dotfiles Status "))
-	p.Line("")
+	p.Header("dotfiles Status")
 
 	// ── load shared state ──────────────────────────────────────────────
 	state, err := config.LoadState()
@@ -44,7 +42,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	sysInfo, _ := config.DetectSystem()
 
 	// ── System ─────────────────────────────────────────────────────────
-	p.Line("%s", ui.StyleSection.Render("▸ System"))
+	p.Section("System")
 	if sysInfo != nil {
 		p.KV("OS", sysInfo.OS+"/"+sysInfo.Arch)
 		p.KV("Hostname", sysInfo.Hostname)
@@ -64,8 +62,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	}
 
 	// ── User ───────────────────────────────────────────────────────────
-	p.Line("")
-	p.Line("%s", ui.StyleSection.Render("▸ User"))
+	p.Section("User")
 	p.KV("Name", state.Name)
 	p.KV("Email", state.Email)
 	p.KV("GitHub", state.GithubUser)
@@ -84,14 +81,12 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	// ── Workspace ──────────────────────────────────────────────────────
 	statusPrintWorkspace(p)
 
-	p.Line("")
+	p.Blank()
 	return nil
 }
 
 // statusPrintModules checks all enabled modules and prints a compact summary.
 func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState, sysInfo *config.SystemInfo) {
-	p.Line("")
-
 	profileName, _ := cmd.Flags().GetString("profile")
 	configPath, _ := cmd.Flags().GetString("config")
 	if profileName == "" {
@@ -106,7 +101,7 @@ func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState,
 
 	cfg, err := config.Load(profileName, configPath, sysInfo)
 	if err != nil {
-		p.Line("%s", ui.StyleSection.Render("▸ Modules"))
+		p.Section("Modules")
 		p.Line("  %s", ui.StyleHint.Render("(could not load config: "+err.Error()+")"))
 		return
 	}
@@ -135,7 +130,7 @@ func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState,
 
 	results, err := module.CheckAll(ctx, modules, rc)
 	if err != nil {
-		p.Line("%s", ui.StyleSection.Render("▸ Modules"))
+		p.Section("Modules")
 		p.Line("  %s", ui.StyleHint.Render("(check failed: "+err.Error()+")"))
 		return
 	}
@@ -148,18 +143,18 @@ func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState,
 		}
 	}
 
-	p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Modules (%d/%d satisfied)", satisfied, total)))
+	p.Section(fmt.Sprintf("Modules (%d/%d satisfied)", satisfied, total))
 	for _, m := range modules {
 		r := results[m.Name()]
-		mark := ui.StyleHint.Render("✗")
+		marker := ui.StyleHint.Render(ui.MarkAbsent)
 		if r != nil && r.Satisfied {
-			mark = ui.StyleSuccess.Render("✓")
+			marker = ui.StyleSuccess.Render(ui.MarkPresent)
 		}
-		p.Line("  %s  %s", mark, ui.StyleValue.Render(m.Name()))
+		p.Bullet(marker, ui.StyleValue.Render(m.Name()))
 	}
 
 	if pending := total - satisfied; pending > 0 {
-		p.Line("")
+		p.Blank()
 		p.Line("  %s", ui.StyleHint.Render(
 			fmt.Sprintf("%d module(s) need attention — run 'dotfiles check' for details.", pending)))
 	}
@@ -167,8 +162,7 @@ func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState,
 
 // statusPrintSecrets prints a compact secrets summary.
 func statusPrintSecrets(p *Printer, state *config.UserState) {
-	p.Line("")
-	p.Line("%s", ui.StyleSection.Render("▸ Secrets"))
+	p.Section("Secrets")
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -213,8 +207,7 @@ func statusPrintSecrets(p *Printer, state *config.UserState) {
 
 // statusPrintSync prints a compact rsync sync summary.
 func statusPrintSync(p *Printer, state *config.UserState) {
-	p.Line("")
-	p.Line("%s", ui.StyleSection.Render("▸ Sync"))
+	p.Section("Sync")
 
 	if state.Modules.Rsync.RemoteHost == "" {
 		p.Line("  %s", ui.StyleHint.Render("(not configured — run 'dotfiles sync setup')"))
@@ -260,16 +253,14 @@ func statusPrintSync(p *Printer, state *config.UserState) {
 
 // statusPrintWorkspace lists registered projects and active tmux sessions.
 func statusPrintWorkspace(p *Printer) {
-	p.Line("")
-
 	cfg, err := workspace.LoadConfig()
 	if err != nil {
-		p.Line("%s", ui.StyleSection.Render("▸ Workspace"))
+		p.Section("Workspace")
 		p.Line("  %s", ui.StyleHint.Render("(could not load config: "+err.Error()+")"))
 		return
 	}
 
-	p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Workspace (%d projects)", len(cfg.Projects))))
+	p.Section(fmt.Sprintf("Workspace (%d projects)", len(cfg.Projects)))
 
 	if len(cfg.Projects) == 0 {
 		p.Line("  %s", ui.StyleHint.Render("(none — use 'dotfiles register <name>' to add one)"))
@@ -289,13 +280,12 @@ func statusPrintWorkspace(p *Printer) {
 	}
 
 	for _, proj := range cfg.Projects {
-		marker := " "
+		marker := ui.StyleHint.Render(ui.MarkPartial)
 		if active[proj.Name] {
-			marker = "*"
+			marker = ui.StyleSuccess.Render(ui.MarkStarred)
 		}
-		p.Line("  %s %s  %s",
-			ui.StyleSuccess.Render(marker),
+		p.Bullet(marker, fmt.Sprintf("%s  %s",
 			ui.StyleValue.Render(fmt.Sprintf("%-18s", proj.Name)),
-			ui.StyleHint.Render(proj.Path))
+			ui.StyleHint.Render(proj.Path)))
 	}
 }

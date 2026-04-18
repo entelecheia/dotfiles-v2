@@ -69,7 +69,7 @@ check "layouts lists monitor" bash -c "$BIN layouts 2>&1 | grep -q 'monitor'"
 # ── 3. Doctor ─────────────────────────────────────────────────────────────────
 echo "--- doctor ---"
 DOCTOR_OUT=$($BIN doctor 2>&1) || true
-echo "$DOCTOR_OUT" | grep -q "Workspace tool status" && pass "doctor shows header" || fail "doctor shows header"
+echo "$DOCTOR_OUT" | grep -q "Workspace Doctor" && pass "doctor shows header" || fail "doctor shows header"
 echo "$DOCTOR_OUT" | grep -q "SHELL:" && pass "doctor shows SHELL" || fail "doctor shows SHELL"
 echo "$DOCTOR_OUT" | grep -q "Config:" && pass "doctor shows config path" || fail "doctor shows config path"
 echo "$DOCTOR_OUT" | grep -q "Scripts:" && pass "doctor shows scripts path" || fail "doctor shows scripts path"

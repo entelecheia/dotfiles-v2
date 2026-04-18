@@ -12,6 +12,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/module"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 func newDiffCmd() *cobra.Command {
@@ -88,17 +89,22 @@ func runDiff(cmd *cobra.Command, _ []string) error {
 	}
 
 	p := printerFrom(cmd)
-	p.Line("Profile: %s  (dry-run diff)\n", profileName)
+	p.Header("Dry-run Diff")
+	p.KV("Profile", profileName)
+	p.Section("Modules")
 
 	pendingCount := 0
 	for _, m := range modules {
 		r := results[m.Name()]
 		if r.Satisfied {
-			p.Line("  ✓ %-15s  already satisfied", m.Name())
+			marker := ui.StyleSuccess.Render(ui.MarkPresent)
+			p.Bullet(marker, fmt.Sprintf("%-15s %s", ui.StyleValue.Render(m.Name()), ui.StyleHint.Render("already satisfied")))
 			continue
 		}
 		pendingCount++
-		p.Line("  ~ %-15s  %d pending change(s)", m.Name(), len(r.Changes))
+		marker := ui.StyleHint.Render(ui.MarkPending)
+		p.Bullet(marker, fmt.Sprintf("%-15s %s", ui.StyleValue.Render(m.Name()),
+			ui.StyleWarning.Render(fmt.Sprintf("%d pending change(s)", len(r.Changes)))))
 		for _, c := range r.Changes {
 			p.Line("      → %s", c.Description)
 			if c.Command != "" {
@@ -107,9 +113,9 @@ func runDiff(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	p.Line("")
+	p.Blank()
 	if pendingCount == 0 {
-		p.Line("Nothing to do — all modules satisfied.")
+		p.Success("Nothing to do — all modules satisfied.")
 	} else {
 		p.Line("%d module(s) have pending changes. Run 'dotfiles apply' to apply them.", pendingCount)
 	}

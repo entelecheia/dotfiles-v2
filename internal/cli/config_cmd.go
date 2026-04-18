@@ -110,13 +110,11 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	config.ApplyEnvOverrides(cfg)
 
 	p := printerFrom(cmd)
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" dotfiles Configuration "))
-	p.Line("")
+	p.Header("dotfiles Configuration")
 	p.KV("Profile", profileName)
 	p.KV("Config", config.StatePath())
 
-	p.Line("%s", ui.StyleSection.Render("▸ System"))
+	p.Section("System")
 	p.KV("OS", sysInfo.OS+"/"+sysInfo.Arch)
 	p.KV("Hostname", sysInfo.Hostname)
 	p.KV("Shell", sysInfo.Shell)
@@ -133,16 +131,14 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		p.KV("CUDA", sysInfo.CUDAHome)
 	}
 
-	p.Line("")
-	p.Line("%s", ui.StyleSection.Render("▸ User"))
+	p.Section("User")
 	p.KV("Name", cfg.Name)
 	p.KV("Email", cfg.Email)
 	p.KV("GitHub", cfg.GithubUser)
 	p.KV("Timezone", cfg.Timezone)
 
 	if cfg.Modules.Workspace.Enabled {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render("▸ Workspace"))
+		p.Section("Workspace")
 		p.KV("Path", cfg.Modules.Workspace.Path)
 		if cfg.Modules.Workspace.Gdrive != "" {
 			p.KV("GDrive", cfg.Modules.Workspace.Gdrive)
@@ -158,8 +154,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	p.Line("")
-	p.Line("%s", ui.StyleSection.Render("▸ Modules"))
+	p.Section("Modules")
 	allModules := []struct {
 		name    string
 		enabled bool
@@ -182,40 +177,36 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	for _, m := range allModules {
-		mark := ui.StyleHint.Render("✗")
+		marker := ui.StyleHint.Render(ui.MarkAbsent)
 		detail := ""
 		if m.enabled {
-			mark = ui.StyleSuccess.Render("✓")
+			marker = ui.StyleSuccess.Render(ui.MarkPresent)
 			if m.detail != "" {
 				detail = ui.StyleHint.Render("  (" + m.detail + ")")
 			}
 		}
-		p.Line("  %s  %s%s", mark, ui.StyleValue.Render(m.name), detail)
+		p.Bullet(marker, ui.StyleValue.Render(m.name)+detail)
 	}
 
 	pkgs := cfg.AllPackages()
 	if len(pkgs) > 0 {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Packages (%d)", len(pkgs))))
+		p.Section(fmt.Sprintf("Packages (%d)", len(pkgs)))
 		p.Line("  %s", ui.StyleHint.Render(strings.Join(pkgs, ", ")))
 	}
 
 	casks := cfg.AllCasks()
 	if len(casks) > 0 {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Casks — install list (%d)", len(casks))))
+		p.Section(fmt.Sprintf("Casks — install list (%d)", len(casks)))
 		p.Line("  %s", ui.StyleHint.Render(strings.Join(casks, ", ")))
 	}
 
 	if len(state.Modules.MacApps.BackupApps) > 0 {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Casks — backup list (%d)", len(state.Modules.MacApps.BackupApps))))
+		p.Section(fmt.Sprintf("Casks — backup list (%d)", len(state.Modules.MacApps.BackupApps)))
 		p.Line("  %s", ui.StyleHint.Render(strings.Join(state.Modules.MacApps.BackupApps, ", ")))
 	}
 
 	if state.Modules.MacApps.BackupRoot != "" {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render("▸ Backup"))
+		p.Section("Backup")
 		p.KV("Root", state.Modules.MacApps.BackupRoot)
 		if state.Modules.MacApps.LastBackup != nil {
 			lb := state.Modules.MacApps.LastBackup
@@ -225,8 +216,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	if state.Secrets.AgeIdentity != "" {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render("▸ Secrets"))
+		p.Section("Secrets")
 		p.KV("Age identity", state.Secrets.AgeIdentity)
 		for i, r := range state.Secrets.AgeRecipients {
 			p.KV(fmt.Sprintf("Recipient %d", i+1), r)
@@ -238,8 +228,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	}
 
 	if state.Modules.Sync.Remote != "" || state.Modules.Rsync.RemoteHost != "" {
-		p.Line("")
-		p.Line("%s", ui.StyleSection.Render("▸ Sync"))
+		p.Section("Sync")
 		if state.Modules.Sync.Remote != "" {
 			p.KV("rclone", state.Modules.Sync.Remote)
 			if state.Modules.Sync.Path != "" {
@@ -260,7 +249,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	p.Line("")
+	p.Blank()
 	return nil
 }
 

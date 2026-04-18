@@ -12,6 +12,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/module"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 func newCheckCmd() *cobra.Command {
@@ -89,31 +90,33 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 
 	// Print report
 	p := printerFrom(cmd)
-	p.Line("Profile: %s\n", profileName)
-	p.Line("%-15s %-10s %s", "MODULE", "STATUS", "CHANGES")
-	p.Line("%-15s %-10s %s", "------", "------", "-------")
+	p.Header("Module Check")
+	p.KV("Profile", profileName)
 
+	p.Section("Modules")
 	okCount, pendingCount, totalChanges := 0, 0, 0
 	for _, m := range modules {
 		r := results[m.Name()]
-		status := "OK"
+		changeCount := len(r.Changes)
+		marker := ui.StyleSuccess.Render(ui.MarkPresent)
+		detail := ui.StyleHint.Render("satisfied")
 		if !r.Satisfied {
-			status = "PENDING"
+			marker = ui.StyleHint.Render(ui.MarkPending)
+			detail = ui.StyleWarning.Render(fmt.Sprintf("%d pending change(s)", changeCount))
 			pendingCount++
-			totalChanges += len(r.Changes)
+			totalChanges += changeCount
 		} else {
 			okCount++
 		}
-		changeCount := len(r.Changes)
-		p.Line("%-15s %-10s %d change(s)", m.Name(), status, changeCount)
+		p.Bullet(marker, fmt.Sprintf("%-15s %s", ui.StyleValue.Render(m.Name()), detail))
 		for _, c := range r.Changes {
-			p.Line("  → %s", c.Description)
+			p.Line("      → %s", c.Description)
 		}
 	}
 
-	p.Line("")
+	p.Blank()
 	if pendingCount == 0 {
-		p.Line("All %d modules satisfied.", okCount)
+		p.Success("All %d modules satisfied.", okCount)
 	} else {
 		p.Line("%d/%d modules satisfied, %d pending (%d change(s)).",
 			okCount, okCount+pendingCount, pendingCount, totalChanges)
