@@ -415,46 +415,48 @@ func runCloneStatus(cmd *cobra.Command, _ []string) error {
 	}
 
 	p := printerFrom(cmd)
-	p.Line("Workspace Sync Status")
-	p.Line("━━━━━━━━━━━━━━━━━━━━━")
+	p.Line("")
+	p.Line("%s", ui.StyleHeader.Render(" Workspace Clone Status "))
+	p.Line("")
 
 	if st.RcloneVersion != "" {
-		p.Line("  rclone:     %s (%s)", st.RcloneVersion, st.RclonePath)
+		printKV("rclone", st.RcloneVersion+" ("+st.RclonePath+")")
 	} else {
-		p.Line("  rclone:     not installed")
+		printKV("rclone", "not installed")
 	}
 
-	p.Line("  Local:      %s", st.LocalPath)
-	p.Line("  Remote:     %s", st.RemotePath)
-	p.Line("  Filter:     %s", st.FilterFile)
-	p.Line("  Interval:   %s", formatInterval(st.Interval))
-	p.Line("  Scheduler:  %s", st.SchedulerState)
+	printKV("Local", st.LocalPath)
+	printKV("Remote", st.RemotePath)
+	printKV("Filter", st.FilterFile)
+	printKV("Interval", formatInterval(st.Interval))
+	printKV("Scheduler", st.SchedulerState.String())
 
 	if st.MountPoint != "" {
 		mountState := "not mounted"
 		if st.Mounted {
 			mountState = "mounted"
 		}
-		p.Line("  Mount:      %s (%s)", st.MountPoint, mountState)
+		printKV("Mount", st.MountPoint+" ("+mountState+")")
 	}
 
 	if st.LastSyncTime != nil {
 		ago := time.Since(*st.LastSyncTime).Truncate(time.Second)
-		p.Line("  Last sync:  %s ago", ago)
+		printKV("Last sync", fmt.Sprintf("%s ago", ago))
 	} else {
-		p.Line("  Last sync:  (never)")
+		printKV("Last sync", "(never)")
 	}
 
 	if st.LastStats != "" {
-		p.Line("  Last stats: %s", st.LastStats)
+		printKV("Last stats", st.LastStats)
 	}
 
 	if st.LastError != "" {
-		p.Line("  Last error: %s", st.LastError)
+		printKV("Last error", st.LastError)
 	} else {
-		p.Line("  Last error: (none)")
+		printKV("Last error", "(none)")
 	}
 
+	p.Line("")
 	return nil
 }
 
