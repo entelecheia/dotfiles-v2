@@ -106,8 +106,9 @@ func runWsInit(cmd *cobra.Command, args []string) error {
 		Force: force,
 		Yes:   yes,
 	})
+	p := printerFrom(cmd)
 	for _, m := range msgs {
-		fmt.Println(m)
+		p.Line("%s", m)
 	}
 	return err
 }
@@ -178,8 +179,9 @@ func runWsMkdir(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	msgs, err := ws.Mkdir(runner, roots, args[0])
+	p := printerFrom(cmd)
 	for _, m := range msgs {
-		fmt.Println(m)
+		p.Line("%s", m)
 	}
 	return err
 }
@@ -199,8 +201,9 @@ func runWsMv(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	msgs, err := ws.Move(context.Background(), runner, roots, args[0], args[1])
+	p := printerFrom(cmd)
 	for _, m := range msgs {
-		fmt.Println(m)
+		p.Line("%s", m)
 	}
 	return err
 }
@@ -222,24 +225,25 @@ func runWsRm(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	recursive, _ := cmd.Flags().GetBool("recursive")
+	p := printerFrom(cmd)
 
 	// Safety confirm for recursive delete (unless --yes)
 	if recursive && !yes {
 		workAbs, gdriveAbs := roots.ResolvePair(args[0])
-		fmt.Printf("Recursively delete:\n  %s\n  %s\n", workAbs, gdriveAbs)
+		p.Line("Recursively delete:\n  %s\n  %s", workAbs, gdriveAbs)
 		ok, err := ui.ConfirmBool("Continue?", false, false)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Println("Aborted.")
+			p.Line("Aborted.")
 			return nil
 		}
 	}
 
 	msgs, err := ws.Remove(context.Background(), runner, roots, args[0], recursive)
 	for _, m := range msgs {
-		fmt.Println(m)
+		p.Line("%s", m)
 	}
 	return err
 }
@@ -268,18 +272,19 @@ func runWsAudit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Println()
-	fmt.Println(ui.StyleHeader.Render(" Workspace Audit "))
-	fmt.Println()
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Work:"), ui.StyleValue.Render(roots.Work))
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("GDrive:"), ui.StyleValue.Render(roots.Gdrive))
+	p := printerFrom(cmd)
+	p.Line("")
+	p.Line("%s", ui.StyleHeader.Render(" Workspace Audit "))
+	p.Line("")
+	p.Line("  %s  %s", ui.StyleKey.Render("Work:"), ui.StyleValue.Render(roots.Work))
+	p.Line("  %s  %s", ui.StyleKey.Render("GDrive:"), ui.StyleValue.Render(roots.Gdrive))
 	if scope != "" {
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Scope:"), ui.StyleValue.Render(scope))
+		p.Line("  %s  %s", ui.StyleKey.Render("Scope:"), ui.StyleValue.Render(scope))
 	}
-	fmt.Println()
+	p.Line("")
 
 	if len(mismatches) == 0 {
-		fmt.Println(ui.StyleSuccess.Render("✓ Trees are in sync."))
+		p.Line("%s", ui.StyleSuccess.Render("✓ Trees are in sync."))
 		return nil
 	}
 
@@ -293,29 +298,29 @@ func runWsAudit(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(workOnly) > 0 {
-		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Only on work (%d)", len(workOnly))))
+		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Only on work (%d)", len(workOnly))))
 		for _, m := range workOnly {
-			printMismatch(m)
+			printMismatch(p, m)
 		}
-		fmt.Println()
+		p.Line("")
 	}
 	if len(gdriveOnly) > 0 {
-		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Only on gdrive (%d)", len(gdriveOnly))))
+		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Only on gdrive (%d)", len(gdriveOnly))))
 		for _, m := range gdriveOnly {
-			printMismatch(m)
+			printMismatch(p, m)
 		}
-		fmt.Println()
+		p.Line("")
 	}
-	fmt.Printf("%d mismatch(es). Run 'dotfiles ws reconcile' to resolve.\n", len(mismatches))
+	p.Line("%d mismatch(es). Run 'dotfiles ws reconcile' to resolve.", len(mismatches))
 	return nil
 }
 
-func printMismatch(m ws.Mismatch) {
+func printMismatch(p *Printer, m ws.Mismatch) {
 	tag := ui.StyleHint.Render("(empty)")
 	if !m.IsEmpty {
 		tag = ui.StyleHint.Render(fmt.Sprintf("(%s)", ws.FormatSize(m.Size)))
 	}
-	fmt.Printf("  %s  %s\n", ui.StyleValue.Render(m.RelPath), tag)
+	p.Line("  %s  %s", ui.StyleValue.Render(m.RelPath), tag)
 }
 
 func newWsReconcileCmd() *cobra.Command {
@@ -341,8 +346,9 @@ func runWsReconcile(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	p := printerFrom(cmd)
 	if len(mismatches) == 0 {
-		fmt.Println(ui.StyleSuccess.Render("✓ Trees are in sync. Nothing to reconcile."))
+		p.Line("%s", ui.StyleSuccess.Render("✓ Trees are in sync. Nothing to reconcile."))
 		return nil
 	}
 
@@ -351,12 +357,12 @@ func runWsReconcile(cmd *cobra.Command, args []string) error {
 	for i, m := range mismatches {
 		srcSide := m.OnlyOn
 		otherSide := srcSide.Other()
-		fmt.Println()
+		p.Line("")
 		tag := "empty"
 		if !m.IsEmpty {
 			tag = ws.FormatSize(m.Size)
 		}
-		fmt.Println(ui.StyleSection.Render(fmt.Sprintf(
+		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf(
 			"[%d/%d] %s — only on %s (%s)",
 			i+1, len(mismatches), m.RelPath, srcSide.Name(), tag)))
 
@@ -367,7 +373,7 @@ func runWsReconcile(cmd *cobra.Command, args []string) error {
 		if yes {
 			// Unattended: always copy (safe — never delete)
 			choice = copyLabel
-			fmt.Printf("  %s (--yes)\n", choice)
+			p.Line("  %s (--yes)", choice)
 		} else {
 			options := []string{copyLabel, deleteLabel, "Skip", "Quit"}
 			choice, err = ui.Select("Action?", options, "Skip", false)
@@ -382,49 +388,49 @@ func runWsReconcile(cmd *cobra.Command, args []string) error {
 			dstParent := filepath.Dir(dstAbs)
 			if !fileutil.IsDir(dstParent) {
 				if err := runner.MkdirAll(dstParent, 0755); err != nil {
-					fmt.Printf("  ⚠ mkdir parent %s: %v\n", dstParent, err)
+					p.Line("  ⚠ mkdir parent %s: %v", dstParent, err)
 					skipped++
 					continue
 				}
 			}
 			if _, err := runner.Run(ctx, "cp", "-R", srcAbs, dstAbs); err != nil {
-				fmt.Printf("  ⚠ cp failed: %v\n", err)
+				p.Line("  ⚠ cp failed: %v", err)
 				skipped++
 				continue
 			}
-			fmt.Printf("  ✓ copied %s → %s\n", srcAbs, dstAbs)
+			p.Line("  ✓ copied %s → %s", srcAbs, dstAbs)
 			copied++
 		case deleteLabel:
 			srcAbs, _ := resolveSidePair(roots, m.RelPath, srcSide)
 			if !m.IsEmpty {
-				fmt.Printf("  About to delete non-empty dir: %s (%s)\n", srcAbs, ws.FormatSize(m.Size))
+				p.Line("  About to delete non-empty dir: %s (%s)", srcAbs, ws.FormatSize(m.Size))
 				confirm, err := ui.ConfirmBool("Really delete?", false, false)
 				if err != nil {
 					return err
 				}
 				if !confirm {
-					fmt.Println("  skipped")
+					p.Line("  skipped")
 					skipped++
 					continue
 				}
 			}
 			if _, err := runner.Run(ctx, "rm", "-rf", srcAbs); err != nil {
-				fmt.Printf("  ⚠ rm failed: %v\n", err)
+				p.Line("  ⚠ rm failed: %v", err)
 				skipped++
 				continue
 			}
-			fmt.Printf("  ✓ deleted %s\n", srcAbs)
+			p.Line("  ✓ deleted %s", srcAbs)
 			deleted++
 		case "Skip":
 			skipped++
 		case "Quit":
-			fmt.Println("  (quit)")
+			p.Line("  (quit)")
 			goto summary
 		}
 	}
 summary:
-	fmt.Println()
-	fmt.Printf("Reconciled: %d copied, %d deleted, %d skipped (of %d).\n",
+	p.Line("")
+	p.Line("Reconciled: %d copied, %d deleted, %d skipped (of %d).",
 		copied, deleted, skipped, len(mismatches))
 	return nil
 }

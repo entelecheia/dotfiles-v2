@@ -65,6 +65,7 @@ func runProfileRoot(cmd *cobra.Command, args []string) error {
 	homeOverride, _ := cmd.Flags().GetString("home")
 	detect, _ := cmd.Flags().GetBool("detect")
 	reset, _ := cmd.Flags().GetBool("reset")
+	p := printerFrom(cmd)
 
 	var state *config.UserState
 	var err error
@@ -89,8 +90,8 @@ func runProfileRoot(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		effective := resolveBackupRoot(cmd, state, home)
-		fmt.Println(ui.StyleSuccess.Render("✓ backup root cleared"))
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Effective:"), ui.StyleValue.Render(effective))
+		p.Line("%s", ui.StyleSuccess.Render("✓ backup root cleared"))
+		p.Line("  %s  %s", ui.StyleKey.Render("Effective:"), ui.StyleValue.Render(effective))
 
 	case detect:
 		drive := appsettings.DetectDriveCandidate(home)
@@ -101,8 +102,8 @@ func runProfileRoot(cmd *cobra.Command, args []string) error {
 		if err := persistProfileState(cmd, state); err != nil {
 			return err
 		}
-		fmt.Println(ui.StyleSuccess.Render("✓ backup root set (auto-detected)"))
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(drive))
+		p.Line("%s", ui.StyleSuccess.Render("✓ backup root set (auto-detected)"))
+		p.Line("  %s  %s", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(drive))
 
 	case len(args) == 1:
 		path := args[0]
@@ -110,8 +111,8 @@ func runProfileRoot(cmd *cobra.Command, args []string) error {
 		if err := persistProfileState(cmd, state); err != nil {
 			return err
 		}
-		fmt.Println(ui.StyleSuccess.Render("✓ backup root set"))
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(path))
+		p.Line("%s", ui.StyleSuccess.Render("✓ backup root set"))
+		p.Line("  %s  %s", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(path))
 
 	default:
 		// Show current
@@ -123,10 +124,10 @@ func runProfileRoot(cmd *cobra.Command, args []string) error {
 		} else if d := appsettings.DetectDriveCandidate(home); d != "" {
 			source = "auto-detected (Drive)"
 		}
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(effective))
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Source:"), ui.StyleHint.Render(source))
+		p.Line("  %s  %s", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(effective))
+		p.Line("  %s  %s", ui.StyleKey.Render("Source:"), ui.StyleHint.Render(source))
 		if saved != "" {
-			fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Saved:"), ui.StyleHint.Render(saved))
+			p.Line("  %s  %s", ui.StyleKey.Render("Saved:"), ui.StyleHint.Render(saved))
 		}
 	}
 	return nil
@@ -222,14 +223,15 @@ func runProfileBackup(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(ui.StyleSuccess.Render("✓ snapshot created"))
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Version:"), ui.StyleValue.Render(snap.Version))
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Path:"), ui.StyleValue.Render(snap.Path))
+	p := printerFrom(cmd)
+	p.Line("%s", ui.StyleSuccess.Render("✓ snapshot created"))
+	p.Line("  %s  %s", ui.StyleKey.Render("Version:"), ui.StyleValue.Render(snap.Version))
+	p.Line("  %s  %s", ui.StyleKey.Render("Path:"), ui.StyleValue.Render(snap.Path))
 	if snap.Tag != "" {
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
+		p.Line("  %s  %s", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
 	}
 	if snap.WithSecret {
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Secrets:"), ui.StyleSuccess.Render("included"))
+		p.Line("  %s  %s", ui.StyleKey.Render("Secrets:"), ui.StyleSuccess.Render("included"))
 	}
 	return nil
 }
@@ -260,6 +262,7 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	version, _ := cmd.Flags().GetString("version")
 	includeSecrets, _ := cmd.Flags().GetBool("include-secrets")
 	noState, _ := cmd.Flags().GetBool("no-state")
+	p := printerFrom(cmd)
 
 	if version == "" {
 		v, err := eng.ResolveLatest()
@@ -270,13 +273,13 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	}
 
 	if !yes {
-		fmt.Printf("About to overwrite %s from snapshot %s.\n", eng.StatePath, version)
+		p.Line("About to overwrite %s from snapshot %s.", eng.StatePath, version)
 		ok, err := ui.ConfirmBool("Continue?", false, false)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Println("aborted")
+			p.Line("aborted")
 			return nil
 		}
 	}
@@ -289,11 +292,11 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(ui.StyleSuccess.Render("✓ restore complete"))
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Version:"), ui.StyleValue.Render(snap.Version))
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Path:"), ui.StyleValue.Render(snap.Path))
+	p.Line("%s", ui.StyleSuccess.Render("✓ restore complete"))
+	p.Line("  %s  %s", ui.StyleKey.Render("Version:"), ui.StyleValue.Render(snap.Version))
+	p.Line("  %s  %s", ui.StyleKey.Render("Path:"), ui.StyleValue.Render(snap.Path))
 	if snap.Tag != "" {
-		fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
+		p.Line("  %s  %s", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
 	}
 	return nil
 }
@@ -320,16 +323,17 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(ui.StyleHeader.Render(" Profile Snapshots "))
-	fmt.Println()
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Host:"), ui.StyleValue.Render(eng.Hostname))
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(eng.HostRoot()))
+	p := printerFrom(cmd)
+	p.Line("%s", ui.StyleHeader.Render(" Profile Snapshots "))
+	p.Line("")
+	p.Line("  %s  %s", ui.StyleKey.Render("Host:"), ui.StyleValue.Render(eng.Hostname))
+	p.Line("  %s  %s", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(eng.HostRoot()))
 	if len(snaps) == 0 {
-		fmt.Println()
-		fmt.Println(ui.StyleHint.Render("  (no snapshots yet — run 'dotfiles profile backup')"))
+		p.Line("")
+		p.Line("  %s", ui.StyleHint.Render("(no snapshots yet — run 'dotfiles profile backup')"))
 		return nil
 	}
-	fmt.Println()
+	p.Line("")
 	for _, s := range snaps {
 		marker := "  "
 		if s.IsLatest {
@@ -346,13 +350,13 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 		if len(extras) > 0 {
 			extra = "  " + ui.StyleHint.Render("("+strings.Join(extras, ", ")+")")
 		}
-		fmt.Printf("%s%s  %s%s\n",
+		p.Line("%s%s  %s%s",
 			marker,
 			ui.StyleValue.Render(s.Version),
 			ui.StyleHint.Render(s.CreatedAt.Format("2006-01-02 15:04 UTC")),
 			extra)
 	}
-	fmt.Println()
+	p.Line("")
 	return nil
 }
 
@@ -377,24 +381,25 @@ func runProfilePrune(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	keep, _ := cmd.Flags().GetInt("keep")
+	p := printerFrom(cmd)
 
 	all, err := eng.List()
 	if err != nil {
 		return err
 	}
 	if len(all) <= keep {
-		fmt.Printf("Nothing to prune (%d snapshots ≤ keep=%d).\n", len(all), keep)
+		p.Line("Nothing to prune (%d snapshots ≤ keep=%d).", len(all), keep)
 		return nil
 	}
 	toDelete := len(all) - keep
 	if !yes {
-		fmt.Printf("About to delete %d snapshot(s) under %s.\n", toDelete, eng.HostRoot())
+		p.Line("About to delete %d snapshot(s) under %s.", toDelete, eng.HostRoot())
 		ok, err := ui.ConfirmBool("Continue?", false, false)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Println("aborted")
+			p.Line("aborted")
 			return nil
 		}
 	}
@@ -402,10 +407,9 @@ func runProfilePrune(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Pruned %d snapshot(s):\n", len(removed))
+	p.Line("Pruned %d snapshot(s):", len(removed))
 	for _, v := range removed {
-		fmt.Printf("  - %s\n", v)
+		p.Line("  - %s", v)
 	}
 	return nil
 }
-

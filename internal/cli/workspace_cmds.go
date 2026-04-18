@@ -7,9 +7,10 @@ import (
 	osexec "os/exec"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/workspace"
-	"github.com/spf13/cobra"
 )
 
 // ── stop ────────────────────────────────────────────────────────────────────
@@ -22,13 +23,14 @@ func newStopCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			force, _ := cmd.Flags().GetBool("force")
+			p := printerFrom(cmd)
 
 			if !force {
-				fmt.Printf("Stop session %q? [y/N] ", name)
+				p.Raw("Stop session %q? [y/N] ", name)
 				var answer string
 				fmt.Scanln(&answer)
 				if strings.ToLower(strings.TrimSpace(answer)) != "y" {
-					fmt.Println("Aborted.")
+					p.Line("Aborted.")
 					return nil
 				}
 			}
@@ -42,7 +44,7 @@ func newStopCmd() *cobra.Command {
 				}
 				return fmt.Errorf("stopping session %q: %s", name, stderr)
 			}
-			fmt.Printf("Session %q stopped.\n", name)
+			p.Line("Session %q stopped.", name)
 			return nil
 		},
 	}
@@ -76,26 +78,27 @@ func newListCmd() *cobra.Command {
 				}
 			}
 
-			fmt.Printf("Projects (%d):\n", len(cfg.Projects))
+			p := printerFrom(cmd)
+			p.Line("Projects (%d):", len(cfg.Projects))
 			if len(cfg.Projects) == 0 {
-				fmt.Println("  (none — use 'dotfiles register <name>' to add one)")
+				p.Line("  (none — use 'dotfiles register <name>' to add one)")
 			}
-			for _, p := range cfg.Projects {
-				layout := cfg.EffectiveLayout(&p)
-				theme := cfg.EffectiveTheme(&p)
+			for _, proj := range cfg.Projects {
+				layout := cfg.EffectiveLayout(&proj)
+				theme := cfg.EffectiveTheme(&proj)
 				status := " "
-				if activeSessions[p.Name] {
+				if activeSessions[proj.Name] {
 					status = "*"
-					delete(activeSessions, p.Name)
+					delete(activeSessions, proj.Name)
 				}
-				fmt.Printf("  %s %-18s %s  (layout=%s, theme=%s)\n", status, p.Name, p.Path, layout, theme)
+				p.Line("  %s %-18s %s  (layout=%s, theme=%s)", status, proj.Name, proj.Path, layout, theme)
 			}
 
 			// Show other active sessions not in our project list
 			if len(activeSessions) > 0 {
-				fmt.Printf("\nOther tmux sessions:\n")
+				p.Line("\nOther tmux sessions:")
 				for name := range activeSessions {
-					fmt.Printf("    %-18s (not registered)\n", name)
+					p.Line("    %-18s (not registered)", name)
 				}
 			}
 
@@ -143,7 +146,7 @@ func newRegisterCmd() *cobra.Command {
 			}
 
 			proj := cfg.FindProject(name)
-			fmt.Printf("Registered project %q → %s\n", name, proj.Path)
+			printerFrom(cmd).Line("Registered project %q → %s", name, proj.Path)
 			return nil
 		},
 	}
@@ -176,7 +179,7 @@ func newUnregisterCmd() *cobra.Command {
 				return fmt.Errorf("saving config: %w", err)
 			}
 
-			fmt.Printf("Removed project %q\n", name)
+			printerFrom(cmd).Line("Removed project %q", name)
 			return nil
 		},
 	}
@@ -189,19 +192,20 @@ func newLayoutsCmd() *cobra.Command {
 		Use:   "layouts",
 		Short: "List available workspace layouts",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Available layouts:")
-			fmt.Println()
-			fmt.Println("  dev (default)")
-			fmt.Println("    5-pane laptop-friendly layout")
-			fmt.Println("    Claude + monitor + files | lazygit + shell")
-			fmt.Println()
-			fmt.Println("  claude")
-			fmt.Println("    7-pane Claude-focused layout")
-			fmt.Println("    Claude + monitor + files + remote | lazygit + shell + logs")
-			fmt.Println()
-			fmt.Println("  monitor")
-			fmt.Println("    4-pane server monitoring layout")
-			fmt.Println("    monitor + shell | lazygit + logs")
+			p := printerFrom(cmd)
+			p.Line("Available layouts:")
+			p.Line("")
+			p.Line("  dev (default)")
+			p.Line("    5-pane laptop-friendly layout")
+			p.Line("    Claude + monitor + files | lazygit + shell")
+			p.Line("")
+			p.Line("  claude")
+			p.Line("    7-pane Claude-focused layout")
+			p.Line("    Claude + monitor + files + remote | lazygit + shell + logs")
+			p.Line("")
+			p.Line("  monitor")
+			p.Line("    4-pane server monitoring layout")
+			p.Line("    monitor + shell | lazygit + logs")
 		},
 	}
 }
@@ -214,43 +218,44 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Check workspace tool installation status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			runner := exec.NewRunner(false, slog.Default())
+			p := printerFrom(cmd)
 
-			fmt.Println("Workspace tool status:")
-			fmt.Println()
+			p.Line("Workspace tool status:")
+			p.Line("")
 
 			status := workspace.CheckDeps(runner)
 
 			for _, name := range status.Installed {
 				path, _ := osexec.LookPath(name)
-				fmt.Printf("  ✓ %-12s %s\n", name, path)
+				p.Line("  ✓ %-12s %s", name, path)
 			}
 			for _, name := range status.Required {
-				fmt.Printf("  ✗ %-12s (required — run 'dotfiles apply' to install)\n", name)
+				p.Line("  ✗ %-12s (required — run 'dotfiles apply' to install)", name)
 			}
 			for _, name := range status.Missing {
-				fmt.Printf("  ○ %-12s (optional — fallback available)\n", name)
+				p.Line("  ○ %-12s (optional — fallback available)", name)
 			}
 
 			// tmux version
-			fmt.Println()
+			p.Line("")
 			if res, err := runner.RunQuery(cmd.Context(), "tmux", "-V"); err != nil {
-				fmt.Println("  tmux: not available")
+				p.Line("  tmux: not available")
 			} else {
-				fmt.Printf("  %s\n", strings.TrimSpace(res.Stdout))
+				p.Line("  %s", strings.TrimSpace(res.Stdout))
 			}
 
 			// Terminal info
-			fmt.Printf("  TERM: %s\n", os.Getenv("TERM"))
+			p.Line("  TERM: %s", os.Getenv("TERM"))
 			if tp := os.Getenv("TERM_PROGRAM"); tp != "" {
-				fmt.Printf("  TERM_PROGRAM: %s\n", tp)
+				p.Line("  TERM_PROGRAM: %s", tp)
 			}
-			fmt.Printf("  SHELL: %s\n", os.Getenv("SHELL"))
+			p.Line("  SHELL: %s", os.Getenv("SHELL"))
 
 			// Workspace config
 			configPath, _ := workspace.ConfigPath()
 			dataDir, _ := workspace.DataDir()
-			fmt.Printf("\n  Config:  %s\n", configPath)
-			fmt.Printf("  Scripts: %s\n", dataDir)
+			p.Line("\n  Config:  %s", configPath)
+			p.Line("  Scripts: %s", dataDir)
 
 			return nil
 		},
