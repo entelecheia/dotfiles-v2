@@ -58,8 +58,9 @@ func runConfigExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
+	p := printerFrom(cmd)
 	if len(args) == 0 {
-		fmt.Print(string(data))
+		p.Raw("%s", string(data))
 		return nil
 	}
 
@@ -70,7 +71,7 @@ func runConfigExport(cmd *cobra.Command, args []string) error {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
-	fmt.Printf("Configuration exported to %s\n", path)
+	p.Line("Configuration exported to %s", path)
 	return nil
 }
 
@@ -108,56 +109,57 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	config.ApplyStateToConfig(cfg, state)
 	config.ApplyEnvOverrides(cfg)
 
-	fmt.Println()
-	fmt.Println(ui.StyleHeader.Render(" dotfiles Configuration "))
-	fmt.Println()
-	printKV("Profile", profileName)
-	printKV("Config", config.StatePath())
+	p := printerFrom(cmd)
+	p.Line("")
+	p.Line("%s", ui.StyleHeader.Render(" dotfiles Configuration "))
+	p.Line("")
+	p.KV("Profile", profileName)
+	p.KV("Config", config.StatePath())
 
-	fmt.Println(ui.StyleSection.Render("▸ System"))
-	printKV("OS", sysInfo.OS+"/"+sysInfo.Arch)
-	printKV("Hostname", sysInfo.Hostname)
-	printKV("Shell", sysInfo.Shell)
+	p.Line("%s", ui.StyleSection.Render("▸ System"))
+	p.KV("OS", sysInfo.OS+"/"+sysInfo.Arch)
+	p.KV("Hostname", sysInfo.Hostname)
+	p.KV("Shell", sysInfo.Shell)
 	if sysInfo.HasBrew {
-		printKV("Brew", sysInfo.BrewPath)
+		p.KV("Brew", sysInfo.BrewPath)
 	}
 	if sysInfo.HasGit {
-		printKV("Git", sysInfo.GitVersion)
+		p.KV("Git", sysInfo.GitVersion)
 	}
 	if sysInfo.HasNVIDIAGPU {
-		printKV("GPU", sysInfo.GPUModel)
+		p.KV("GPU", sysInfo.GPUModel)
 	}
 	if sysInfo.HasCUDA {
-		printKV("CUDA", sysInfo.CUDAHome)
+		p.KV("CUDA", sysInfo.CUDAHome)
 	}
 
-	fmt.Println()
-	fmt.Println(ui.StyleSection.Render("▸ User"))
-	printKV("Name", cfg.Name)
-	printKV("Email", cfg.Email)
-	printKV("GitHub", cfg.GithubUser)
-	printKV("Timezone", cfg.Timezone)
+	p.Line("")
+	p.Line("%s", ui.StyleSection.Render("▸ User"))
+	p.KV("Name", cfg.Name)
+	p.KV("Email", cfg.Email)
+	p.KV("GitHub", cfg.GithubUser)
+	p.KV("Timezone", cfg.Timezone)
 
 	if cfg.Modules.Workspace.Enabled {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render("▸ Workspace"))
-		printKV("Path", cfg.Modules.Workspace.Path)
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render("▸ Workspace"))
+		p.KV("Path", cfg.Modules.Workspace.Path)
 		if cfg.Modules.Workspace.Gdrive != "" {
-			printKV("GDrive", cfg.Modules.Workspace.Gdrive)
+			p.KV("GDrive", cfg.Modules.Workspace.Gdrive)
 		}
 		if cfg.Modules.Workspace.GdriveSymlink != "" {
-			printKV("GDrive link", cfg.Modules.Workspace.GdriveSymlink)
+			p.KV("GDrive link", cfg.Modules.Workspace.GdriveSymlink)
 		}
 		if cfg.Modules.Workspace.Symlink != "" {
-			printKV("Symlink", cfg.Modules.Workspace.Symlink)
+			p.KV("Symlink", cfg.Modules.Workspace.Symlink)
 		}
 		for _, repo := range cfg.Modules.Workspace.Repos {
-			printKV(repo.Name+" repo", repo.Remote)
+			p.KV(repo.Name+" repo", repo.Remote)
 		}
 	}
 
-	fmt.Println()
-	fmt.Println(ui.StyleSection.Render("▸ Modules"))
+	p.Line("")
+	p.Line("%s", ui.StyleSection.Render("▸ Modules"))
 	allModules := []struct {
 		name    string
 		enabled bool
@@ -188,85 +190,78 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 				detail = ui.StyleHint.Render("  (" + m.detail + ")")
 			}
 		}
-		fmt.Printf("  %s  %s%s\n", mark, ui.StyleValue.Render(m.name), detail)
+		p.Line("  %s  %s%s", mark, ui.StyleValue.Render(m.name), detail)
 	}
 
 	pkgs := cfg.AllPackages()
 	if len(pkgs) > 0 {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Packages (%d)", len(pkgs))))
-		fmt.Printf("  %s\n", ui.StyleHint.Render(strings.Join(pkgs, ", ")))
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Packages (%d)", len(pkgs))))
+		p.Line("  %s", ui.StyleHint.Render(strings.Join(pkgs, ", ")))
 	}
 
 	casks := cfg.AllCasks()
 	if len(casks) > 0 {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Casks — install list (%d)", len(casks))))
-		fmt.Printf("  %s\n", ui.StyleHint.Render(strings.Join(casks, ", ")))
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Casks — install list (%d)", len(casks))))
+		p.Line("  %s", ui.StyleHint.Render(strings.Join(casks, ", ")))
 	}
 
 	if len(state.Modules.MacApps.BackupApps) > 0 {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Casks — backup list (%d)", len(state.Modules.MacApps.BackupApps))))
-		fmt.Printf("  %s\n", ui.StyleHint.Render(strings.Join(state.Modules.MacApps.BackupApps, ", ")))
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Casks — backup list (%d)", len(state.Modules.MacApps.BackupApps))))
+		p.Line("  %s", ui.StyleHint.Render(strings.Join(state.Modules.MacApps.BackupApps, ", ")))
 	}
 
 	if state.Modules.MacApps.BackupRoot != "" {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render("▸ Backup"))
-		printKV("Root", state.Modules.MacApps.BackupRoot)
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render("▸ Backup"))
+		p.KV("Root", state.Modules.MacApps.BackupRoot)
 		if state.Modules.MacApps.LastBackup != nil {
 			lb := state.Modules.MacApps.LastBackup
-			printKV("Last backup", fmt.Sprintf("%s (%d files)", lb.Time.Format("2006-01-02 15:04"), lb.Files))
-			printKV("Path", lb.Path)
+			p.KV("Last backup", fmt.Sprintf("%s (%d files)", lb.Time.Format("2006-01-02 15:04"), lb.Files))
+			p.KV("Path", lb.Path)
 		}
 	}
 
 	if state.Secrets.AgeIdentity != "" {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render("▸ Secrets"))
-		printKV("Age identity", state.Secrets.AgeIdentity)
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render("▸ Secrets"))
+		p.KV("Age identity", state.Secrets.AgeIdentity)
 		for i, r := range state.Secrets.AgeRecipients {
-			printKV(fmt.Sprintf("Recipient %d", i+1), r)
+			p.KV(fmt.Sprintf("Recipient %d", i+1), r)
 		}
 		if state.Secrets.LastBackup != nil {
 			lb := state.Secrets.LastBackup
-			printKV("Last backup", fmt.Sprintf("%s (%d files)", lb.Time.Format("2006-01-02 15:04"), lb.Files))
+			p.KV("Last backup", fmt.Sprintf("%s (%d files)", lb.Time.Format("2006-01-02 15:04"), lb.Files))
 		}
 	}
 
 	if state.Modules.Sync.Remote != "" || state.Modules.Rsync.RemoteHost != "" {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render("▸ Sync"))
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render("▸ Sync"))
 		if state.Modules.Sync.Remote != "" {
-			printKV("rclone", state.Modules.Sync.Remote)
+			p.KV("rclone", state.Modules.Sync.Remote)
 			if state.Modules.Sync.Path != "" {
-				printKV("  path", state.Modules.Sync.Path)
+				p.KV("  path", state.Modules.Sync.Path)
 			}
 			if state.Modules.Sync.Interval > 0 {
-				printKV("  interval", fmt.Sprintf("%ds", state.Modules.Sync.Interval))
+				p.KV("  interval", fmt.Sprintf("%ds", state.Modules.Sync.Interval))
 			}
 		}
 		if state.Modules.Rsync.RemoteHost != "" {
-			printKV("rsync", state.Modules.Rsync.RemoteHost)
+			p.KV("rsync", state.Modules.Rsync.RemoteHost)
 			if state.Modules.Rsync.RemotePath != "" {
-				printKV("  path", state.Modules.Rsync.RemotePath)
+				p.KV("  path", state.Modules.Rsync.RemotePath)
 			}
 			if state.Modules.Rsync.Interval > 0 {
-				printKV("  interval", fmt.Sprintf("%ds", state.Modules.Rsync.Interval))
+				p.KV("  interval", fmt.Sprintf("%ds", state.Modules.Rsync.Interval))
 			}
 		}
 	}
 
-	fmt.Println()
+	p.Line("")
 	return nil
-}
-
-// printKV is the os.Stdout-backed shim for callers that don't yet have a
-// cobra-aware Printer. New code should prefer `p := printerFrom(cmd); p.KV(...)`
-// so output can be captured in tests.
-func printKV(key, value string) {
-	(&Printer{Out: os.Stdout, Err: os.Stderr}).KV(key, value)
 }
 
 func workspaceDetail(cfg *config.Config) string {
