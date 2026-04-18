@@ -170,11 +170,16 @@ func (r *Runner) WriteFile(path string, content []byte, perm os.FileMode) error 
 }
 
 // MkdirAll creates directories. Respects dry-run.
+//
+// Logs at Debug level — setup flows create many dirs (30+ in a fresh install)
+// so keeping these at Info would drown out the interesting events like command
+// execution and file writes. Enable with `-v debug` to audit every mkdir.
 func (r *Runner) MkdirAll(path string, perm os.FileMode) error {
 	if r.DryRun {
-		r.Logger.Info("dry-run: mkdir", "path", path)
+		r.Logger.Debug("dry-run: mkdir", "path", path)
 		return nil
 	}
+	r.Logger.Debug("mkdir", "path", path)
 	return os.MkdirAll(path, perm)
 }
 
