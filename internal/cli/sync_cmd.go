@@ -381,29 +381,29 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	p.Line("")
 
 	if st.RsyncVersion != "" {
-		printKV("rsync", st.RsyncVersion)
+		p.KV("rsync", st.RsyncVersion)
 	} else {
-		printKV("rsync", "not installed")
+		p.KV("rsync", "not installed")
 	}
 
-	printKV("Local", st.LocalPath)
+	p.KV("Local", st.LocalPath)
 	if st.RemoteHost != "" {
-		printKV("Remote", st.RemoteHost+":"+st.RemotePath)
+		p.KV("Remote", st.RemoteHost+":"+st.RemotePath)
 	} else {
-		printKV("Remote", "(not configured)")
+		p.KV("Remote", "(not configured)")
 	}
-	printKV("Interval", formatInterval(st.Interval))
-	printKV("Scheduler", st.SchedulerState.String())
+	p.KV("Interval", formatInterval(st.Interval))
+	p.KV("Scheduler", st.SchedulerState.String())
 
 	if st.LastSyncTime != nil {
 		ago := time.Since(*st.LastSyncTime).Truncate(time.Second)
-		printKV("Last sync", fmt.Sprintf("%s ago", ago))
+		p.KV("Last sync", fmt.Sprintf("%s ago", ago))
 	} else {
-		printKV("Last sync", "(never)")
+		p.KV("Last sync", "(never)")
 	}
 
 	if st.LastResult != "" {
-		printKV("Last result", st.LastResult)
+		p.KV("Last result", st.LastResult)
 	}
 
 	p.Line("")

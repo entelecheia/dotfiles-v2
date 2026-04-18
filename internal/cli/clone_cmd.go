@@ -420,40 +420,40 @@ func runCloneStatus(cmd *cobra.Command, _ []string) error {
 	p.Line("")
 
 	if st.RcloneVersion != "" {
-		printKV("rclone", st.RcloneVersion+" ("+st.RclonePath+")")
+		p.KV("rclone", st.RcloneVersion+" ("+st.RclonePath+")")
 	} else {
-		printKV("rclone", "not installed")
+		p.KV("rclone", "not installed")
 	}
 
-	printKV("Local", st.LocalPath)
-	printKV("Remote", st.RemotePath)
-	printKV("Filter", st.FilterFile)
-	printKV("Interval", formatInterval(st.Interval))
-	printKV("Scheduler", st.SchedulerState.String())
+	p.KV("Local", st.LocalPath)
+	p.KV("Remote", st.RemotePath)
+	p.KV("Filter", st.FilterFile)
+	p.KV("Interval", formatInterval(st.Interval))
+	p.KV("Scheduler", st.SchedulerState.String())
 
 	if st.MountPoint != "" {
 		mountState := "not mounted"
 		if st.Mounted {
 			mountState = "mounted"
 		}
-		printKV("Mount", st.MountPoint+" ("+mountState+")")
+		p.KV("Mount", st.MountPoint+" ("+mountState+")")
 	}
 
 	if st.LastSyncTime != nil {
 		ago := time.Since(*st.LastSyncTime).Truncate(time.Second)
-		printKV("Last sync", fmt.Sprintf("%s ago", ago))
+		p.KV("Last sync", fmt.Sprintf("%s ago", ago))
 	} else {
-		printKV("Last sync", "(never)")
+		p.KV("Last sync", "(never)")
 	}
 
 	if st.LastStats != "" {
-		printKV("Last stats", st.LastStats)
+		p.KV("Last stats", st.LastStats)
 	}
 
 	if st.LastError != "" {
-		printKV("Last error", st.LastError)
+		p.KV("Last error", st.LastError)
 	} else {
-		printKV("Last error", "(none)")
+		p.KV("Last error", "(none)")
 	}
 
 	p.Line("")
