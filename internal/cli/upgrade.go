@@ -118,13 +118,40 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		return fmt.Errorf("downloaded binary failed sanity check: %w", err)
 	}
 
+	// Atomic replace: write a sibling of execPath, then rename over it.
+	// A direct write(2) to the running binary fails with ETXTBSY on Linux;
+	// rename(2) only swaps the directory entry, leaving the running process
+	// mapped to the old inode so it can finish cleanly.
 	data, err := os.ReadFile(newBinary)
 	if err != nil {
 		return fmt.Errorf("reading new binary: %w", err)
 	}
 
-	if err := os.WriteFile(execPath, data, 0755); err != nil {
-		return fmt.Errorf("writing new binary: %w", err)
+	dir := filepath.Dir(execPath)
+	tmp, err := os.CreateTemp(dir, ".dotfiles.*.new")
+	if err != nil {
+		return fmt.Errorf("creating staging file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("writing staging file: %w", err)
+	}
+	if err := tmp.Chmod(0755); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("chmod staging file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("closing staging file: %w", err)
+	}
+	if err := os.Rename(tmpPath, execPath); err != nil {
+		cleanup()
+		return fmt.Errorf("replacing binary %s: %w", execPath, err)
 	}
 
 	p.Line("Upgraded: %s → %s", currentClean, latestVersion)
