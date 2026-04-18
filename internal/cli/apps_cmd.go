@@ -286,11 +286,10 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 	}
 
 	p := printerFrom(cmd)
-	p.Line("%s", ui.StyleHeader.Render(" macOS App Settings Status "))
-	p.Line("")
-	p.Line("  %s  %s", ui.StyleKey.Render("Host:"), ui.StyleValue.Render(eng.Hostname))
-	p.Line("  %s  %s", ui.StyleKey.Render("Backup:"), ui.StyleValue.Render(eng.HostRoot()))
-	p.Line("")
+	p.Header("macOS App Settings Status")
+	p.KV("Host", eng.Hostname)
+	p.KV("Backup", eng.HostRoot())
+	p.Section("Apps")
 
 	statuses := eng.Status(nil)
 	tokens := make([]string, 0, len(statuses))
@@ -303,12 +302,12 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 
 	for _, token := range tokens {
 		s := byToken[token]
-		inst := "?"
+		marker := ui.StyleHint.Render(ui.MarkPartial) // unknown: brew unavailable
 		if installed != nil {
 			if installed[token] {
-				inst = ui.StyleSuccess.Render("✓")
+				marker = ui.StyleSuccess.Render(ui.MarkPresent)
 			} else {
-				inst = ui.StyleWarning.Render("·")
+				marker = ui.StyleHint.Render(ui.MarkPartial)
 			}
 		}
 		live := fmt.Sprintf("%d/%d", s.PresentLive, s.TotalLive)
@@ -320,11 +319,10 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 		} else {
 			bak = ui.StyleWarning.Render(bak)
 		}
-		p.Line("  %s  %-22s  live:%-6s  backup:%-8s",
-			inst, ui.StyleValue.Render(token), live, bak)
+		p.Bullet(marker, fmt.Sprintf("%-22s  live:%-6s  backup:%-8s",
+			ui.StyleValue.Render(token), live, bak))
 	}
 	_ = mf
-	p.Line("")
 	return nil
 }
 

@@ -47,10 +47,8 @@ func runClean(cmd *cobra.Command, args []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	p := printerFrom(cmd)
 
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" Workspace Cleanup "))
-	p.Line("")
-	p.Line("  Scanning %s ...\n", ui.StyleHint.Render(root))
+	p.Header("Workspace Cleanup")
+	p.KV("Scanning", root)
 
 	scanner := clean.NewScanner(root, includeRisky)
 	result, err := scanner.Scan()
@@ -59,8 +57,8 @@ func runClean(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(result.Matches) == 0 && len(result.Protected) == 0 {
-		p.Line("  No junk found. Workspace is clean.")
-		p.Line("")
+		p.Blank()
+		p.Success("No junk found. Workspace is clean.")
 		return nil
 	}
 
@@ -82,66 +80,64 @@ func runClean(cmd *cobra.Command, args []string) error {
 			catSize += m.Size
 		}
 
-		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf(
-			"▸ %s (%d items, %s)", cat, len(catMatches), clean.FormatSize(catSize))))
+		p.Section(fmt.Sprintf("%s (%d items, %s)", cat, len(catMatches), clean.FormatSize(catSize)))
 
-		// For .DS_Store, just show count
 		if cat == "misc" {
-			p.Line("  %s  %s",
-				ui.StyleHint.Render(".DS_Store"),
-				ui.StyleHint.Render(fmt.Sprintf("(%d files)", len(catMatches))))
-		} else {
-			for _, m := range catMatches {
-				p.Line("  %-15s %s  %s",
-					ui.StyleHint.Render(m.Pattern.Name),
-					ui.StyleValue.Render(m.RelPath),
-					ui.StyleHint.Render(clean.FormatSize(m.Size)))
-			}
+			// .DS_Store and similar: collapse to a single summary line
+			p.Bullet(ui.StyleHint.Render(ui.MarkPartial),
+				fmt.Sprintf("%s %s",
+					ui.StyleHint.Render(".DS_Store"),
+					ui.StyleHint.Render(fmt.Sprintf("(%d files)", len(catMatches)))))
+			continue
 		}
-		p.Line("")
+
+		for _, m := range catMatches {
+			marker := ui.StyleHint.Render(ui.MarkPending)
+			p.Bullet(marker, fmt.Sprintf("%-15s %s  %s",
+				ui.StyleHint.Render(m.Pattern.Name),
+				ui.StyleValue.Render(m.RelPath),
+				ui.StyleHint.Render(clean.FormatSize(m.Size))))
+		}
 	}
 
 	// Protected items
 	if len(result.Protected) > 0 {
-		p.Line("%s", ui.StyleSection.Render("▸ Protected (skipped)"))
+		p.Section("Protected (skipped)")
 		for _, m := range result.Protected {
-			p.Line("  %-15s %s  %s",
+			marker := ui.StyleHint.Render(ui.MarkPartial)
+			p.Bullet(marker, fmt.Sprintf("%-15s %s  %s",
 				ui.StyleHint.Render(m.Pattern.Name),
 				ui.StyleValue.Render(m.RelPath),
-				ui.StyleHint.Render("(inside _sys/)"))
+				ui.StyleHint.Render("(inside _sys/)")))
 		}
-		p.Line("")
 	}
 
 	// Summary
-	summary := fmt.Sprintf("  Total: %d items, ~%s to free",
+	p.Blank()
+	summary := fmt.Sprintf("Total: %d items, ~%s to free",
 		len(result.Matches), clean.FormatSize(result.TotalSize()))
 	if len(result.Protected) > 0 {
 		summary += fmt.Sprintf(" (%d protected, not touched)", len(result.Protected))
 	}
-	p.Line("%s", summary)
+	p.Line("  %s", summary)
 
 	// Action
 	if dryRun || !yes {
-		p.Line("")
-		hint := "  Run with --yes to delete"
+		hint := "Run with --yes to delete"
 		if !includeRisky {
 			hint += ", or --all --yes to include dist/build/out/target"
 		}
-		p.Line("%s", ui.StyleHint.Render(hint))
-		p.Line("")
+		p.Line("  %s", ui.StyleHint.Render(hint))
 		return nil
 	}
 
 	// Actually delete
-	p.Line("")
+	p.Blank()
 	deleted, freed, errs := clean.Delete(result.Matches)
-	if len(errs) > 0 {
-		for _, e := range errs {
-			p.Line("  ✗ %s", e)
-		}
+	for _, e := range errs {
+		p.Bullet(ui.StyleError.Render(ui.MarkFail), fmt.Sprintf("%s", e))
 	}
-	p.Line("  ✓ Deleted %d items, freed %s", deleted, clean.FormatSize(freed))
-	p.Line("")
+	p.Bullet(ui.StyleSuccess.Render(ui.MarkPresent),
+		fmt.Sprintf("Deleted %d items, freed %s", deleted, clean.FormatSize(freed)))
 	return nil
 }
