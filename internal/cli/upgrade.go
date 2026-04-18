@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	osexec "os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -137,13 +136,14 @@ func verifyBinary(ctx context.Context, path string) error {
 	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	cmd := osexec.CommandContext(verifyCtx, path, "--version")
-	out, err := cmd.CombinedOutput()
+	runner := exec.NewRunner(false, slog.Default())
+	res, err := runner.RunQuery(verifyCtx, path, "--version")
 	if err != nil {
 		return fmt.Errorf("running %s --version: %w", path, err)
 	}
-	if !strings.Contains(strings.ToLower(string(out)), "dotfiles") {
-		return fmt.Errorf("unexpected version output: %s", strings.TrimSpace(string(out)))
+	combined := res.Stdout + res.Stderr
+	if !strings.Contains(strings.ToLower(combined), "dotfiles") {
+		return fmt.Errorf("unexpected version output: %s", strings.TrimSpace(combined))
 	}
 	return nil
 }

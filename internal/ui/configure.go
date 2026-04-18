@@ -2,7 +2,9 @@ package ui
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -14,7 +16,12 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+// detectRunner returns a non-dry-run runner used by the detect* helpers below.
+// Detection commands are read-only; they always run regardless of caller intent.
+func detectRunner() *exec.Runner { return exec.NewRunner(false, slog.Default()) }
 
 // printSection prints a styled section header.
 func printSection(title string) {
@@ -685,12 +692,11 @@ func formatBool(v bool) string {
 
 // detectGitConfig reads a value from git config (global).
 func detectGitConfig(key string) string {
-	cmd := osexec.Command("git", "config", "--global", "--get", key)
-	out, err := cmd.Output()
+	res, err := detectRunner().RunQuery(context.Background(), "git", "config", "--global", "--get", key)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(res.Stdout)
 }
 
 // detectGithubUser attempts to get the current user from gh CLI.
@@ -698,12 +704,11 @@ func detectGithubUser() string {
 	if _, err := osexec.LookPath("gh"); err != nil {
 		return ""
 	}
-	cmd := osexec.Command("gh", "api", "user", "--jq", ".login")
-	out, err := cmd.Output()
+	res, err := detectRunner().RunQuery(context.Background(), "gh", "api", "user", "--jq", ".login")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(res.Stdout)
 }
 
 // detectTimezone reads the system timezone.

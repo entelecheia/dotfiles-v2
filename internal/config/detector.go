@@ -1,12 +1,19 @@
 package config
 
 import (
+	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	execrun "github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+// detectRunner is a shared read-only runner for probe commands.
+func detectRunner() *execrun.Runner { return execrun.NewRunner(false, slog.Default()) }
 
 // SystemInfo holds detected system information.
 type SystemInfo struct {
@@ -54,12 +61,12 @@ func (s *SystemInfo) SuggestProfile() string {
 }
 
 func detectHostname(info *SystemInfo) {
-	out, err := exec.Command("hostname").Output()
+	res, err := detectRunner().RunQuery(context.Background(), "hostname")
 	if err != nil {
 		info.Hostname = "unknown"
 		return
 	}
-	info.Hostname = strings.TrimSpace(string(out))
+	info.Hostname = strings.TrimSpace(res.Stdout)
 }
 
 func detectBrew(info *SystemInfo) {
@@ -72,12 +79,12 @@ func detectBrew(info *SystemInfo) {
 }
 
 func detectGPU(info *SystemInfo) {
-	out, err := exec.Command("nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits").Output()
+	res, err := detectRunner().RunQuery(context.Background(), "nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits")
 	if err != nil {
 		return
 	}
 	info.HasNVIDIAGPU = true
-	lines := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)
+	lines := strings.SplitN(strings.TrimSpace(res.Stdout), "\n", 2)
 	if len(lines) > 0 {
 		info.GPUModel = strings.TrimSpace(lines[0])
 	}
@@ -109,13 +116,13 @@ func detectShell(info *SystemInfo) {
 }
 
 func detectGit(info *SystemInfo) {
-	out, err := exec.Command("git", "--version").Output()
+	res, err := detectRunner().RunQuery(context.Background(), "git", "--version")
 	if err != nil {
 		return
 	}
 	info.HasGit = true
 	// parse "git version 2.43.0" -> "2.43.0"
-	parts := strings.Fields(strings.TrimSpace(string(out)))
+	parts := strings.Fields(strings.TrimSpace(res.Stdout))
 	if len(parts) >= 3 {
 		info.GitVersion = parts[2]
 	}

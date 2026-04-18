@@ -3,8 +3,6 @@ package rclone
 import (
 	"context"
 	"fmt"
-	"os"
-	osexec "os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -78,25 +76,17 @@ func HasRemote(ctx context.Context, runner *exec.Runner, name string) bool {
 }
 
 // ConfigRemote runs interactive rclone config to create a Google Drive remote.
-// This requires a TTY — it attaches stdin/stdout/stderr directly.
-func ConfigRemote(ctx context.Context, name string) error {
-	cmd := osexec.CommandContext(ctx, "rclone", "config", "create", name, "drive",
+// Requires a TTY; in dry-run mode this is a no-op with a warning log.
+func ConfigRemote(ctx context.Context, runner *exec.Runner, name string) error {
+	return runner.RunInteractive(ctx, "rclone", "config", "create", name, "drive",
 		"--drive-scope", "drive",
 	)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
 
 // ReconnectRemote runs interactive rclone config reconnect to refresh auth.
-// This requires a TTY — it attaches stdin/stdout/stderr directly.
-func ReconnectRemote(ctx context.Context, name string) error {
-	cmd := osexec.CommandContext(ctx, "rclone", "config", "reconnect", name+":")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+// Requires a TTY; in dry-run mode this is a no-op with a warning log.
+func ReconnectRemote(ctx context.Context, runner *exec.Runner, name string) error {
+	return runner.RunInteractive(ctx, "rclone", "config", "reconnect", name+":")
 }
 
 // CheckRemote verifies that a remote is accessible (with 15s timeout).

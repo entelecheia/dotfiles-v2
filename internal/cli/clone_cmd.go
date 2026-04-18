@@ -301,7 +301,7 @@ func runCloneSetup(cmd *cobra.Command, _ []string) error {
 		if dryRun {
 			fmt.Printf("  (dry-run) would configure remote '%s'\n", remote)
 		} else {
-			if err := rclone.ConfigRemote(ctx, remote); err != nil {
+			if err := rclone.ConfigRemote(ctx, runner, remote); err != nil {
 				return fmt.Errorf("configuring remote: %w", err)
 			}
 			if !rclone.HasRemote(ctx, runner, remote) {
@@ -569,7 +569,7 @@ func newCloneConnectCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Configuring Google Drive remote '%s'...\n", remote)
-			if err := rclone.ConfigRemote(cmd.Context(), remote); err != nil {
+			if err := rclone.ConfigRemote(cmd.Context(), runner, remote); err != nil {
 				return fmt.Errorf("configuring remote: %w", err)
 			}
 
@@ -606,7 +606,7 @@ func newCloneReconnectCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Reconnecting remote '%s'...\n", remote)
-			if err := rclone.ReconnectRemote(cmd.Context(), remote); err != nil {
+			if err := rclone.ReconnectRemote(cmd.Context(), runner, remote); err != nil {
 				return fmt.Errorf("reconnecting: %w", err)
 			}
 

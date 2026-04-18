@@ -1,9 +1,9 @@
 package config
 
 import (
+	"context"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -276,9 +276,9 @@ func GeneratePreflightConfig(sys *SystemInfo) *UserState {
 }
 
 func gitConfigValue(key string) string {
-	out, err := exec.Command("git", "config", "--global", key).Output()
+	res, err := detectRunner().RunQuery(context.Background(), "git", "config", "--global", key)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(res.Stdout)
 }
