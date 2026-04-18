@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -96,10 +97,11 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Interactive configuration
+	p := printerFrom(cmd)
 	state.Profile = profileName
-	if err := configureInteractive(state, profileName, yes); err != nil {
+	if err := configureInteractive(p, state, profileName, yes); err != nil {
 		if errors.Is(err, errAborted) {
-			fmt.Println("Aborted.")
+			p.Line("Aborted.")
 			return nil
 		}
 		return err
@@ -141,26 +143,23 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	modules := registry.Resolve(cfg, moduleFilter)
 
 	if len(modules) == 0 {
-		fmt.Println("No modules to apply.")
+		p.Line("No modules to apply.")
 		return nil
 	}
 
 	// Show plan
-	fmt.Printf("\nProfile: %s\n", profileName)
+	p.Line("\nProfile: %s", profileName)
 	if dryRun {
-		fmt.Println("Mode: dry-run (no changes will be made)")
+		p.Line("Mode: dry-run (no changes will be made)")
 	}
 	if homeOverride != "" {
-		fmt.Printf("Home: %s\n", homeOverride)
+		p.Line("Home: %s", homeOverride)
 	}
-	fmt.Printf("Modules: ")
-	for i, m := range modules {
-		if i > 0 {
-			fmt.Print(", ")
-		}
-		fmt.Print(m.Name())
+	names := make([]string, 0, len(modules))
+	for _, m := range modules {
+		names = append(names, m.Name())
 	}
-	fmt.Println()
+	p.Line("Modules: %s", strings.Join(names, ", "))
 
 	// Final confirmation
 	if !yes && !dryRun {
@@ -184,18 +183,18 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		HomeDir:  home,
 	}
 
-	fmt.Println()
+	p.Line("")
 	return module.RunAll(ctx, modules, rc)
 }
 
 // configureInteractive walks through each configuration section interactively.
 // Skipped entirely when --yes is set.
-func configureInteractive(state *config.UserState, profile string, yes bool) error {
+func configureInteractive(p *Printer, state *config.UserState, profile string, yes bool) error {
 	if yes {
 		return nil
 	}
 
-	fmt.Println("\n=== Configuration ===")
+	p.Line("\n=== Configuration ===")
 
 	if err := ui.ConfigureIdentity(state, false); err != nil {
 		return err

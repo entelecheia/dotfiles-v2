@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"runtime"
 	"runtime/debug"
 
@@ -48,9 +47,10 @@ func newVersionCmd(version, commit string) *cobra.Command {
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
 			v, c := ResolveVersion(version, commit)
-			fmt.Printf("dotfiles %s (%s)\n", v, c)
-			fmt.Printf("  go:   %s\n", runtime.Version())
-			fmt.Printf("  os:   %s/%s\n", runtime.GOOS, runtime.GOARCH)
+			p := printerFrom(cmd)
+			p.Line("dotfiles %s (%s)", v, c)
+			p.Line("  go:   %s", runtime.Version())
+			p.Line("  os:   %s/%s", runtime.GOOS, runtime.GOARCH)
 		},
 	}
 }

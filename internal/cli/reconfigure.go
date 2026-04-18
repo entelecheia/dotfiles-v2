@@ -24,12 +24,13 @@ func runReconfigure(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
+	p := printerFrom(cmd)
 	if state.Name == "" {
-		fmt.Println("No existing configuration found. Running init...")
+		p.Line("No existing configuration found. Running init...")
 	} else {
-		fmt.Println("Current configuration:")
+		p.Line("Current configuration:")
 		ui.PrintStateSummary(state)
-		fmt.Println()
+		p.Line("")
 	}
 
 	// Re-run the init flow — it uses existing state values as defaults.
@@ -44,10 +45,10 @@ func runReconfigure(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	if apply {
-		fmt.Println()
+		p.Line("")
 		return runApply(cmd, nil)
 	}
 
-	fmt.Println("Run 'dotfiles apply' when ready to apply.")
+	p.Line("Run 'dotfiles apply' when ready to apply.")
 	return nil
 }

@@ -87,30 +87,31 @@ func runDiff(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	fmt.Printf("Profile: %s  (dry-run diff)\n\n", profileName)
+	p := printerFrom(cmd)
+	p.Line("Profile: %s  (dry-run diff)\n", profileName)
 
 	pendingCount := 0
 	for _, m := range modules {
 		r := results[m.Name()]
 		if r.Satisfied {
-			fmt.Printf("  ✓ %-15s  already satisfied\n", m.Name())
+			p.Line("  ✓ %-15s  already satisfied", m.Name())
 			continue
 		}
 		pendingCount++
-		fmt.Printf("  ~ %-15s  %d pending change(s)\n", m.Name(), len(r.Changes))
+		p.Line("  ~ %-15s  %d pending change(s)", m.Name(), len(r.Changes))
 		for _, c := range r.Changes {
-			fmt.Printf("      → %s\n", c.Description)
+			p.Line("      → %s", c.Description)
 			if c.Command != "" {
-				fmt.Printf("        $ %s\n", c.Command)
+				p.Line("        $ %s", c.Command)
 			}
 		}
 	}
 
-	fmt.Println()
+	p.Line("")
 	if pendingCount == 0 {
-		fmt.Println("Nothing to do — all modules satisfied.")
+		p.Line("Nothing to do — all modules satisfied.")
 	} else {
-		fmt.Printf("%d module(s) have pending changes. Run 'dotfiles apply' to apply them.\n", pendingCount)
+		p.Line("%d module(s) have pending changes. Run 'dotfiles apply' to apply them.", pendingCount)
 	}
 
 	return nil

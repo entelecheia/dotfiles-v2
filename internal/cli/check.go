@@ -88,9 +88,10 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Print report
-	fmt.Printf("Profile: %s\n\n", profileName)
-	fmt.Printf("%-15s %-10s %s\n", "MODULE", "STATUS", "CHANGES")
-	fmt.Printf("%-15s %-10s %s\n", "------", "------", "-------")
+	p := printerFrom(cmd)
+	p.Line("Profile: %s\n", profileName)
+	p.Line("%-15s %-10s %s", "MODULE", "STATUS", "CHANGES")
+	p.Line("%-15s %-10s %s", "------", "------", "-------")
 
 	okCount, pendingCount, totalChanges := 0, 0, 0
 	for _, m := range modules {
@@ -104,19 +105,19 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 			okCount++
 		}
 		changeCount := len(r.Changes)
-		fmt.Printf("%-15s %-10s %d change(s)\n", m.Name(), status, changeCount)
+		p.Line("%-15s %-10s %d change(s)", m.Name(), status, changeCount)
 		for _, c := range r.Changes {
-			fmt.Printf("  → %s\n", c.Description)
+			p.Line("  → %s", c.Description)
 		}
 	}
 
-	fmt.Println()
+	p.Line("")
 	if pendingCount == 0 {
-		fmt.Printf("All %d modules satisfied.\n", okCount)
+		p.Line("All %d modules satisfied.", okCount)
 	} else {
-		fmt.Printf("%d/%d modules satisfied, %d pending (%d change(s)).\n",
+		p.Line("%d/%d modules satisfied, %d pending (%d change(s)).",
 			okCount, okCount+pendingCount, pendingCount, totalChanges)
-		fmt.Println("Run 'dotfiles apply' to apply pending changes.")
+		p.Line("Run 'dotfiles apply' to apply pending changes.")
 	}
 
 	return nil

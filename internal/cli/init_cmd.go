@@ -27,6 +27,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	homeOverride, _ := cmd.Flags().GetString("home")
 	fromPath, _ := cmd.Flags().GetString("from")
+	p := printerFrom(cmd)
 
 	var state *config.UserState
 	var err error
@@ -37,11 +38,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("importing config from %s: %w", fromPath, err)
 		}
-		fmt.Printf("Imported settings from %s\n", fromPath)
+		p.Line("Imported settings from %s", fromPath)
 		ui.PrintStateSummary(state)
-		fmt.Println()
-		fmt.Println("Machine-specific settings (workspace, terminal) will be confirmed interactively.")
-		fmt.Println()
+		p.Line("")
+		p.Line("Machine-specific settings (workspace, terminal) will be confirmed interactively.")
+		p.Line("")
 	} else if homeOverride != "" {
 		state, err = config.LoadStateForHome(homeOverride)
 		if err != nil {
@@ -56,16 +57,16 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	// If state already has data (not from --from), ask whether to reconfigure.
 	if state.Name != "" && !yes && fromPath == "" {
-		fmt.Printf("Current configuration:\n")
+		p.Line("Current configuration:")
 		ui.PrintStateSummary(state)
-		fmt.Println()
+		p.Line("")
 
 		reconfigure, err := ui.ConfirmBool("Reconfigure existing settings?", false, false)
 		if err != nil {
 			return err
 		}
 		if !reconfigure {
-			fmt.Println("Keeping existing configuration.")
+			p.Line("Keeping existing configuration.")
 			return nil
 		}
 	}
@@ -130,15 +131,15 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	fmt.Println()
-	fmt.Println("Configuration saved.")
+	p.Line("")
+	p.Line("Configuration saved.")
 	statePath := config.StatePath()
 	if homeOverride != "" {
 		statePath = config.StatePathForHome(homeOverride)
 	}
-	fmt.Printf("  State file: %s\n", statePath)
+	p.Line("  State file: %s", statePath)
 	ui.PrintStateSummary(state)
-	fmt.Println()
-	fmt.Println("Run 'dotfiles apply' to apply the configuration.")
+	p.Line("")
+	p.Line("Run 'dotfiles apply' to apply the configuration.")
 	return nil
 }

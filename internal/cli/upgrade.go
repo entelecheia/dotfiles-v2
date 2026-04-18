@@ -44,8 +44,9 @@ type githubRelease struct {
 func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	ctx := context.Background()
 	checkOnly, _ := cmd.Flags().GetBool("check")
+	p := printerFrom(cmd)
 
-	fmt.Printf("Current version: %s\n", currentVersion)
+	p.Line("Current version: %s", currentVersion)
 
 	latest, err := fetchLatestRelease(ctx)
 	if err != nil {
@@ -55,25 +56,25 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	latestVersion := strings.TrimPrefix(latest.TagName, "v")
 	currentClean := strings.TrimPrefix(currentVersion, "v")
 
-	fmt.Printf("Latest version:  %s\n", latestVersion)
+	p.Line("Latest version:  %s", latestVersion)
 
 	cmp := compareSemver(currentClean, latestVersion)
 	switch {
 	case cmp == 0:
-		fmt.Println("Already up to date.")
+		p.Line("Already up to date.")
 		return nil
 	case cmp > 0:
-		fmt.Printf("Current version %s is newer than latest release %s.\n", currentClean, latestVersion)
+		p.Line("Current version %s is newer than latest release %s.", currentClean, latestVersion)
 		if checkOnly {
 			return nil
 		}
-		fmt.Println("Nothing to upgrade.")
+		p.Line("Nothing to upgrade.")
 		return nil
 	}
 
 	if checkOnly {
-		fmt.Printf("\nUpdate available: %s → %s\n", currentClean, latestVersion)
-		fmt.Println("Run 'dotfiles update' to install.")
+		p.Line("\nUpdate available: %s → %s", currentClean, latestVersion)
+		p.Line("Run 'dotfiles update' to install.")
 		return nil
 	}
 
@@ -82,7 +83,7 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	assetName := fmt.Sprintf("dotfiles_%s_%s_%s.tar.gz", latestVersion, osName, archName)
 	downloadURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest.TagName, assetName)
 
-	fmt.Printf("\nDownloading %s...\n", assetName)
+	p.Line("\nDownloading %s...", assetName)
 
 	tmpDir, err := os.MkdirTemp("", "dotfiles-upgrade-*")
 	if err != nil {
@@ -126,8 +127,8 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		return fmt.Errorf("writing new binary: %w", err)
 	}
 
-	fmt.Printf("Upgraded: %s → %s\n", currentClean, latestVersion)
-	fmt.Printf("Binary: %s\n", execPath)
+	p.Line("Upgraded: %s → %s", currentClean, latestVersion)
+	p.Line("Binary: %s", execPath)
 	return nil
 }
 
