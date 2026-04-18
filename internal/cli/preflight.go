@@ -73,26 +73,37 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	p.Line("\n=== Generated Config ===")
+	p.Header("Generated Config")
 	ui.PrintStateSummary(state)
-	p.Line("\n  Config saved: %s", statePath)
+	p.Blank()
+	p.KV("Config saved", statePath)
 	p.Line("  Run 'dotfiles apply' to apply the configuration.")
 
 	return nil
 }
 
 func printPreflightReport(p *Printer, report *config.PreflightReport) {
-	p.Line("=== Environment Preflight ===")
-	p.Line("")
+	p.Header("Environment Preflight")
 
 	for _, c := range report.Checks {
-		statusStr := fmt.Sprintf("[%s]", c.Status)
-		p.Line("  %-6s %-25s %s", statusStr, c.Name, c.Value)
+		var marker string
+		switch c.Status {
+		case config.CheckPass:
+			marker = ui.StyleSuccess.Render(ui.MarkPresent)
+		case config.CheckWarn:
+			marker = ui.StyleWarning.Render(ui.MarkWarn)
+		case config.CheckFail:
+			marker = ui.StyleError.Render(ui.MarkFail)
+		default:
+			marker = ui.StyleHint.Render(ui.MarkPartial)
+		}
+		p.Bullet(marker, fmt.Sprintf("%-25s %s", ui.StyleValue.Render(c.Name), ui.StyleHint.Render(c.Value)))
 		if c.Message != "" {
-			p.Line("         %-25s %s", "", c.Message)
+			p.Line("     %s", ui.StyleHint.Render(c.Message))
 		}
 	}
 
 	pass, warn, fail := report.Counts()
-	p.Line("\n  Result: %d passed, %d warnings, %d failures", pass, warn, fail)
+	p.Blank()
+	p.Line("  Result: %d passed, %d warnings, %d failures", pass, warn, fail)
 }
