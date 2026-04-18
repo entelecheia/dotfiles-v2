@@ -17,3 +17,12 @@ export CUDA_HOME={{ .CUDAHome }}
 export PATH="${CUDA_HOME}/bin:$PATH"
 export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
 {{ end -}}
+
+# pnpm: load pnpm-only config from ~/.config/pnpm/npmrc so npm 11+ doesn't warn
+# about unknown keys (virtual-store-dir, store-dir, cache-dir). `command pnpm`
+# avoids recursion; the function only activates if pnpm is on PATH.
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm() {
+    NPM_CONFIG_USERCONFIG="$HOME/.config/pnpm/npmrc" command pnpm "$@"
+  }
+fi

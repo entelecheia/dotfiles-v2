@@ -1,5 +1,6 @@
 # Managed by dotfiles-v2 — do not edit manually
-# Relocate pnpm virtual store outside Google Drive
+# pnpm-specific config; loaded via NPM_CONFIG_USERCONFIG (see shell/00-exports.sh.tmpl)
+# Kept out of ~/.npmrc because npm 11+ warns about these unknown keys.
 
 virtual-store-dir={{ .Home }}/.local/share/pnpm/virtual-store
 store-dir={{ .Home }}/.local/share/pnpm/store
