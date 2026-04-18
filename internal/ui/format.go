@@ -2,11 +2,11 @@ package ui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
 // printSection prints a styled section header.
@@ -31,41 +31,10 @@ func formatBool(v bool) string {
 	return StyleHint.Render("✗ disabled")
 }
 
-func sameSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	seen := make(map[string]int, len(a))
-	for _, v := range a {
-		seen[v]++
-	}
-	for _, v := range b {
-		seen[v]--
-	}
-	for _, c := range seen {
-		if c != 0 {
-			return false
-		}
-	}
-	return true
-}
-
+// splitCaskList parses a whitespace-separated cask list into a clean,
+// de-duplicated slice.
 func splitCaskList(s string) []string {
-	fields := strings.Fields(s)
-	if len(fields) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool)
-	var out []string
-	for _, f := range fields {
-		f = strings.TrimSpace(f)
-		if f == "" || seen[f] {
-			continue
-		}
-		seen[f] = true
-		out = append(out, f)
-	}
-	return out
+	return sliceutil.Dedupe(strings.Fields(s))
 }
 
 func pickBackupChoice(path string, detectedDrive bool) string {
@@ -79,26 +48,4 @@ func pickBackupChoice(path string, detectedDrive bool) string {
 		return "custom"
 	}
 	return "local"
-}
-
-func expandHome(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, path[2:])
-	}
-	return path
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func contains(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

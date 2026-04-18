@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // detectRunner returns a non-dry-run runner used by the detect* helpers below.
@@ -134,7 +135,7 @@ func detectSSHKeys() []string {
 			strings.HasPrefix(name, "age_key") {
 			continue
 		}
-		if !fileExists(filepath.Join(sshDir, name+".pub")) {
+		if !fileutil.Exists(filepath.Join(sshDir, name+".pub")) {
 			continue
 		}
 		if !seen[name] {
@@ -183,7 +184,7 @@ func detectAgeKeys() []string {
 
 // readAgePublicKey attempts to read the .pub file corresponding to an age identity.
 func readAgePublicKey(identityPath string) string {
-	expanded := expandHome(identityPath)
+	expanded := fileutil.ExpandHome(identityPath)
 	pubPath := expanded + ".pub"
 	f, err := os.Open(pubPath)
 	if err != nil {

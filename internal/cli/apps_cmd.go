@@ -16,6 +16,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
@@ -162,7 +163,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		want = cat.Defaults
 	case len(args) > 0:
 		// Trust explicit args; merge with user's stored extras if asked later.
-		want = dedupe(args)
+		want = sliceutil.Dedupe(args)
 	case forceSelect || (!yes):
 		interactive = true
 	default:
@@ -192,7 +193,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		extra := splitTokenList(extraRaw)
-		want = dedupe(append(append([]string(nil), selected...), extra...))
+		want = sliceutil.Dedupe(append(append([]string(nil), selected...), extra...))
 
 		if !noSave {
 			save, err := ui.ConfirmBool("Save this selection to state?", true, false)
@@ -238,25 +239,11 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// dedupe preserves first-seen order.
-func dedupe(items []string) []string {
-	seen := make(map[string]bool, len(items))
-	var out []string
-	for _, v := range items {
-		if v == "" || seen[v] {
-			continue
-		}
-		seen[v] = true
-		out = append(out, v)
-	}
-	return out
-}
-
 // splitTokenList parses whitespace/comma-separated tokens into a clean list.
 func splitTokenList(s string) []string {
 	replacer := strings.NewReplacer(",", " ", "\t", " ")
 	parts := strings.Fields(replacer.Replace(s))
-	return dedupe(parts)
+	return sliceutil.Dedupe(parts)
 }
 
 // persistUserState writes user state honouring the --home override.

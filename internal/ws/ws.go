@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // Roots bundles the two parallel workspace roots (both pointing at the "work" dir).
@@ -96,18 +97,13 @@ func (r Roots) ResolvePair(rel string) (workAbs, gdriveAbs string) {
 func DirPresence(roots Roots, rel string) Side {
 	workAbs, gdriveAbs := roots.ResolvePair(rel)
 	var s Side
-	if isDir(workAbs) {
+	if fileutil.IsDir(workAbs) {
 		s |= SideWork
 	}
-	if isDir(gdriveAbs) {
+	if fileutil.IsDir(gdriveAbs) {
 		s |= SideGdrive
 	}
 	return s
-}
-
-func isDir(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.IsDir()
 }
 
 func exists(path string) bool {
@@ -129,7 +125,7 @@ func Mkdir(runner *exec.Runner, roots Roots, rel string) ([]string, error) {
 		side Side
 		abs  string
 	}{{SideWork, workAbs}, {SideGdrive, gdriveAbs}} {
-		if isDir(pair.abs) {
+		if fileutil.IsDir(pair.abs) {
 			msgs = append(msgs, fmt.Sprintf("  ⋯ %s: already exists (%s)", pair.side.Name(), pair.abs))
 			continue
 		}
@@ -180,7 +176,7 @@ func Move(ctx context.Context, runner *exec.Runner, roots Roots, srcRel, dstRel 
 		}
 		// Ensure parent exists
 		parent := filepath.Dir(pair.dstAbs)
-		if !isDir(parent) {
+		if !fileutil.IsDir(parent) {
 			if err := runner.MkdirAll(parent, 0755); err != nil {
 				return msgs, fmt.Errorf("%s: mkdir parent %s: %w", pair.side.Name(), parent, err)
 			}

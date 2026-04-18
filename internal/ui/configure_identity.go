@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
 // ConfigureIdentity prompts for identity fields with system detection.
@@ -101,7 +102,7 @@ func ConfigureSSH(state *config.UserState, yes bool) error {
 		options = append(options, "(enter custom name)")
 
 		selectDefault := sshKeyDefault
-		if !contains(options, selectDefault) {
+		if !sliceutil.Contains(options, selectDefault) {
 			selectDefault = keys[0]
 		}
 

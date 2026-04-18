@@ -5,6 +5,7 @@ import (
 	"runtime"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // ConfigureWorkspace prompts for workspace settings. Skipped for server profile.
@@ -75,7 +76,7 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		}
 	}
 
-	expandedPath := expandHome(state.Modules.Workspace.Path)
+	expandedPath := fileutil.ExpandHome(state.Modules.Workspace.Path)
 	if !yes {
 		currentTarget := readSymlinkTarget(expandedPath)
 		if currentTarget != "" {

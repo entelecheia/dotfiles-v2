@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 func TestValidateRelPath(t *testing.T) {
@@ -75,10 +76,10 @@ func TestMkdirBothSides(t *testing.T) {
 		t.Fatalf("expected 2 msgs, got %d: %v", len(msgs), msgs)
 	}
 	wa, ga := roots.ResolvePair("projects/foo")
-	if !isDir(wa) {
+	if !fileutil.IsDir(wa) {
 		t.Errorf("work side missing: %s", wa)
 	}
-	if !isDir(ga) {
+	if !fileutil.IsDir(ga) {
 		t.Errorf("gdrive side missing: %s", ga)
 	}
 
@@ -97,7 +98,7 @@ func TestMkdirOnlyMissingSide(t *testing.T) {
 	if _, err := Mkdir(runner, roots, "existing"); err != nil {
 		t.Fatal(err)
 	}
-	if !isDir(filepath.Join(roots.Gdrive, "existing")) {
+	if !fileutil.IsDir(filepath.Join(roots.Gdrive, "existing")) {
 		t.Errorf("gdrive side should have been created")
 	}
 }
@@ -111,11 +112,11 @@ func TestMoveBothSides(t *testing.T) {
 		t.Fatal(err)
 	}
 	wa, ga := roots.ResolvePair("new")
-	if !isDir(wa) || !isDir(ga) {
+	if !fileutil.IsDir(wa) || !fileutil.IsDir(ga) {
 		t.Errorf("new not on both sides")
 	}
 	oldWa, oldGa := roots.ResolvePair("old")
-	if isDir(oldWa) || isDir(oldGa) {
+	if fileutil.IsDir(oldWa) || fileutil.IsDir(oldGa) {
 		t.Errorf("old should be gone")
 	}
 }
@@ -142,7 +143,7 @@ func TestRemoveEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	wa, ga := roots.ResolvePair("empty")
-	if isDir(wa) || isDir(ga) {
+	if fileutil.IsDir(wa) || fileutil.IsDir(ga) {
 		t.Errorf("not removed")
 	}
 }

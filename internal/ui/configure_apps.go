@@ -9,6 +9,8 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
+	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
 // ConfigureAITools prompts for AI tools toggle.
@@ -118,7 +120,7 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 		options = append(options, "(enter custom path)")
 
 		selectDefault := identityDefault
-		if !contains(options, selectDefault) {
+		if !sliceutil.Contains(options, selectDefault) {
 			selectDefault = ageKeys[0]
 		}
 
@@ -244,7 +246,7 @@ func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
 		backupDefault = selected
 	}
 	sameAsInstall, err := ConfirmBool("Use the same list for settings backup?",
-		len(state.Modules.MacApps.BackupApps) == 0 || sameSlice(state.Modules.MacApps.BackupApps, selected),
+		len(state.Modules.MacApps.BackupApps) == 0 || sliceutil.Equal(state.Modules.MacApps.BackupApps, selected),
 		yes)
 	if err != nil {
 		return err
@@ -263,7 +265,7 @@ func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
 	rootDefault := state.Modules.MacApps.BackupRoot
 	detected := false
 	if rootDefault == "" {
-		if drive := appsettings.DetectDriveCandidate(expandHome("~")); drive != "" {
+		if drive := appsettings.DetectDriveCandidate(fileutil.ExpandHome("~")); drive != "" {
 			rootDefault = drive
 			detected = true
 		} else {
