@@ -2,33 +2,56 @@ package ui
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
-// printSection prints a styled section header.
-func printSection(title string) {
-	fmt.Println()
-	fmt.Println(StyleSection.Render("▸ " + title))
+// WriteHeader writes a styled report title to w with one leading blank line.
+// The title is rendered with a single space of horizontal padding so the
+// blue StyleHeader background frames the text cleanly.
+func WriteHeader(w io.Writer, title string) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, StyleHeader.Render(" "+title+" "))
 }
 
-func printKV(key, value string) {
+// WriteSection writes a section divider with one leading blank line and the
+// canonical "▸ " prefix. Callers pass the section name only.
+func WriteSection(w io.Writer, title string) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, StyleSection.Render("▸ "+title))
+}
+
+// WriteKV writes a styled key/value row at the 2-space top-level indent.
+// An empty value renders as "(unset)" in the hint style.
+func WriteKV(w io.Writer, key, value string) {
 	if value == "" {
-		value = lipgloss.NewStyle().Foreground(lipgloss.Color("#565F89")).Render("(unset)")
+		value = StyleHint.Render("(unset)")
 	} else {
 		value = StyleValue.Render(value)
 	}
-	fmt.Printf("  %s  %s\n", StyleKey.Render(key+":"), value)
+	fmt.Fprintf(w, "  %s  %s\n", StyleKey.Render(key+":"), value)
 }
 
+// printSection emits a section divider to os.Stdout. Ui-internal wrapper over
+// WriteSection used by the configure_*.go interactive flow, which always runs
+// on a real TTY and does not go through cli.Printer.
+func printSection(title string) { WriteSection(os.Stdout, title) }
+
+// printKV emits a KV row to os.Stdout. Ui-internal wrapper over WriteKV used
+// by PrintStateSummary (called from `dotfiles init`/`reconfigure`/`preflight`).
+func printKV(key, value string) { WriteKV(os.Stdout, key, value) }
+
+// formatBool returns a styled enabled/disabled indicator. The leading glyph
+// comes from the marker alphabet (MarkPresent / MarkAbsent) so colour and
+// glyph stay semantically paired.
 func formatBool(v bool) string {
 	if v {
-		return StyleSuccess.Render("✓") + " enabled"
+		return StyleSuccess.Render(MarkPresent) + " enabled"
 	}
-	return StyleHint.Render("✗ disabled")
+	return StyleHint.Render(MarkAbsent + " disabled")
 }
 
 // splitCaskList parses a whitespace-separated cask list into a clean,

@@ -8,6 +8,16 @@ import (
 )
 
 // Styles for consistent output across the CLI.
+//
+// Semantic contract for the colour layer (glyphs live in markers.go):
+//   - StyleHeader   page/report titles — blue, bold, padded
+//   - StyleSection  section dividers   — purple, bold
+//   - StyleKey      left-side labels in key/value rows
+//   - StyleValue    values in key/value rows, emphasized list items
+//   - StyleSuccess  positive status (MarkPresent, MarkStarred) — green, bold
+//   - StyleWarning  non-fatal attention (MarkWarn) — orange, bold
+//   - StyleError    hard failure / non-zero exit paths (MarkFail) — red, bold
+//   - StyleHint     secondary info, neutral missing, (unset) placeholders
 var (
 	StyleHeader = lipgloss.NewStyle().
 			Bold(true).
@@ -15,10 +25,12 @@ var (
 			BorderForeground(lipgloss.Color("#7AA2F7")).
 			Padding(0, 1)
 
+	// StyleSection intentionally has no MarginTop — the leading blank line is
+	// emitted by cli.Printer.Section / ui.WriteSection so the contract stays
+	// explicit and assertable in tests.
 	StyleSection = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#BB9AF7")).
-			MarginTop(1)
+			Foreground(lipgloss.Color("#BB9AF7"))
 
 	StyleKey = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#9ECE6A")).
@@ -26,10 +38,6 @@ var (
 
 	StyleValue = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#C0CAF5"))
-
-	StyleMuted = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#565F89")).
-			Italic(true)
 
 	StyleSuccess = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#9ECE6A")).
