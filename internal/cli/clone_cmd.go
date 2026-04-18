@@ -409,44 +409,45 @@ func runCloneStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	fmt.Println("Workspace Sync Status")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━")
+	p := printerFrom(cmd)
+	p.Line("Workspace Sync Status")
+	p.Line("━━━━━━━━━━━━━━━━━━━━━")
 
 	if st.RcloneVersion != "" {
-		fmt.Printf("  rclone:     %s (%s)\n", st.RcloneVersion, st.RclonePath)
+		p.Line("  rclone:     %s (%s)", st.RcloneVersion, st.RclonePath)
 	} else {
-		fmt.Println("  rclone:     not installed")
+		p.Line("  rclone:     not installed")
 	}
 
-	fmt.Printf("  Local:      %s\n", st.LocalPath)
-	fmt.Printf("  Remote:     %s\n", st.RemotePath)
-	fmt.Printf("  Filter:     %s\n", st.FilterFile)
-	fmt.Printf("  Interval:   %s\n", formatInterval(st.Interval))
-	fmt.Printf("  Scheduler:  %s\n", st.SchedulerState)
+	p.Line("  Local:      %s", st.LocalPath)
+	p.Line("  Remote:     %s", st.RemotePath)
+	p.Line("  Filter:     %s", st.FilterFile)
+	p.Line("  Interval:   %s", formatInterval(st.Interval))
+	p.Line("  Scheduler:  %s", st.SchedulerState)
 
 	if st.MountPoint != "" {
 		mountState := "not mounted"
 		if st.Mounted {
 			mountState = "mounted"
 		}
-		fmt.Printf("  Mount:      %s (%s)\n", st.MountPoint, mountState)
+		p.Line("  Mount:      %s (%s)", st.MountPoint, mountState)
 	}
 
 	if st.LastSyncTime != nil {
 		ago := time.Since(*st.LastSyncTime).Truncate(time.Second)
-		fmt.Printf("  Last sync:  %s ago\n", ago)
+		p.Line("  Last sync:  %s ago", ago)
 	} else {
-		fmt.Println("  Last sync:  (never)")
+		p.Line("  Last sync:  (never)")
 	}
 
 	if st.LastStats != "" {
-		fmt.Printf("  Last stats: %s\n", st.LastStats)
+		p.Line("  Last stats: %s", st.LastStats)
 	}
 
 	if st.LastError != "" {
-		fmt.Printf("  Last error: %s\n", st.LastError)
+		p.Line("  Last error: %s", st.LastError)
 	} else {
-		fmt.Println("  Last error: (none)")
+		p.Line("  Last error: (none)")
 	}
 
 	return nil
@@ -635,15 +636,16 @@ func runClonePause(cmd *cobra.Command, _ []string) error {
 	engine := template.NewEngine()
 	sched := rclone.NewScheduler(runner, paths, cfg, engine)
 
+	p := printerFrom(cmd)
 	if sched.State(cmd.Context()) == rclone.SchedulerNotInstalled {
-		fmt.Println("Scheduler not installed. Run 'dot clone setup' to configure auto-sync.")
+		p.Line("Scheduler not installed. Run 'dot clone setup' to configure auto-sync.")
 		return nil
 	}
 
 	if err := sched.Pause(cmd.Context()); err != nil {
 		return fmt.Errorf("pausing scheduler: %w", err)
 	}
-	fmt.Println("Auto-sync paused.")
+	p.Line("Auto-sync paused.")
 	return nil
 }
 
@@ -664,15 +666,16 @@ func runCloneResume(cmd *cobra.Command, _ []string) error {
 	engine := template.NewEngine()
 	sched := rclone.NewScheduler(runner, paths, cfg, engine)
 
+	p := printerFrom(cmd)
 	if sched.State(cmd.Context()) == rclone.SchedulerNotInstalled {
-		fmt.Println("Scheduler not installed. Run 'dot clone setup' to configure auto-sync.")
+		p.Line("Scheduler not installed. Run 'dot clone setup' to configure auto-sync.")
 		return nil
 	}
 
 	if err := sched.Resume(cmd.Context()); err != nil {
 		return fmt.Errorf("resuming scheduler: %w", err)
 	}
-	fmt.Println("Auto-sync resumed.")
+	p.Line("Auto-sync resumed.")
 	return nil
 }
 
