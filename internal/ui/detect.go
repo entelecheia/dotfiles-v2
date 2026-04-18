@@ -3,7 +3,6 @@ package ui
 import (
 	"bufio"
 	"context"
-	"log/slog"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -15,13 +14,9 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
-// detectRunner returns a non-dry-run runner used by the detect* helpers below.
-// Detection commands are read-only; they always run regardless of caller intent.
-func detectRunner() *exec.Runner { return exec.NewRunner(false, slog.Default()) }
-
 // detectGitConfig reads a value from git config (global).
 func detectGitConfig(key string) string {
-	res, err := detectRunner().RunQuery(context.Background(), "git", "config", "--global", "--get", key)
+	res, err := exec.NewProbeRunner().RunQuery(context.Background(), "git", "config", "--global", "--get", key)
 	if err != nil {
 		return ""
 	}
@@ -33,7 +28,7 @@ func detectGithubUser() string {
 	if _, err := osexec.LookPath("gh"); err != nil {
 		return ""
 	}
-	res, err := detectRunner().RunQuery(context.Background(), "gh", "api", "user", "--jq", ".login")
+	res, err := exec.NewProbeRunner().RunQuery(context.Background(), "gh", "api", "user", "--jq", ".login")
 	if err != nil {
 		return ""
 	}

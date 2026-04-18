@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	execrun "github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 // CheckStatus represents the result status of a single preflight check.
@@ -276,7 +278,7 @@ func GeneratePreflightConfig(sys *SystemInfo) *UserState {
 }
 
 func gitConfigValue(key string) string {
-	res, err := detectRunner().RunQuery(context.Background(), "git", "config", "--global", key)
+	res, err := execrun.NewProbeRunner().RunQuery(context.Background(), "git", "config", "--global", key)
 	if err != nil {
 		return ""
 	}

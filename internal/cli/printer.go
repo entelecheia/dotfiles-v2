@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 // Printer routes CLI output to writable sinks so tests can capture output.
@@ -39,4 +41,15 @@ func (p *Printer) Warn(format string, a ...any) {
 // Raw prints to Out without adding a newline (for progress dots, prompts).
 func (p *Printer) Raw(format string, a ...any) {
 	fmt.Fprintf(p.Out, format, a...)
+}
+
+// KV renders a styled key/value line. Empty values render as "(unset)" in
+// the hint style so the column alignment stays consistent across calls.
+func (p *Printer) KV(key, value string) {
+	if value == "" {
+		value = ui.StyleHint.Render("(unset)")
+	} else {
+		value = ui.StyleValue.Render(value)
+	}
+	fmt.Fprintf(p.Out, "  %s  %s\n", ui.StyleKey.Render(key+":"), value)
 }

@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,9 +10,6 @@ import (
 
 	execrun "github.com/entelecheia/dotfiles-v2/internal/exec"
 )
-
-// detectRunner is a shared read-only runner for probe commands.
-func detectRunner() *execrun.Runner { return execrun.NewRunner(false, slog.Default()) }
 
 // SystemInfo holds detected system information.
 type SystemInfo struct {
@@ -61,7 +57,7 @@ func (s *SystemInfo) SuggestProfile() string {
 }
 
 func detectHostname(info *SystemInfo) {
-	res, err := detectRunner().RunQuery(context.Background(), "hostname")
+	res, err := execrun.NewProbeRunner().RunQuery(context.Background(), "hostname")
 	if err != nil {
 		info.Hostname = "unknown"
 		return
@@ -79,7 +75,7 @@ func detectBrew(info *SystemInfo) {
 }
 
 func detectGPU(info *SystemInfo) {
-	res, err := detectRunner().RunQuery(context.Background(), "nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits")
+	res, err := execrun.NewProbeRunner().RunQuery(context.Background(), "nvidia-smi", "--query-gpu=name", "--format=csv,noheader,nounits")
 	if err != nil {
 		return
 	}
@@ -116,7 +112,7 @@ func detectShell(info *SystemInfo) {
 }
 
 func detectGit(info *SystemInfo) {
-	res, err := detectRunner().RunQuery(context.Background(), "git", "--version")
+	res, err := execrun.NewProbeRunner().RunQuery(context.Background(), "git", "--version")
 	if err != nil {
 		return
 	}

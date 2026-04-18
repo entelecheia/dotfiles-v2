@@ -27,6 +27,13 @@ func NewRunner(dryRun bool, logger *slog.Logger) *Runner {
 	return &Runner{DryRun: dryRun, Logger: logger}
 }
 
+// NewProbeRunner returns a non-dry-run Runner for read-only detection helpers
+// (hostname, git config, gh api, etc.). Detection probes always run regardless
+// of caller intent since they don't mutate system state.
+func NewProbeRunner() *Runner {
+	return NewRunner(false, slog.Default())
+}
+
 // Run executes a command. In dry-run mode, logs but does not execute.
 func (r *Runner) Run(ctx context.Context, name string, args ...string) (*Result, error) {
 	cmdStr := name + " " + strings.Join(args, " ")

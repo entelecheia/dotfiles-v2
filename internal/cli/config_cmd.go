@@ -262,13 +262,11 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// printKV is the os.Stdout-backed shim for callers that don't yet have a
+// cobra-aware Printer. New code should prefer `p := printerFrom(cmd); p.KV(...)`
+// so output can be captured in tests.
 func printKV(key, value string) {
-	if value == "" {
-		value = ui.StyleHint.Render("(unset)")
-	} else {
-		value = ui.StyleValue.Render(value)
-	}
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render(key+":"), value)
+	(&Printer{Out: os.Stdout, Err: os.Stderr}).KV(key, value)
 }
 
 func workspaceDetail(cfg *config.Config) string {
