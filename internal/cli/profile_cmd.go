@@ -324,20 +324,19 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p := printerFrom(cmd)
-	p.Line("%s", ui.StyleHeader.Render(" Profile Snapshots "))
-	p.Line("")
-	p.Line("  %s  %s", ui.StyleKey.Render("Host:"), ui.StyleValue.Render(eng.Hostname))
-	p.Line("  %s  %s", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(eng.HostRoot()))
+	p.Header("Profile Snapshots")
+	p.KV("Host", eng.Hostname)
+	p.KV("Root", eng.HostRoot())
 	if len(snaps) == 0 {
-		p.Line("")
+		p.Blank()
 		p.Line("  %s", ui.StyleHint.Render("(no snapshots yet — run 'dotfiles profile backup')"))
 		return nil
 	}
-	p.Line("")
+	p.Section(fmt.Sprintf("Versions (%d)", len(snaps)))
 	for _, s := range snaps {
-		marker := "  "
+		marker := ui.StyleHint.Render(ui.MarkPartial)
 		if s.IsLatest {
-			marker = ui.StyleSuccess.Render("★ ")
+			marker = ui.StyleSuccess.Render(ui.MarkStarred)
 		}
 		extras := []string{}
 		if s.Tag != "" {
@@ -350,13 +349,12 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 		if len(extras) > 0 {
 			extra = "  " + ui.StyleHint.Render("("+strings.Join(extras, ", ")+")")
 		}
-		p.Line("%s%s  %s%s",
-			marker,
+		p.Bullet(marker, fmt.Sprintf("%s  %s%s",
 			ui.StyleValue.Render(s.Version),
 			ui.StyleHint.Render(s.CreatedAt.Format("2006-01-02 15:04 UTC")),
-			extra)
+			extra))
 	}
-	p.Line("")
+	p.Blank()
 	return nil
 }
 

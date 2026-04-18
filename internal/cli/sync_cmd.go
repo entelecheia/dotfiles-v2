@@ -376,9 +376,7 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	}
 
 	p := printerFrom(cmd)
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" Workspace Sync Status "))
-	p.Line("")
+	p.Header("Workspace Sync Status")
 
 	if st.RsyncVersion != "" {
 		p.KV("rsync", st.RsyncVersion)
@@ -406,7 +404,7 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Last result", st.LastResult)
 	}
 
-	p.Line("")
+	p.Blank()
 	return nil
 }
 

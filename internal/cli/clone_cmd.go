@@ -415,9 +415,7 @@ func runCloneStatus(cmd *cobra.Command, _ []string) error {
 	}
 
 	p := printerFrom(cmd)
-	p.Line("")
-	p.Line("%s", ui.StyleHeader.Render(" Workspace Clone Status "))
-	p.Line("")
+	p.Header("Workspace Clone Status")
 
 	if st.RcloneVersion != "" {
 		p.KV("rclone", st.RcloneVersion+" ("+st.RclonePath+")")
@@ -456,7 +454,7 @@ func runCloneStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Last error", "(none)")
 	}
 
-	p.Line("")
+	p.Blank()
 	return nil
 }
 
