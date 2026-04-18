@@ -78,34 +78,35 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 
 	expandedPath := fileutil.ExpandHome(state.Modules.Workspace.Path)
 	if !yes {
+		keepCurrent := false
 		currentTarget := readSymlinkTarget(expandedPath)
 		if currentTarget != "" {
 			fmt.Println(StyleHint.Render(fmt.Sprintf("  Current symlink: %s → %s", state.Modules.Workspace.Path, currentTarget)))
 
-			keepCurrent, err := ConfirmBool("Keep existing symlink?", true, false)
+			keepCurrent, err = ConfirmBool("Keep existing symlink?", true, false)
 			if err != nil {
 				return err
 			}
-			if keepCurrent {
-				state.Modules.Workspace.Symlink = ""
-				return nil
-			}
 		}
 
-		symlinkDefault := state.Modules.Workspace.Symlink
-		if symlinkDefault == "" && state.Modules.Workspace.Gdrive != "" && state.Modules.Workspace.GdriveSymlink == "" {
-			// Only default to Gdrive when no separate GdriveSymlink is configured
-			symlinkDefault = state.Modules.Workspace.Gdrive
-		}
-		state.Modules.Workspace.Symlink, err = Input("Symlink target (blank to skip)", symlinkDefault, false)
-		if err != nil {
-			return err
+		if keepCurrent {
+			state.Modules.Workspace.Symlink = ""
+		} else {
+			symlinkDefault := state.Modules.Workspace.Symlink
+			if symlinkDefault == "" && state.Modules.Workspace.Gdrive != "" && state.Modules.Workspace.GdriveSymlink == "" {
+				// Only default to Gdrive when no separate GdriveSymlink is configured
+				symlinkDefault = state.Modules.Workspace.Gdrive
+			}
+			state.Modules.Workspace.Symlink, err = Input("Symlink target (blank to skip)", symlinkDefault, false)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
 	// --- Workspace git repos (optional) ---
 	if !yes {
-		configureRepos, err := ConfirmBool("Configure workspace git repos?", len(state.Modules.Workspace.Repos) > 0, false)
+		configureRepos, err := ConfirmBool("Configure workspace git repos?", true, false)
 		if err != nil {
 			return err
 		}
