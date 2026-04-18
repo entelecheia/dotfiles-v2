@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -278,9 +277,10 @@ func statusPrintWorkspace() {
 
 	// Collect active tmux sessions
 	active := make(map[string]bool)
-	out, err := osexec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	runner := exec.NewRunner(false, slog.Default())
+	res, err := runner.RunQuery(context.Background(), "tmux", "list-sessions", "-F", "#{session_name}")
 	if err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
 			if line != "" {
 				active[line] = true
 			}

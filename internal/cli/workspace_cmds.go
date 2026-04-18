@@ -33,9 +33,14 @@ func newStopCmd() *cobra.Command {
 				}
 			}
 
-			out, err := osexec.Command("tmux", "kill-session", "-t", name).CombinedOutput()
+			runner := exec.NewRunner(false, slog.Default())
+			res, err := runner.RunQuery(cmd.Context(), "tmux", "kill-session", "-t", name)
 			if err != nil {
-				return fmt.Errorf("stopping session %q: %s", name, strings.TrimSpace(string(out)))
+				stderr := strings.TrimSpace(res.Stderr)
+				if stderr == "" {
+					stderr = err.Error()
+				}
+				return fmt.Errorf("stopping session %q: %s", name, stderr)
 			}
 			fmt.Printf("Session %q stopped.\n", name)
 			return nil
@@ -61,9 +66,10 @@ func newListCmd() *cobra.Command {
 
 			// Collect active session names for status display
 			activeSessions := make(map[string]bool)
-			out, err := osexec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+			runner := exec.NewRunner(false, slog.Default())
+			res, err := runner.RunQuery(cmd.Context(), "tmux", "list-sessions", "-F", "#{session_name}")
 			if err == nil {
-				for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				for _, line := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
 					if line != "" {
 						activeSessions[line] = true
 					}
@@ -227,11 +233,10 @@ func newDoctorCmd() *cobra.Command {
 
 			// tmux version
 			fmt.Println()
-			out, err := osexec.Command("tmux", "-V").Output()
-			if err != nil {
+			if res, err := runner.RunQuery(cmd.Context(), "tmux", "-V"); err != nil {
 				fmt.Println("  tmux: not available")
 			} else {
-				fmt.Printf("  %s\n", strings.TrimSpace(string(out)))
+				fmt.Printf("  %s\n", strings.TrimSpace(res.Stdout))
 			}
 
 			// Terminal info

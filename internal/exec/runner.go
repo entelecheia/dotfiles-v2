@@ -2,7 +2,6 @@ package exec
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	osexec "os/exec"
@@ -53,7 +52,7 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) (*Result,
 		result.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	if err != nil {
-		return result, fmt.Errorf("command %q failed: %w\nstderr: %s", cmdStr, err, result.Stderr)
+		return result, &CmdError{Cmd: cmdStr, Stderr: result.Stderr, ExitCode: result.ExitCode, Err: err}
 	}
 	return result, nil
 }
@@ -80,7 +79,7 @@ func (r *Runner) RunQuery(ctx context.Context, name string, args ...string) (*Re
 		result.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	if err != nil {
-		return result, fmt.Errorf("command %q failed: %w\nstderr: %s", cmdStr, err, result.Stderr)
+		return result, &CmdError{Cmd: cmdStr, Stderr: result.Stderr, ExitCode: result.ExitCode, Err: err}
 	}
 	return result, nil
 }
@@ -101,7 +100,33 @@ func (r *Runner) RunAttached(ctx context.Context, name string, args ...string) e
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("command %q failed: %w", cmdStr, err)
+		return &CmdError{Cmd: cmdStr, Err: err}
+	}
+	return nil
+}
+
+// RunInteractive executes a command with stdin, stdout, stderr all attached to
+// the terminal. Use for interactive flows that need a TTY (e.g. OAuth prompts,
+// editor invocations, password entry).
+//
+// In dry-run mode, logs a warning and skips execution. Callers must treat
+// dry-run as a non-op — interactive side-effects cannot be simulated.
+func (r *Runner) RunInteractive(ctx context.Context, name string, args ...string) error {
+	cmdStr := name + " " + strings.Join(args, " ")
+
+	if r.DryRun {
+		r.Logger.Warn("dry-run: skipped interactive command (requires real TTY)", "cmd", cmdStr)
+		return nil
+	}
+
+	r.Logger.Info("exec (interactive)", "cmd", cmdStr)
+	cmd := osexec.CommandContext(ctx, name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return &CmdError{Cmd: cmdStr, Err: err}
 	}
 	return nil
 }
@@ -145,11 +170,16 @@ func (r *Runner) WriteFile(path string, content []byte, perm os.FileMode) error 
 }
 
 // MkdirAll creates directories. Respects dry-run.
+//
+// Logs at Debug level — setup flows create many dirs (30+ in a fresh install)
+// so keeping these at Info would drown out the interesting events like command
+// execution and file writes. Enable with `-v debug` to audit every mkdir.
 func (r *Runner) MkdirAll(path string, perm os.FileMode) error {
 	if r.DryRun {
-		r.Logger.Info("dry-run: mkdir", "path", path)
+		r.Logger.Debug("dry-run: mkdir", "path", path)
 		return nil
 	}
+	r.Logger.Debug("mkdir", "path", path)
 	return os.MkdirAll(path, perm)
 }
 

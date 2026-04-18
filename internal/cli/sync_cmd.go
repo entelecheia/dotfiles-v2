@@ -87,17 +87,17 @@ func syncBootstrap(cmd *cobra.Command) (*config.UserState, *rsync.Config, *rsync
 }
 
 // syncPreflight validates rsync + extensions file before any sync operation.
-func syncPreflight(cfg *rsync.Config, runner *exec.Runner) bool {
+func syncPreflight(p *Printer, cfg *rsync.Config, runner *exec.Runner) bool {
 	if !runner.CommandExists("rsync") {
-		fmt.Println("rsync is not installed. Run 'dot sync setup' to get started.")
+		p.Line("rsync is not installed. Run 'dot sync setup' to get started.")
 		return false
 	}
 	if cfg.RemoteHost == "" {
-		fmt.Println("Remote host not configured. Run 'dot sync setup' to configure.")
+		p.Line("Remote host not configured. Run 'dot sync setup' to configure.")
 		return false
 	}
 	if !runner.FileExists(cfg.ExtensionsFile) {
-		fmt.Println("Extensions file not found. Run 'dot sync setup' to configure sync.")
+		p.Line("Extensions file not found. Run 'dot sync setup' to configure sync.")
 		return false
 	}
 	return true
@@ -110,7 +110,8 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if !syncPreflight(cfg, runner) {
+	p := printerFrom(cmd)
+	if !syncPreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -118,14 +119,14 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	// Acquire lock
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
-		fmt.Printf("  %s\n", lockErr)
+		p.Line("  %s", lockErr)
 		return nil
 	}
 	defer release()
 
-	fmt.Printf("Syncing %s ⟷ %s:%s\n", cfg.LocalPath, cfg.RemoteHost, cfg.RemotePath)
+	p.Line("Syncing %s ⟷ %s:%s", cfg.LocalPath, cfg.RemoteHost, cfg.RemotePath)
 	if dryRun {
-		fmt.Println("  (dry-run — no changes)")
+		p.Line("  (dry-run — no changes)")
 	}
 	syncErr := rsync.Sync(cmd.Context(), runner, cfg, dryRun)
 	if !dryRun {
@@ -139,7 +140,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	if syncErr != nil {
 		return fmt.Errorf("sync failed: %w", syncErr)
 	}
-	fmt.Println("✓ Sync complete.")
+	p.Line("✓ Sync complete.")
 	return nil
 }
 
@@ -159,26 +160,27 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if !syncPreflight(cfg, runner) {
+	p := printerFrom(cmd)
+	if !syncPreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
-		fmt.Printf("  %s\n", lockErr)
+		p.Line("  %s", lockErr)
 		return nil
 	}
 	defer release()
 
-	fmt.Printf("Pulling %s:%s → %s\n", cfg.RemoteHost, cfg.RemotePath, cfg.LocalPath)
+	p.Line("Pulling %s:%s → %s", cfg.RemoteHost, cfg.RemotePath, cfg.LocalPath)
 	if dryRun {
-		fmt.Println("  (dry-run — no changes)")
+		p.Line("  (dry-run — no changes)")
 	}
 	if err := rsync.Pull(cmd.Context(), runner, cfg, dryRun); err != nil {
 		return fmt.Errorf("pull failed: %w", err)
 	}
-	fmt.Println("✓ Pull complete.")
+	p.Line("✓ Pull complete.")
 	return nil
 }
 
@@ -198,26 +200,27 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if !syncPreflight(cfg, runner) {
+	p := printerFrom(cmd)
+	if !syncPreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
-		fmt.Printf("  %s\n", lockErr)
+		p.Line("  %s", lockErr)
 		return nil
 	}
 	defer release()
 
-	fmt.Printf("Pushing %s → %s:%s\n", cfg.LocalPath, cfg.RemoteHost, cfg.RemotePath)
+	p.Line("Pushing %s → %s:%s", cfg.LocalPath, cfg.RemoteHost, cfg.RemotePath)
 	if dryRun {
-		fmt.Println("  (dry-run — no changes)")
+		p.Line("  (dry-run — no changes)")
 	}
 	if err := rsync.Push(cmd.Context(), runner, cfg, dryRun); err != nil {
 		return fmt.Errorf("push failed: %w", err)
 	}
-	fmt.Println("✓ Push complete.")
+	p.Line("✓ Push complete.")
 	return nil
 }
 
@@ -239,19 +242,20 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	}
 	yes, _ := cmd.Flags().GetBool("yes")
 	ctx := cmd.Context()
+	p := printerFrom(cmd)
 
 	// 1. Check / install rsync
-	fmt.Println("Checking rsync...")
+	p.Line("Checking rsync...")
 	ver, ok := rsync.CheckRsync(runner)
 	if ok {
-		fmt.Printf("  ✓ rsync installed (%s)\n", ver)
+		p.Line("  ✓ rsync installed (%s)", ver)
 	} else {
 		confirmed, err := ui.Confirm("rsync not found. Install it?", yes)
 		if err != nil {
 			return err
 		}
 		if !confirmed {
-			fmt.Println("Aborted.")
+			p.Line("Aborted.")
 			return nil
 		}
 		if err := rsync.InstallRsync(ctx, runner); err != nil {
@@ -261,7 +265,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		if !ok {
 			return fmt.Errorf("rsync not found in PATH after install")
 		}
-		fmt.Printf("  ✓ rsync installed (%s)\n", ver)
+		p.Line("  ✓ rsync installed (%s)", ver)
 	}
 
 	// 2. Configure remote host
@@ -271,17 +275,17 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	if remoteHost == "" {
-		fmt.Println("Remote host is required.")
+		p.Line("Remote host is required.")
 		return nil
 	}
 
 	// 3. Verify SSH access
-	fmt.Printf("Checking SSH access to %s...\n", remoteHost)
+	p.Line("Checking SSH access to %s...", remoteHost)
 	if err := rsync.CheckSSH(ctx, runner, remoteHost); err != nil {
-		fmt.Printf("  ⚠ %v\n", err)
-		fmt.Println("  Fix SSH access and try again.")
+		p.Line("  ⚠ %v", err)
+		p.Line("  Fix SSH access and try again.")
 	} else {
-		fmt.Printf("  ✓ SSH to %s OK\n", remoteHost)
+		p.Line("  ✓ SSH to %s OK", remoteHost)
 	}
 
 	// 4. Configure paths
@@ -313,7 +317,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	state.Modules.Workspace.Path = localPath
 
 	// 5. Deploy extensions file
-	fmt.Println("Deploying binary extensions file...")
+	p.Line("Deploying binary extensions file...")
 	engine := template.NewEngine()
 	extContent, err := engine.ReadStatic("rsync/binary-extensions.conf")
 	if err != nil {
@@ -325,10 +329,10 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	if err := runner.WriteFile(paths.ExtensionsFile, extContent, 0644); err != nil {
 		return fmt.Errorf("writing extensions file: %w", err)
 	}
-	fmt.Printf("  ✓ %s\n", paths.ExtensionsFile)
+	p.Line("  ✓ %s", paths.ExtensionsFile)
 
 	// 6. Deploy scheduler
-	fmt.Println("Deploying auto-sync scheduler...")
+	p.Line("Deploying auto-sync scheduler...")
 	cfg, err := rsync.ResolveConfig(state)
 	if err != nil {
 		return err
@@ -337,14 +341,14 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	if err := sched.Install(ctx); err != nil {
 		return fmt.Errorf("installing scheduler: %w", err)
 	}
-	fmt.Println("  ✓ scheduler installed")
+	p.Line("  ✓ scheduler installed")
 
 	// 7. Save state
 	if err := config.SaveState(state); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
 
-	fmt.Println("\n✓ Sync setup complete. Run 'dot sync' to start syncing.")
+	p.Line("\n✓ Sync setup complete. Run 'dot sync' to start syncing.")
 	return nil
 }
 
@@ -371,9 +375,10 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	fmt.Println()
-	fmt.Println(ui.StyleHeader.Render(" Workspace Sync Status "))
-	fmt.Println()
+	p := printerFrom(cmd)
+	p.Line("")
+	p.Line("%s", ui.StyleHeader.Render(" Workspace Sync Status "))
+	p.Line("")
 
 	if st.RsyncVersion != "" {
 		printKV("rsync", st.RsyncVersion)
@@ -401,7 +406,7 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 		printKV("Last result", st.LastResult)
 	}
 
-	fmt.Println()
+	p.Line("")
 	return nil
 }
 
@@ -429,13 +434,14 @@ func runSyncLog(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	p := printerFrom(cmd)
 	lines, err := rsync.TailLog(cfg.LogFile, n)
 	if err != nil {
-		fmt.Printf("No log file found at %s\n", cfg.LogFile)
+		p.Line("No log file found at %s", cfg.LogFile)
 		return nil
 	}
 
-	fmt.Println(lines)
+	p.Line("%s", lines)
 	return nil
 }
 
@@ -458,15 +464,16 @@ func runSyncPause(cmd *cobra.Command, _ []string) error {
 	engine := template.NewEngine()
 	sched := rsync.NewScheduler(runner, paths, cfg, engine)
 
+	p := printerFrom(cmd)
 	if sched.State(cmd.Context()) == rsync.SchedulerNotInstalled {
-		fmt.Println("Scheduler not installed. Run 'dot sync setup' to configure auto-sync.")
+		p.Line("Scheduler not installed. Run 'dot sync setup' to configure auto-sync.")
 		return nil
 	}
 
 	if err := sched.Pause(cmd.Context()); err != nil {
 		return fmt.Errorf("pausing scheduler: %w", err)
 	}
-	fmt.Println("Auto-sync paused.")
+	p.Line("Auto-sync paused.")
 	return nil
 }
 
@@ -487,14 +494,15 @@ func runSyncResume(cmd *cobra.Command, _ []string) error {
 	engine := template.NewEngine()
 	sched := rsync.NewScheduler(runner, paths, cfg, engine)
 
+	p := printerFrom(cmd)
 	if sched.State(cmd.Context()) == rsync.SchedulerNotInstalled {
-		fmt.Println("Scheduler not installed. Run 'dot sync setup' to configure auto-sync.")
+		p.Line("Scheduler not installed. Run 'dot sync setup' to configure auto-sync.")
 		return nil
 	}
 
 	if err := sched.Resume(cmd.Context()); err != nil {
 		return fmt.Errorf("resuming scheduler: %w", err)
 	}
-	fmt.Println("Auto-sync resumed.")
+	p.Line("Auto-sync resumed.")
 	return nil
 }

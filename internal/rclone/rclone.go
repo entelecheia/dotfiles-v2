@@ -3,8 +3,6 @@ package rclone
 import (
 	"context"
 	"fmt"
-	"os"
-	osexec "os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -17,7 +15,7 @@ func CheckRclone(runner *exec.Runner) (string, bool) {
 	if !runner.CommandExists("rclone") {
 		return "", false
 	}
-	result, err := runner.Run(context.Background(), "rclone", "version")
+	result, err := runner.RunQuery(context.Background(), "rclone", "version")
 	if err != nil {
 		return "", false
 	}
@@ -48,7 +46,7 @@ func InstallRclone(ctx context.Context, runner *exec.Runner) error {
 
 // ListRemotes returns configured rclone remote names (without trailing colon).
 func ListRemotes(ctx context.Context, runner *exec.Runner) ([]string, error) {
-	result, err := runner.Run(ctx, "rclone", "listremotes")
+	result, err := runner.RunQuery(ctx, "rclone", "listremotes")
 	if err != nil {
 		return nil, fmt.Errorf("listing remotes: %w", err)
 	}
@@ -78,32 +76,24 @@ func HasRemote(ctx context.Context, runner *exec.Runner, name string) bool {
 }
 
 // ConfigRemote runs interactive rclone config to create a Google Drive remote.
-// This requires a TTY — it attaches stdin/stdout/stderr directly.
-func ConfigRemote(ctx context.Context, name string) error {
-	cmd := osexec.CommandContext(ctx, "rclone", "config", "create", name, "drive",
+// Requires a TTY; in dry-run mode this is a no-op with a warning log.
+func ConfigRemote(ctx context.Context, runner *exec.Runner, name string) error {
+	return runner.RunInteractive(ctx, "rclone", "config", "create", name, "drive",
 		"--drive-scope", "drive",
 	)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
 
 // ReconnectRemote runs interactive rclone config reconnect to refresh auth.
-// This requires a TTY — it attaches stdin/stdout/stderr directly.
-func ReconnectRemote(ctx context.Context, name string) error {
-	cmd := osexec.CommandContext(ctx, "rclone", "config", "reconnect", name+":")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+// Requires a TTY; in dry-run mode this is a no-op with a warning log.
+func ReconnectRemote(ctx context.Context, runner *exec.Runner, name string) error {
+	return runner.RunInteractive(ctx, "rclone", "config", "reconnect", name+":")
 }
 
 // CheckRemote verifies that a remote is accessible (with 15s timeout).
 func CheckRemote(ctx context.Context, runner *exec.Runner, remote string) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	_, err := runner.Run(timeoutCtx, "rclone", "lsd", remote+":", "--max-depth", "0")
+	_, err := runner.RunQuery(timeoutCtx, "rclone", "lsd", remote+":", "--max-depth", "0")
 	if err != nil {
 		if timeoutCtx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("remote %q timed out (15s) — run 'dot clone reconnect' to fix authentication", remote)

@@ -94,6 +94,7 @@ func newSecretsInitCmd() *cobra.Command {
 			}
 
 			runner := secretsRunner(cmd)
+			p := printerFrom(cmd)
 
 			if !runner.CommandExists("age") {
 				return fmt.Errorf("age is not installed — run 'dotfiles apply' to install it")
@@ -118,9 +119,9 @@ func newSecretsInitCmd() *cobra.Command {
 				if _, err := runner.Run(ctx, "age", args...); err != nil {
 					return fmt.Errorf("encrypting SSH key: %w", err)
 				}
-				fmt.Printf("  Encrypted: %s -> %s\n", sshKeyPath, dest)
+				p.Line("  Encrypted: %s -> %s", sshKeyPath, dest)
 			} else {
-				fmt.Printf("  SSH key not found, skipping: %s\n", sshKeyPath)
+				p.Line("  SSH key not found, skipping: %s", sshKeyPath)
 			}
 
 			// Encrypt shell secrets if they exist.
@@ -128,7 +129,7 @@ func newSecretsInitCmd() *cobra.Command {
 			if scaffold && !runner.FileExists(shellSecrets) {
 				dryRun, _ := cmd.Flags().GetBool("dry-run")
 				if dryRun {
-					fmt.Printf("  [dry-run] Would scaffold: %s (0600)\n", shellSecrets)
+					p.Line("  [dry-run] Would scaffold: %s (0600)", shellSecrets)
 				} else {
 					if err := os.MkdirAll(filepath.Dir(shellSecrets), 0755); err != nil {
 						return fmt.Errorf("creating shell config dir: %w", err)
@@ -136,7 +137,7 @@ func newSecretsInitCmd() *cobra.Command {
 					if err := os.WriteFile(shellSecrets, []byte(shellSecretsTemplate), 0600); err != nil {
 						return fmt.Errorf("scaffolding shell secrets: %w", err)
 					}
-					fmt.Printf("  Scaffolded: %s (0600)\n", shellSecrets)
+					p.Line("  Scaffolded: %s (0600)", shellSecrets)
 				}
 			}
 			if runner.FileExists(shellSecrets) {
@@ -146,12 +147,12 @@ func newSecretsInitCmd() *cobra.Command {
 				if _, err := runner.Run(ctx, "age", args...); err != nil {
 					return fmt.Errorf("encrypting shell secrets: %w", err)
 				}
-				fmt.Printf("  Encrypted: %s -> %s\n", shellSecrets, dest)
+				p.Line("  Encrypted: %s -> %s", shellSecrets, dest)
 			} else {
-				fmt.Printf("  Shell secrets not found, skipping: %s\n", shellSecrets)
+				p.Line("  Shell secrets not found, skipping: %s", shellSecrets)
 			}
 
-			fmt.Println("Done. Run 'dotfiles secrets list' to verify.")
+			p.Line("Done. Run 'dotfiles secrets list' to verify.")
 			return nil
 		},
 	}
@@ -179,11 +180,12 @@ func newSecretsBackupCmd() *cobra.Command {
 			}
 
 			runner := secretsRunner(cmd)
+			p := printerFrom(cmd)
 
 			entries, err := os.ReadDir(storeDir)
 			if err != nil {
 				if os.IsNotExist(err) {
-					fmt.Println("No secrets store found. Run 'dotfiles secrets init' first.")
+					p.Line("No secrets store found. Run 'dotfiles secrets init' first.")
 					return nil
 				}
 				return fmt.Errorf("reading secrets dir: %w", err)
@@ -202,15 +204,15 @@ func newSecretsBackupCmd() *cobra.Command {
 				if _, err := runner.Run(ctx, "cp", src, dst); err != nil {
 					return fmt.Errorf("copying %s: %w", e.Name(), err)
 				}
-				fmt.Printf("  Copied: %s\n", e.Name())
+				p.Line("  Copied: %s", e.Name())
 				copied++
 			}
 
 			if copied == 0 {
-				fmt.Println("No .age files found to backup.")
+				p.Line("No .age files found to backup.")
 				return nil
 			}
-			fmt.Printf("Backup complete: %d file(s) -> %s\n", copied, dest)
+			p.Line("Backup complete: %d file(s) -> %s", copied, dest)
 
 			// Record last-backup location (skip in dry-run — runner.Run didn't copy).
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -223,7 +225,7 @@ func newSecretsBackupCmd() *cobra.Command {
 			}
 			state, err := config.LoadState()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not load state to record backup: %v\n", err)
+				p.Warn("warning: could not load state to record backup: %v", err)
 				return nil
 			}
 			state.Secrets.LastBackup = &config.BackupRecord{
@@ -232,7 +234,7 @@ func newSecretsBackupCmd() *cobra.Command {
 				Files: copied,
 			}
 			if err := config.SaveState(state); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not save last-backup record: %v\n", err)
+				p.Warn("warning: could not save last-backup record: %v", err)
 			}
 			return nil
 		},
@@ -272,6 +274,7 @@ func newSecretsRestoreCmd() *cobra.Command {
 			}
 
 			runner := secretsRunner(cmd)
+			p := printerFrom(cmd)
 
 			if !runner.CommandExists("age") {
 				return fmt.Errorf("age is not installed — run 'dotfiles apply' to install it")
@@ -295,9 +298,9 @@ func newSecretsRestoreCmd() *cobra.Command {
 				if err := os.Chmod(sshDest, 0600); err != nil {
 					return fmt.Errorf("setting SSH key permissions: %w", err)
 				}
-				fmt.Printf("  Restored: %s\n", sshDest)
+				p.Line("  Restored: %s", sshDest)
 			} else {
-				fmt.Printf("  SSH key archive not found, skipping: %s\n", sshAgeSrc)
+				p.Line("  SSH key archive not found, skipping: %s", sshAgeSrc)
 			}
 
 			// Restore shell secrets.
@@ -313,12 +316,12 @@ func newSecretsRestoreCmd() *cobra.Command {
 				if err := os.Chmod(shellDest, 0600); err != nil {
 					return fmt.Errorf("setting shell secrets permissions: %w", err)
 				}
-				fmt.Printf("  Restored: %s\n", shellDest)
+				p.Line("  Restored: %s", shellDest)
 			} else {
-				fmt.Printf("  Shell secrets archive not found, skipping: %s\n", shellAgeSrc)
+				p.Line("  Shell secrets archive not found, skipping: %s", shellAgeSrc)
 			}
 
-			fmt.Println("Restore complete.")
+			p.Line("Restore complete.")
 			return nil
 		},
 	}
@@ -351,47 +354,48 @@ func newSecretsStatusCmd() *cobra.Command {
 			}
 
 			runner := secretsRunner(cmd)
+			p := printerFrom(cmd)
 			checkFile := func(label, path string) {
 				exists := runner.FileExists(path)
 				mark := "missing"
 				if exists {
 					mark = "present"
 				}
-				fmt.Printf("  %-30s  %s\n", label, mark)
+				p.Line("  %-30s  %s", label, mark)
 			}
 
-			fmt.Println("Plaintext files:")
+			p.Line("Plaintext files:")
 			checkFile("SSH key (~/.ssh/"+keyName+")", filepath.Join(home, ".ssh", keyName))
 			checkFile("Shell secrets", filepath.Join(home, ".config", "shell", "90-secrets.sh"))
 
-			fmt.Println()
-			fmt.Println("Encrypted files:")
+			p.Line("")
+			p.Line("Encrypted files:")
 			checkFile(keyName+".age", filepath.Join(storeDir, keyName+".age"))
 			checkFile("90-secrets.sh.age", filepath.Join(storeDir, "90-secrets.sh.age"))
 
-			fmt.Println()
+			p.Line("")
 			identity := state.Secrets.AgeIdentity
 			if identity == "" {
 				identity = filepath.Join(home, ".ssh", "id_ed25519")
 			}
-			fmt.Printf("  Age identity: %s\n", identity)
+			p.Line("  Age identity: %s", identity)
 			if len(state.Secrets.AgeRecipients) > 0 {
-				fmt.Println("  Age recipients:")
+				p.Line("  Age recipients:")
 				for _, r := range state.Secrets.AgeRecipients {
-					fmt.Printf("    %s\n", r)
+					p.Line("    %s", r)
 				}
 			} else {
-				fmt.Println("  Age recipients: (none configured)")
+				p.Line("  Age recipients: (none configured)")
 			}
 
-			fmt.Println()
+			p.Line("")
 			if lb := state.Secrets.LastBackup; lb != nil && lb.Path != "" {
-				fmt.Println("Last backup:")
-				fmt.Printf("  Path:  %s\n", lb.Path)
-				fmt.Printf("  When:  %s (%s ago)\n", lb.Time.Format(time.RFC3339), humanDuration(time.Since(lb.Time)))
-				fmt.Printf("  Files: %d\n", lb.Files)
+				p.Line("Last backup:")
+				p.Line("  Path:  %s", lb.Path)
+				p.Line("  When:  %s (%s ago)", lb.Time.Format(time.RFC3339), humanDuration(time.Since(lb.Time)))
+				p.Line("  Files: %d", lb.Files)
 			} else {
-				fmt.Println("Last backup: (none recorded)")
+				p.Line("Last backup: (none recorded)")
 			}
 
 			return nil
@@ -428,15 +432,16 @@ func newSecretsListCmd() *cobra.Command {
 			}
 
 			entries, err := os.ReadDir(storeDir)
+			p := printerFrom(cmd)
 			if err != nil {
 				if os.IsNotExist(err) {
-					fmt.Println("No secrets store found. Run 'dotfiles secrets init' first.")
+					p.Line("No secrets store found. Run 'dotfiles secrets init' first.")
 					return nil
 				}
 				return fmt.Errorf("reading secrets dir: %w", err)
 			}
 
-			fmt.Printf("Secrets store: %s\n\n", storeDir)
+			p.Line("Secrets store: %s\n", storeDir)
 			found := 0
 			for _, e := range entries {
 				if e.IsDir() {
@@ -446,11 +451,11 @@ func newSecretsListCmd() *cobra.Command {
 				if err != nil {
 					continue
 				}
-				fmt.Printf("  %-30s  %d bytes\n", e.Name(), info.Size())
+				p.Line("  %-30s  %d bytes", e.Name(), info.Size())
 				found++
 			}
 			if found == 0 {
-				fmt.Println("  (empty)")
+				p.Line("  (empty)")
 			}
 			return nil
 		},

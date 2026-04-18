@@ -12,6 +12,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/ws"
 )
@@ -379,7 +380,7 @@ func runWsReconcile(cmd *cobra.Command, args []string) error {
 		case copyLabel:
 			srcAbs, dstAbs := resolveSidePair(roots, m.RelPath, srcSide)
 			dstParent := filepath.Dir(dstAbs)
-			if !isDirCheap(dstParent) {
+			if !fileutil.IsDir(dstParent) {
 				if err := runner.MkdirAll(dstParent, 0755); err != nil {
 					fmt.Printf("  ⚠ mkdir parent %s: %v\n", dstParent, err)
 					skipped++
@@ -435,11 +436,6 @@ func resolveSidePair(roots ws.Roots, rel string, srcSide ws.Side) (string, strin
 		return workAbs, gdriveAbs
 	}
 	return gdriveAbs, workAbs
-}
-
-func isDirCheap(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }
 
 // --- Alias top-level commands ---

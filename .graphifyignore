@@ -1,0 +1,49 @@
+# .graphifyignore — Graphify file exclusion patterns
+# Copy to project root as .graphifyignore
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+.next/
+.astro/
+graphify-out/
+
+# IDE / OS
+.git/
+.DS_Store
+.idea/
+.vscode/
+
+# Large binary files
+*.whl
+*.tar.gz
+*.zip
+*.pdf
+*.hwp
+*.hwpx
+*.docx
+*.xlsx
+*.pptx
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.mp4
+*.mp3
+*.wav
+
+# Lock files
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+poetry.lock
+uv.lock
+Cargo.lock

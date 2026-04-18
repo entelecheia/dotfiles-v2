@@ -3,6 +3,8 @@ package ui
 import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
 // Styles for consistent output across the CLI.
@@ -121,7 +123,7 @@ func MultiSelect(message string, options, defaultVals []string, unattended bool)
 	selected := append([]string(nil), defaultVals...)
 	opts := make([]huh.Option[string], len(options))
 	for i, o := range options {
-		opts[i] = huh.NewOption(o, o).Selected(containsString(defaultVals, o))
+		opts[i] = huh.NewOption(o, o).Selected(sliceutil.Contains(defaultVals, o))
 	}
 	err := huh.NewMultiSelect[string]().
 		Title(message).
@@ -132,15 +134,6 @@ func MultiSelect(message string, options, defaultVals []string, unattended bool)
 		return defaultVals, err
 	}
 	return selected, nil
-}
-
-func containsString(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // ConfirmBool asks for a bool. Returns defaultVal if unattended.
