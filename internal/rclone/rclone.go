@@ -15,7 +15,7 @@ func CheckRclone(runner *exec.Runner) (string, bool) {
 	if !runner.CommandExists("rclone") {
 		return "", false
 	}
-	result, err := runner.Run(context.Background(), "rclone", "version")
+	result, err := runner.RunQuery(context.Background(), "rclone", "version")
 	if err != nil {
 		return "", false
 	}
@@ -46,7 +46,7 @@ func InstallRclone(ctx context.Context, runner *exec.Runner) error {
 
 // ListRemotes returns configured rclone remote names (without trailing colon).
 func ListRemotes(ctx context.Context, runner *exec.Runner) ([]string, error) {
-	result, err := runner.Run(ctx, "rclone", "listremotes")
+	result, err := runner.RunQuery(ctx, "rclone", "listremotes")
 	if err != nil {
 		return nil, fmt.Errorf("listing remotes: %w", err)
 	}
@@ -93,7 +93,7 @@ func ReconnectRemote(ctx context.Context, runner *exec.Runner, name string) erro
 func CheckRemote(ctx context.Context, runner *exec.Runner, remote string) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	_, err := runner.Run(timeoutCtx, "rclone", "lsd", remote+":", "--max-depth", "0")
+	_, err := runner.RunQuery(timeoutCtx, "rclone", "lsd", remote+":", "--max-depth", "0")
 	if err != nil {
 		if timeoutCtx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("remote %q timed out (15s) — run 'dot clone reconnect' to fix authentication", remote)
