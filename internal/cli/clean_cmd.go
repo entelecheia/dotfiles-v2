@@ -45,11 +45,12 @@ func runClean(cmd *cobra.Command, args []string) error {
 	includeRisky, _ := cmd.Flags().GetBool("all")
 	yes, _ := cmd.Flags().GetBool("yes")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	p := printerFrom(cmd)
 
-	fmt.Println()
-	fmt.Println(ui.StyleHeader.Render(" Workspace Cleanup "))
-	fmt.Println()
-	fmt.Printf("  Scanning %s ...\n\n", ui.StyleHint.Render(root))
+	p.Line("")
+	p.Line("%s", ui.StyleHeader.Render(" Workspace Cleanup "))
+	p.Line("")
+	p.Line("  Scanning %s ...\n", ui.StyleHint.Render(root))
 
 	scanner := clean.NewScanner(root, includeRisky)
 	result, err := scanner.Scan()
@@ -58,8 +59,8 @@ func runClean(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(result.Matches) == 0 && len(result.Protected) == 0 {
-		fmt.Println("  No junk found. Workspace is clean.")
-		fmt.Println()
+		p.Line("  No junk found. Workspace is clean.")
+		p.Line("")
 		return nil
 	}
 
@@ -81,66 +82,66 @@ func runClean(cmd *cobra.Command, args []string) error {
 			catSize += m.Size
 		}
 
-		fmt.Println(ui.StyleSection.Render(fmt.Sprintf(
+		p.Line("%s", ui.StyleSection.Render(fmt.Sprintf(
 			"▸ %s (%d items, %s)", cat, len(catMatches), clean.FormatSize(catSize))))
 
 		// For .DS_Store, just show count
 		if cat == "misc" {
-			fmt.Printf("  %s  %s\n",
+			p.Line("  %s  %s",
 				ui.StyleHint.Render(".DS_Store"),
 				ui.StyleHint.Render(fmt.Sprintf("(%d files)", len(catMatches))))
 		} else {
 			for _, m := range catMatches {
-				fmt.Printf("  %-15s %s  %s\n",
+				p.Line("  %-15s %s  %s",
 					ui.StyleHint.Render(m.Pattern.Name),
 					ui.StyleValue.Render(m.RelPath),
 					ui.StyleHint.Render(clean.FormatSize(m.Size)))
 			}
 		}
-		fmt.Println()
+		p.Line("")
 	}
 
 	// Protected items
 	if len(result.Protected) > 0 {
-		fmt.Println(ui.StyleSection.Render("▸ Protected (skipped)"))
+		p.Line("%s", ui.StyleSection.Render("▸ Protected (skipped)"))
 		for _, m := range result.Protected {
-			fmt.Printf("  %-15s %s  %s\n",
+			p.Line("  %-15s %s  %s",
 				ui.StyleHint.Render(m.Pattern.Name),
 				ui.StyleValue.Render(m.RelPath),
 				ui.StyleHint.Render("(inside _sys/)"))
 		}
-		fmt.Println()
+		p.Line("")
 	}
 
 	// Summary
-	fmt.Printf("  Total: %d items, ~%s to free",
+	summary := fmt.Sprintf("  Total: %d items, ~%s to free",
 		len(result.Matches), clean.FormatSize(result.TotalSize()))
 	if len(result.Protected) > 0 {
-		fmt.Printf(" (%d protected, not touched)", len(result.Protected))
+		summary += fmt.Sprintf(" (%d protected, not touched)", len(result.Protected))
 	}
-	fmt.Println()
+	p.Line("%s", summary)
 
 	// Action
 	if dryRun || !yes {
-		fmt.Println()
+		p.Line("")
 		hint := "  Run with --yes to delete"
 		if !includeRisky {
 			hint += ", or --all --yes to include dist/build/out/target"
 		}
-		fmt.Println(ui.StyleHint.Render(hint))
-		fmt.Println()
+		p.Line("%s", ui.StyleHint.Render(hint))
+		p.Line("")
 		return nil
 	}
 
 	// Actually delete
-	fmt.Println()
+	p.Line("")
 	deleted, freed, errs := clean.Delete(result.Matches)
 	if len(errs) > 0 {
 		for _, e := range errs {
-			fmt.Printf("  ✗ %s\n", e)
+			p.Line("  ✗ %s", e)
 		}
 	}
-	fmt.Printf("  ✓ Deleted %d items, freed %s\n", deleted, clean.FormatSize(freed))
-	fmt.Println()
+	p.Line("  ✓ Deleted %d items, freed %s", deleted, clean.FormatSize(freed))
+	p.Line("")
 	return nil
 }

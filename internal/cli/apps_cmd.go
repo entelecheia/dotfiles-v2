@@ -71,10 +71,11 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 		defaults[t] = true
 	}
 
-	fmt.Println(ui.StyleHeader.Render(" macOS Cask Catalog "))
+	p := printerFrom(cmd)
+	p.Line("%s", ui.StyleHeader.Render(" macOS Cask Catalog "))
 	for _, g := range cat.Groups {
-		fmt.Println()
-		fmt.Println(ui.StyleSection.Render("▸ " + g.Name))
+		p.Line("")
+		p.Line("%s", ui.StyleSection.Render("▸ "+g.Name))
 		for _, a := range g.Apps {
 			marks := []string{}
 			if defaults[a.Token] {
@@ -89,11 +90,11 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 			} else {
 				prefix = "  "
 			}
-			fmt.Printf("  %s%s  %s\n", prefix, ui.StyleValue.Render(a.Token), ui.StyleHint.Render(a.Name))
+			p.Line("  %s%s  %s", prefix, ui.StyleValue.Render(a.Token), ui.StyleHint.Render(a.Name))
 		}
 	}
-	fmt.Println()
-	fmt.Println(ui.StyleHint.Render("  ★ default preselection   ✓ installed"))
+	p.Line("")
+	p.Line("  %s", ui.StyleHint.Render("★ default preselection   ✓ installed"))
 	return nil
 }
 
@@ -126,8 +127,9 @@ state file so subsequent 'dotfiles apply' runs honour it.`,
 }
 
 func runAppsInstall(cmd *cobra.Command, args []string) error {
+	p := printerFrom(cmd)
 	if runtime.GOOS != "darwin" {
-		fmt.Println(ui.StyleWarning.Render("not macOS — apps install is a no-op"))
+		p.Line("%s", ui.StyleWarning.Render("not macOS — apps install is a no-op"))
 		return nil
 	}
 	ctx := context.Background()
@@ -181,7 +183,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		if len(preselect) == 0 {
 			preselect = cat.Defaults
 		}
-		fmt.Println(ui.StyleHint.Render(fmt.Sprintf(
+		p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
 			"  Catalog: %d apps across %d groups  (★ defaults, ✓ installed)", len(tokens), len(cat.Groups))))
 		selected, err := ui.MultiSelect("Pick apps to install", tokens, preselect, false)
 		if err != nil {
@@ -215,24 +217,24 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 
 	missing := brew.MissingCasks(want)
 	if len(missing) == 0 {
-		fmt.Println(ui.StyleSuccess.Render("✓ all selected casks already installed"))
+		p.Line("%s", ui.StyleSuccess.Render("✓ all selected casks already installed"))
 		if saveAfter {
 			return persistUserState(cmd, state)
 		}
 		return nil
 	}
 	if dryRun {
-		fmt.Printf("dry-run: would install %d cask(s): %s\n", len(missing), strings.Join(missing, ", "))
+		p.Line("dry-run: would install %d cask(s): %s", len(missing), strings.Join(missing, ", "))
 		if saveAfter {
 			return persistUserState(cmd, state)
 		}
 		return nil
 	}
-	fmt.Printf("Installing %d cask(s): %s\n", len(missing), strings.Join(missing, ", "))
+	p.Line("Installing %d cask(s): %s", len(missing), strings.Join(missing, ", "))
 	if err := brew.InstallCask(ctx, missing); err != nil {
 		return fmt.Errorf("install casks: %w", err)
 	}
-	fmt.Println(ui.StyleSuccess.Render("✓ install complete"))
+	p.Line("%s", ui.StyleSuccess.Render("✓ install complete"))
 	if saveAfter {
 		return persistUserState(cmd, state)
 	}
@@ -283,11 +285,12 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	fmt.Println(ui.StyleHeader.Render(" macOS App Settings Status "))
-	fmt.Println()
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Host:"), ui.StyleValue.Render(eng.Hostname))
-	fmt.Printf("  %s  %s\n", ui.StyleKey.Render("Backup:"), ui.StyleValue.Render(eng.HostRoot()))
-	fmt.Println()
+	p := printerFrom(cmd)
+	p.Line("%s", ui.StyleHeader.Render(" macOS App Settings Status "))
+	p.Line("")
+	p.Line("  %s  %s", ui.StyleKey.Render("Host:"), ui.StyleValue.Render(eng.Hostname))
+	p.Line("  %s  %s", ui.StyleKey.Render("Backup:"), ui.StyleValue.Render(eng.HostRoot()))
+	p.Line("")
 
 	statuses := eng.Status(nil)
 	tokens := make([]string, 0, len(statuses))
@@ -317,11 +320,11 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 		} else {
 			bak = ui.StyleWarning.Render(bak)
 		}
-		fmt.Printf("  %s  %-22s  live:%-6s  backup:%-8s\n",
+		p.Line("  %s  %-22s  live:%-6s  backup:%-8s",
 			inst, ui.StyleValue.Render(token), live, bak)
 	}
 	_ = mf
-	fmt.Println()
+	p.Line("")
 	return nil
 }
 
@@ -340,8 +343,9 @@ func newAppsBackupCmd() *cobra.Command {
 }
 
 func runAppsBackup(cmd *cobra.Command, args []string) error {
+	p := printerFrom(cmd)
 	if runtime.GOOS != "darwin" {
-		fmt.Println(ui.StyleWarning.Render("not macOS — apps backup is a no-op"))
+		p.Line("%s", ui.StyleWarning.Render("not macOS — apps backup is a no-op"))
 		return nil
 	}
 	eng, err := newAppsEngine(cmd)
@@ -358,7 +362,7 @@ func runAppsBackup(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	printAppSummary("Backup", sum)
+	printAppSummary(p, "Backup", sum)
 
 	// Record last backup (skipped in dry-run)
 	if !eng.Runner.DryRun {
@@ -384,8 +388,9 @@ func newAppsRestoreCmd() *cobra.Command {
 }
 
 func runAppsRestore(cmd *cobra.Command, args []string) error {
+	p := printerFrom(cmd)
 	if runtime.GOOS != "darwin" {
-		fmt.Println(ui.StyleWarning.Render("not macOS — apps restore is a no-op"))
+		p.Line("%s", ui.StyleWarning.Render("not macOS — apps restore is a no-op"))
 		return nil
 	}
 	yes, _ := cmd.Flags().GetBool("yes")
@@ -400,13 +405,13 @@ func runAppsRestore(cmd *cobra.Command, args []string) error {
 	}
 
 	if !yes {
-		fmt.Println(ui.StyleWarning.Render("This overwrites local app settings. Quit target apps first."))
+		p.Line("%s", ui.StyleWarning.Render("This overwrites local app settings. Quit target apps first."))
 		ok, err := ui.ConfirmBool("Continue with restore?", false, false)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Println("aborted")
+			p.Line("aborted")
 			return nil
 		}
 	}
@@ -415,7 +420,7 @@ func runAppsRestore(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	printAppSummary("Restore", sum)
+	printAppSummary(p, "Restore", sum)
 	if !eng.Runner.DryRun {
 		eng.FlushCFPrefsd(context.Background())
 	}
@@ -550,17 +555,16 @@ func intersectManifest(tokens []string, mf *appsettings.Manifest) []string {
 	return out
 }
 
-func printAppSummary(label string, sum *appsettings.Summary) {
-	fmt.Println()
-	fmt.Println(ui.StyleHeader.Render(fmt.Sprintf(" %s Summary ", label)))
-	fmt.Println()
+func printAppSummary(p *Printer, label string, sum *appsettings.Summary) {
+	p.Line("")
+	p.Line("%s", ui.StyleHeader.Render(fmt.Sprintf(" %s Summary ", label)))
+	p.Line("")
 	for _, a := range sum.Apps {
-		line := fmt.Sprintf("  %s  paths: %d copied / %d missing  files: %d  bytes: %d",
+		p.Line("  %s  paths: %d copied / %d missing  files: %d  bytes: %d",
 			ui.StyleValue.Render(a.Token), a.Copied, a.Missing, a.Files, a.Bytes)
-		fmt.Println(line)
 	}
-	fmt.Println()
-	fmt.Printf("Total: %d file(s), %d byte(s)\n", sum.Files, sum.Bytes)
+	p.Line("")
+	p.Line("Total: %d file(s), %d byte(s)", sum.Files, sum.Bytes)
 }
 
 // recordLastBackup stamps state.Modules.MacApps.LastBackup with the timestamp + counts.

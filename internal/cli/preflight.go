@@ -40,8 +40,9 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Run preflight checks
+	p := printerFrom(cmd)
 	report := config.RunPreflightChecks(sysInfo, home)
-	printPreflightReport(report)
+	printPreflightReport(p, report)
 
 	if checkOnly {
 		return nil
@@ -53,8 +54,8 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 		statePath = config.StatePathForHome(homeOverride)
 	}
 	if _, err := os.Stat(statePath); err == nil && !force {
-		fmt.Printf("\nConfig already exists: %s\n", statePath)
-		fmt.Println("Use --force to overwrite.")
+		p.Line("\nConfig already exists: %s", statePath)
+		p.Line("Use --force to overwrite.")
 		return nil
 	}
 
@@ -72,26 +73,26 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	fmt.Println("\n=== Generated Config ===")
+	p.Line("\n=== Generated Config ===")
 	ui.PrintStateSummary(state)
-	fmt.Printf("\n  Config saved: %s\n", statePath)
-	fmt.Println("  Run 'dotfiles apply' to apply the configuration.")
+	p.Line("\n  Config saved: %s", statePath)
+	p.Line("  Run 'dotfiles apply' to apply the configuration.")
 
 	return nil
 }
 
-func printPreflightReport(report *config.PreflightReport) {
-	fmt.Println("=== Environment Preflight ===")
-	fmt.Println()
+func printPreflightReport(p *Printer, report *config.PreflightReport) {
+	p.Line("=== Environment Preflight ===")
+	p.Line("")
 
 	for _, c := range report.Checks {
 		statusStr := fmt.Sprintf("[%s]", c.Status)
-		fmt.Printf("  %-6s %-25s %s\n", statusStr, c.Name, c.Value)
+		p.Line("  %-6s %-25s %s", statusStr, c.Name, c.Value)
 		if c.Message != "" {
-			fmt.Printf("         %-25s %s\n", "", c.Message)
+			p.Line("         %-25s %s", "", c.Message)
 		}
 	}
 
 	pass, warn, fail := report.Counts()
-	fmt.Printf("\n  Result: %d passed, %d warnings, %d failures\n", pass, warn, fail)
+	p.Line("\n  Result: %d passed, %d warnings, %d failures", pass, warn, fail)
 }

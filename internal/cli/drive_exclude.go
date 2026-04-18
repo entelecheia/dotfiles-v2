@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entelecheia/dotfiles-v2/internal/driveexclude"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
-	"github.com/spf13/cobra"
 )
 
 func newDriveExcludeCmd() *cobra.Command {
@@ -32,8 +33,9 @@ from Google Drive sync using macOS xattr (com.google.drivefs.ignorecontent).`,
 // ── interactive (default) ──────────────────────────────────────────────────
 
 func runDriveExcludeInteractive(cmd *cobra.Command, _ []string) error {
+	p := printerFrom(cmd)
 	if !driveexclude.IsDarwin() {
-		fmt.Println("drive-exclude is only supported on macOS (Google Drive File Stream).")
+		p.Line("drive-exclude is only supported on macOS (Google Drive File Stream).")
 		return nil
 	}
 
@@ -46,12 +48,12 @@ func runDriveExcludeInteractive(cmd *cobra.Command, _ []string) error {
 
 	pending := filterStatus(results, driveexclude.StatusPending)
 	if len(pending) == 0 {
-		printStatus(root, results)
-		fmt.Println("\nAll directories are already excluded.")
+		printStatus(p, root, results)
+		p.Line("\nAll directories are already excluded.")
 		return nil
 	}
 
-	printScanResults(root, results)
+	printScanResults(p, root, results)
 
 	yes, _ := cmd.Flags().GetBool("yes")
 	confirmed, err := ui.Confirm(
@@ -62,11 +64,11 @@ func runDriveExcludeInteractive(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	if !confirmed {
-		fmt.Println("Aborted.")
+		p.Line("Aborted.")
 		return nil
 	}
 
-	return applyPending(root, pending, false)
+	return applyPending(p, root, pending, false)
 }
 
 // ── scan ───────────────────────────────────────────────────────────────────
@@ -88,12 +90,13 @@ func newDriveExcludeScanCmd() *cobra.Command {
 				return fmt.Errorf("scanning: %w", err)
 			}
 
+			p := printerFrom(cmd)
 			if len(results) == 0 {
-				fmt.Println("No excludable directories found.")
+				p.Line("No excludable directories found.")
 				return nil
 			}
 
-			printScanResults(root, results)
+			printScanResults(p, root, results)
 			return nil
 		},
 	}
@@ -111,9 +114,10 @@ func newDriveExcludeApplyCmd() *cobra.Command {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			all, _ := cmd.Flags().GetBool("all")
 			yes, _ := cmd.Flags().GetBool("yes")
+			p := printerFrom(cmd)
 
 			if !dryRun && !driveexclude.IsDarwin() {
-				fmt.Println("drive-exclude apply is only supported on macOS.")
+				p.Line("drive-exclude apply is only supported on macOS.")
 				return nil
 			}
 
@@ -130,11 +134,11 @@ func newDriveExcludeApplyCmd() *cobra.Command {
 
 			pending := filterStatus(results, driveexclude.StatusPending)
 			if len(pending) == 0 {
-				fmt.Println("Nothing to apply — all directories already excluded.")
+				p.Line("Nothing to apply — all directories already excluded.")
 				return nil
 			}
 
-			printScanResults(root, results)
+			printScanResults(p, root, results)
 
 			if !all && !yes {
 				confirmed, err := ui.Confirm(
@@ -145,12 +149,12 @@ func newDriveExcludeApplyCmd() *cobra.Command {
 					return err
 				}
 				if !confirmed {
-					fmt.Println("Aborted.")
+					p.Line("Aborted.")
 					return nil
 				}
 			}
 
-			return applyPending(root, pending, dryRun)
+			return applyPending(p, root, pending, dryRun)
 		},
 	}
 	cmd.Flags().Bool("all", false, "Apply to all pending without confirmation")
@@ -169,9 +173,10 @@ func newDriveExcludeAddCmd() *cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			p := printerFrom(cmd)
 
 			if !dryRun && !driveexclude.IsDarwin() {
-				fmt.Println("drive-exclude add is only supported on macOS.")
+				p.Line("drive-exclude add is only supported on macOS.")
 				return nil
 			}
 
@@ -180,23 +185,23 @@ func newDriveExcludeAddCmd() *cobra.Command {
 
 				info, err := os.Stat(path)
 				if err != nil {
-					fmt.Printf("  ✗ %s: %v\n", arg, err)
+					p.Line("  ✗ %s: %v", arg, err)
 					continue
 				}
 				if !info.IsDir() {
-					fmt.Printf("  ✗ %s: not a directory\n", arg)
+					p.Line("  ✗ %s: not a directory", arg)
 					continue
 				}
 
 				if dryRun {
-					fmt.Printf("  (dry-run) would exclude: %s\n", path)
+					p.Line("  (dry-run) would exclude: %s", path)
 					continue
 				}
 
 				if err := driveexclude.ApplyXattr(path); err != nil {
-					fmt.Printf("  ✗ %s: %v\n", path, err)
+					p.Line("  ✗ %s: %v", path, err)
 				} else {
-					fmt.Printf("  ✓ %s excluded\n", path)
+					p.Line("  ✓ %s excluded", path)
 				}
 			}
 			return nil
@@ -219,7 +224,7 @@ func newDriveExcludeStatusCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("scanning: %w", err)
 			}
-			printStatus(root, results)
+			printStatus(printerFrom(cmd), root, results)
 			return nil
 		},
 	}
@@ -259,7 +264,7 @@ func filterStatus(results []driveexclude.ScanResult, status driveexclude.DirStat
 	return filtered
 }
 
-func printScanResults(root string, results []driveexclude.ScanResult) {
+func printScanResults(p *Printer, root string, results []driveexclude.ScanResult) {
 	counts := driveexclude.CountByStatus(results)
 
 	for _, r := range results {
@@ -267,59 +272,59 @@ func printScanResults(root string, results []driveexclude.ScanResult) {
 		size := driveexclude.FormatSize(r.Size)
 		switch r.Status {
 		case driveexclude.StatusExcluded:
-			fmt.Printf("  [EXCLUDED]  %s (%s, xattr set)\n", rel, size)
+			p.Line("  [EXCLUDED]  %s (%s, xattr set)", rel, size)
 		case driveexclude.StatusPending:
-			fmt.Printf("  [PENDING]   %s (%s, no xattr)\n", rel, size)
+			p.Line("  [PENDING]   %s (%s, no xattr)", rel, size)
 		case driveexclude.StatusSymlink:
-			fmt.Printf("  [SYMLINK]   %s → %s\n", rel, r.LinkTarget)
+			p.Line("  [SYMLINK]   %s → %s", rel, r.LinkTarget)
 		}
 	}
 
 	// Show guidance for symlinks
 	symlinks := filterStatus(results, driveexclude.StatusSymlink)
 	if len(symlinks) > 0 {
-		fmt.Println("\n  Symlinked node_modules detected. To fix:")
-		fmt.Println("    1. rm <symlink>")
-		fmt.Println("    2. pnpm install   (or npm install)")
-		fmt.Println("    3. dot drive-exclude apply")
+		p.Line("\n  Symlinked node_modules detected. To fix:")
+		p.Line("    1. rm <symlink>")
+		p.Line("    2. pnpm install   (or npm install)")
+		p.Line("    3. dot drive-exclude apply")
 	}
 
-	fmt.Printf("\nFound: %d directories", len(results))
+	summary := fmt.Sprintf("\nFound: %d directories", len(results))
 	if c := counts[driveexclude.StatusExcluded]; c > 0 {
-		fmt.Printf(" (%d excluded", c)
+		summary += fmt.Sprintf(" (%d excluded", c)
 	} else {
-		fmt.Print(" (0 excluded")
+		summary += " (0 excluded"
 	}
 	if c := counts[driveexclude.StatusPending]; c > 0 {
-		fmt.Printf(", %d pending", c)
+		summary += fmt.Sprintf(", %d pending", c)
 	}
 	if c := counts[driveexclude.StatusSymlink]; c > 0 {
-		fmt.Printf(", %d symlink", c)
+		summary += fmt.Sprintf(", %d symlink", c)
 	}
-	fmt.Println(")")
+	p.Line("%s)", summary)
 
 	if pending := driveexclude.SumPendingSize(results); pending > 0 {
-		fmt.Printf("Total pending: %s\n", driveexclude.FormatSize(pending))
+		p.Line("Total pending: %s", driveexclude.FormatSize(pending))
 	}
 }
 
-func printStatus(root string, results []driveexclude.ScanResult) {
-	fmt.Printf("Drive Exclude Status (%s)\n", root)
-	fmt.Println(separator)
+func printStatus(p *Printer, root string, results []driveexclude.ScanResult) {
+	p.Line("Drive Exclude Status (%s)", root)
+	p.Line("%s", separator)
 
 	// Group by pattern category
 	nodePatterns := []string{"node_modules", ".pnpm"}
 	buildPatterns := []string{".astro", ".next", ".nuxt", ".svelte-kit", ".parcel-cache", ".turbo", ".angular", ".webpack"}
 	pyPatterns := []string{".venv", "__pycache__", ".mypy_cache", ".pytest_cache"}
 
-	printCategoryStatus("node_modules", results, nodePatterns)
-	printCategoryStatus("build caches", results, buildPatterns)
-	printCategoryStatus("python", results, pyPatterns)
+	printCategoryStatus(p, "node_modules", results, nodePatterns)
+	printCategoryStatus(p, "build caches", results, buildPatterns)
+	printCategoryStatus(p, "python", results, pyPatterns)
 
 	// Symlink warnings
 	symlinks := filterStatus(results, driveexclude.StatusSymlink)
 	if len(symlinks) > 0 {
-		fmt.Printf("  ⚠ symlink legacy:   %d (rm symlink, reinstall, then apply)\n", len(symlinks))
+		p.Line("  ⚠ symlink legacy:   %d (rm symlink, reinstall, then apply)", len(symlinks))
 	}
 
 	// Totals
@@ -328,16 +333,16 @@ func printStatus(root string, results []driveexclude.ScanResult) {
 	for _, r := range excluded {
 		totalSize += r.Size
 	}
-	fmt.Printf("\nTotal excluded: %d directories\n", len(excluded))
+	p.Line("\nTotal excluded: %d directories", len(excluded))
 	if totalSize > 0 {
-		fmt.Printf("Estimated Drive savings: ~%s\n", driveexclude.FormatSize(totalSize))
+		p.Line("Estimated Drive savings: ~%s", driveexclude.FormatSize(totalSize))
 	}
 }
 
-func printCategoryStatus(name string, results []driveexclude.ScanResult, patterns []string) {
+func printCategoryStatus(p *Printer, name string, results []driveexclude.ScanResult, patterns []string) {
 	pset := make(map[string]bool, len(patterns))
-	for _, p := range patterns {
-		pset[p] = true
+	for _, pat := range patterns {
+		pset[pat] = true
 	}
 
 	var excluded, pending int
@@ -361,20 +366,20 @@ func printCategoryStatus(name string, results []driveexclude.ScanResult, pattern
 	if pending > 0 {
 		icon = "⚠"
 	}
-	fmt.Printf("  %s %-16s %d excluded, %d pending\n", icon, name+":", excluded, pending)
+	p.Line("  %s %-16s %d excluded, %d pending", icon, name+":", excluded, pending)
 }
 
-func applyPending(root string, pending []driveexclude.ScanResult, dryRun bool) error {
+func applyPending(p *Printer, root string, pending []driveexclude.ScanResult, dryRun bool) error {
 	for _, r := range pending {
 		rel := driveexclude.RelPath(root, r.Path)
 		if dryRun {
-			fmt.Printf("  (dry-run) would exclude: %s\n", rel)
+			p.Line("  (dry-run) would exclude: %s", rel)
 			continue
 		}
 		if err := driveexclude.ApplyXattr(r.Path); err != nil {
-			fmt.Printf("  ✗ %s: %v\n", rel, err)
+			p.Line("  ✗ %s: %v", rel, err)
 		} else {
-			fmt.Printf("  ✓ %s excluded (%s)\n", rel, driveexclude.FormatSize(r.Size))
+			p.Line("  ✓ %s excluded (%s)", rel, driveexclude.FormatSize(r.Size))
 		}
 	}
 	return nil

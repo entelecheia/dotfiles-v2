@@ -33,6 +33,7 @@ If the project is not registered, you'll be prompted to register it.`,
 func runOpen(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	ctx := context.Background()
+	p := printerFrom(cmd)
 
 	// Validate session name
 	if err := workspace.ValidateSessionName(name); err != nil {
@@ -41,8 +42,8 @@ func runOpen(cmd *cobra.Command, args []string) error {
 
 	// Detect nested tmux
 	if os.Getenv("TMUX") != "" {
-		fmt.Println("Already inside a tmux session.")
-		fmt.Printf("Use 'tmux switch-client -t %s' to switch, or detach first (C-a d).\n", name)
+		p.Line("Already inside a tmux session.")
+		p.Line("Use 'tmux switch-client -t %s' to switch, or detach first (C-a d).", name)
 		return nil
 	}
 
@@ -62,7 +63,7 @@ func runOpen(cmd *cobra.Command, args []string) error {
 
 		yes, _ := cmd.Flags().GetBool("yes")
 		if !yes {
-			fmt.Printf("Project %q is not registered. Register %s as %q? [Y/n] ", name, cwd, name)
+			p.Raw("Project %q is not registered. Register %s as %q? [Y/n] ", name, cwd, name)
 			reader := bufio.NewReader(os.Stdin)
 			answer, _ := reader.ReadString('\n')
 			answer = strings.TrimSpace(strings.ToLower(answer))
@@ -77,7 +78,7 @@ func runOpen(cmd *cobra.Command, args []string) error {
 		if err := cfg.Save(); err != nil {
 			return fmt.Errorf("saving config: %w", err)
 		}
-		fmt.Printf("  Registered project %q → %s\n", name, cwd)
+		p.Line("  Registered project %q → %s", name, cwd)
 		proj = cfg.FindProject(name)
 	}
 
@@ -122,7 +123,7 @@ func runOpen(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("deploying workspace scripts: %w", err)
 	}
 	if changed {
-		fmt.Println("  Workspace scripts updated")
+		p.Line("  Workspace scripts updated")
 	}
 
 	// Get launcher path
@@ -137,7 +138,7 @@ func runOpen(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("  Opening workspace: %s (layout=%s, theme=%s)\n", name, layout, theme)
+	p.Line("  Opening workspace: %s (layout=%s, theme=%s)", name, layout, theme)
 	if err := syscall.Exec(bashPath, []string{
 		"bash", launcher, name, proj.Path, layout, theme,
 	}, os.Environ()); err != nil {

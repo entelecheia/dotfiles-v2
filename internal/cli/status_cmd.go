@@ -30,9 +30,10 @@ func newStatusCmd() *cobra.Command {
 }
 
 func runStatus(cmd *cobra.Command, _ []string) error {
-	fmt.Println()
-	fmt.Println(ui.StyleHeader.Render(" dotfiles Status "))
-	fmt.Println()
+	p := printerFrom(cmd)
+	p.Line("")
+	p.Line("%s", ui.StyleHeader.Render(" dotfiles Status "))
+	p.Line("")
 
 	// ── load shared state ──────────────────────────────────────────────
 	state, err := config.LoadState()
@@ -43,53 +44,53 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	sysInfo, _ := config.DetectSystem()
 
 	// ── System ─────────────────────────────────────────────────────────
-	fmt.Println(ui.StyleSection.Render("▸ System"))
+	p.Line("%s", ui.StyleSection.Render("▸ System"))
 	if sysInfo != nil {
-		printKV("OS", sysInfo.OS+"/"+sysInfo.Arch)
-		printKV("Hostname", sysInfo.Hostname)
-		printKV("Shell", sysInfo.Shell)
+		p.KV("OS", sysInfo.OS+"/"+sysInfo.Arch)
+		p.KV("Hostname", sysInfo.Hostname)
+		p.KV("Shell", sysInfo.Shell)
 		if sysInfo.HasGit {
-			printKV("Git", sysInfo.GitVersion)
+			p.KV("Git", sysInfo.GitVersion)
 		}
 		if sysInfo.HasBrew {
-			printKV("Brew", sysInfo.BrewPath)
+			p.KV("Brew", sysInfo.BrewPath)
 		}
 		if sysInfo.HasNVIDIAGPU {
-			printKV("GPU", sysInfo.GPUModel)
+			p.KV("GPU", sysInfo.GPUModel)
 		}
 		if sysInfo.HasCUDA {
-			printKV("CUDA", sysInfo.CUDAHome)
+			p.KV("CUDA", sysInfo.CUDAHome)
 		}
 	}
 
 	// ── User ───────────────────────────────────────────────────────────
-	fmt.Println()
-	fmt.Println(ui.StyleSection.Render("▸ User"))
-	printKV("Name", state.Name)
-	printKV("Email", state.Email)
-	printKV("GitHub", state.GithubUser)
-	printKV("Profile", state.Profile)
-	printKV("Config", config.StatePath())
+	p.Line("")
+	p.Line("%s", ui.StyleSection.Render("▸ User"))
+	p.KV("Name", state.Name)
+	p.KV("Email", state.Email)
+	p.KV("GitHub", state.GithubUser)
+	p.KV("Profile", state.Profile)
+	p.KV("Config", config.StatePath())
 
 	// ── Modules ────────────────────────────────────────────────────────
-	statusPrintModules(cmd, state, sysInfo)
+	statusPrintModules(p, cmd, state, sysInfo)
 
 	// ── Secrets ────────────────────────────────────────────────────────
-	statusPrintSecrets(state)
+	statusPrintSecrets(p, state)
 
 	// ── Sync ───────────────────────────────────────────────────────────
-	statusPrintSync(state)
+	statusPrintSync(p, state)
 
 	// ── Workspace ──────────────────────────────────────────────────────
-	statusPrintWorkspace()
+	statusPrintWorkspace(p)
 
-	fmt.Println()
+	p.Line("")
 	return nil
 }
 
 // statusPrintModules checks all enabled modules and prints a compact summary.
-func statusPrintModules(cmd *cobra.Command, state *config.UserState, sysInfo *config.SystemInfo) {
-	fmt.Println()
+func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState, sysInfo *config.SystemInfo) {
+	p.Line("")
 
 	profileName, _ := cmd.Flags().GetString("profile")
 	configPath, _ := cmd.Flags().GetString("config")
@@ -105,8 +106,8 @@ func statusPrintModules(cmd *cobra.Command, state *config.UserState, sysInfo *co
 
 	cfg, err := config.Load(profileName, configPath, sysInfo)
 	if err != nil {
-		fmt.Println(ui.StyleSection.Render("▸ Modules"))
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(could not load config: "+err.Error()+")"))
+		p.Line("%s", ui.StyleSection.Render("▸ Modules"))
+		p.Line("  %s", ui.StyleHint.Render("(could not load config: "+err.Error()+")"))
 		return
 	}
 	config.ApplyStateToConfig(cfg, state)
@@ -134,8 +135,8 @@ func statusPrintModules(cmd *cobra.Command, state *config.UserState, sysInfo *co
 
 	results, err := module.CheckAll(ctx, modules, rc)
 	if err != nil {
-		fmt.Println(ui.StyleSection.Render("▸ Modules"))
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(check failed: "+err.Error()+")"))
+		p.Line("%s", ui.StyleSection.Render("▸ Modules"))
+		p.Line("  %s", ui.StyleHint.Render("(check failed: "+err.Error()+")"))
 		return
 	}
 
@@ -147,31 +148,31 @@ func statusPrintModules(cmd *cobra.Command, state *config.UserState, sysInfo *co
 		}
 	}
 
-	fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Modules (%d/%d satisfied)", satisfied, total)))
+	p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Modules (%d/%d satisfied)", satisfied, total)))
 	for _, m := range modules {
 		r := results[m.Name()]
 		mark := ui.StyleHint.Render("✗")
 		if r != nil && r.Satisfied {
 			mark = ui.StyleSuccess.Render("✓")
 		}
-		fmt.Printf("  %s  %s\n", mark, ui.StyleValue.Render(m.Name()))
+		p.Line("  %s  %s", mark, ui.StyleValue.Render(m.Name()))
 	}
 
 	if pending := total - satisfied; pending > 0 {
-		fmt.Println()
-		fmt.Printf("  %s\n", ui.StyleHint.Render(
+		p.Line("")
+		p.Line("  %s", ui.StyleHint.Render(
 			fmt.Sprintf("%d module(s) need attention — run 'dotfiles check' for details.", pending)))
 	}
 }
 
 // statusPrintSecrets prints a compact secrets summary.
-func statusPrintSecrets(state *config.UserState) {
-	fmt.Println()
-	fmt.Println(ui.StyleSection.Render("▸ Secrets"))
+func statusPrintSecrets(p *Printer, state *config.UserState) {
+	p.Line("")
+	p.Line("%s", ui.StyleSection.Render("▸ Secrets"))
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(cannot resolve home dir)"))
+		p.Line("  %s", ui.StyleHint.Render("(cannot resolve home dir)"))
 		return
 	}
 
@@ -187,8 +188,8 @@ func statusPrintSecrets(state *config.UserState) {
 		return "missing"
 	}
 
-	printKV("SSH key", fileStatus(filepath.Join(home, ".ssh", keyName)))
-	printKV("Shell secrets", fileStatus(filepath.Join(home, ".config", "shell", "90-secrets.sh")))
+	p.KV("SSH key", fileStatus(filepath.Join(home, ".ssh", keyName)))
+	p.KV("Shell secrets", fileStatus(filepath.Join(home, ".config", "shell", "90-secrets.sh")))
 
 	// Count .age files
 	storeDir := filepath.Join(home, ".local", "share", "dotfiles-secrets")
@@ -200,35 +201,35 @@ func statusPrintSecrets(state *config.UserState) {
 			}
 		}
 	}
-	printKV("Encrypted", fmt.Sprintf("%d file(s)", ageCount))
+	p.KV("Encrypted", fmt.Sprintf("%d file(s)", ageCount))
 
 	if lb := state.Secrets.LastBackup; lb != nil && lb.Path != "" {
-		printKV("Last backup", fmt.Sprintf("%s (%s ago, %d files)",
+		p.KV("Last backup", fmt.Sprintf("%s (%s ago, %d files)",
 			lb.Path, humanDuration(time.Since(lb.Time)), lb.Files))
 	} else {
-		printKV("Last backup", "(none)")
+		p.KV("Last backup", "(none)")
 	}
 }
 
 // statusPrintSync prints a compact rsync sync summary.
-func statusPrintSync(state *config.UserState) {
-	fmt.Println()
-	fmt.Println(ui.StyleSection.Render("▸ Sync"))
+func statusPrintSync(p *Printer, state *config.UserState) {
+	p.Line("")
+	p.Line("%s", ui.StyleSection.Render("▸ Sync"))
 
 	if state.Modules.Rsync.RemoteHost == "" {
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(not configured — run 'dotfiles sync setup')"))
+		p.Line("  %s", ui.StyleHint.Render("(not configured — run 'dotfiles sync setup')"))
 		return
 	}
 
 	syncCfg, err := rsync.ResolveConfig(state)
 	if err != nil {
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(config error: "+err.Error()+")"))
+		p.Line("  %s", ui.StyleHint.Render("(config error: "+err.Error()+")"))
 		return
 	}
 
 	paths, err := rsync.ResolvePaths()
 	if err != nil {
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(cannot resolve paths)"))
+		p.Line("  %s", ui.StyleHint.Render("(cannot resolve paths)"))
 		return
 	}
 
@@ -239,39 +240,39 @@ func statusPrintSync(state *config.UserState) {
 
 	st, err := rsync.GetStatus(context.Background(), sched, syncCfg)
 	if err != nil {
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(status unavailable: "+err.Error()+")"))
+		p.Line("  %s", ui.StyleHint.Render("(status unavailable: "+err.Error()+")"))
 		return
 	}
 
-	printKV("Remote", st.RemoteHost+":"+st.RemotePath)
-	printKV("Scheduler", st.SchedulerState.String())
+	p.KV("Remote", st.RemoteHost+":"+st.RemotePath)
+	p.KV("Scheduler", st.SchedulerState.String())
 
 	if st.LastSyncTime != nil {
-		printKV("Last sync", humanDuration(time.Since(*st.LastSyncTime))+" ago")
+		p.KV("Last sync", humanDuration(time.Since(*st.LastSyncTime))+" ago")
 	} else {
-		printKV("Last sync", "(never)")
+		p.KV("Last sync", "(never)")
 	}
 
 	if st.LastResult != "" {
-		printKV("Last result", st.LastResult)
+		p.KV("Last result", st.LastResult)
 	}
 }
 
 // statusPrintWorkspace lists registered projects and active tmux sessions.
-func statusPrintWorkspace() {
-	fmt.Println()
+func statusPrintWorkspace(p *Printer) {
+	p.Line("")
 
 	cfg, err := workspace.LoadConfig()
 	if err != nil {
-		fmt.Println(ui.StyleSection.Render("▸ Workspace"))
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(could not load config: "+err.Error()+")"))
+		p.Line("%s", ui.StyleSection.Render("▸ Workspace"))
+		p.Line("  %s", ui.StyleHint.Render("(could not load config: "+err.Error()+")"))
 		return
 	}
 
-	fmt.Println(ui.StyleSection.Render(fmt.Sprintf("▸ Workspace (%d projects)", len(cfg.Projects))))
+	p.Line("%s", ui.StyleSection.Render(fmt.Sprintf("▸ Workspace (%d projects)", len(cfg.Projects))))
 
 	if len(cfg.Projects) == 0 {
-		fmt.Printf("  %s\n", ui.StyleHint.Render("(none — use 'dotfiles register <name>' to add one)"))
+		p.Line("  %s", ui.StyleHint.Render("(none — use 'dotfiles register <name>' to add one)"))
 		return
 	}
 
@@ -287,14 +288,14 @@ func statusPrintWorkspace() {
 		}
 	}
 
-	for _, p := range cfg.Projects {
+	for _, proj := range cfg.Projects {
 		marker := " "
-		if active[p.Name] {
+		if active[proj.Name] {
 			marker = "*"
 		}
-		fmt.Printf("  %s %s  %s\n",
+		p.Line("  %s %s  %s",
 			ui.StyleSuccess.Render(marker),
-			ui.StyleValue.Render(fmt.Sprintf("%-18s", p.Name)),
-			ui.StyleHint.Render(p.Path))
+			ui.StyleValue.Render(fmt.Sprintf("%-18s", proj.Name)),
+			ui.StyleHint.Render(proj.Path))
 	}
 }

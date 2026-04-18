@@ -22,7 +22,7 @@ Also available as 'dot' for convenience.`,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// No subcommand → show friendly welcome screen
-			printWelcome(version, commit)
+			printWelcome(cmd, version, commit)
 			return nil
 		},
 	}
