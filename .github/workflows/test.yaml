@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Run unit tests with coverage
+      - name: Unit tests with coverage
         run: go test ./... -race -count=1 -coverprofile=coverage.out
       - name: Build binary
         run: go build -o bin/dotfiles ./cmd/dotfiles/
@@ -45,8 +45,7 @@ jobs:
         run: brew install shellcheck
       - name: Shellcheck install script
         run: shellcheck scripts/install.sh
-      - name: Bash syntax check install script
-        run: bash -n scripts/install.sh
+      - run: bash -n scripts/install.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
@@ -59,89 +58,72 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        dockerfile: [ubuntu-22.04, ubuntu-24.04]
+        profile: [minimal, full, server]
         include:
-          - os: ubuntu-22.04
-            profile: minimal
-            dockerfile: Dockerfile.ubuntu-22.04
-          - os: ubuntu-22.04
-            profile: full
-            dockerfile: Dockerfile.ubuntu-22.04
-          - os: ubuntu-22.04
+          # Minimal/server-stripped base image — only meaningful for server profile.
+          - dockerfile: server
             profile: server
-            dockerfile: Dockerfile.ubuntu-22.04
-          - os: ubuntu-24.04
-            profile: minimal
-            dockerfile: Dockerfile.ubuntu-24.04
-          - os: ubuntu-24.04
-            profile: full
-            dockerfile: Dockerfile.ubuntu-24.04
-          - os: ubuntu-24.04
-            profile: server
-            dockerfile: Dockerfile.ubuntu-24.04
-          - os: ubuntu-22.04
-            profile: server
-            dockerfile: Dockerfile.server
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Build binary
-        run: go build -o dotfiles ./cmd/dotfiles/
-      - name: Build Docker image
-        run: docker build -t dotfiles-test:${{ matrix.os }}-${{ matrix.profile }} -f tests/${{ matrix.dockerfile }} .
-      - name: Run profile test
-        run: docker run --rm dotfiles-test:${{ matrix.os }}-${{ matrix.profile }} /tests/run-profile.sh ${{ matrix.profile }}
+      - run: go build -o dotfiles ./cmd/dotfiles/
+      - name: Build image + run profile
+        env:
+          TAG: dotfiles-test:${{ matrix.dockerfile }}
+        run: |
+          docker build -t "$TAG" -f "tests/Dockerfile.${{ matrix.dockerfile }}" .
+          docker run --rm "$TAG" /tests/run-profile.sh "${{ matrix.profile }}"
 
-  module:
+  linux:
+    # Combined module + scenario suite: one image build, N fresh-container runs.
     needs: unit
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [packages, shell, node, git, ssh, terminal, tmux, ai-tools, conda]
-        os: [ubuntu-22.04]
     runs-on: ubuntu-latest
+    env:
+      TAG: dotfiles-test:linux
+      MODULES: "packages shell node git ssh terminal tmux ai-tools conda"
+      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace drive-exclude sync install-script"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Build binary
-        run: go build -o dotfiles ./cmd/dotfiles/
-      - name: Build Docker image
-        run: docker build -t dotfiles-test:${{ matrix.os }}-module -f tests/Dockerfile.${{ matrix.os }} .
-      - name: Run module test
-        run: docker run --rm dotfiles-test:${{ matrix.os }}-module /tests/run-module.sh ${{ matrix.module }}
-
-  scenario:
-    needs: unit
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario:
-          - dry-run-all-profiles
-          - init-and-apply
-          - idempotency
-          - server-profile
-          - upgrade-check
-          - home-override
-          - workspace
-          - drive-exclude
-          - sync
-          - install-script
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-      - name: Build binary
-        run: go build -o dotfiles ./cmd/dotfiles/
-      - name: Build Docker image
-        run: docker build -t dotfiles-test:scenario -f tests/Dockerfile.ubuntu-22.04 .
-      - name: Run scenario
-        run: docker run --rm dotfiles-test:scenario /tests/scenarios/${{ matrix.scenario }}.sh
+      - run: go build -o dotfiles ./cmd/dotfiles/
+      - run: docker build -t "$TAG" -f tests/Dockerfile.ubuntu-22.04 .
+      - name: Modules
+        run: |
+          failed=()
+          for m in $MODULES; do
+            echo "::group::module $m"
+            if ! docker run --rm "$TAG" /tests/run-module.sh "$m"; then
+              failed+=("$m")
+              echo "::error::module $m failed"
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "failed modules: ${failed[*]}"
+            exit 1
+          fi
+      - name: Scenarios
+        if: always()
+        run: |
+          failed=()
+          for s in $SCENARIOS; do
+            echo "::group::scenario $s"
+            if ! docker run --rm "$TAG" "/tests/scenarios/$s.sh"; then
+              failed+=("$s")
+              echo "::error::scenario $s failed"
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "failed scenarios: ${failed[*]}"
+            exit 1
+          fi
 
   apps-install-macos:
     needs: unit
@@ -152,8 +134,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Build binary
-        run: go build -o bin/dotfiles ./cmd/dotfiles/
+      - run: go build -o bin/dotfiles ./cmd/dotfiles/
       - name: Ensure jq is present
         run: command -v jq >/dev/null || brew install jq
       - name: Install defaults and verify /Applications

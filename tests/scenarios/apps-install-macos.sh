@@ -18,7 +18,11 @@ if [[ ! -f "$CATALOG" ]]; then
 fi
 
 # Parse the top-level `defaults:` list. Stops at the next top-level key.
-mapfile -t DEFAULTS < <(awk '
+# Built with a while-read loop so the script runs under bash 3.2 (macOS default).
+DEFAULTS=()
+while IFS= read -r token; do
+  DEFAULTS+=("$token")
+done < <(awk '
   /^defaults:[[:space:]]*$/ { in_defaults = 1; next }
   in_defaults && /^[a-zA-Z]/  { in_defaults = 0 }
   in_defaults && /^[[:space:]]*-[[:space:]]*/ {
