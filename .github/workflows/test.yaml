@@ -142,3 +142,19 @@ jobs:
         run: docker build -t dotfiles-test:scenario -f tests/Dockerfile.ubuntu-22.04 .
       - name: Run scenario
         run: docker run --rm dotfiles-test:scenario /tests/scenarios/${{ matrix.scenario }}.sh
+
+  apps-install-macos:
+    needs: unit
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Build binary
+        run: go build -o bin/dotfiles ./cmd/dotfiles/
+      - name: Ensure jq is present
+        run: command -v jq >/dev/null || brew install jq
+      - name: Install defaults and verify /Applications
+        run: bash tests/scenarios/apps-install-macos.sh

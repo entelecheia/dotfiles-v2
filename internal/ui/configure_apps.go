@@ -206,10 +206,10 @@ func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
 	// MultiSelect presented in grouped sections. Build a single flattened list
 	// so huh renders group separators as disabled-looking labels.
 	tokens := cat.AllTokens()
-	// Preselect: existing state → profile defaults.
+	// Preselect: existing state → catalog recommended (curated set).
 	preselect := state.Modules.MacApps.Casks
 	if len(preselect) == 0 {
-		preselect = cat.Defaults
+		preselect = cat.Recommended
 	}
 	// Filter preselect to tokens that actually exist in the catalog.
 	seen := make(map[string]bool)

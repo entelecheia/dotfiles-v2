@@ -31,6 +31,21 @@ func TestLoadMacApps(t *testing.T) {
 			t.Errorf("default %q not defined in any group", d)
 		}
 	}
+	if len(c.Recommended) == 0 {
+		t.Fatal("recommended empty")
+	}
+	recommended := make(map[string]bool, len(c.Recommended))
+	for _, r := range c.Recommended {
+		if !present[r] {
+			t.Errorf("recommended %q not defined in any group", r)
+		}
+		recommended[r] = true
+	}
+	for _, d := range c.Defaults {
+		if !recommended[d] {
+			t.Errorf("default %q missing from recommended (defaults must be a subset)", d)
+		}
+	}
 	// AllTokens must be unique
 	tokens := c.AllTokens()
 	seen := make(map[string]bool)

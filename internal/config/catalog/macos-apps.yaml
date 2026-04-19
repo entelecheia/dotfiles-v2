@@ -1,28 +1,32 @@
 # macOS cask catalog consumed by `dotfiles apps install` and the init wizard.
 # Groups keep the checkbox list navigable; tokens are Homebrew cask identifiers.
-# `defaults` is the preselected set surfaced to users on a fresh machine.
+# `defaults` is the minimal preselection; `recommended` is the curated full set.
 
 defaults:
-  - 1password
+  - raycast
+  - obsidian
+  - arc
+  - cmux
+  - shottr
+
+recommended:
   - raycast
   - obsidian
   - fantastical
   - arc
   - cmux
-  - cursor
-  - chatgpt
+  - antigravity
   - claude
   - slack
   - bartender
-  - one-switch
   - popclip
   - shottr
-  - wispr-flow
   - forklift
   - yoink
   - hazel
   - termius
   - keyboard-maestro
+  - warp
 
 groups:
   - name: "Security & Launcher"
@@ -35,9 +39,6 @@ groups:
     apps:
       - {token: obsidian,          name: "Obsidian"}
       - {token: fantastical,       name: "Fantastical"}
-      - {token: notion-mail,       name: "Notion Mail"}
-      - {token: fsnotes,           name: "FSNotes"}
-      - {token: marked-app,        name: "Marked 2"}
 
   - name: "Browsers"
     apps:
@@ -48,12 +49,11 @@ groups:
   - name: "Terminal & Editor"
     apps:
       - {token: cmux,              name: "cmux"}
+      - {token: warp,              name: "Warp"}
       - {token: ghostty,           name: "Ghostty"}
       - {token: cursor,            name: "Cursor"}
-      - {token: zed,               name: "Zed"}
       - {token: visual-studio-code, name: "Visual Studio Code"}
       - {token: sublime-text,      name: "Sublime Text"}
-      - {token: sublime-merge,     name: "Sublime Merge"}
 
   - name: "AI"
     apps:
@@ -79,7 +79,6 @@ groups:
       - {token: hazel,             name: "Hazel"}
       - {token: default-folder-x,  name: "Default Folder X"}
       - {token: contexts,          name: "Contexts"}
-      - {token: dockmate,          name: "DockMate"}
 
   - name: "Capture & Dictation"
     apps:
@@ -91,14 +90,10 @@ groups:
     apps:
       - {token: forklift,          name: "ForkLift"}
       - {token: yoink,             name: "Yoink"}
-      - {token: commander-one,     name: "Commander One"}
-      - {token: path-finder,       name: "Path Finder"}
       - {token: transmit,          name: "Transmit"}
 
   - name: "Media & Design"
     apps:
-      - {token: downie,            name: "Downie"}
-      - {token: permute,           name: "Permute"}
       - {token: movist-pro,        name: "Movist Pro"}
       - {token: capcut,            name: "CapCut"}
       - {token: canva,             name: "Canva"}
@@ -108,20 +103,10 @@ groups:
     apps:
       - {token: gitkraken,         name: "GitKraken"}
       - {token: termius,           name: "Termius"}
-      - {token: redis-insight,     name: "Redis Insight"}
       - {token: jump-desktop,      name: "Jump Desktop"}
       - {token: vnc-viewer,        name: "VNC Viewer"}
 
   - name: "System"
     apps:
-      - {token: istat-menus,       name: "iStat Menus"}
       - {token: aldente,           name: "AlDente"}
-      - {token: app-tamer,         name: "App Tamer"}
       - {token: jettison,          name: "Jettison"}
-      - {token: macpilot,          name: "MacPilot"}
-
-  - name: "Writing & Research"
-    apps:
-      - {token: scrivener,         name: "Scrivener"}
-      - {token: bookends,          name: "Bookends"}
-      - {token: texifier,          name: "Texifier"}

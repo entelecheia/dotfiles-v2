@@ -26,8 +26,9 @@ type MacAppGroup struct {
 
 // MacApps is the root of the catalog.
 type MacApps struct {
-	Defaults []string      `yaml:"defaults"`
-	Groups   []MacAppGroup `yaml:"groups"`
+	Defaults    []string      `yaml:"defaults"`
+	Recommended []string      `yaml:"recommended"`
+	Groups      []MacAppGroup `yaml:"groups"`
 }
 
 // LoadMacApps parses the embedded macOS app catalog.

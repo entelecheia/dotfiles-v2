@@ -70,6 +70,10 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 	for _, t := range cat.Defaults {
 		defaults[t] = true
 	}
+	recommended := make(map[string]bool, len(cat.Recommended))
+	for _, t := range cat.Recommended {
+		recommended[t] = true
+	}
 
 	p := printerFrom(cmd)
 	p.Header("macOS Cask Catalog")
@@ -79,6 +83,9 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 			marks := []string{}
 			if defaults[a.Token] {
 				marks = append(marks, ui.StyleSuccess.Render(ui.MarkStarred))
+			}
+			if recommended[a.Token] && !defaults[a.Token] {
+				marks = append(marks, ui.StyleSuccess.Render(ui.MarkPreferred))
 			}
 			if installed != nil && installed[a.Token] {
 				marks = append(marks, ui.StyleSuccess.Render(ui.MarkPresent))
@@ -93,7 +100,7 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	p.Blank()
-	p.Line("  %s", ui.StyleHint.Render(ui.MarkStarred+" default preselection   "+ui.MarkPresent+" installed"))
+	p.Line("  %s", ui.StyleHint.Render(ui.MarkStarred+" default   "+ui.MarkPreferred+" recommended   "+ui.MarkPresent+" installed"))
 	return nil
 }
 
@@ -108,10 +115,11 @@ func newAppsInstallCmd() *cobra.Command {
 Modes:
   - positional args       : install exactly those tokens.
   - --defaults            : install the catalog's default set.
+  - --recommended         : install the catalog's recommended set.
   - --all                 : install every cask in the catalog.
   - --select              : open the checkbox picker even when state is set.
   - no args + interactive : open the checkbox picker, preselected from saved state.
-  - no args + --yes       : use saved state (falls back to catalog defaults).
+  - no args + --yes       : use saved state (falls back to catalog recommended).
 
 After an interactive run, the updated selection can be saved back to the user
 state file so subsequent 'dotfiles apply' runs honour it.`,
@@ -119,6 +127,7 @@ state file so subsequent 'dotfiles apply' runs honour it.`,
 		RunE: runAppsInstall,
 	}
 	c.Flags().Bool("defaults", false, "Install the catalog's default set regardless of saved state")
+	c.Flags().Bool("recommended", false, "Install the catalog's recommended set regardless of saved state")
 	c.Flags().Bool("all", false, "Install every app in the catalog")
 	c.Flags().Bool("select", false, "Force the interactive picker even when state has a list")
 	c.Flags().Bool("no-save", false, "Do not persist the interactive selection back to state")
@@ -135,9 +144,14 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	useDefaults, _ := cmd.Flags().GetBool("defaults")
+	useRecommended, _ := cmd.Flags().GetBool("recommended")
 	useAll, _ := cmd.Flags().GetBool("all")
 	forceSelect, _ := cmd.Flags().GetBool("select")
 	noSave, _ := cmd.Flags().GetBool("no-save")
+
+	if useDefaults && useRecommended {
+		return fmt.Errorf("--defaults and --recommended are mutually exclusive")
+	}
 
 	state, brew, _, err := appsBrewCtx(cmd)
 	if err != nil {
@@ -162,17 +176,19 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		want = cat.AllTokens()
 	case useDefaults:
 		want = cat.Defaults
+	case useRecommended:
+		want = cat.Recommended
 	case len(args) > 0:
 		// Trust explicit args; merge with user's stored extras if asked later.
 		want = sliceutil.Dedupe(args)
 	case forceSelect || (!yes):
 		interactive = true
 	default:
-		// --yes without args: use saved state, fall back to defaults.
+		// --yes without args: use saved state, fall back to recommended.
 		want = append([]string(nil), state.Modules.MacApps.Casks...)
 		want = append(want, state.Modules.MacApps.CasksExtra...)
 		if len(want) == 0 {
-			want = cat.Defaults
+			want = cat.Recommended
 		}
 	}
 
@@ -180,7 +196,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		tokens := cat.AllTokens()
 		preselect := append([]string(nil), state.Modules.MacApps.Casks...)
 		if len(preselect) == 0 {
-			preselect = cat.Defaults
+			preselect = cat.Recommended
 		}
 		p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
 			"  Catalog: %d apps across %d groups  (★ defaults, ✓ installed)", len(tokens), len(cat.Groups))))

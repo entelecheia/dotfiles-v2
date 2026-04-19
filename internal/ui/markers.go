@@ -9,6 +9,7 @@ package ui
 //   MarkFail     ✗      StyleError    hard failure (same glyph, colour disambiguates)
 //   MarkPartial  ·      StyleHint     partial state / listed without a state
 //   MarkStarred  ★      StyleSuccess  active / default choice
+//   MarkPreferred ◆     StyleSuccess  recommended / curated choice
 //   MarkPending  ~      StyleHint     queued / diff / not-yet-applied
 //   MarkWarn     ⚠      StyleWarning  attention needed, non-fatal
 //
@@ -16,11 +17,12 @@ package ui
 // marker alphabet stays searchable and consistent. Printer.Bullet applies the
 // colour layer automatically via (marker, style) tuples.
 const (
-	MarkPresent = "✓"
-	MarkAbsent  = "✗"
-	MarkFail    = "✗"
-	MarkPartial = "·"
-	MarkStarred = "★"
-	MarkPending = "~"
-	MarkWarn    = "⚠"
+	MarkPresent   = "✓"
+	MarkAbsent    = "✗"
+	MarkFail      = "✗"
+	MarkPartial   = "·"
+	MarkStarred   = "★"
+	MarkPreferred = "◆"
+	MarkPending   = "~"
+	MarkWarn      = "⚠"
 )
