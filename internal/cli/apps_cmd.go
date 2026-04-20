@@ -121,6 +121,10 @@ Modes:
   - no args + interactive : open the checkbox picker, preselected from saved state.
   - no args + --yes       : use saved state (falls back to catalog recommended).
 
+Casks whose .app already exists under /Applications (e.g. installed via the
+App Store or downloaded directly) are skipped by default. Pass --force to
+reinstall them over the existing bundle.
+
 After an interactive run, the updated selection can be saved back to the user
 state file so subsequent 'dotfiles apply' runs honour it.`,
 		Args: cobra.ArbitraryArgs,
@@ -131,6 +135,7 @@ state file so subsequent 'dotfiles apply' runs honour it.`,
 	c.Flags().Bool("all", false, "Install every app in the catalog")
 	c.Flags().Bool("select", false, "Force the interactive picker even when state has a list")
 	c.Flags().Bool("no-save", false, "Do not persist the interactive selection back to state")
+	c.Flags().Bool("force", false, "Reinstall even when the .app already exists under /Applications")
 	return c
 }
 
@@ -148,6 +153,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 	useAll, _ := cmd.Flags().GetBool("all")
 	forceSelect, _ := cmd.Flags().GetBool("select")
 	noSave, _ := cmd.Flags().GetBool("no-save")
+	force, _ := cmd.Flags().GetBool("force")
 
 	if useDefaults && useRecommended {
 		return fmt.Errorf("--defaults and --recommended are mutually exclusive")
@@ -238,6 +244,35 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		}
 		return nil
 	}
+
+	// Filter out casks whose .app already exists under /Applications (e.g.
+	// installed via the App Store). Without this, brew aborts the whole batch
+	// on the first conflict. --force bypasses the skip and reinstalls.
+	if !force {
+		existing := brew.ExistingCaskTargets(missing)
+		if len(existing) > 0 {
+			var toInstall, skipped []string
+			for _, c := range missing {
+				if existing[c] {
+					skipped = append(skipped, c)
+				} else {
+					toInstall = append(toInstall, c)
+				}
+			}
+			p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
+				"↷ skipping %d already-present app(s): %s  (use --force to reinstall)",
+				len(skipped), strings.Join(skipped, ", "))))
+			missing = toInstall
+		}
+	}
+
+	if len(missing) == 0 {
+		p.Line("%s", ui.StyleSuccess.Render("✓ nothing to install"))
+		if saveAfter {
+			return persistUserState(cmd, state)
+		}
+		return nil
+	}
 	if dryRun {
 		p.Line("dry-run: would install %d cask(s): %s", len(missing), strings.Join(missing, ", "))
 		if saveAfter {
@@ -246,7 +281,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	p.Line("Installing %d cask(s): %s", len(missing), strings.Join(missing, ", "))
-	if err := brew.InstallCask(ctx, missing); err != nil {
+	if err := brew.InstallCask(ctx, missing, force); err != nil {
 		return fmt.Errorf("install casks: %w", err)
 	}
 	p.Line("%s", ui.StyleSuccess.Render("✓ install complete"))

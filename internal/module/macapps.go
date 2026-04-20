@@ -79,11 +79,36 @@ func (m *MacAppsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult
 		return &ApplyResult{}, nil
 	}
 
-	if err := rc.Brew.InstallCask(ctx, missing); err != nil {
+	// Skip casks whose .app already exists under /Applications. apply is
+	// idempotent and should not fail when an app was installed outside brew.
+	var skipped []string
+	if existing := rc.Brew.ExistingCaskTargets(missing); len(existing) > 0 {
+		var toInstall []string
+		for _, c := range missing {
+			if existing[c] {
+				skipped = append(skipped, c)
+			} else {
+				toInstall = append(toInstall, c)
+			}
+		}
+		missing = toInstall
+		rc.Runner.Logger.Info("macapps: skipping externally-installed casks", "tokens", skipped)
+	}
+
+	if len(missing) == 0 {
+		msgs := []string{"no casks to install"}
+		if len(skipped) > 0 {
+			msgs = append(msgs, fmt.Sprintf("skipped %d already-present: %s", len(skipped), strings.Join(skipped, ", ")))
+		}
+		return &ApplyResult{Messages: msgs}, nil
+	}
+
+	if err := rc.Brew.InstallCask(ctx, missing, false); err != nil {
 		return nil, fmt.Errorf("install casks: %w", err)
 	}
-	return &ApplyResult{
-		Changed:  true,
-		Messages: []string{fmt.Sprintf("installed %d cask(s): %s", len(missing), strings.Join(missing, ", "))},
-	}, nil
+	msgs := []string{fmt.Sprintf("installed %d cask(s): %s", len(missing), strings.Join(missing, ", "))}
+	if len(skipped) > 0 {
+		msgs = append(msgs, fmt.Sprintf("skipped %d already-present: %s", len(skipped), strings.Join(skipped, ", ")))
+	}
+	return &ApplyResult{Changed: true, Messages: msgs}, nil
 }

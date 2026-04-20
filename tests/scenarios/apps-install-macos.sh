@@ -53,18 +53,17 @@ fi
 echo "=== Installing default casks via $BIN apps install --defaults --yes ==="
 "$BIN" apps install --defaults --yes
 
-echo "=== Verifying each default cask installed a binary under /Applications ==="
+echo "=== Verifying each default cask has its .app under /Applications ==="
+# Note: verification keys off /Applications/<Name>.app directly (not
+# `brew list --cask`) so casks that were skipped because they were already
+# present (App Store, manual install) still count as verified.
 failed=0
 for token in "${DEFAULTS[@]}"; do
-  if ! brew list --cask "$token" >/dev/null 2>&1; then
-    echo "  ✗ $token: brew does not track this cask"
-    failed=$((failed + 1))
-    continue
-  fi
-
   # Extract the primary .app artifact name from the cask metadata.
+  # Supports both string entries and [source, {target: ...}] tuples.
   app_name=$(brew info --cask "$token" --json=v2 2>/dev/null \
-    | jq -r '[.casks[0].artifacts[]? | objects | .app // empty | .[]? | if type=="array" then .[0] else . end | strings] | .[0] // empty')
+    | jq -r '[.casks[0].artifacts[]? | objects | .app // empty | .[]? | if type=="array" then (.[1].target // .[0]) else . end | strings] | .[0] // empty' \
+    | xargs -I{} basename "{}")
 
   if [[ -z "$app_name" ]]; then
     echo "  ✗ $token: no .app artifact declared in cask metadata"
