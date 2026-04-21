@@ -3,42 +3,42 @@
 # `defaults` is the minimal preselection; `recommended` is the curated full set.
 
 defaults:
-  - raycast
-  - obsidian
   - arc
   - cmux
+  - obsidian
+  - raycast
   - shottr
 
 recommended:
-  - raycast
-  - obsidian
-  - fantastical
-  - arc
-  - cmux
   - antigravity
-  - claude
-  - slack
+  - arc
   - bartender
-  - popclip
-  - shottr
+  - claude
+  - cmux
+  - fantastical
   - forklift
-  - yoink
   - hazel
-  - termius
   - keyboard-maestro
+  - obsidian
+  - popclip
+  - raycast
+  - shottr
+  - slack
+  - termius
   - warp
+  - yoink
 
 groups:
   - name: "Security & Launcher"
     apps:
       - {token: 1password,         name: "1Password"}
-      - {token: raycast,           name: "Raycast"}
       - {token: alfred,            name: "Alfred"}
+      - {token: raycast,           name: "Raycast"}
 
   - name: "Knowledge & Calendar"
     apps:
-      - {token: obsidian,          name: "Obsidian"}
       - {token: fantastical,       name: "Fantastical"}
+      - {token: obsidian,          name: "Obsidian"}
 
   - name: "Browsers"
     apps:
@@ -49,36 +49,36 @@ groups:
   - name: "Terminal & Editor"
     apps:
       - {token: cmux,              name: "cmux"}
-      - {token: warp,              name: "Warp"}
-      - {token: ghostty,           name: "Ghostty"}
       - {token: cursor,            name: "Cursor"}
-      - {token: visual-studio-code, name: "Visual Studio Code"}
+      - {token: ghostty,           name: "Ghostty"}
       - {token: sublime-text,      name: "Sublime Text"}
+      - {token: visual-studio-code, name: "Visual Studio Code"}
+      - {token: warp,              name: "Warp"}
 
   - name: "AI"
     apps:
-      - {token: claude,            name: "Claude"}
+      - {token: antigravity,       name: "Antigravity"}
       - {token: chatgpt,           name: "ChatGPT"}
       - {token: chatgpt-atlas,     name: "ChatGPT Atlas"}
+      - {token: claude,            name: "Claude"}
       - {token: codex-app,         name: "Codex"}
-      - {token: antigravity,       name: "Antigravity"}
 
   - name: "Communication"
     apps:
-      - {token: slack,             name: "Slack"}
       - {token: discord,           name: "Discord"}
+      - {token: slack,             name: "Slack"}
       - {token: telegram-desktop,  name: "Telegram"}
       - {token: whatsapp,          name: "WhatsApp"}
 
   - name: "Productivity utilities"
     apps:
       - {token: bartender,         name: "Bartender"}
+      - {token: contexts,          name: "Contexts"}
+      - {token: default-folder-x,  name: "Default Folder X"}
+      - {token: hazel,             name: "Hazel"}
+      - {token: keyboard-maestro,  name: "Keyboard Maestro"}
       - {token: one-switch,        name: "One Switch"}
       - {token: popclip,           name: "PopClip"}
-      - {token: keyboard-maestro,  name: "Keyboard Maestro"}
-      - {token: hazel,             name: "Hazel"}
-      - {token: default-folder-x,  name: "Default Folder X"}
-      - {token: contexts,          name: "Contexts"}
 
   - name: "Capture & Dictation"
     apps:
@@ -89,21 +89,21 @@ groups:
   - name: "Files & Drag-drop"
     apps:
       - {token: forklift,          name: "ForkLift"}
-      - {token: yoink,             name: "Yoink"}
       - {token: transmit,          name: "Transmit"}
+      - {token: yoink,             name: "Yoink"}
 
   - name: "Media & Design"
     apps:
-      - {token: movist-pro,        name: "Movist Pro"}
-      - {token: capcut,            name: "CapCut"}
       - {token: canva,             name: "Canva"}
+      - {token: capcut,            name: "CapCut"}
       - {token: figma,             name: "Figma"}
+      - {token: movist-pro,        name: "Movist Pro"}
 
   - name: "Dev & Remote"
     apps:
       - {token: gitkraken,         name: "GitKraken"}
-      - {token: termius,           name: "Termius"}
       - {token: jump-desktop,      name: "Jump Desktop"}
+      - {token: termius,           name: "Termius"}
       - {token: vnc-viewer,        name: "VNC Viewer"}
 
   - name: "System"

@@ -8,34 +8,15 @@ apps:
       - {type: pref,      path: "Preferences/com.1password.1password.plist"}
       - {type: group,     path: "Group Containers/2BUA8C4S2C.com.1password"}
 
-  - token: raycast
-    paths:
-      - {type: pref,      path: "Preferences/com.raycast.macos.plist"}
-      - {type: support,   path: "Application Support/com.raycast.macos"}
-      - {type: group,     path: "Group Containers/SY64MV22J9.com.raycast.macos.shared"}
-
-  - token: obsidian
-    paths:
-      - {type: pref,      path: "Preferences/md.obsidian.plist"}
-      - {type: support,   path: "Application Support/obsidian"}
-
-  - token: fantastical
-    paths:
-      - {type: container, path: "Containers/com.flexibits.fantastical2.mac"}
-      - {type: group,     path: "Group Containers/85C27NK92C.com.flexibits.fantastical2.mac"}
-
   - token: arc
     paths:
       - {type: support,   path: "Application Support/Arc"}
 
-  - token: cmux
+  - token: bartender
     paths:
-      - {type: pref,      path: "Preferences/com.cmuxterm.app.plist"}
-      - {type: support,   path: "Application Support/cmux"}
-
-  - token: cursor
-    paths:
-      - {type: support,   path: "Application Support/Cursor"}
+      - {type: pref,      path: "Preferences/com.surteesstudios.Bartender.plist"}
+      - {type: group,     path: "Group Containers/8DD663WDX4.com.surteesstudios.Bartender"}
+      - {type: group,     path: "Group Containers/24J875RH8J.com.surteesstudios.Bartender"}
 
   - token: chatgpt
     paths:
@@ -49,35 +30,19 @@ apps:
       - {type: pref,      path: "Preferences/com.anthropic.claudefordesktop.plist"}
       - {type: support,   path: "Application Support/Claude"}
 
-  - token: slack
+  - token: cmux
     paths:
-      - {type: support,   path: "Application Support/Slack"}
-      - {type: group,     path: "Group Containers/BQR82RBBHL.com.tinyspeck.slackmacgap"}
-      - {type: group,     path: "Group Containers/BQR82RBBHL.slack"}
+      - {type: pref,      path: "Preferences/com.cmuxterm.app.plist"}
+      - {type: support,   path: "Application Support/cmux"}
 
-  - token: bartender
+  - token: cursor
     paths:
-      - {type: pref,      path: "Preferences/com.surteesstudios.Bartender.plist"}
-      - {type: group,     path: "Group Containers/8DD663WDX4.com.surteesstudios.Bartender"}
-      - {type: group,     path: "Group Containers/24J875RH8J.com.surteesstudios.Bartender"}
+      - {type: support,   path: "Application Support/Cursor"}
 
-  - token: one-switch
+  - token: fantastical
     paths:
-      - {type: pref,      path: "Preferences/studio.fireball.OneSwitch.plist"}
-
-  - token: popclip
-    paths:
-      - {type: pref,      path: "Preferences/com.pilotmoon.popclip.plist"}
-      - {type: support,   path: "Application Support/PopClip"}
-
-  - token: shottr
-    paths:
-      - {type: container, path: "Containers/cc.ffitch.shottr"}
-
-  - token: wispr-flow
-    paths:
-      - {type: pref,      path: "Preferences/com.electron.wispr-flow.plist"}
-      - {type: support,   path: "Application Support/Wispr Flow"}
+      - {type: container, path: "Containers/com.flexibits.fantastical2.mac"}
+      - {type: group,     path: "Group Containers/85C27NK92C.com.flexibits.fantastical2.mac"}
 
   - token: forklift
     paths:
@@ -87,23 +52,12 @@ apps:
       - {type: support,   path: "Application Support/ForkLift"}
       - {type: group,     path: "Group Containers/J3CP9BBBN6.com.binarynights.ForkLift"}
 
-  - token: yoink
-    paths:
-      - {type: container, path: "Containers/at.EternalStorms.Yoink"}
-      - {type: group,     path: "Group Containers/G78RJ6NLJU.group.at.EternalStorms.Yoink"}
-
   - token: hazel
     paths:
       - {type: pref,      path: "Preferences/com.noodlesoft.Hazel.plist"}
       - {type: pref,      path: "Preferences/86Z3GCJ4MF.com.noodlesoft.HazelHelper.plist"}
       - {type: support,   path: "Application Support/Hazel"}
       - {type: group,     path: "Group Containers/86Z3GCJ4MF.com.noodlesoft.Hazel"}
-
-  - token: termius
-    paths:
-      - {type: pref,      path: "Preferences/com.termius-dmg.mac.plist"}
-      - {type: support,   path: "Application Support/Termius"}
-      - {type: group,     path: "Group Containers/6KN952WR85.com.termius.mac"}
 
   - token: keyboard-maestro
     paths:
@@ -115,3 +69,49 @@ apps:
   - token: moom
     paths:
       - {type: pref,      path: "Preferences/com.manytricks.Moom.plist"}
+
+  - token: obsidian
+    paths:
+      - {type: pref,      path: "Preferences/md.obsidian.plist"}
+      - {type: support,   path: "Application Support/obsidian"}
+
+  - token: one-switch
+    paths:
+      - {type: pref,      path: "Preferences/studio.fireball.OneSwitch.plist"}
+
+  - token: popclip
+    paths:
+      - {type: pref,      path: "Preferences/com.pilotmoon.popclip.plist"}
+      - {type: support,   path: "Application Support/PopClip"}
+
+  - token: raycast
+    paths:
+      - {type: pref,      path: "Preferences/com.raycast.macos.plist"}
+      - {type: support,   path: "Application Support/com.raycast.macos"}
+      - {type: group,     path: "Group Containers/SY64MV22J9.com.raycast.macos.shared"}
+
+  - token: shottr
+    paths:
+      - {type: container, path: "Containers/cc.ffitch.shottr"}
+
+  - token: slack
+    paths:
+      - {type: support,   path: "Application Support/Slack"}
+      - {type: group,     path: "Group Containers/BQR82RBBHL.com.tinyspeck.slackmacgap"}
+      - {type: group,     path: "Group Containers/BQR82RBBHL.slack"}
+
+  - token: termius
+    paths:
+      - {type: pref,      path: "Preferences/com.termius-dmg.mac.plist"}
+      - {type: support,   path: "Application Support/Termius"}
+      - {type: group,     path: "Group Containers/6KN952WR85.com.termius.mac"}
+
+  - token: wispr-flow
+    paths:
+      - {type: pref,      path: "Preferences/com.electron.wispr-flow.plist"}
+      - {type: support,   path: "Application Support/Wispr Flow"}
+
+  - token: yoink
+    paths:
+      - {type: container, path: "Containers/at.EternalStorms.Yoink"}
+      - {type: group,     path: "Group Containers/G78RJ6NLJU.group.at.EternalStorms.Yoink"}
