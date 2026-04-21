@@ -200,6 +200,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 
 	if interactive {
 		tokens := cat.AllTokens()
+		sort.Strings(tokens)
 		preselect := append([]string(nil), state.Modules.MacApps.Casks...)
 		if len(preselect) == 0 {
 			preselect = cat.Recommended
