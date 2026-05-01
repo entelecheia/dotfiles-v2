@@ -184,7 +184,20 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	p.Line("")
-	return module.RunAll(ctx, modules, rc)
+	if err := module.RunAll(ctx, modules, rc); err != nil {
+		return err
+	}
+
+	// Refresh shell completion scripts from the current cobra tree so any
+	// new subcommand (e.g. gdrive-sync) tab-completes after the next shell
+	// session. Failures here are logged but don't fail apply — completion
+	// is a UX nicety, not a correctness requirement.
+	if changed, err := installCompletions(cmd.Root(), runner, home); err != nil {
+		runner.Logger.Warn("installing shell completions failed", "err", err)
+	} else if changed && !dryRun {
+		p.Line("✓ shell completions refreshed in %s", completionDir(home))
+	}
+	return nil
 }
 
 // configureInteractive walks through each configuration section interactively.
