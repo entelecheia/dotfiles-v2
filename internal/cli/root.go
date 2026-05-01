@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -117,7 +118,12 @@ func Execute(version, commit string) error {
 	// implicit routing which could mask typos as project launches).
 	if len(os.Args) > 1 {
 		first := os.Args[1]
-		if first != "" && first[0] != '-' {
+		// Skip the gate for cobra's hidden runtime hooks (__complete,
+		// __completeNoDesc). Cobra registers them inside cmd.Execute()
+		// via InitDefaultCompletionCmd, so they're not yet present in
+		// knownSubcommands at this point. User-facing commands never
+		// start with "__".
+		if first != "" && first[0] != '-' && !strings.HasPrefix(first, "__") {
 			known := knownSubcommands(cmd)
 			if !known[first] {
 				fmt.Fprintf(os.Stderr, "Unknown command %q\n", first)
