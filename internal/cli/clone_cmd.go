@@ -42,7 +42,8 @@ Maintenance:
   dot clone log         View recent sync log entries
   dot clone skip        Manage skipped-file list
   dot clone pause       Temporarily stop auto-sync
-  dot clone resume      Restart auto-sync`,
+  dot clone resume      Restart auto-sync
+  dot clone reset       Uninstall scheduler + wipe generated files (re-run setup to reconfigure)`,
 		RunE:         runClonePull,
 		SilenceUsage: true,
 	}
@@ -62,6 +63,7 @@ Maintenance:
 		newCloneLogCmd(),
 		newClonePauseCmd(),
 		newCloneResumeCmd(),
+		newCloneResetCmd(),
 	)
 
 	return cmd
@@ -112,7 +114,7 @@ func clonePreflight(p *Printer, cfg *rclone.Config, runner *exec.Runner) bool {
 
 func newClonePullCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "pull",
+		Use:          "pull",
 		Short:        "Pull from remote: download newer files (safe, read-only on remote)",
 		RunE:         runClonePull,
 		SilenceUsage: true,
@@ -685,6 +687,100 @@ func runCloneResume(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("resuming scheduler: %w", err)
 	}
 	p.Line("Auto-sync resumed.")
+	return nil
+}
+
+// ── reset ─────────────────────────────────────────────────────────────────
+
+func newCloneResetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reset",
+		Short: "Uninstall scheduler and wipe generated files (filter, skip list, log)",
+		Long: `Reset the clone module to a clean slate. Useful when you want to make
+sure the auto-sync scheduler stays off and won't be accidentally re-armed
+by a stray ` + "`dot clone resume`" + ` invocation.
+
+Removes:
+  - launchd plist (macOS) / systemd timer + service (Linux)
+  - rclone filter file (~/.config/rclone/workspace-filter.txt)
+  - rclone skip list  (~/.config/rclone/workspace-skip.txt)
+  - bisync log        (~/.local/log/rclone-bisync.log)
+  - state.modules.sync.{remote, path, interval} (cleared)
+
+Does NOT touch:
+  - rclone remote credentials (~/.config/rclone/rclone.conf) — use
+    ` + "`rclone config delete <remote>`" + ` if you need to drop those.
+  - workspace files.
+
+After reset, ` + "`dot clone resume`" + ` becomes a no-op and ` + "`dot clone`" + ` will refuse
+to run with "filter file missing" until you ` + "`dot clone setup`" + ` again.`,
+		RunE:         runCloneReset,
+		SilenceUsage: true,
+	}
+}
+
+func runCloneReset(cmd *cobra.Command, _ []string) error {
+	state, cfg, paths, runner, err := cloneBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	yes, _ := cmd.Flags().GetBool("yes")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	p := printerFrom(cmd)
+
+	if dryRun {
+		p.Line("(dry-run — no changes)")
+	}
+
+	confirmed, err := ui.Confirm("Reset clone (uninstall scheduler, wipe filter/skip/log)?", yes)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		p.Line("Aborted.")
+		return nil
+	}
+
+	engine := template.NewEngine()
+	sched := rclone.NewScheduler(runner, paths, cfg, engine)
+	ctx := cmd.Context()
+
+	// 1. Uninstall scheduler (best-effort — fine if not installed).
+	if sched.State(ctx) == rclone.SchedulerNotInstalled {
+		p.Line("  ✓ scheduler already not installed")
+	} else if err := sched.Uninstall(ctx); err != nil {
+		p.Warn("scheduler uninstall failed: %v", err)
+	} else {
+		p.Line("  ✓ scheduler uninstalled")
+	}
+
+	// 2. Remove generated files (best-effort).
+	for _, target := range []struct{ label, path string }{
+		{"filter file", paths.FilterFile},
+		{"skip list", paths.SkipFile},
+		{"log file", cfg.LogFile},
+	} {
+		if target.path == "" {
+			continue
+		}
+		if err := runner.Remove(target.path); err != nil && !os.IsNotExist(err) {
+			p.Warn("remove %s (%s): %v", target.label, target.path, err)
+			continue
+		}
+		p.Line("  ✓ removed %s (%s)", target.label, target.path)
+	}
+
+	// 3. Clear state.modules.sync.
+	if !dryRun {
+		state.Modules.Sync = config.UserSyncState{}
+		if err := config.SaveState(state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+		p.Line("  ✓ state.modules.sync cleared")
+	}
+
+	p.Blank()
+	p.Line("✓ clone reset complete. Run `dot clone setup` to reconfigure.")
 	return nil
 }
 
