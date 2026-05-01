@@ -60,6 +60,9 @@ Also available as 'dot' for convenience.`,
 	// Sync (rsync binary sync to remote server)
 	root.AddCommand(newSyncCmd())
 
+	// Gdrive-sync (local rsync mirror between workspace and gdrive-workspace)
+	root.AddCommand(newGdriveSyncCmd())
+
 	// Clone (rclone Google Drive sync)
 	root.AddCommand(newCloneCmd())
 

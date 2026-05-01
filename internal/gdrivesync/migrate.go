@@ -30,9 +30,9 @@ type migrationLink struct {
 // migrationLinks lists the workspace-relative symlinks that the legacy
 // dual-path policy created and that the new policy reverses.
 //
-//   .gdrive          → just remove (was a bookmark to gdrive-workspace)
-//   inbox/downloads  → real dir (will receive content from mirror)
-//   inbox/incoming   → real dir (will receive content from mirror)
+//	.gdrive          → just remove (was a bookmark to gdrive-workspace)
+//	inbox/downloads  → real dir (will receive content from mirror)
+//	inbox/incoming   → real dir (will receive content from mirror)
 var migrationLinks = []migrationLink{
 	{Rel: ".gdrive", Action: "remove"},
 	{Rel: "inbox/downloads", Action: "convert"},
@@ -162,6 +162,19 @@ func hasUncommittedGit(path string) bool {
 		return false
 	}
 	return strings.TrimSpace(string(out)) != ""
+}
+
+// HasPendingMigration reports whether any legacy migration symlink still
+// lives under localBase. Pull/push/sync refuse to run while any of these
+// remain because the symlinks would route writes back into the mirror
+// tree, defeating the workspace-authoritative model.
+func HasPendingMigration(localBase string) bool {
+	for _, st := range symlinkStates(localBase) {
+		if st.IsSymlink {
+			return true
+		}
+	}
+	return false
 }
 
 // symlinkStates inspects each migration target under localBase and

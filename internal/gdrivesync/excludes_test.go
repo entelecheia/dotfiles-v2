@@ -19,12 +19,12 @@ func TestLoadExcludePatterns_ContainsCriticalRules(t *testing.T) {
 
 	// Critical rules — losing these would break correctness or sync the wrong things.
 	required := []string{
-		".git",            // submodule gitlink files
-		".git/",           // .git directories
-		".gitmodules",     // submodule manifest
+		".git",             // submodule gitlink files
+		".git/",            // .git directories
+		".gitmodules",      // submodule manifest
 		".sync-conflicts/", // self-protection
-		".DS_Store",       // mac noise
-		"*.gdoc",          // Drive native pointer
+		".DS_Store",        // mac noise
+		"*.gdoc",           // Drive native pointer
 		"*.gsheet",
 		".tmp.driveupload",
 		".tmp.drivedownload",

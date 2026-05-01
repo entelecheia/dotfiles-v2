@@ -235,6 +235,30 @@ func TestMigrationLinks_CompletePlanFromSourceSpec(t *testing.T) {
 	}
 }
 
+func TestHasPendingMigration_TrueWhileSymlinksRemain(t *testing.T) {
+	f := newMigrationFixture(t)
+	if !HasPendingMigration(f.root) {
+		t.Error("HasPendingMigration should be true with legacy symlinks present")
+	}
+}
+
+func TestHasPendingMigration_FalseAfterConvert(t *testing.T) {
+	f := newMigrationFixture(t)
+	if err := ConvertSymlinks(f.runner(), f.root); err != nil {
+		t.Fatalf("ConvertSymlinks: %v", err)
+	}
+	if HasPendingMigration(f.root) {
+		t.Error("HasPendingMigration should be false after symlinks are converted")
+	}
+}
+
+func TestHasPendingMigration_FalseOnFreshTree(t *testing.T) {
+	root := t.TempDir()
+	if HasPendingMigration(root) {
+		t.Error("HasPendingMigration should be false when none of the migration paths exist")
+	}
+}
+
 func TestPreflight_ReportsBasicShape(t *testing.T) {
 	f := newMigrationFixture(t)
 

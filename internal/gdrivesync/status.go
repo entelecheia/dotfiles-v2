@@ -20,8 +20,8 @@ type Status struct {
 	LastPull     time.Time
 	LastPush     time.Time
 	LastSync     time.Time
-	RsyncVersion string  // empty if not installed
-	LockHeld     bool    // someone has gdrive-sync.lock right now
+	RsyncVersion string // empty if not installed
+	LockHeld     bool   // someone has gdrive-sync.lock right now
 	MaxDelete    int
 	Conflicts    []ConflictEntry // local-tree backups (oldest first)
 }
