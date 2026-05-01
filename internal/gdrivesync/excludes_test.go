@@ -18,6 +18,9 @@ func TestLoadExcludePatterns_ContainsCriticalRules(t *testing.T) {
 	}
 
 	// Critical rules — losing these would break correctness or sync the wrong things.
+	// Note: shared-folder exclusions are NOT name-based; they're handled by the
+	// dynamic excludes pipeline (DetectSharedEntry + manual list). Don't add
+	// `shared/`, `_shared/`, etc. back here.
 	required := []string{
 		".git",             // submodule gitlink files
 		".git/",            // .git directories
@@ -114,7 +117,7 @@ func TestMaterializeExcludesFile_RewritesIfStale(t *testing.T) {
 }
 
 func TestCommonArgs_AlwaysOnRules(t *testing.T) {
-	args := commonArgs("/tmp/excludes.conf", false)
+	args := commonArgs([]string{"/tmp/excludes.conf"}, false)
 
 	wantContains := []string{
 		"-a",
@@ -134,7 +137,7 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 	}
 
 	// With verbose=true: --progress should be present.
-	args = commonArgs("/tmp/x.conf", true)
+	args = commonArgs([]string{"/tmp/x.conf"}, true)
 	if !slices.Contains(args, "--progress") {
 		t.Error("commonArgs(verbose=true) did not add --progress")
 	}
@@ -143,7 +146,7 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 func TestCommonArgs_NoDeleteFlags(t *testing.T) {
 	// commonArgs is shared between pull and push; the actual --delete-after / --update
 	// must be added by the caller. Guard: commonArgs must NOT inject either of those.
-	args := commonArgs("/tmp/x.conf", false)
+	args := commonArgs([]string{"/tmp/x.conf"}, false)
 	for _, forbidden := range []string{"--delete", "--delete-after", "--delete-excluded", "--update"} {
 		if slices.Contains(args, forbidden) {
 			t.Errorf("commonArgs leaked direction-specific flag %q (must be added by Pull/Push only)", forbidden)

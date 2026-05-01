@@ -30,7 +30,7 @@ func TestPullArgs_WorkspaceAuthoritative(t *testing.T) {
 	cfg := newTestConfig(t)
 	conflict := &ConflictDir{Timestamp: "2026-05-01T12-00-00Z"}
 
-	args := pullArgs(cfg, conflict, false)
+	args := pullArgs(cfg, conflict, "", false)
 
 	// Must include --update (workspace-authoritative).
 	if !slices.Contains(args, "--update") {
@@ -64,12 +64,12 @@ func TestPullArgs_DryRunPlumbing(t *testing.T) {
 	cfg := newTestConfig(t)
 	conflict := &ConflictDir{Timestamp: "ts"}
 
-	noDry := pullArgs(cfg, conflict, false)
+	noDry := pullArgs(cfg, conflict, "", false)
 	if slices.Contains(noDry, "--dry-run") {
 		t.Error("pullArgs(dryRun=false) leaked --dry-run")
 	}
 
-	dry := pullArgs(cfg, conflict, true)
+	dry := pullArgs(cfg, conflict, "", true)
 	if !slices.Contains(dry, "--dry-run") {
 		t.Errorf("pullArgs(dryRun=true) missing --dry-run; got %v", dry)
 	}
@@ -80,7 +80,7 @@ func TestPushArgs_DeletePropagationWithSafetyCap(t *testing.T) {
 	cfg.MaxDelete = 250
 	conflict := &ConflictDir{Timestamp: "2026-05-01T12-00-00Z"}
 
-	args := pushArgs(cfg, conflict, false)
+	args := pushArgs(cfg, conflict, "", false)
 
 	if !slices.Contains(args, "--delete-after") {
 		t.Errorf("pushArgs missing --delete-after; got %v", args)
@@ -112,7 +112,7 @@ func TestPushArgs_DeletePropagationWithSafetyCap(t *testing.T) {
 
 func TestMigrateArgs_NoDeleteNoUpdate(t *testing.T) {
 	cfg := newTestConfig(t)
-	args := migrateArgs(cfg, false)
+	args := migrateArgs(cfg, "", false)
 
 	for _, forbidden := range []string{"--delete", "--delete-after", "--update"} {
 		if slices.Contains(args, forbidden) {

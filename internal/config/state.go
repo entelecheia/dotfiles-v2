@@ -74,15 +74,16 @@ type UserSyncState struct {
 // Paused defaults to true on a fresh state so `migrate` can run a one-shot
 // pull and the user can verify before flipping to false via `resume`.
 type UserGdriveSyncState struct {
-	LocalPath   string    `yaml:"local_path,omitempty"`  // primary tree, default ~/workspace/work
-	MirrorPath  string    `yaml:"mirror_path,omitempty"` // mirror tree, default ~/gdrive-workspace/work
-	LastPull    time.Time `yaml:"last_pull,omitempty"`
-	LastPush    time.Time `yaml:"last_push,omitempty"`
-	LastSync    time.Time `yaml:"last_sync,omitempty"`
-	ConflictDir string    `yaml:"conflict_dir,omitempty"` // default <local>/.sync-conflicts
-	Paused      bool      `yaml:"paused,omitempty"`       // gates pull/push/sync; cleared by `resume`
-	MaxDelete   int       `yaml:"max_delete,omitempty"`   // safety cap for push --delete-after, default 1000
-	Interval    int       `yaml:"interval,omitempty"`     // auto-sync interval in seconds (launchd/systemd), default 300
+	LocalPath      string    `yaml:"local_path,omitempty"`  // primary tree, default ~/workspace/work
+	MirrorPath     string    `yaml:"mirror_path,omitempty"` // mirror tree, default ~/gdrive-workspace/work
+	LastPull       time.Time `yaml:"last_pull,omitempty"`
+	LastPush       time.Time `yaml:"last_push,omitempty"`
+	LastSync       time.Time `yaml:"last_sync,omitempty"`
+	ConflictDir    string    `yaml:"conflict_dir,omitempty"`    // default <local>/.sync-conflicts
+	Paused         bool      `yaml:"paused,omitempty"`          // gates pull/push/sync; cleared by `resume`
+	MaxDelete      int       `yaml:"max_delete,omitempty"`      // safety cap for push --delete-after, default 1000
+	Interval       int       `yaml:"interval,omitempty"`        // auto-sync interval in seconds (launchd/systemd), default 300
+	SharedExcludes []string  `yaml:"shared_excludes,omitempty"` // operator-curated owned-but-shared-out folders, relative to mirror_path
 }
 
 // RepoConfig describes a git repository to clone into the workspace.
@@ -152,6 +153,20 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.GdriveSync.Interval != 0 && (s.Modules.GdriveSync.Interval < 60 || s.Modules.GdriveSync.Interval > 86400) {
 		return fmt.Errorf("gdrive_sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.GdriveSync.Interval)
+	}
+	for _, p := range s.Modules.GdriveSync.SharedExcludes {
+		// Paths must be relative to mirror_path. Absolute paths and parent
+		// escapes would let the manual list reach outside the mirror tree
+		// and exclude unrelated content (or be portable across machines
+		// in misleading ways).
+		if strings.HasPrefix(p, "/") {
+			return fmt.Errorf("gdrive_sync.shared_excludes entry %q must be relative to mirror_path (no leading /)", p)
+		}
+		for _, seg := range strings.Split(p, "/") {
+			if seg == ".." {
+				return fmt.Errorf("gdrive_sync.shared_excludes entry %q may not contain '..' segments", p)
+			}
+		}
 	}
 	seen := make(map[string]bool)
 	for _, repo := range s.Modules.Workspace.Repos {

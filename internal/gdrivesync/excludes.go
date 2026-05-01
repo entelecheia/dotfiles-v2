@@ -69,19 +69,26 @@ func LoadExcludePatterns() ([]string, error) {
 }
 
 // commonArgs returns the rsync flags shared between pull and push.
-// excludesFile must be a real path on disk (use MaterializeExcludesFile).
+// excludeFiles must be real paths on disk (use MaterializeExcludesFile
+// + MaterializeSharedExcludesFile). Empty paths are skipped.
 //
-// Layered exclusions: this excludes file (static baseline) +
-// --filter=:- .gitignore (per-directory gitignore) + --no-links (skip
-// symlinks entirely). All three are always-on.
-func commonArgs(excludesFile string, verbose bool) []string {
+// Layered exclusions: static baseline (embedded excludes) + dynamic
+// shared excludes (auto-detected Drive shortcuts + operator manual
+// list) + --filter=:- .gitignore (per-directory gitignore) +
+// --no-links (skip symlinks entirely). All four are always-on.
+func commonArgs(excludeFiles []string, verbose bool) []string {
 	args := []string{
 		"-a",
 		"--human-readable",
 		"--info=stats2,progress2",
 		"--no-links",
 		"--filter=:- .gitignore",
-		"--exclude-from=" + excludesFile,
+	}
+	for _, f := range excludeFiles {
+		if f == "" {
+			continue
+		}
+		args = append(args, "--exclude-from="+f)
 	}
 	if verbose {
 		args = append(args, "--progress")

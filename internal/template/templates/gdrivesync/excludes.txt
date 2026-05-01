@@ -25,6 +25,12 @@
 .gdrive
 .gdrive/
 
+# Note: shared-folder exclusions are NOT name-based here.
+# Drive shortcut detection (.shortcut-targets-by-id, Shared drives/) and
+# the operator's manual list (state.modules.gdrive_sync.shared_excludes)
+# are both layered in at sync-time via a second --exclude-from file.
+# See `dot gdrive-sync shared`.
+
 # rsync self-protection (never sync the conflict backups themselves)
 .sync-conflicts/
 

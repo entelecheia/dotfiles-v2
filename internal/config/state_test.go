@@ -95,6 +95,32 @@ func TestValidate_SyncInterval(t *testing.T) {
 	}
 }
 
+func TestValidate_GdriveSyncSharedExcludes(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []string
+		wantErr bool
+	}{
+		{"empty", nil, false},
+		{"single relative", []string{"projects/koica-shared"}, false},
+		{"multiple relative", []string{"projects/a", "external/b/c"}, false},
+		{"absolute path rejected", []string{"/abs/path"}, true},
+		{"parent escape rejected", []string{"../escape"}, true},
+		{"parent escape mid-path rejected", []string{"projects/../../etc"}, true},
+		{"single dot allowed", []string{"./relative"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &UserState{}
+			s.Modules.GdriveSync.SharedExcludes = tt.entries
+			err := s.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate(shared_excludes=%v) err=%v, wantErr=%v", tt.entries, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestSaveLoadRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
