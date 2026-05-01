@@ -186,6 +186,8 @@ func printUsecases(cmd *cobra.Command) {
 				"List .sync-conflicts/<ts>/ entries with ages"},
 			{"dotfiles gdrive-sync pause",
 				"Stop auto-sync (scheduler + paused gate)"},
+			{"dotfiles gdrive-sync shared",
+				"Manage shared-folder exclusions (auto-detected shortcuts + manual list)"},
 		})
 
 	section(p, "8. Google Drive exclusions (macOS)",

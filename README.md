@@ -303,14 +303,18 @@ dotfiles gdrive-sync push          # workspace → mirror (--delete-after, --max
 dotfiles gdrive-sync status        # last sync, paused, scheduler, conflict backups, lock state
 dotfiles gdrive-sync conflicts     # list .sync-conflicts/<ts>/ entries with ages
 dotfiles gdrive-sync pause         # stop auto-sync (scheduler + paused gate)
+dotfiles gdrive-sync shared        # show shared-folder exclusions (auto + manual)
+dotfiles gdrive-sync shared add <path>     # add an owned-but-shared-out folder to the manual list
+dotfiles gdrive-sync shared remove <path>  # drop an entry from the manual list
 ```
 
 **Key features:**
 - **Workspace authoritative**: pull uses `--update` (newer-only, no delete) so workspace adds are never destroyed; push uses `--delete-after` so workspace deletes propagate
 - **Migration gate**: refuses to run while legacy symlinks (`.gdrive`, `inbox/downloads`, `inbox/incoming`) are still in place — point user to `migrate`
 - **Pause gate**: `migrate` leaves `Paused=true` so the operator verifies first; `resume` clears it
+- **Shared-drive refusal**: refuses to sync if `mirror_path` resolves under a Drive `Shared drives/` root — workspace-authoritative semantics would propagate deletions into a team drive
 - **Auto-sync scheduler**: launchd LaunchAgent on macOS, systemd user-timer on Linux; default 5-min interval (configurable via `state.modules.gdrive_sync.interval`, range 60..86400). `pause`/`resume` poke the scheduler on top of the Paused gate; idempotent re-install reloads after interval change
-- **Three-layer excludes**: embedded baseline (git internals, Drive metadata, build cache) + per-directory `.gitignore` via `--filter=:- .gitignore` + `--no-links` (skip all symlinks)
+- **Four-layer excludes**: (1) embedded static baseline (git internals, Drive metadata, build caches) + (2) per-run dynamic shared-folder list — Drive shortcuts auto-detected via `.shortcut-targets-by-id/` and `Shared drives/` symlink targets, plus an operator-curated manual list managed via `dot gdrive-sync shared add/remove` for owned-but-shared-out folders + (3) per-directory `.gitignore` via `--filter=:- .gitignore` + (4) `--no-links` (skip all symlinks). Detection is property-based, never name-based — `shared/`, `_shared/`, `_external/` directory names carry no special meaning
 - **Conflict capture**: `--backup --backup-dir=.sync-conflicts/<RFC3339-ts>/from-{gdrive,workspace}/` snapshots overwrites/deletes; both passes share the timestamp
 - **Safety cap**: `--max-delete=1000` (configurable) aborts runaway push deletions
 - **Stale-aware lock**: PID file inside `~/Library/Caches/dotfiles/gdrive-sync.lock`; signal-0 probes detect crashed-process locks
