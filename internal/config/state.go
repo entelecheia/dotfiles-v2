@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,7 @@ type UserModulesState struct {
 	Fonts       UserFontsState     `yaml:"fonts,omitempty"`
 	Sync        UserSyncState      `yaml:"sync,omitempty"`
 	Rsync       UserRsyncState     `yaml:"rsync,omitempty"`
+	GdriveSync  UserGdriveSyncState `yaml:"gdrive_sync,omitempty"`
 	MacApps     UserMacAppsState   `yaml:"macapps,omitempty"`
 }
 
@@ -61,6 +63,25 @@ type UserSyncState struct {
 	Remote   string `yaml:"remote,omitempty"`   // rclone remote name, default "gdrive"
 	Path     string `yaml:"path,omitempty"`     // remote path, default "work"
 	Interval int    `yaml:"interval,omitempty"` // sync interval in seconds, default 300
+}
+
+// UserGdriveSyncState holds local↔local rsync mirror config from user state.
+//
+// `dot gdrive-sync` keeps ~/workspace/work and ~/gdrive-workspace/work in sync
+// via local rsync (no SSH). Workspace is authoritative: pull uses --update only,
+// push uses --delete-after. Last* timestamps are advisory (status display).
+//
+// Paused defaults to true on a fresh state so `migrate` can run a one-shot
+// pull and the user can verify before flipping to false via `resume`.
+type UserGdriveSyncState struct {
+	LocalPath   string    `yaml:"local_path,omitempty"`   // primary tree, default ~/workspace/work
+	MirrorPath  string    `yaml:"mirror_path,omitempty"`  // mirror tree, default ~/gdrive-workspace/work
+	LastPull    time.Time `yaml:"last_pull,omitempty"`
+	LastPush    time.Time `yaml:"last_push,omitempty"`
+	LastSync    time.Time `yaml:"last_sync,omitempty"`
+	ConflictDir string    `yaml:"conflict_dir,omitempty"` // default <local>/.sync-conflicts
+	Paused      bool      `yaml:"paused,omitempty"`       // gates pull/push/sync; cleared by `resume`
+	MaxDelete   int       `yaml:"max_delete,omitempty"`   // safety cap for push --delete-after, default 1000
 }
 
 // RepoConfig describes a git repository to clone into the workspace.
@@ -124,6 +145,9 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.Rsync.Interval != 0 && (s.Modules.Rsync.Interval < 60 || s.Modules.Rsync.Interval > 86400) {
 		return fmt.Errorf("rsync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Rsync.Interval)
+	}
+	if s.Modules.GdriveSync.MaxDelete != 0 && (s.Modules.GdriveSync.MaxDelete < 1 || s.Modules.GdriveSync.MaxDelete > 1000000) {
+		return fmt.Errorf("gdrive_sync.max_delete must be 0 or 1..1000000 (got %d)", s.Modules.GdriveSync.MaxDelete)
 	}
 	seen := make(map[string]bool)
 	for _, repo := range s.Modules.Workspace.Repos {

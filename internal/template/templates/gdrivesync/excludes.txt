@@ -1,0 +1,64 @@
+# Static exclude rules for `dot gdrive-sync`.
+#
+# Layered with two other mechanisms:
+#   - `--filter=:- .gitignore` reads each directory's .gitignore at sync time
+#   - `--no-links` skips all symlinks
+# This file is the always-on baseline.
+
+# git internals — match file AND directory at any depth.
+# Submodules use a `.git` *file* (gitlink) not a directory, so the
+# slash-only patterns from the parent file alone are insufficient.
+.git
+.git/
+.git/**
+.gitmodules
+**/.git
+**/.git/
+
+# claude / omc local state
+.omc/
+.omx/
+.claude/settings.local.json
+**/.claude/settings.local.json
+
+# legacy dual-path artifacts
+.gdrive
+.gdrive/
+
+# rsync self-protection (never sync the conflict backups themselves)
+.sync-conflicts/
+
+# Drive metadata / OS files
+.DS_Store
+._*
+Icon?
+
+# Google Docs native (workspace never edits these directly)
+*.gdoc
+*.gsheet
+*.gslides
+*.gdraw
+*.gform
+*.gshortcut
+*.gtable
+*.gmap
+*.gsite
+
+# Drive in-flight artifacts
+*.tmp.driveupload
+*.tmp.drivedownload
+
+# build / cache directories (gitignore catches most; keep as safety net)
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+target/
+dist/
+build/
+.next/
+.turbo/
+
+# never sync the toolkit venv
+_sys/env/.venv/
