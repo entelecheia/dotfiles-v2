@@ -165,7 +165,30 @@ func printUsecases(cmd *cobra.Command) {
 				"Show sync health, last run, scheduler state"},
 		})
 
-	section(p, "7. Google Drive exclusions (macOS)",
+	section(p, "7. Local rsync mirror (gdrive-sync)",
+		"Workspace ⟷ gdrive-workspace mirror via local rsync. No SSH; cloud client handles upload/download.",
+		[]usecase{
+			{"dotfiles gdrive-sync setup",
+				"One-time: rsync (if missing) + auto-sync scheduler (launchd/systemd)"},
+			{"dotfiles gdrive-sync migrate",
+				"One-shot: convert legacy symlinks + bring mirror into workspace"},
+			{"dotfiles gdrive-sync resume",
+				"Activate two-way sync after migrate verified (clears Paused, re-arms timer)"},
+			{"dotfiles gdrive-sync",
+				"Pull-then-push (default): mirror → workspace, then workspace → mirror"},
+			{"dotfiles gdrive-sync pull",
+				"Pull only: mirror → workspace (--update, no --delete)"},
+			{"dotfiles gdrive-sync push",
+				"Push only: workspace → mirror (--delete-after, --max-delete=N)"},
+			{"dotfiles gdrive-sync status",
+				"Last sync, paused state, scheduler, conflicts"},
+			{"dotfiles gdrive-sync conflicts",
+				"List .sync-conflicts/<ts>/ entries with ages"},
+			{"dotfiles gdrive-sync pause",
+				"Stop auto-sync (scheduler + paused gate)"},
+		})
+
+	section(p, "8. Google Drive exclusions (macOS)",
 		"Exclude heavy directories (node_modules, build caches) from Drive sync.",
 		[]usecase{
 			{"dotfiles drive-exclude scan",
@@ -178,7 +201,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Manually exclude a specific path"},
 		})
 
-	section(p, "8. Secrets management (age encryption)",
+	section(p, "9. Secrets management (age encryption)",
 		"Encrypt SSH keys and shell secrets with age.",
 		[]usecase{
 			{"dotfiles secrets init --scaffold",
@@ -193,7 +216,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Decrypt from backup on new machine"},
 		})
 
-	section(p, "9. macOS app management (cask install + settings backup)",
+	section(p, "10. macOS app management (cask install + settings backup)",
 		"Install apps from an embedded catalog; back up and restore per-app settings.",
 		[]usecase{
 			{"dotfiles apps list",
@@ -214,7 +237,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Restore all backed-up settings (confirms first, flushes cfprefsd)"},
 		})
 
-	section(p, "10. Profile snapshots (versioned config backup)",
+	section(p, "11. Profile snapshots (versioned config backup)",
 		"Snapshot config.yaml, cask lists, and optional secrets into timestamped versions.",
 		[]usecase{
 			{"dotfiles profile backup",
@@ -231,7 +254,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Delete snapshots older than the 5 most recent"},
 		})
 
-	section(p, "11. Cross-machine migration",
+	section(p, "12. Cross-machine migration",
 		"Move your full setup to a new Mac in minutes.",
 		[]usecase{
 			{"dotfiles profile backup --tag pre-migration --include-secrets",
@@ -246,7 +269,7 @@ func printUsecases(cmd *cobra.Command) {
 				"[new machine] Restore plists and app settings"},
 		})
 
-	section(p, "12. Prompt style",
+	section(p, "13. Prompt style",
 		"Switch between a minimal and a rich Starship prompt.",
 		[]usecase{
 			{"dotfiles reconfigure",
@@ -255,7 +278,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Deploy the selected starship.toml immediately"},
 		})
 
-	section(p, "13. Updates and reconfiguration",
+	section(p, "14. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
 			{"dotfiles update --check",
@@ -268,7 +291,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Show installed version and build info"},
 		})
 
-	section(p, "14. GPU server / DGX provisioning",
+	section(p, "15. GPU server / DGX provisioning",
 		"Deploy on a fresh GPU server — auto-detects NVIDIA + CUDA.",
 		[]usecase{
 			{"curl -fsSL .../install.sh | bash",
@@ -279,7 +302,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Apply server profile (no workspace, fonts, gpg, secrets)"},
 		})
 
-	section(p, "15. Troubleshooting",
+	section(p, "16. Troubleshooting",
 		"Diagnose and recover from issues.",
 		[]usecase{
 			{"dotfiles doctor",
