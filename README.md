@@ -293,25 +293,29 @@ dotfiles sync resume          # resume auto-sync scheduler
 Local rsync mirror between `~/workspace/work` (single primary) and the cloud-sync client's mirror tree (default `~/gdrive-workspace/work`). No SSH; the cloud client (Google Drive, Dropbox, etc.) handles the round-trip to the cloud. Lets you do all file work in one place while still benefiting from off-machine backup.
 
 ```bash
-dotfiles gdrive-sync migrate     # one-shot: convert legacy symlinks + pull mirror in (idempotent)
-dotfiles gdrive-sync resume      # clear the Paused gate after manual verification
-dotfiles gdrive-sync              # default = sync (pull → push)
-dotfiles gdrive-sync sync         # explicit; same as default
-dotfiles gdrive-sync pull         # mirror → workspace (--update only, no --delete)
-dotfiles gdrive-sync push         # workspace → mirror (--delete-after, --max-delete=N)
-dotfiles gdrive-sync status       # last sync, paused state, conflict backups, lock state
-dotfiles gdrive-sync conflicts    # list .sync-conflicts/<ts>/ entries with ages
-dotfiles gdrive-sync pause        # set Paused so pull/push/sync refuse to run
+dotfiles gdrive-sync setup        # one-time: rsync (if missing) + auto-sync scheduler
+dotfiles gdrive-sync migrate      # one-shot: convert legacy symlinks + pull mirror in (idempotent)
+dotfiles gdrive-sync resume       # clear the Paused gate (and re-arm scheduler) after verification
+dotfiles gdrive-sync               # default = sync (pull → push)
+dotfiles gdrive-sync sync          # explicit; same as default
+dotfiles gdrive-sync pull          # mirror → workspace (--update only, no --delete)
+dotfiles gdrive-sync push          # workspace → mirror (--delete-after, --max-delete=N)
+dotfiles gdrive-sync status        # last sync, paused, scheduler, conflict backups, lock state
+dotfiles gdrive-sync conflicts     # list .sync-conflicts/<ts>/ entries with ages
+dotfiles gdrive-sync pause         # stop auto-sync (scheduler + paused gate)
 ```
 
 **Key features:**
 - **Workspace authoritative**: pull uses `--update` (newer-only, no delete) so workspace adds are never destroyed; push uses `--delete-after` so workspace deletes propagate
 - **Migration gate**: refuses to run while legacy symlinks (`.gdrive`, `inbox/downloads`, `inbox/incoming`) are still in place — point user to `migrate`
 - **Pause gate**: `migrate` leaves `Paused=true` so the operator verifies first; `resume` clears it
+- **Auto-sync scheduler**: launchd LaunchAgent on macOS, systemd user-timer on Linux; default 5-min interval (configurable via `state.modules.gdrive_sync.interval`, range 60..86400). `pause`/`resume` poke the scheduler on top of the Paused gate; idempotent re-install reloads after interval change
 - **Three-layer excludes**: embedded baseline (git internals, Drive metadata, build cache) + per-directory `.gitignore` via `--filter=:- .gitignore` + `--no-links` (skip all symlinks)
 - **Conflict capture**: `--backup --backup-dir=.sync-conflicts/<RFC3339-ts>/from-{gdrive,workspace}/` snapshots overwrites/deletes; both passes share the timestamp
 - **Safety cap**: `--max-delete=1000` (configurable) aborts runaway push deletions
 - **Stale-aware lock**: PID file inside `~/Library/Caches/dotfiles/gdrive-sync.lock`; signal-0 probes detect crashed-process locks
+
+> Auto-sync runs every Interval seconds via launchd (macOS) or systemd timer (Linux); default 5m. Distinct identifiers from rsync's scheduler (`com.dotfiles.gdrive-sync` vs `com.dotfiles.workspace-sync`) so both can coexist.
 
 ### `dotfiles clone`
 
