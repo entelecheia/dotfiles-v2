@@ -26,6 +26,7 @@ type Status struct {
 	Interval       int
 	SchedulerState SchedulerState
 	Conflicts      []ConflictEntry // local-tree backups (oldest first)
+	Shared         []SharedEntry   // detected shortcuts + manual list
 }
 
 // GetStatus collects current sync state from cfg + state + filesystem.
@@ -64,6 +65,14 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 
 	if confs, err := ListConflicts(s.LocalPath); err == nil {
 		s.Conflicts = confs
+	}
+
+	// Populate shared entries from a property-detected scan plus the
+	// operator's manual list. Errors are non-fatal — status is best-
+	// effort, and a permission hiccup mid-tree shouldn't black out the
+	// whole snapshot.
+	if shared, err := ScanShared(s.MirrorPath, cfg.SharedExcludes); err == nil {
+		s.Shared = shared
 	}
 
 	return s, nil

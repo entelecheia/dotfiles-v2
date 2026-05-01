@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -54,6 +57,7 @@ Maintenance:
 		newGdriveSyncSetupCmd(),
 		newGdriveSyncResumeCmd(),
 		newGdriveSyncPauseCmd(),
+		newGdriveSyncSharedCmd(),
 	)
 	return cmd
 }
@@ -331,6 +335,17 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 			p.Bullet("•", fmt.Sprintf("%s (%s ago)", c.Timestamp, age))
 		}
 	}
+	if n := len(st.Shared); n > 0 {
+		auto, manual := 0, 0
+		for _, e := range st.Shared {
+			if e.Reason == gdrivesync.SharedManual {
+				manual++
+			} else {
+				auto++
+			}
+		}
+		p.KV("Shared", fmt.Sprintf("%d entries (%d auto, %d manual) — see `dot gdrive-sync shared`", n, auto, manual))
+	}
 	p.Blank()
 	return nil
 }
@@ -601,6 +616,260 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 		p.Line("  Run `dot gdrive-sync sync` for an immediate sync, or wait for the timer.")
 	}
 	return nil
+}
+
+// ── shared (manual exclusion list) ───────────────────────────────────────
+
+func newGdriveSyncSharedCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "shared",
+		Short: "Manage shared-folder exclusions (auto-detected + manual)",
+		Long: `View and manage which folders gdrive-sync skips because they are shared.
+
+Two layers feed this list:
+  - auto    — Drive shortcuts surfaced via .shortcut-targets-by-id/ or
+              the Shared drives/ root. Detected by filesystem property,
+              never by name.
+  - manual  — relative paths the operator added (state.modules.gdrive_sync
+              .shared_excludes). Use this for owned-but-shared-out folders
+              that have no filesystem signal.
+
+Both layers feed a per-run dynamic excludes file passed to rsync.
+
+  dot gdrive-sync shared             # alias for list
+  dot gdrive-sync shared list
+  dot gdrive-sync shared add <path>...
+  dot gdrive-sync shared remove <path>...
+  dot gdrive-sync shared clear`,
+		RunE: runGdriveSyncSharedList,
+	}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "Show auto-detected + manual shared entries",
+			RunE:  runGdriveSyncSharedList,
+		},
+		&cobra.Command{
+			Use:          "add <path>...",
+			Short:        "Add one or more paths to the manual shared-excludes list",
+			Args:         cobra.MinimumNArgs(1),
+			RunE:         runGdriveSyncSharedAdd,
+			SilenceUsage: true,
+		},
+		&cobra.Command{
+			Use:          "remove <path>...",
+			Aliases:      []string{"rm"},
+			Short:        "Remove one or more paths from the manual shared-excludes list",
+			Args:         cobra.MinimumNArgs(1),
+			RunE:         runGdriveSyncSharedRemove,
+			SilenceUsage: true,
+		},
+		&cobra.Command{
+			Use:          "clear",
+			Short:        "Empty the manual shared-excludes list",
+			RunE:         runGdriveSyncSharedClear,
+			SilenceUsage: true,
+		},
+	)
+	return cmd
+}
+
+func runGdriveSyncSharedList(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	entries, err := gdrivesync.ScanShared(stripTrailingSlash(cfg.MirrorPath), cfg.SharedExcludes)
+	if err != nil {
+		return fmt.Errorf("scanning shared entries: %w", err)
+	}
+	p := printerFrom(cmd)
+	if len(entries) == 0 {
+		p.Line("No shared entries detected and no manual excludes configured.")
+		p.Line("Add owned-but-shared-out folders with: dot gdrive-sync shared add <path>")
+		return nil
+	}
+	p.Header(fmt.Sprintf("Shared exclusions under %s", stripTrailingSlash(cfg.MirrorPath)))
+	for _, e := range entries {
+		detail := e.Detail
+		if detail == "" {
+			detail = "—"
+		}
+		p.Line("  %-8s  %-40s  %s", e.Reason.String(), e.RelPath, detail)
+	}
+	p.Blank()
+	p.Line("auto entries are detected from filesystem properties; manual entries are operator-curated.")
+	return nil
+}
+
+func runGdriveSyncSharedAdd(cmd *cobra.Command, args []string) error {
+	state, cfg, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	mirror := stripTrailingSlash(cfg.MirrorPath)
+	added := make([]string, 0, len(args))
+	current := append([]string(nil), state.Modules.GdriveSync.SharedExcludes...)
+
+	for _, raw := range args {
+		rel, err := relativizeForMirror(raw, mirror)
+		if err != nil {
+			return err
+		}
+		if !containsString(current, rel) {
+			current = append(current, rel)
+			added = append(added, rel)
+		}
+	}
+
+	dedupedSorted := dedupSorted(current)
+	state.Modules.GdriveSync.SharedExcludes = dedupedSorted
+	if err := config.SaveState(state); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+
+	p := printerFrom(cmd)
+	if len(added) == 0 {
+		p.Line("No new entries — all already present.")
+	} else {
+		for _, rel := range added {
+			p.Line("✓ added %q", rel)
+		}
+	}
+	return nil
+}
+
+func runGdriveSyncSharedRemove(cmd *cobra.Command, args []string) error {
+	state, cfg, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	mirror := stripTrailingSlash(cfg.MirrorPath)
+	removed := make([]string, 0, len(args))
+	current := append([]string(nil), state.Modules.GdriveSync.SharedExcludes...)
+
+	for _, raw := range args {
+		rel, err := relativizeForMirror(raw, mirror)
+		if err != nil {
+			return err
+		}
+		next := current[:0]
+		gone := false
+		for _, e := range current {
+			if e == rel {
+				gone = true
+				continue
+			}
+			next = append(next, e)
+		}
+		current = next
+		if gone {
+			removed = append(removed, rel)
+		}
+	}
+
+	state.Modules.GdriveSync.SharedExcludes = current
+	if err := config.SaveState(state); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+
+	p := printerFrom(cmd)
+	if len(removed) == 0 {
+		p.Line("No matching entries — nothing removed.")
+	} else {
+		for _, rel := range removed {
+			p.Line("✓ removed %q", rel)
+		}
+	}
+	return nil
+}
+
+func runGdriveSyncSharedClear(cmd *cobra.Command, _ []string) error {
+	state, _, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	yes, _ := cmd.Flags().GetBool("yes")
+	n := len(state.Modules.GdriveSync.SharedExcludes)
+	p := printerFrom(cmd)
+	if n == 0 {
+		p.Line("Manual shared-excludes list is already empty.")
+		return nil
+	}
+	confirmed, err := ui.Confirm(fmt.Sprintf("Clear %d manual shared-excludes entries?", n), yes)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		p.Line("Aborted.")
+		return nil
+	}
+	state.Modules.GdriveSync.SharedExcludes = nil
+	if err := config.SaveState(state); err != nil {
+		return fmt.Errorf("saving state: %w", err)
+	}
+	p.Line("✓ Cleared %d manual entries.", n)
+	return nil
+}
+
+// relativizeForMirror normalizes a user-supplied path so it lives under
+// mirror as a relative path. Absolute paths must be inside mirror.
+// Trailing slashes and "./" prefixes are stripped. Empty results,
+// "..", and parent escapes are rejected.
+func relativizeForMirror(raw, mirror string) (string, error) {
+	cleaned := strings.TrimSpace(raw)
+	if cleaned == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	if filepath.IsAbs(cleaned) {
+		mirrorAbs, err := filepath.Abs(mirror)
+		if err != nil {
+			return "", fmt.Errorf("resolving mirror %q: %w", mirror, err)
+		}
+		rel, err := filepath.Rel(mirrorAbs, cleaned)
+		if err != nil {
+			return "", fmt.Errorf("relativizing %q against %q: %w", cleaned, mirror, err)
+		}
+		cleaned = rel
+	}
+	cleaned = strings.TrimPrefix(cleaned, "./")
+	cleaned = strings.TrimSuffix(cleaned, "/")
+	if cleaned == "" || cleaned == "." {
+		return "", fmt.Errorf("path resolves to mirror root, refusing to exclude everything")
+	}
+	for _, seg := range strings.Split(cleaned, "/") {
+		if seg == ".." {
+			return "", fmt.Errorf("path %q escapes mirror root", raw)
+		}
+	}
+	return cleaned, nil
+}
+
+// dedupSorted returns a stable, sorted copy of in with duplicates removed.
+func dedupSorted(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // ── small helpers ────────────────────────────────────────────────────────
