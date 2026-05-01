@@ -97,7 +97,12 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 				// Only default to Gdrive when no separate GdriveSymlink is configured
 				symlinkDefault = state.Modules.Workspace.Gdrive
 			}
-			state.Modules.Workspace.Symlink, err = Input("Symlink target (blank to skip)", symlinkDefault, false)
+			fmt.Println(StyleHint.Render(fmt.Sprintf(
+				"  Optional: make %s itself a symlink pointing elsewhere\n"+
+					"  (e.g. into cloud-storage). Leave blank to keep %s as a real directory.",
+				state.Modules.Workspace.Path, state.Modules.Workspace.Path)))
+			prompt := fmt.Sprintf("Symlink %s → (blank to skip)", state.Modules.Workspace.Path)
+			state.Modules.Workspace.Symlink, err = Input(prompt, symlinkDefault, false)
 			if err != nil {
 				return err
 			}
