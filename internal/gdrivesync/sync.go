@@ -18,6 +18,9 @@ const (
 	defaultLocalRel    = "workspace/work"
 	defaultMirrorRel   = "gdrive-workspace/work"
 	defaultMaxDelete   = 1000
+	defaultInterval    = 300 // 5 min — matches existing rsync scheduler default
+	intervalMin        = 60
+	intervalMax        = 86400
 	logRotateMaxLines  = 2000
 	logRotateKeepLines = 1000
 )
@@ -31,6 +34,7 @@ type Config struct {
 	LockDir      string
 	RsyncPath    string // resolved rsync binary; empty if not installed
 	MaxDelete    int
+	Interval     int // auto-sync interval in seconds (used by Scheduler templates)
 	Verbose      bool
 }
 
@@ -74,6 +78,16 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		maxDelete = defaultMaxDelete
 	}
 
+	interval := gs.Interval
+	switch {
+	case interval <= 0:
+		interval = defaultInterval
+	case interval < intervalMin:
+		interval = intervalMin
+	case interval > intervalMax:
+		interval = intervalMax
+	}
+
 	rsyncPath, _ := osexec.LookPath("rsync")
 
 	return &Config{
@@ -84,6 +98,7 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		LockDir:      paths.LockDir,
 		RsyncPath:    rsyncPath,
 		MaxDelete:    maxDelete,
+		Interval:     interval,
 	}, nil
 }
 

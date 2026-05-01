@@ -24,15 +24,15 @@ type UserState struct {
 
 // UserModulesState holds module opt-in/config from user state.
 type UserModulesState struct {
-	Workspace   UserWorkspaceState `yaml:"workspace,omitempty"`
-	AITools     bool               `yaml:"ai_tools,omitempty"`
-	Warp        bool               `yaml:"warp,omitempty"`
-	PromptStyle string             `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
-	Fonts       UserFontsState     `yaml:"fonts,omitempty"`
-	Sync        UserSyncState      `yaml:"sync,omitempty"`
-	Rsync       UserRsyncState     `yaml:"rsync,omitempty"`
+	Workspace   UserWorkspaceState  `yaml:"workspace,omitempty"`
+	AITools     bool                `yaml:"ai_tools,omitempty"`
+	Warp        bool                `yaml:"warp,omitempty"`
+	PromptStyle string              `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Fonts       UserFontsState      `yaml:"fonts,omitempty"`
+	Sync        UserSyncState       `yaml:"sync,omitempty"`
+	Rsync       UserRsyncState      `yaml:"rsync,omitempty"`
 	GdriveSync  UserGdriveSyncState `yaml:"gdrive_sync,omitempty"`
-	MacApps     UserMacAppsState   `yaml:"macapps,omitempty"`
+	MacApps     UserMacAppsState    `yaml:"macapps,omitempty"`
 }
 
 // UserMacAppsState holds user selections for the macapps module.
@@ -74,14 +74,15 @@ type UserSyncState struct {
 // Paused defaults to true on a fresh state so `migrate` can run a one-shot
 // pull and the user can verify before flipping to false via `resume`.
 type UserGdriveSyncState struct {
-	LocalPath   string    `yaml:"local_path,omitempty"`   // primary tree, default ~/workspace/work
-	MirrorPath  string    `yaml:"mirror_path,omitempty"`  // mirror tree, default ~/gdrive-workspace/work
+	LocalPath   string    `yaml:"local_path,omitempty"`  // primary tree, default ~/workspace/work
+	MirrorPath  string    `yaml:"mirror_path,omitempty"` // mirror tree, default ~/gdrive-workspace/work
 	LastPull    time.Time `yaml:"last_pull,omitempty"`
 	LastPush    time.Time `yaml:"last_push,omitempty"`
 	LastSync    time.Time `yaml:"last_sync,omitempty"`
 	ConflictDir string    `yaml:"conflict_dir,omitempty"` // default <local>/.sync-conflicts
 	Paused      bool      `yaml:"paused,omitempty"`       // gates pull/push/sync; cleared by `resume`
 	MaxDelete   int       `yaml:"max_delete,omitempty"`   // safety cap for push --delete-after, default 1000
+	Interval    int       `yaml:"interval,omitempty"`     // auto-sync interval in seconds (launchd/systemd), default 300
 }
 
 // RepoConfig describes a git repository to clone into the workspace.
@@ -148,6 +149,9 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.GdriveSync.MaxDelete != 0 && (s.Modules.GdriveSync.MaxDelete < 1 || s.Modules.GdriveSync.MaxDelete > 1000000) {
 		return fmt.Errorf("gdrive_sync.max_delete must be 0 or 1..1000000 (got %d)", s.Modules.GdriveSync.MaxDelete)
+	}
+	if s.Modules.GdriveSync.Interval != 0 && (s.Modules.GdriveSync.Interval < 60 || s.Modules.GdriveSync.Interval > 86400) {
+		return fmt.Errorf("gdrive_sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.GdriveSync.Interval)
 	}
 	seen := make(map[string]bool)
 	for _, repo := range s.Modules.Workspace.Repos {

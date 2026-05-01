@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic gdrive-sync timer (workspace ⟷ gdrive-workspace mirror)
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec={{.Interval}}s
+Unit=dotfiles-gdrive-sync.service
+
+[Install]
+WantedBy=timers.target

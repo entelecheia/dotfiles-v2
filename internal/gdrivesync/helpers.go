@@ -12,10 +12,13 @@ import (
 
 // Paths holds well-known file locations for gdrive-sync artifacts.
 type Paths struct {
-	ConfigDir    string // ~/.config/dotfiles (or $XDG_CONFIG_HOME/dotfiles)
-	ExcludesFile string // <ConfigDir>/gdrive-sync-excludes.conf (materialized from embed)
-	LogFile      string // ~/.local/log/dotfiles-gdrive-sync.log
-	LockDir      string // ~/Library/Caches/dotfiles/gdrive-sync.lock (macOS) or equivalent
+	ConfigDir      string // ~/.config/dotfiles (or $XDG_CONFIG_HOME/dotfiles)
+	ExcludesFile   string // <ConfigDir>/gdrive-sync-excludes.conf (materialized from embed)
+	LogFile        string // ~/.local/log/dotfiles-gdrive-sync.log
+	LockDir        string // ~/Library/Caches/dotfiles/gdrive-sync.lock (macOS) or equivalent
+	LaunchdPlist   string // ~/Library/LaunchAgents/com.dotfiles.gdrive-sync.plist (macOS)
+	SystemdService string // ~/.config/systemd/user/dotfiles-gdrive-sync.service (Linux)
+	SystemdTimer   string // ~/.config/systemd/user/dotfiles-gdrive-sync.timer (Linux)
 }
 
 // ResolvePaths returns the standard gdrive-sync artifact paths for the
@@ -36,10 +39,13 @@ func ResolvePaths() (*Paths, error) {
 		cacheDir = "/tmp"
 	}
 	return &Paths{
-		ConfigDir:    configDir,
-		ExcludesFile: filepath.Join(configDir, excludesDiskName),
-		LogFile:      filepath.Join(home, ".local", "log", "dotfiles-gdrive-sync.log"),
-		LockDir:      filepath.Join(cacheDir, "dotfiles", "gdrive-sync.lock"),
+		ConfigDir:      configDir,
+		ExcludesFile:   filepath.Join(configDir, excludesDiskName),
+		LogFile:        filepath.Join(home, ".local", "log", "dotfiles-gdrive-sync.log"),
+		LockDir:        filepath.Join(cacheDir, "dotfiles", "gdrive-sync.lock"),
+		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.gdrive-sync.plist"),
+		SystemdService: filepath.Join(home, ".config", "systemd", "user", "dotfiles-gdrive-sync.service"),
+		SystemdTimer:   filepath.Join(home, ".config", "systemd", "user", "dotfiles-gdrive-sync.timer"),
 	}, nil
 }
 

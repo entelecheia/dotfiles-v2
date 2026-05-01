@@ -12,23 +12,28 @@ import (
 
 // Status is the snapshot returned by GetStatus for the `status` command.
 type Status struct {
-	LocalPath    string
-	MirrorPath   string
-	LocalExists  bool
-	MirrorExists bool
-	Paused       bool
-	LastPull     time.Time
-	LastPush     time.Time
-	LastSync     time.Time
-	RsyncVersion string // empty if not installed
-	LockHeld     bool   // someone has gdrive-sync.lock right now
-	MaxDelete    int
-	Conflicts    []ConflictEntry // local-tree backups (oldest first)
+	LocalPath      string
+	MirrorPath     string
+	LocalExists    bool
+	MirrorExists   bool
+	Paused         bool
+	LastPull       time.Time
+	LastPush       time.Time
+	LastSync       time.Time
+	RsyncVersion   string // empty if not installed
+	LockHeld       bool   // someone has gdrive-sync.lock right now
+	MaxDelete      int
+	Interval       int
+	SchedulerState SchedulerState
+	Conflicts      []ConflictEntry // local-tree backups (oldest first)
 }
 
 // GetStatus collects current sync state from cfg + state + filesystem.
 // Always non-mutating; safe to run while a sync is in progress.
-func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *config.UserState) (*Status, error) {
+//
+// sched may be nil — callers that don't have a Scheduler instance get a
+// SchedulerNotInstalled value back rather than a panic.
+func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *config.UserState, sched *Scheduler) (*Status, error) {
 	gs := state.Modules.GdriveSync
 	s := &Status{
 		LocalPath:    strings.TrimRight(cfg.LocalPath, "/"),
@@ -41,6 +46,10 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		LastSync:     gs.LastSync,
 		LockHeld:     pathExists(cfg.LockDir),
 		MaxDelete:    cfg.MaxDelete,
+		Interval:     cfg.Interval,
+	}
+	if sched != nil {
+		s.SchedulerState = sched.State(ctx)
 	}
 
 	if runner.CommandExists("rsync") {

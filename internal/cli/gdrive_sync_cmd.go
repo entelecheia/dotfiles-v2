@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,6 +12,9 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/gdrivesync"
+	"github.com/entelecheia/dotfiles-v2/internal/rsync"
+	"github.com/entelecheia/dotfiles-v2/internal/template"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 func newGdriveSyncCmd() *cobra.Command {
@@ -26,14 +30,16 @@ the workspace side); push uses --delete-after to propagate workspace
 deletions to the mirror, guarded by --max-delete=N.
 
 Getting started:
+  dot gdrive-sync setup       Install rsync (if missing) + auto-sync scheduler
   dot gdrive-sync migrate     One-time symlink → real-dir conversion + bring-down
   dot gdrive-sync resume      Activate two-way sync after migrate verified
   dot gdrive-sync             Default = sync (pull then push)
 
 Maintenance:
-  dot gdrive-sync status      Show last sync, conflicts, paused state
+  dot gdrive-sync status      Show last sync, conflicts, paused state, scheduler
   dot gdrive-sync conflicts   List timestamped backup directories
-  dot gdrive-sync pause       Stop sync from running until resume`,
+  dot gdrive-sync pause       Stop auto-sync (scheduler + paused gate)
+  dot gdrive-sync resume      Restart auto-sync`,
 		RunE:         runGdriveSync,
 		SilenceUsage: true,
 	}
@@ -45,6 +51,7 @@ Maintenance:
 		newGdriveSyncStatusCmd(),
 		newGdriveSyncMigrateCmd(),
 		newGdriveSyncConflictsCmd(),
+		newGdriveSyncSetupCmd(),
 		newGdriveSyncResumeCmd(),
 		newGdriveSyncPauseCmd(),
 	)
@@ -69,6 +76,17 @@ func gdriveBootstrap(cmd *cobra.Command) (*config.UserState, *gdrivesync.Config,
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	runner := exec.NewRunner(dryRun, logger)
 	return state, cfg, runner, nil
+}
+
+// gdriveScheduler builds a Scheduler bound to the same runner+cfg used
+// elsewhere in the gdrive-sync subcommands. Returns the Paths used so
+// callers can introspect plist/timer locations.
+func gdriveScheduler(cfg *gdrivesync.Config, runner *exec.Runner) (*gdrivesync.Scheduler, *gdrivesync.Paths, error) {
+	paths, err := gdrivesync.ResolvePaths()
+	if err != nil {
+		return nil, nil, err
+	}
+	return gdrivesync.NewScheduler(runner, paths, cfg, template.NewEngine()), paths, nil
 }
 
 // gdrivePreflight validates that sync can proceed. The bypass flags let
@@ -272,7 +290,11 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := gdrivesync.GetStatus(cmd.Context(), runner, cfg, state)
+	sched, _, err := gdriveScheduler(cfg, runner)
+	if err != nil {
+		return err
+	}
+	st, err := gdrivesync.GetStatus(cmd.Context(), runner, cfg, state, sched)
 	if err != nil {
 		return err
 	}
@@ -293,6 +315,8 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 	} else {
 		p.KV("Paused", "no")
 	}
+	p.KV("Interval", formatInterval(st.Interval))
+	p.KV("Scheduler", st.SchedulerState.String())
 	p.KV("Max delete", fmt.Sprintf("%d", st.MaxDelete))
 	p.KV("Lock held", boolStr(st.LockHeld))
 	p.KV("Last sync", formatLastSync(st.LastSync))
@@ -420,19 +444,34 @@ func newGdriveSyncResumeCmd() *cobra.Command {
 }
 
 func runGdriveSyncResume(cmd *cobra.Command, _ []string) error {
-	state, err := config.LoadState()
+	state, cfg, runner, err := gdriveBootstrap(cmd)
 	if err != nil {
-		return fmt.Errorf("loading state: %w", err)
+		return err
 	}
-	if !state.Modules.GdriveSync.Paused {
-		printerFrom(cmd).Line("gdrive-sync already active.")
-		return nil
+	p := printerFrom(cmd)
+
+	if state.Modules.GdriveSync.Paused {
+		state.Modules.GdriveSync.Paused = false
+		if err := config.SaveState(state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+		p.Line("✓ gdrive-sync resumed.")
+	} else {
+		p.Line("gdrive-sync was not paused.")
 	}
-	state.Modules.GdriveSync.Paused = false
-	if err := config.SaveState(state); err != nil {
-		return fmt.Errorf("saving state: %w", err)
+
+	// If the scheduler is installed, reattach it so periodic runs resume.
+	sched, _, err := gdriveScheduler(cfg, runner)
+	if err != nil {
+		return nil // state save succeeded; scheduler is best-effort
 	}
-	printerFrom(cmd).Line("✓ gdrive-sync resumed. Try `dot gdrive-sync sync --dry-run` first.")
+	if sched.State(cmd.Context()) != gdrivesync.SchedulerNotInstalled {
+		if err := sched.Resume(cmd.Context()); err != nil {
+			p.Warn("scheduler resume failed: %v", err)
+		} else {
+			p.Line("✓ scheduler resumed.")
+		}
+	}
 	return nil
 }
 
@@ -446,23 +485,135 @@ func newGdriveSyncPauseCmd() *cobra.Command {
 }
 
 func runGdriveSyncPause(cmd *cobra.Command, _ []string) error {
-	state, err := config.LoadState()
+	state, cfg, runner, err := gdriveBootstrap(cmd)
 	if err != nil {
-		return fmt.Errorf("loading state: %w", err)
+		return err
 	}
-	if state.Modules.GdriveSync.Paused {
-		printerFrom(cmd).Line("gdrive-sync already paused.")
+	p := printerFrom(cmd)
+
+	if !state.Modules.GdriveSync.Paused {
+		state.Modules.GdriveSync.Paused = true
+		if err := config.SaveState(state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+		p.Line("✓ gdrive-sync paused.")
+	} else {
+		p.Line("gdrive-sync was already paused.")
+	}
+
+	// Stop the scheduler if installed so we don't waste invocations
+	// hitting the paused gate every Interval seconds.
+	sched, _, err := gdriveScheduler(cfg, runner)
+	if err != nil {
 		return nil
 	}
-	state.Modules.GdriveSync.Paused = true
-	if err := config.SaveState(state); err != nil {
-		return fmt.Errorf("saving state: %w", err)
+	if sched.State(cmd.Context()) == gdrivesync.SchedulerRunning {
+		if err := sched.Pause(cmd.Context()); err != nil {
+			p.Warn("scheduler pause failed: %v", err)
+		} else {
+			p.Line("✓ scheduler stopped.")
+		}
 	}
-	printerFrom(cmd).Line("✓ gdrive-sync paused. Run `dot gdrive-sync resume` to clear.")
+	return nil
+}
+
+// ── setup ────────────────────────────────────────────────────────────────
+
+func newGdriveSyncSetupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup",
+		Short: "Install rsync (if missing) and deploy auto-sync scheduler",
+		Long: `One-time setup. Verifies rsync is available (offers to install via brew/apt
+if not), then deploys the platform's user-scheduler (launchd LaunchAgent on
+macOS, systemd user-timer on Linux) to run ` + "`dot gdrive-sync sync`" + ` every
+Interval seconds (default 300).
+
+Idempotent — re-run safely after an interval change to reload the unit.`,
+		RunE:         runGdriveSyncSetup,
+		SilenceUsage: true,
+	}
+}
+
+func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
+	state, cfg, runner, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	yes, _ := cmd.Flags().GetBool("yes")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	ctx := cmd.Context()
+	p := printerFrom(cmd)
+
+	if dryRun {
+		p.Line("(dry-run — no changes)")
+	}
+
+	// 1. Check / install rsync
+	p.Line("Checking rsync...")
+	ver, ok := rsync.CheckRsync(runner)
+	if ok {
+		p.Line("  ✓ rsync installed (%s)", ver)
+	} else {
+		confirmed, err := ui.Confirm("rsync not found. Install it?", yes)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			p.Line("Aborted.")
+			return nil
+		}
+		if err := rsync.InstallRsync(ctx, runner); err != nil {
+			return fmt.Errorf("installing rsync: %w", err)
+		}
+		ver, ok = rsync.CheckRsync(runner)
+		if !ok {
+			return fmt.Errorf("rsync not found in PATH after install")
+		}
+		p.Line("  ✓ rsync installed (%s)", ver)
+	}
+
+	// 2. Deploy scheduler
+	p.Line("Deploying auto-sync scheduler...")
+	sched, paths, err := gdriveScheduler(cfg, runner)
+	if err != nil {
+		return err
+	}
+	if err := sched.Install(ctx); err != nil {
+		return fmt.Errorf("installing scheduler: %w", err)
+	}
+	p.Line("  ✓ scheduler installed (interval: %s)", formatInterval(cfg.Interval))
+	p.Line("  unit: %s", scheduleUnitLabel(paths))
+	p.Line("  log:  %s", cfg.LogFile)
+
+	// 3. Persist Interval (in case ResolveConfig clamped it).
+	if state.Modules.GdriveSync.Interval != cfg.Interval {
+		state.Modules.GdriveSync.Interval = cfg.Interval
+		if err := config.SaveState(state); err != nil {
+			return fmt.Errorf("saving state: %w", err)
+		}
+	}
+
+	p.Blank()
+	p.Line("✓ gdrive-sync setup complete.")
+	if state.Modules.GdriveSync.Paused {
+		p.Line("  Paused gate is set — run `dot gdrive-sync resume` to start syncing.")
+	} else {
+		p.Line("  Run `dot gdrive-sync sync` for an immediate sync, or wait for the timer.")
+	}
 	return nil
 }
 
 // ── small helpers ────────────────────────────────────────────────────────
+
+// scheduleUnitLabel returns a human-friendly identifier for the scheduler
+// artifact on the current platform — the launchd plist path on macOS,
+// or the systemd timer unit path on Linux.
+func scheduleUnitLabel(paths *gdrivesync.Paths) string {
+	if runtime.GOOS == "darwin" {
+		return paths.LaunchdPlist
+	}
+	return paths.SystemdTimer
+}
 
 func stripTrailingSlash(p string) string {
 	if len(p) > 1 && p[len(p)-1] == '/' {
