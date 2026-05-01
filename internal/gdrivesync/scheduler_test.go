@@ -59,6 +59,12 @@ func TestPlistTemplate_RendersWithIntervalAndCommand(t *testing.T) {
 		"<string>sync</string>",
 		"<integer>420</integer>",
 		"<string>/tmp/gd.log</string>",
+		// PATH must list Homebrew prefixes so launchd resolves rsync 3.x
+		// (Apple's /usr/bin/rsync is openrsync 2.6.9 and lacks --info).
+		"<key>EnvironmentVariables</key>",
+		"<key>PATH</key>",
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered plist missing %q\n--- got ---\n%s", want, body)

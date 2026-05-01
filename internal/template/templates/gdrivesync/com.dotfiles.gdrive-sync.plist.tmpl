@@ -11,6 +11,15 @@
     <string>gdrive-sync</string>
     <string>sync</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd inherits a minimal PATH that finds Apple's old /usr/bin/rsync
+         (openrsync, "rsync 2.6.9 compatible") instead of Homebrew's modern
+         rsync 3.x. List Homebrew prefixes first so `--info=stats2,progress2`
+         and other 3.x-only flags resolve correctly on both arches. -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
   <key>StartInterval</key>
   <integer>{{.Interval}}</integer>
   <key>RunAtLoad</key>

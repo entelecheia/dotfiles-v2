@@ -10,6 +10,14 @@
     <string>{{.DotfilesPath}}</string>
     <string>sync</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd's default PATH finds Apple's old /usr/bin/rsync (openrsync,
+         "rsync 2.6.9 compatible"). Put Homebrew first so modern rsync 3.x
+         resolves on both Apple Silicon and Intel Macs. -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
   <key>StartInterval</key>
   <integer>{{.Interval}}</integer>
   <key>RunAtLoad</key>
