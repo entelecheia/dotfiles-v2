@@ -29,22 +29,37 @@ const (
 type Config struct {
 	LocalPath      string   // workspace tree, with trailing slash
 	MirrorPath     string   // gdrive tree, with trailing slash
-	ExcludesFile   string   // materialized static exclude list (embedded baseline)
-	ConfigDir      string   // dotfiles config dir, used for dynamic excludes file
+	ExcludesFile   string   // materialized static exclude list (under .dotfiles/gdrive-sync/)
+	IgnoreFile     string   // user-supplied ignore patterns (under .dotfiles/gdrive-sync/)
+	ConfigDir      string   // workspace-local store dir (.dotfiles/gdrive-sync/) — dynamic files land here
 	SharedExcludes []string // operator-curated shared paths (relative to MirrorPath)
 	LogFile        string
 	LockDir        string
 	RsyncPath      string // resolved rsync binary; empty if not installed
 	MaxDelete      int
-	Interval       int // auto-sync interval in seconds (used by Scheduler templates)
+	Interval       int               // push scheduler cadence (seconds)
+	PullInterval   int               // intake scheduler cadence (0 = no intake unit)
+	Propagation    PropagationPolicy // default {true,true,false}
+	Paused         bool              // mirrors LocalConfig.Paused; the auth source for sync gating
 	Verbose        bool
+
+	// LocalPaths exposes the resolved per-workspace layout for
+	// callers (status, init, manifest readers) that need granular
+	// access beyond what the convenience fields above expose.
+	LocalPaths *LocalPaths
 }
 
-// ResolveConfig merges UserState fields with defaults and materializes
-// the embedded exclude rules to disk so rsync can read them via
-// --exclude-from. Trailing slashes are normalized for rsync semantics.
+// ResolveConfig builds the runtime Config by reading the per-workspace
+// local store (.dotfiles/gdrive-sync/), migrating from the legacy
+// global state on first call. Trailing slashes are normalized for
+// rsync semantics.
+//
+// The global UserGdriveSyncState is consulted only as a migration
+// source (and for LocalPath, the entry point that locates the
+// workspace). Once .dotfiles/gdrive-sync/config.yaml exists, the
+// global block is no longer read.
 func ResolveConfig(state *config.UserState) (*Config, error) {
-	paths, err := ResolvePaths()
+	systemPaths, err := ResolvePaths()
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +76,17 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		localPath += "/"
 	}
 
-	mirrorPath := gs.MirrorPath
+	localPaths := ResolveLocalPaths(localPath)
+
+	localCfg, err := LoadOrMigrateLocalConfig(state, localPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	mirrorPath := localCfg.MirrorPath
+	if mirrorPath == "" {
+		mirrorPath = gs.MirrorPath
+	}
 	if mirrorPath == "" {
 		mirrorPath = filepath.Join(home, defaultMirrorRel)
 	}
@@ -70,17 +95,12 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		mirrorPath += "/"
 	}
 
-	excludesFile, err := MaterializeExcludesFile(paths.ConfigDir)
-	if err != nil {
-		return nil, err
-	}
-
-	maxDelete := gs.MaxDelete
+	maxDelete := localCfg.MaxDelete
 	if maxDelete <= 0 {
 		maxDelete = defaultMaxDelete
 	}
 
-	interval := gs.Interval
+	interval := localCfg.Interval
 	switch {
 	case interval <= 0:
 		interval = defaultInterval
@@ -90,19 +110,40 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		interval = intervalMax
 	}
 
+	pullInterval := localCfg.PullInterval
+	if pullInterval > 0 {
+		switch {
+		case pullInterval < intervalMin:
+			pullInterval = intervalMin
+		case pullInterval > intervalMax:
+			pullInterval = intervalMax
+		}
+	}
+
+	policy := localCfg.Propagation
+	if err := policy.Validate(); err != nil {
+		// Defensive: heal a corrupt on-disk policy back to defaults.
+		policy = DefaultPropagationPolicy()
+	}
+
 	rsyncPath, _ := osexec.LookPath("rsync")
 
 	return &Config{
 		LocalPath:      localPath,
 		MirrorPath:     mirrorPath,
-		ExcludesFile:   excludesFile,
-		ConfigDir:      paths.ConfigDir,
-		SharedExcludes: append([]string(nil), gs.SharedExcludes...),
-		LogFile:        paths.LogFile,
-		LockDir:        paths.LockDir,
+		ExcludesFile:   localPaths.ExcludeFile,
+		IgnoreFile:     localPaths.IgnoreFile,
+		ConfigDir:      localPaths.StoreDir,
+		SharedExcludes: append([]string(nil), localCfg.SharedExcludes...),
+		LogFile:        systemPaths.LogFile,
+		LockDir:        systemPaths.LockDir,
 		RsyncPath:      rsyncPath,
 		MaxDelete:      maxDelete,
 		Interval:       interval,
+		PullInterval:   pullInterval,
+		Propagation:    policy,
+		Paused:         localCfg.Paused,
+		LocalPaths:     localPaths,
 	}, nil
 }
 
@@ -120,7 +161,7 @@ func expandHome(path, home string) string {
 // never deleted. --backup snapshots overwrites into the conflict dir.
 // dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
 func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
 	args = append(args,
 		"--update",
 		"--backup",
@@ -138,7 +179,7 @@ func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 // guarded by --max-delete=N to abort runaway deletions.
 // dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
 func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
 	args = append(args,
 		"--delete-after",
 		"--max-delete="+strconv.Itoa(cfg.MaxDelete),
@@ -156,7 +197,7 @@ func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 // No --update, no --delete: pure additive bring-everything-in.
 // dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
 func migrateArgs(cfg *Config, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
 	if dryRun {
 		args = append(args, "--dry-run")
 	}

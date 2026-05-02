@@ -41,7 +41,7 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		MirrorPath:   strings.TrimRight(cfg.MirrorPath, "/"),
 		LocalExists:  runner.IsDir(cfg.LocalPath),
 		MirrorExists: runner.IsDir(cfg.MirrorPath),
-		Paused:       gs.Paused,
+		Paused:       cfg.Paused,
 		LastPull:     gs.LastPull,
 		LastPush:     gs.LastPush,
 		LastSync:     gs.LastSync,

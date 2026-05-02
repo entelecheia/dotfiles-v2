@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
 
@@ -105,7 +104,7 @@ func TestSystemdTemplates_RenderWithIntervalAndCommand(t *testing.T) {
 
 func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	t.Run("zero -> default 300", func(t *testing.T) {
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		cfg, err := ResolveConfig(state)
 		if err != nil {
 			t.Fatalf("ResolveConfig: %v", err)
@@ -118,7 +117,7 @@ func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	t.Run("below min clamps up", func(t *testing.T) {
 		// state.Validate would reject this, but ResolveConfig is a
 		// downstream defense — test it directly with a hand-built state.
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		state.Modules.GdriveSync.Interval = 5
 		cfg, err := ResolveConfig(state)
 		if err != nil {
@@ -130,7 +129,7 @@ func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	})
 
 	t.Run("above max clamps down", func(t *testing.T) {
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		state.Modules.GdriveSync.Interval = 200_000
 		cfg, err := ResolveConfig(state)
 		if err != nil {
@@ -142,7 +141,7 @@ func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	})
 
 	t.Run("valid passes through", func(t *testing.T) {
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		state.Modules.GdriveSync.Interval = 600
 		cfg, err := ResolveConfig(state)
 		if err != nil {

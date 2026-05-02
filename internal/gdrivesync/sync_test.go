@@ -26,6 +26,18 @@ func newTestConfig(t *testing.T) *Config {
 	}
 }
 
+// newIsolatedState returns a UserState whose gdrive-sync LocalPath
+// points at a fresh per-test directory. Use this for any test that
+// calls ResolveConfig — without it the test would migrate against the
+// real ~/workspace/work tree and pollute it (or pick up state from
+// previous test runs).
+func newIsolatedState(t *testing.T) *config.UserState {
+	t.Helper()
+	state := &config.UserState{}
+	state.Modules.GdriveSync.LocalPath = t.TempDir()
+	return state
+}
+
 func TestPullArgs_WorkspaceAuthoritative(t *testing.T) {
 	cfg := newTestConfig(t)
 	conflict := &ConflictDir{Timestamp: "2026-05-01T12-00-00Z"}
@@ -128,13 +140,15 @@ func TestMigrateArgs_NoDeleteNoUpdate(t *testing.T) {
 }
 
 func TestResolveConfig_Defaults(t *testing.T) {
-	state := &config.UserState{}
+	state := newIsolatedState(t)
 	cfg, err := ResolveConfig(state)
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
-	if !strings.HasSuffix(cfg.LocalPath, "workspace/work/") {
-		t.Errorf("LocalPath default wrong: %s", cfg.LocalPath)
+	// LocalPath comes from the isolated tempdir, but ResolveConfig
+	// must have suffix-normalized it to a trailing slash.
+	if !strings.HasSuffix(cfg.LocalPath, "/") {
+		t.Errorf("LocalPath missing trailing slash: %q", cfg.LocalPath)
 	}
 	if !strings.HasSuffix(cfg.MirrorPath, "gdrive-workspace/work/") {
 		t.Errorf("MirrorPath default wrong: %s", cfg.MirrorPath)
@@ -142,15 +156,24 @@ func TestResolveConfig_Defaults(t *testing.T) {
 	if cfg.MaxDelete != defaultMaxDelete {
 		t.Errorf("MaxDelete default = %d, want %d", cfg.MaxDelete, defaultMaxDelete)
 	}
-	// ExcludesFile must be a real path (materialized).
 	if cfg.ExcludesFile == "" {
 		t.Error("ExcludesFile not resolved")
+	}
+	// Default propagation policy is the safe baseline.
+	want := DefaultPropagationPolicy()
+	if cfg.Propagation != want {
+		t.Errorf("Propagation = %+v, want %+v", cfg.Propagation, want)
+	}
+	// LocalPaths is always populated so callers can drill into the .dotfiles store.
+	if cfg.LocalPaths == nil || cfg.LocalPaths.StoreDir == "" {
+		t.Errorf("LocalPaths not resolved: %+v", cfg.LocalPaths)
 	}
 }
 
 func TestResolveConfig_StateOverrides(t *testing.T) {
+	tmp := t.TempDir()
 	state := &config.UserState{}
-	state.Modules.GdriveSync.LocalPath = "/custom/local"
+	state.Modules.GdriveSync.LocalPath = tmp
 	state.Modules.GdriveSync.MirrorPath = "/custom/mirror"
 	state.Modules.GdriveSync.MaxDelete = 50
 
@@ -158,8 +181,8 @@ func TestResolveConfig_StateOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
 	}
-	if cfg.LocalPath != "/custom/local/" {
-		t.Errorf("LocalPath = %q, want trailing-slashed /custom/local/", cfg.LocalPath)
+	if cfg.LocalPath != tmp+"/" {
+		t.Errorf("LocalPath = %q, want %q", cfg.LocalPath, tmp+"/")
 	}
 	if cfg.MirrorPath != "/custom/mirror/" {
 		t.Errorf("MirrorPath = %q, want trailing-slashed /custom/mirror/", cfg.MirrorPath)

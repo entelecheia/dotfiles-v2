@@ -58,8 +58,62 @@ Maintenance:
 		newGdriveSyncResumeCmd(),
 		newGdriveSyncPauseCmd(),
 		newGdriveSyncSharedCmd(),
+		newGdriveSyncInitCmd(),
 	)
 	return cmd
+}
+
+// ── init ─────────────────────────────────────────────────────────────────
+
+func newGdriveSyncInitCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Initialize <workspace>/.dotfiles/gdrive-sync/ from current state",
+		Long: `One-time onboarding for the per-workspace store. Creates
+<workspace>/.dotfiles/gdrive-sync/ with config.yaml, exclude.txt, ignore.txt,
+manifests, log dir; appends '/.dotfiles/' to <workspace>/.gitignore so the
+store is never committed; and creates <workspace>/inbox/gdrive/ if missing.
+
+Idempotent — re-running on a populated store leaves operator edits intact and
+just heals any missing pieces.`,
+		RunE:         runGdriveSyncInit,
+		SilenceUsage: true,
+	}
+}
+
+func runGdriveSyncInit(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	p := printerFrom(cmd)
+	paths := cfg.LocalPaths
+	if paths == nil {
+		return fmt.Errorf("local paths unresolved — bug in ResolveConfig")
+	}
+
+	// gdriveBootstrap already triggered LoadOrMigrateLocalConfig, so the
+	// .dotfiles/gdrive-sync/ tree exists by the time we get here. Heal
+	// anything missing (operator may have deleted files) and create the
+	// inbox/gdrive staging dir.
+	if err := gdrivesync.EnsureLocalLayout(paths); err != nil {
+		return fmt.Errorf("ensure layout: %w", err)
+	}
+	inboxGdrive := stripTrailingSlash(cfg.LocalPath) + "/inbox/gdrive"
+	if err := os.MkdirAll(inboxGdrive, 0755); err != nil {
+		return fmt.Errorf("create inbox/gdrive: %w", err)
+	}
+
+	p.Header("gdrive-sync workspace initialized")
+	p.KV("Store", paths.StoreDir)
+	p.KV("Workspace", stripTrailingSlash(cfg.LocalPath))
+	p.KV("Mirror", stripTrailingSlash(cfg.MirrorPath))
+	p.KV("Propagation", cfg.Propagation.String())
+	p.KV("Inbox staging", inboxGdrive)
+	p.Blank()
+	p.Line("Edit %s to customize behavior; %s for additional ignore patterns.", paths.ConfigFile, paths.IgnoreFile)
+	p.Line("Run 'dot gdrive-sync setup' to deploy the auto-sync scheduler.")
+	return nil
 }
 
 // gdriveBootstrap loads state + resolved config + a runner for any
@@ -111,7 +165,7 @@ func gdrivePreflight(p *Printer, cfg *gdrivesync.Config, runner *exec.Runner, st
 		p.Line("Mirror path missing: %s", cfg.MirrorPath)
 		return false
 	}
-	if !bypassPause && state.Modules.GdriveSync.Paused {
+	if !bypassPause && cfg.Paused {
 		p.Line("gdrive-sync is paused. Run `dot gdrive-sync resume` to activate.")
 		return false
 	}
@@ -459,16 +513,15 @@ func newGdriveSyncResumeCmd() *cobra.Command {
 }
 
 func runGdriveSyncResume(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := gdriveBootstrap(cmd)
+	_, cfg, runner, err := gdriveBootstrap(cmd)
 	if err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
 
-	if state.Modules.GdriveSync.Paused {
-		state.Modules.GdriveSync.Paused = false
-		if err := config.SaveState(state); err != nil {
-			return fmt.Errorf("saving state: %w", err)
+	if cfg.Paused {
+		if err := setLocalPaused(cfg, false); err != nil {
+			return fmt.Errorf("saving local config: %w", err)
 		}
 		p.Line("✓ gdrive-sync resumed.")
 	} else {
@@ -500,16 +553,15 @@ func newGdriveSyncPauseCmd() *cobra.Command {
 }
 
 func runGdriveSyncPause(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := gdriveBootstrap(cmd)
+	_, cfg, runner, err := gdriveBootstrap(cmd)
 	if err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
 
-	if !state.Modules.GdriveSync.Paused {
-		state.Modules.GdriveSync.Paused = true
-		if err := config.SaveState(state); err != nil {
-			return fmt.Errorf("saving state: %w", err)
+	if !cfg.Paused {
+		if err := setLocalPaused(cfg, true); err != nil {
+			return fmt.Errorf("saving local config: %w", err)
 		}
 		p.Line("✓ gdrive-sync paused.")
 	} else {
@@ -610,11 +662,34 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 
 	p.Blank()
 	p.Line("✓ gdrive-sync setup complete.")
-	if state.Modules.GdriveSync.Paused {
+	if cfg.Paused {
 		p.Line("  Paused gate is set — run `dot gdrive-sync resume` to start syncing.")
 	} else {
 		p.Line("  Run `dot gdrive-sync sync` for an immediate sync, or wait for the timer.")
 	}
+	return nil
+}
+
+// setLocalPaused mutates the local config's Paused field, persists, and
+// keeps cfg in sync so callers see the new value without re-running
+// ResolveConfig.
+func setLocalPaused(cfg *gdrivesync.Config, paused bool) error {
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	local, ok, err := gdrivesync.LoadLocalConfig(cfg.LocalPaths)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		// Should not happen — ResolveConfig migrates first. Defensive fallback.
+		local = &gdrivesync.LocalConfig{Propagation: gdrivesync.DefaultPropagationPolicy()}
+	}
+	local.Paused = paused
+	if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
+		return err
+	}
+	cfg.Paused = paused
 	return nil
 }
 
