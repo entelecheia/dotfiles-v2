@@ -964,7 +964,7 @@ dotfiles-v2/
 |-----|--------|-------------|
 | **unit** | ubuntu-latest, macos-latest | Go unit tests + coverage |
 | **integration** | ubuntu-{22.04,24.04} × {minimal,full,server} + GPU sim | Docker-based profile tests |
-| **module** | 8 modules × ubuntu-22.04 | Individual module tests |
+| **module** | 9 modules × ubuntu-22.04 | Individual module tests |
 | **scenario** | 9 E2E scenarios | dry-run, idempotency, server, upgrade, home-override, workspace, drive-exclude, sync |
 
 **Release**: Triggered by `workflow_run` — only after Test succeeds on a `v*` tag. Uses GoReleaser for cross-platform builds (darwin/linux × amd64/arm64).

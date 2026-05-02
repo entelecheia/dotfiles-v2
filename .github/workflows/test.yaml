@@ -84,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TAG: dotfiles-test:linux
-      MODULES: "packages shell node git ssh terminal tmux ai-tools conda"
+      MODULES: "packages shell node git ssh terminal tmux ai conda"
       SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace drive-exclude sync install-script"
     steps:
       - uses: actions/checkout@v4
