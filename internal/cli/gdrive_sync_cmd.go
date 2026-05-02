@@ -619,8 +619,14 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Paused", "no")
 	}
 	p.KV("Propagation", st.Propagation.String())
-	p.KV("Interval", formatInterval(st.Interval))
-	p.KV("Scheduler", st.SchedulerState.String())
+	p.KV("Push interval", formatInterval(st.Interval))
+	p.KV("Push scheduler", st.SchedulerState.String())
+	if st.PullInterval > 0 {
+		p.KV("Intake interval", formatInterval(st.PullInterval))
+		p.KV("Intake scheduler", st.IntakeSchedulerState.String())
+	} else {
+		p.KV("Intake scheduler", "(off — `dot gdrive-sync setup --pull-interval=DUR` to enable)")
+	}
 	if st.Propagation.Delete {
 		p.KV("Max delete", fmt.Sprintf("%d", st.MaxDelete))
 	}
@@ -835,22 +841,29 @@ func runGdriveSyncPause(cmd *cobra.Command, _ []string) error {
 // ── setup ────────────────────────────────────────────────────────────────
 
 func newGdriveSyncSetupCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Install rsync (if missing) and deploy auto-sync scheduler",
 		Long: `One-time setup. Verifies rsync is available (offers to install via brew/apt
 if not), then deploys the platform's user-scheduler (launchd LaunchAgent on
-macOS, systemd user-timer on Linux) to run ` + "`dot gdrive-sync sync`" + ` every
+macOS, systemd user-timer on Linux) to run ` + "`dot gdrive-sync push`" + ` every
 Interval seconds (default 300).
+
+  --pull-interval=DUR    Also deploy a parallel intake scheduler that runs
+                         ` + "`dot gdrive-sync intake`" + ` every DUR (e.g. 15m, 1h).
+                         Pass 0 (or omit) to skip; pass --pull-interval=0
+                         to remove an existing intake unit.
 
 Idempotent — re-run safely after an interval change to reload the unit.`,
 		RunE:         runGdriveSyncSetup,
 		SilenceUsage: true,
 	}
+	cmd.Flags().String("pull-interval", "", "deploy intake scheduler at this cadence (e.g. 15m, 1h, 0 to remove)")
+	return cmd
 }
 
 func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := gdriveBootstrap(cmd)
+	_, cfg, runner, err := gdriveBootstrap(cmd)
 	if err != nil {
 		return err
 	}
@@ -861,6 +874,19 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 
 	if dryRun {
 		p.Line("(dry-run — no changes)")
+	}
+
+	// 0. Resolve --pull-interval flag (if passed) into cfg.PullInterval
+	//    and persist into LocalConfig before installing the scheduler.
+	if cmd.Flags().Changed("pull-interval") {
+		raw, _ := cmd.Flags().GetString("pull-interval")
+		seconds, err := parsePullIntervalFlag(raw)
+		if err != nil {
+			return fmt.Errorf("--pull-interval: %w", err)
+		}
+		if err := setLocalPullInterval(cfg, seconds); err != nil {
+			return fmt.Errorf("saving pull interval: %w", err)
+		}
 	}
 
 	// 1. Check / install rsync
@@ -887,7 +913,7 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 		p.Line("  ✓ rsync installed (%s)", ver)
 	}
 
-	// 2. Deploy scheduler
+	// 2. Deploy scheduler(s) — push always, intake when PullInterval > 0.
 	p.Line("Deploying auto-sync scheduler...")
 	sched, paths, err := gdriveScheduler(cfg, runner)
 	if err != nil {
@@ -896,25 +922,63 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 	if err := sched.Install(ctx); err != nil {
 		return fmt.Errorf("installing scheduler: %w", err)
 	}
-	p.Line("  ✓ scheduler installed (interval: %s)", formatInterval(cfg.Interval))
+	p.Line("  ✓ push unit installed (interval: %s)", formatInterval(cfg.Interval))
 	p.Line("  unit: %s", scheduleUnitLabel(paths))
-	p.Line("  log:  %s", cfg.LogFile)
-
-	// 3. Persist Interval (in case ResolveConfig clamped it).
-	if state.Modules.GdriveSync.Interval != cfg.Interval {
-		state.Modules.GdriveSync.Interval = cfg.Interval
-		if err := config.SaveState(state); err != nil {
-			return fmt.Errorf("saving state: %w", err)
-		}
+	if cfg.PullInterval > 0 {
+		p.Line("  ✓ intake unit installed (interval: %s)", formatInterval(cfg.PullInterval))
+	} else {
+		p.Line("  (no intake scheduler — pass --pull-interval=DUR to enable)")
 	}
+	p.Line("  log:  %s", cfg.LogFile)
 
 	p.Blank()
 	p.Line("✓ gdrive-sync setup complete.")
 	if cfg.Paused {
 		p.Line("  Paused gate is set — run `dot gdrive-sync resume` to start syncing.")
 	} else {
-		p.Line("  Run `dot gdrive-sync sync` for an immediate sync, or wait for the timer.")
+		p.Line("  Run `dot gdrive-sync push` for an immediate push, or wait for the timer.")
 	}
+	return nil
+}
+
+// parsePullIntervalFlag accepts a Go duration string ("15m", "1h"),
+// a bare integer (seconds), or "0" to disable. Returns seconds.
+func parsePullIntervalFlag(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "0" {
+		return 0, nil
+	}
+	// Try Go duration first (handles "15m", "1h", "30s").
+	if d, err := time.ParseDuration(raw); err == nil {
+		return int(d.Seconds()), nil
+	}
+	// Bare integer fallback.
+	var seconds int
+	_, err := fmt.Sscanf(raw, "%d", &seconds)
+	if err != nil {
+		return 0, fmt.Errorf("not a duration or seconds: %q", raw)
+	}
+	return seconds, nil
+}
+
+// setLocalPullInterval mutates LocalConfig.PullInterval, persists, and
+// keeps cfg in sync.
+func setLocalPullInterval(cfg *gdrivesync.Config, seconds int) error {
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	local, ok, err := gdrivesync.LoadLocalConfig(cfg.LocalPaths)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		local = &gdrivesync.LocalConfig{Propagation: gdrivesync.DefaultPropagationPolicy()}
+	}
+	local.PullInterval = seconds
+	if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
+		return err
+	}
+	cfg.PullInterval = seconds
 	return nil
 }
 

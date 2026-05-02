@@ -1,6 +1,6 @@
 [Unit]
-Description=Periodic gdrive-sync (workspace ⟷ gdrive-workspace mirror)
+Description={{.Description}}
 
 [Service]
 Type=oneshot
-ExecStart={{.DotfilesPath}} gdrive-sync sync
+ExecStart={{.DotfilesPath}} gdrive-sync {{.Action}}

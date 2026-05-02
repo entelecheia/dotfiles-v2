@@ -12,23 +12,25 @@ import (
 
 // Status is the snapshot returned by GetStatus for the `status` command.
 type Status struct {
-	LocalPath      string
-	MirrorPath     string
-	StoreDir       string // <local>/.dotfiles/gdrive-sync/ — empty if unresolved
-	LocalExists    bool
-	MirrorExists   bool
-	Paused         bool
-	Propagation    PropagationPolicy
-	LastPull       time.Time
-	LastPush       time.Time
-	LastSync       time.Time
-	RsyncVersion   string // empty if not installed
-	LockHeld       bool   // someone has gdrive-sync.lock right now
-	MaxDelete      int
-	Interval       int
-	SchedulerState SchedulerState
-	Conflicts      []ConflictEntry // local-tree backups (oldest first)
-	Shared         []SharedEntry   // detected shortcuts + manual list
+	LocalPath            string
+	MirrorPath           string
+	StoreDir             string // <local>/.dotfiles/gdrive-sync/ — empty if unresolved
+	LocalExists          bool
+	MirrorExists         bool
+	Paused               bool
+	Propagation          PropagationPolicy
+	LastPull             time.Time
+	LastPush             time.Time
+	LastSync             time.Time
+	RsyncVersion         string // empty if not installed
+	LockHeld             bool   // someone has gdrive-sync.lock right now
+	MaxDelete            int
+	Interval             int
+	PullInterval         int            // 0 → no intake scheduler
+	SchedulerState       SchedulerState // push unit
+	IntakeSchedulerState SchedulerState // intake unit (if installed)
+	Conflicts            []ConflictEntry
+	Shared               []SharedEntry
 }
 
 // GetStatus collects current sync state from cfg + state + filesystem.
@@ -56,9 +58,11 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		LockHeld:     pathExists(cfg.LockDir),
 		MaxDelete:    cfg.MaxDelete,
 		Interval:     cfg.Interval,
+		PullInterval: cfg.PullInterval,
 	}
 	if sched != nil {
-		s.SchedulerState = sched.State(ctx)
+		s.SchedulerState = sched.StateKind(ctx, SchedulerKindPush)
+		s.IntakeSchedulerState = sched.StateKind(ctx, SchedulerKindIntake)
 	}
 
 	if runner.CommandExists("rsync") {

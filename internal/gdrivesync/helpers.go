@@ -16,9 +16,38 @@ type Paths struct {
 	ExcludesFile   string // <ConfigDir>/gdrive-sync-excludes.conf (materialized from embed)
 	LogFile        string // ~/.local/log/dotfiles-gdrive-sync.log
 	LockDir        string // ~/Library/Caches/dotfiles/gdrive-sync.lock (macOS) or equivalent
-	LaunchdPlist   string // ~/Library/LaunchAgents/com.dotfiles.gdrive-sync.plist (macOS)
-	SystemdService string // ~/.config/systemd/user/dotfiles-gdrive-sync.service (Linux)
-	SystemdTimer   string // ~/.config/systemd/user/dotfiles-gdrive-sync.timer (Linux)
+	LaunchdPlist   string // ~/Library/LaunchAgents/com.dotfiles.gdrive-sync.plist (macOS, push)
+	SystemdService string // ~/.config/systemd/user/dotfiles-gdrive-sync.service (Linux, push)
+	SystemdTimer   string // ~/.config/systemd/user/dotfiles-gdrive-sync.timer (Linux, push)
+}
+
+// PlistFor returns the launchd plist path for the given kind. The push
+// variant is the historical LaunchdPlist value; the intake variant is
+// derived by name in the same directory.
+func (p *Paths) PlistFor(kind SchedulerKind) string {
+	if kind == SchedulerKindPush {
+		return p.LaunchdPlist
+	}
+	dir := filepath.Dir(p.LaunchdPlist)
+	return filepath.Join(dir, kind.LaunchdLabel()+".plist")
+}
+
+// SystemdServiceFor returns the systemd service unit path for the kind.
+func (p *Paths) SystemdServiceFor(kind SchedulerKind) string {
+	if kind == SchedulerKindPush {
+		return p.SystemdService
+	}
+	dir := filepath.Dir(p.SystemdService)
+	return filepath.Join(dir, kind.SystemdServiceName())
+}
+
+// SystemdTimerFor returns the systemd timer unit path for the kind.
+func (p *Paths) SystemdTimerFor(kind SchedulerKind) string {
+	if kind == SchedulerKindPush {
+		return p.SystemdTimer
+	}
+	dir := filepath.Dir(p.SystemdTimer)
+	return filepath.Join(dir, kind.SystemdTimerName())
 }
 
 // ResolvePaths returns the standard gdrive-sync artifact paths for the
