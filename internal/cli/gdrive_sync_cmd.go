@@ -282,7 +282,7 @@ func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
 	if dryRun {
 		p.Line("  (dry-run — no changes)")
 	}
-	res, err := gdrivesync.PullTracked(cmd.Context(), runner, cfg, gdrivesync.PullOptions{DryRun: dryRun})
+	res, err := gdrivesync.PullTracked(cfg, gdrivesync.PullOptions{DryRun: dryRun})
 	recordSyncResult(state, cfg, "pull", err, dryRun)
 	if err != nil {
 		return fmt.Errorf("pull failed: %w", err)

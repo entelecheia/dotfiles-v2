@@ -1,7 +1,6 @@
 package gdrivesync
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,8 +9,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 // PullOptions controls one tracked pull run.
@@ -49,7 +46,7 @@ func (r *PullResult) HasChanges() bool {
 // PullTracked applies Drive-side changes only for paths already present in
 // baseline.manifest. Baseline is the Git-shared Drive payload index; files not
 // listed there are deliberately left for Intake to stage under inbox/gdrive.
-func PullTracked(_ context.Context, _ *exec.Runner, cfg *Config, opts PullOptions) (*PullResult, error) {
+func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 	if cfg.LocalPaths == nil {
 		return nil, fmt.Errorf("pull: local paths unresolved")
 	}

@@ -124,7 +124,7 @@ func TestPullTracked_RestoresMissingBaselineFile(t *testing.T) {
 	mtime := f.writeMirror("assets/image.bin", body)
 	f.seedBaseline("assets/image.bin", body, mtime)
 
-	res, err := PullTracked(context.Background(), f.runner, f.cfg, PullOptions{})
+	res, err := PullTracked(f.cfg, PullOptions{})
 	if err != nil {
 		t.Fatalf("PullTracked: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestPullTracked_UpdatesLocalWhenOnlyDriveChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := PullTracked(context.Background(), f.runner, f.cfg, PullOptions{})
+	res, err := PullTracked(f.cfg, PullOptions{})
 	if err != nil {
 		t.Fatalf("PullTracked: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestPullTracked_ConflictPreservesLocalAndBacksUpDrive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := PullTracked(context.Background(), f.runner, f.cfg, PullOptions{})
+	res, err := PullTracked(f.cfg, PullOptions{})
 	if err != nil {
 		t.Fatalf("PullTracked: %v", err)
 	}

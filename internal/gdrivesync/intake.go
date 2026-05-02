@@ -74,7 +74,7 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 	local := strings.TrimRight(cfg.LocalPath, "/")
 	tracked := gitTrackedRelPaths(local)
 
-	pullRes, err := PullTracked(ctx, runner, cfg, PullOptions{DryRun: opts.DryRun})
+	pullRes, err := PullTracked(cfg, PullOptions{DryRun: opts.DryRun})
 	if err != nil {
 		return nil, err
 	}

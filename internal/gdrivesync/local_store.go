@@ -261,35 +261,6 @@ func appendGitignoreBlock(gitignorePath string, lines []string) error {
 	return nil
 }
 
-// appendGitignoreLine appends `line` to the workspace .gitignore if and
-// only if it isn't already present. Creates the file if missing.
-// Idempotent — repeated calls are no-ops once the line is in.
-func appendGitignoreLine(gitignorePath, line string) error {
-	want := strings.TrimSpace(line)
-	if want == "" {
-		return nil
-	}
-	body, err := os.ReadFile(gitignorePath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("reading %s: %w", gitignorePath, err)
-	}
-	for _, existing := range strings.Split(string(body), "\n") {
-		if strings.TrimSpace(existing) == want {
-			return nil
-		}
-	}
-	prefix := ""
-	if len(body) > 0 && !strings.HasSuffix(string(body), "\n") {
-		prefix = "\n"
-	}
-	out := append([]byte{}, body...)
-	out = append(out, []byte(prefix+want+"\n")...)
-	if err := os.WriteFile(gitignorePath, out, 0644); err != nil {
-		return fmt.Errorf("writing %s: %w", gitignorePath, err)
-	}
-	return nil
-}
-
 // LoadLocalConfig reads <localStoreDir>/config.yaml. Returns
 // (config, true, nil) when the file exists and parses, (nil, false, nil)
 // when missing (caller should migrate or use defaults), or an error on

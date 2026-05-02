@@ -297,13 +297,6 @@ func refuseSharedDriveMirror(cfg *Config) error {
 
 // ── pull / push / sync ──────────────────────────────────────────────────
 
-// Pull restores/updates only baseline-tracked Drive payloads. Baseline-unknown
-// mirror files are left for Intake to stage into inbox/gdrive.
-func Pull(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
-	_, err := PullTracked(ctx, runner, cfg, PullOptions{DryRun: dryRun})
-	return err
-}
-
 // Push local → mirror under cfg.Propagation. It first runs a tracked pull guard
 // so Drive edits to baseline-managed payloads are not overwritten by stale local
 // content. The policy maps to rsync flags (see propagationFlags); an all-false
@@ -324,7 +317,7 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return err
 	}
-	pre, err := PullTracked(ctx, runner, cfg, PullOptions{DryRun: dryRun})
+	pre, err := PullTracked(cfg, PullOptions{DryRun: dryRun})
 	if err != nil {
 		return fmt.Errorf("tracked pull guard: %w", err)
 	}
