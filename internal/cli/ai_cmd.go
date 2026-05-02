@@ -172,7 +172,7 @@ func newAIRestoreCmd() *cobra.Command {
 		RunE:  runAIRestore,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
-	c.Flags().String("version", "", "Specific version to restore (default: latest)")
+	c.Flags().String("version", "", `Specific version to restore, or "latest" (default: latest)`)
 	c.Flags().Bool("include-auth", false, "Restore auth/local-secret files from the snapshot")
 	return c
 }
@@ -186,7 +186,7 @@ func runAIRestore(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p := printerFrom(cmd)
-	if version == "" {
+	if version == "" || version == "latest" {
 		v, err := eng.ResolveLatest()
 		if err != nil {
 			return err

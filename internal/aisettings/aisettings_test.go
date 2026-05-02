@@ -58,6 +58,32 @@ func TestBackupRestoreSkipsAuthByDefault(t *testing.T) {
 	}
 }
 
+func TestRestoreLatestAlias(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("model = \"gpt\"\n"))
+
+	snap, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("mutated\n"))
+	restored, err := eng.Restore(RestoreOptions{Version: "latest"})
+	if err != nil {
+		t.Fatalf("restore latest alias: %v", err)
+	}
+	if restored.Version != snap.Version {
+		t.Fatalf("restored version = %q, want %q", restored.Version, snap.Version)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "model = \"gpt\"\n" {
+		t.Fatalf("restored config = %q", got)
+	}
+}
+
 func TestIncludeAuthBackup(t *testing.T) {
 	eng, home, _ := testEngine(t)
 	mustWrite(t, filepath.Join(home, ".codex", "auth.json"), []byte(`{"token":"secret"}`))

@@ -185,7 +185,7 @@ func (e *Engine) Backup(opts BackupOptions) (*Summary, error) {
 // Restore restores a versioned snapshot into HomeDir.
 func (e *Engine) Restore(opts RestoreOptions) (*Summary, error) {
 	version := opts.Version
-	if version == "" {
+	if version == "" || version == "latest" {
 		v, err := e.ResolveLatest()
 		if err != nil {
 			return nil, err

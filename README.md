@@ -502,6 +502,7 @@ dotfiles ai backup                       # versioned snapshot under BackupRoot
 dotfiles ai backup --tag "pre-migration"
 dotfiles ai backup --include-auth        # include auth/local-secret files explicitly
 dotfiles ai restore                      # restore latest snapshot
+dotfiles ai restore --version latest     # explicit alias for latest.txt
 dotfiles ai restore --version 20260502T010203Z
 dotfiles ai restore --include-auth       # restore auth/local-secret files explicitly
 
