@@ -51,6 +51,7 @@ groups:
       - {token: cmux,              name: "cmux"}
       - {token: cursor,            name: "Cursor"}
       - {token: ghostty,           name: "Ghostty"}
+      - {token: iterm2,            name: "iTerm2"}
       - {token: sublime-text,      name: "Sublime Text"}
       - {token: visual-studio-code, name: "Visual Studio Code"}
       - {token: warp,              name: "Warp"}

@@ -17,9 +17,9 @@ func TestLoad_MinimalProfile(t *testing.T) {
 		t.Error("minimal profile: expected non-empty packages list")
 	}
 
-	// Check a few expected packages
+	// Check a few expected effective packages, including terminal tools.
 	want := map[string]bool{"git": false, "curl": false, "fzf": false}
-	for _, p := range cfg.Packages {
+	for _, p := range cfg.AllPackages() {
 		want[p] = true
 	}
 	for pkg, found := range want {
@@ -173,6 +173,39 @@ func TestMergeConfigs_OverlayPackagesWin(t *testing.T) {
 	}
 	if merged.Packages[0] != "ripgrep" {
 		t.Errorf("expected overlay packages to win, got %v", merged.Packages)
+	}
+}
+
+func TestMergeConfigs_TerminalOverlayPreservesTools(t *testing.T) {
+	base := &Config{
+		Modules: ModulesConfig{
+			Terminal: TermConfig{
+				Enabled:     true,
+				Warp:        true,
+				PromptStyle: "minimal",
+				Tools:       []string{"bat", "zoxide"},
+			},
+		},
+	}
+	overlay := &Config{
+		Modules: ModulesConfig{
+			Terminal: TermConfig{
+				Enabled:     true,
+				Warp:        false,
+				PromptStyle: "rich",
+			},
+		},
+	}
+
+	merged := mergeConfigs(base, overlay)
+	if merged.Modules.Terminal.Warp {
+		t.Fatal("overlay warp=false should win")
+	}
+	if merged.Modules.Terminal.PromptStyle != "rich" {
+		t.Fatalf("PromptStyle = %q, want rich", merged.Modules.Terminal.PromptStyle)
+	}
+	if len(merged.Modules.Terminal.Tools) != 2 || merged.Modules.Terminal.Tools[1] != "zoxide" {
+		t.Fatalf("terminal tools were not preserved: %v", merged.Modules.Terminal.Tools)
 	}
 }
 

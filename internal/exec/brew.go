@@ -188,14 +188,9 @@ func (b *Brew) RefreshPath() {
 // MissingFormulas returns formulas from the list that are not installed.
 func (b *Brew) MissingFormulas(formulas []string) []string {
 	// Use brew list --formula -1 to get all installed formulas at once
-	result, err := b.Runner.RunQuery(context.Background(), "brew", "list", "--formula", "-1")
-	if err != nil {
+	installed, ok := b.InstalledFormulas()
+	if !ok {
 		return formulas // assume all missing if we can't check
-	}
-
-	installed := make(map[string]bool)
-	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
-		installed[strings.TrimSpace(line)] = true
 	}
 
 	var missing []string
@@ -205,6 +200,23 @@ func (b *Brew) MissingFormulas(formulas []string) []string {
 		}
 	}
 	return missing
+}
+
+// InstalledFormulas returns the set of all currently installed formulas. The
+// bool is false when the brew query failed, so callers can distinguish "not
+// installed" from "unknown".
+func (b *Brew) InstalledFormulas() (map[string]bool, bool) {
+	installed := make(map[string]bool)
+	result, err := b.Runner.RunQuery(context.Background(), "brew", "list", "--formula", "-1")
+	if err != nil || result.ExitCode != 0 {
+		return installed, false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			installed[s] = true
+		}
+	}
+	return installed, true
 }
 
 // InstalledCasks returns the set of all currently installed casks.

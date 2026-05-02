@@ -121,6 +121,36 @@ func TestValidate_GdriveSyncSharedExcludes(t *testing.T) {
 	}
 }
 
+func TestValidate_TerminalSelections(t *testing.T) {
+	valid := &UserState{Profile: "full"}
+	valid.Modules.TerminalApps.Enabled = true
+	valid.Modules.TerminalApps.Casks = []string{"warp", "cmux", "iterm2"}
+	valid.Modules.TerminalTools.Enabled = true
+	valid.Modules.TerminalTools.Formulas = []string{"yazi", "bat", "zoxide"}
+	valid.Modules.TerminalTools.FormulasExtra = []string{"atuin"}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid terminal selections rejected: %v", err)
+	}
+
+	invalidApp := &UserState{Profile: "full"}
+	invalidApp.Modules.TerminalApps.Casks = []string{"not-a-terminal"}
+	if err := invalidApp.Validate(); err == nil {
+		t.Fatal("expected invalid terminal app token to fail validation")
+	}
+
+	invalidTool := &UserState{Profile: "full"}
+	invalidTool.Modules.TerminalTools.Formulas = []string{"not-curated"}
+	if err := invalidTool.Validate(); err == nil {
+		t.Fatal("expected invalid terminal tool formula to fail validation")
+	}
+
+	invalidExtra := &UserState{Profile: "full"}
+	invalidExtra.Modules.TerminalTools.FormulasExtra = []string{"bad token"}
+	if err := invalidExtra.Validate(); err == nil {
+		t.Fatal("expected invalid terminal tool extra formula to fail validation")
+	}
+}
+
 func TestSaveLoadRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -135,6 +165,11 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	original.Modules.Workspace.Path = "~/workspace"
 	original.Modules.AI.Enabled = true
 	original.Modules.Sync.Interval = 600
+	original.Modules.TerminalApps.Enabled = true
+	original.Modules.TerminalApps.Casks = []string{"warp", "iterm2"}
+	original.Modules.TerminalTools.Enabled = true
+	original.Modules.TerminalTools.Formulas = []string{"yazi", "bat", "zoxide"}
+	original.Modules.TerminalTools.FormulasExtra = []string{"atuin"}
 
 	if err := saveStateAt(path, original); err != nil {
 		t.Fatalf("saveStateAt: %v", err)
@@ -163,6 +198,15 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	if loaded.Modules.Sync.Interval != 600 {
 		t.Errorf("Sync.Interval: got %d, want 600", loaded.Modules.Sync.Interval)
 	}
+	if strings.Join(loaded.Modules.TerminalApps.Casks, ",") != "warp,iterm2" {
+		t.Errorf("TerminalApps.Casks: got %v", loaded.Modules.TerminalApps.Casks)
+	}
+	if strings.Join(loaded.Modules.TerminalTools.Formulas, ",") != "yazi,bat,zoxide" {
+		t.Errorf("TerminalTools.Formulas: got %v", loaded.Modules.TerminalTools.Formulas)
+	}
+	if strings.Join(loaded.Modules.TerminalTools.FormulasExtra, ",") != "atuin" {
+		t.Errorf("TerminalTools.FormulasExtra: got %v", loaded.Modules.TerminalTools.FormulasExtra)
+	}
 }
 
 func TestLoadState_LegacyAIToolsMigratesToAI(t *testing.T) {
@@ -187,6 +231,78 @@ func TestLoadState_LegacyAIToolsMigratesToAI(t *testing.T) {
 	}
 	if strings.Contains(string(data), "ai_tools") {
 		t.Fatalf("legacy ai_tools key was persisted: %s", data)
+	}
+}
+
+func TestLoadState_LegacyWarpMigratesToTerminalApps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("name: Test\nprofile: full\nmodules:\n  warp: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if !loaded.Modules.TerminalApps.Enabled || strings.Join(loaded.Modules.TerminalApps.Casks, ",") != "warp" {
+		t.Fatalf("legacy warp did not migrate to terminal_apps: %+v", loaded.Modules.TerminalApps)
+	}
+	if err := saveStateAt(path, loaded); err != nil {
+		t.Fatalf("saveStateAt: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "warp: true") {
+		t.Fatalf("legacy warp key was persisted: %s", data)
+	}
+	if !strings.Contains(string(data), "terminal_apps:") {
+		t.Fatalf("terminal_apps key missing after migration: %s", data)
+	}
+}
+
+func TestApplyStateToConfig_TerminalSelections(t *testing.T) {
+	cfg := &Config{
+		Packages: []string{"git"},
+		Modules: ModulesConfig{
+			Terminal: TermConfig{
+				Enabled: true,
+				Warp:    true,
+				Apps:    []string{"warp"},
+				Tools:   DefaultTerminalTools("full"),
+			},
+		},
+	}
+	state := &UserState{Profile: "full"}
+	state.Modules.TerminalApps.Enabled = true
+	state.Modules.TerminalApps.Casks = []string{"cmux", "iterm2"}
+	state.Modules.TerminalTools.Enabled = true
+	state.Modules.TerminalTools.Formulas = []string{"yazi", "bat"}
+	state.Modules.TerminalTools.FormulasExtra = []string{"atuin"}
+
+	ApplyStateToConfig(cfg, state)
+
+	if cfg.Modules.Terminal.Warp {
+		t.Fatal("warp theme should be disabled when explicit terminal app selection excludes warp")
+	}
+	if strings.Join(cfg.Modules.Terminal.Apps, ",") != "cmux,iterm2" {
+		t.Fatalf("Terminal.Apps = %v", cfg.Modules.Terminal.Apps)
+	}
+	if strings.Join(cfg.Modules.Terminal.Tools, ",") != "yazi,bat" {
+		t.Fatalf("Terminal.Tools = %v", cfg.Modules.Terminal.Tools)
+	}
+	if strings.Join(cfg.Modules.Terminal.ToolsExtra, ",") != "atuin" {
+		t.Fatalf("Terminal.ToolsExtra = %v", cfg.Modules.Terminal.ToolsExtra)
+	}
+	if !cfg.Modules.MacApps.Enabled {
+		t.Fatal("terminal app casks should enable macapps module")
+	}
+	if strings.Join(cfg.AllCasks(), ",") != "cmux,iterm2" {
+		t.Fatalf("AllCasks = %v", cfg.AllCasks())
+	}
+	if strings.Join(cfg.AllPackages(), ",") != "git,yazi,bat,atuin" {
+		t.Fatalf("AllPackages = %v", cfg.AllPackages())
 	}
 }
 
