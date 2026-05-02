@@ -175,14 +175,16 @@ func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 }
 
 // pushArgs builds the rsync argv for the push (local → mirror) pass.
-// Uses --delete-after to propagate workspace deletions to the mirror,
-// guarded by --max-delete=N to abort runaway deletions.
+// Translates cfg.Propagation into rsync flags (--existing /
+// --ignore-existing for create/update toggles; --delete-after with
+// --max-delete cap for delete) and always excludes the workspace's
+// staging dirs so they never bounce back to mirror.
 // dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
 func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
 	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
+	args = append(args, pushAlwaysExcludes()...)
+	args = append(args, propagationFlags(cfg.Propagation, cfg.MaxDelete)...)
 	args = append(args,
-		"--delete-after",
-		"--max-delete="+strconv.Itoa(cfg.MaxDelete),
 		"--backup",
 		"--backup-dir="+conflict.PushBackupRel(),
 	)
@@ -191,6 +193,42 @@ func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 	}
 	args = append(args, cfg.LocalPath, cfg.MirrorPath)
 	return args
+}
+
+// pushAlwaysExcludes returns the workspace-anchored excludes that push
+// must enforce regardless of operator config: the per-workspace store
+// (`.dotfiles/`) and the GDrive intake staging area (`inbox/gdrive/`).
+// Anchored with leading `/` so deeper subtrees with the same names are
+// untouched.
+func pushAlwaysExcludes() []string {
+	return []string{
+		"--exclude=/.dotfiles/",
+		"--exclude=/inbox/gdrive/",
+	}
+}
+
+// propagationFlags translates a PropagationPolicy into the rsync flags
+// that enforce it. Default policy `{true, true, false}` returns nil
+// (rsync's natural behavior copies new + modified, no delete).
+func propagationFlags(p PropagationPolicy, maxDelete int) []string {
+	var flags []string
+	if !p.Create {
+		// `--existing` makes rsync skip files absent in destination,
+		// effectively scoping it to updates of files mirror already has.
+		flags = append(flags, "--existing")
+	}
+	if !p.Update {
+		// `--ignore-existing` skips files that already exist in dest,
+		// scoping to creates only.
+		flags = append(flags, "--ignore-existing")
+	}
+	if p.Delete {
+		flags = append(flags,
+			"--delete-after",
+			"--max-delete="+strconv.Itoa(maxDelete),
+		)
+	}
+	return flags
 }
 
 // migrateArgs builds the rsync argv for the one-shot migration pull.
@@ -256,10 +294,15 @@ func Pull(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	return runRsync(ctx, runner, cfg, args)
 }
 
-// Push local → mirror with --delete-after. Workspace is authoritative;
-// mirror's view of "what should exist" is rebuilt from workspace each push.
-// --max-delete guards against catastrophic accidents.
+// Push local → mirror under cfg.Propagation. The policy maps to rsync
+// flags (see propagationFlags); an all-false policy is refused before any
+// rsync invocation. The workspace's per-workspace store (`.dotfiles/`)
+// and intake staging area (`inbox/gdrive/`) are always excluded so they
+// never bounce back to mirror, regardless of operator excludes.
 func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
+	if err := cfg.Propagation.Validate(); err != nil {
+		return fmt.Errorf("push refused: %w", err)
+	}
 	if err := ensureLogDir(cfg.LogFile); err != nil {
 		return err
 	}
@@ -272,39 +315,16 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	}
 	conflict := NewConflictDir()
 	args := pushArgs(cfg, conflict, dyn, dryRun)
-	fmt.Printf("  Push: %s → %s\n", cfg.LocalPath, cfg.MirrorPath)
+	fmt.Printf("  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation)
 	return runRsync(ctx, runner, cfg, args)
 }
 
-// Sync runs Pull then Push within a single conflict-timestamp window so
-// any backups created across both passes share one parent directory.
-// Pull errors are logged but do not abort the push (matches existing
-// internal/rsync.Sync semantics).
+// Sync is now a thin alias for Push — the historical bidirectional Pull
+// + Push behavior was retired in favor of push-first semantics with a
+// separate Intake step (see `dot gdrive-sync intake`). Kept as an entry
+// point so callers (and the existing scheduler unit) keep working.
 func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return err
-	}
-	if err := refuseSharedDriveMirror(cfg); err != nil {
-		return err
-	}
-	dyn, err := prepareDynamicExcludes(cfg)
-	if err != nil {
-		return err
-	}
-	conflict := NewConflictDir()
-
-	pullErr := runRsync(ctx, runner, cfg, pullArgs(cfg, conflict, dyn, dryRun))
-	if pullErr != nil {
-		fmt.Printf("  ⚠ pull: %v — continuing to push\n", pullErr)
-	} else {
-		fmt.Printf("  ✓ pull: %s → %s\n", cfg.MirrorPath, cfg.LocalPath)
-	}
-
-	pushErr := runRsync(ctx, runner, cfg, pushArgs(cfg, conflict, dyn, dryRun))
-	if pullErr != nil {
-		return pullErr
-	}
-	return pushErr
+	return Push(ctx, runner, cfg, dryRun)
 }
 
 // MigratePull is the additive one-shot pull used by the `migrate`

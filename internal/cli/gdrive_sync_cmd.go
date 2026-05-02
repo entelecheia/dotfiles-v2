@@ -212,41 +212,20 @@ func recordSyncResult(state *config.UserState, cfg *gdrivesync.Config, op string
 func newGdriveSyncSyncCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "sync",
-		Short:        "Pull then push (default)",
+		Short:        "Alias for `push` (kept for back-compat; prefer `dot gdrive-sync push`)",
 		RunE:         runGdriveSync,
 		SilenceUsage: true,
 	}
 }
 
-func runGdriveSync(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := gdriveBootstrap(cmd)
-	if err != nil {
-		return err
-	}
-	p := printerFrom(cmd)
-	if !gdrivePreflight(p, cfg, runner, state, false, false) {
-		return nil
-	}
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-
-	release, lockErr := gdrivesync.AcquireLock(cfg.LockDir)
-	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
-	}
-	defer release()
-
-	p.Line("Syncing %s ⟷ %s", cfg.LocalPath, cfg.MirrorPath)
-	if dryRun {
-		p.Line("  (dry-run — no changes)")
-	}
-	syncErr := gdrivesync.Sync(cmd.Context(), runner, cfg, dryRun)
-	recordSyncResult(state, cfg, "sync", syncErr, dryRun)
-	if syncErr != nil {
-		return fmt.Errorf("sync failed: %w", syncErr)
-	}
-	p.Line("✓ Sync complete.")
-	return nil
+// runGdriveSync is the handler for both the bare `dot gdrive-sync` and
+// the explicit `sync` subcommand. The historical Pull+Push semantics
+// were retired in favor of push-first; this is now a thin alias for
+// push that prints a one-line deprecation hint so callers gradually
+// migrate to the new name.
+func runGdriveSync(cmd *cobra.Command, args []string) error {
+	printerFrom(cmd).Line("(note: `sync` is now an alias for `push`; use `dot gdrive-sync intake` for mirror→inbox/gdrive staging)")
+	return runGdriveSyncPush(cmd, args)
 }
 
 // ── pull ─────────────────────────────────────────────────────────────────
@@ -294,12 +273,28 @@ func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
 // ── push ─────────────────────────────────────────────────────────────────
 
 func newGdriveSyncPushCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "push",
-		Short:        "Send workspace to mirror (--delete-after, capped by --max-delete)",
+	cmd := &cobra.Command{
+		Use:   "push",
+		Short: "Send workspace to mirror under a propagation policy (default: create+update, no delete)",
+		Long: `Push the workspace tree to the gdrive mirror under a propagation
+policy. The default policy '{create:true, update:true, delete:false}'
+copies new and modified files but never deletes mirror-side content.
+
+Flag --propagate= takes a comma-separated allowlist; absent items are
+disabled. Examples:
+
+  dot gdrive-sync push                              # default policy
+  dot gdrive-sync push --propagate=create,update,delete   # full sync
+  dot gdrive-sync push --propagate=create           # additive only
+  dot gdrive-sync push --propagate=update           # in-place updates only
+
+The per-workspace store (.dotfiles/) and intake staging area
+(inbox/gdrive/) are always excluded so they never round-trip to mirror.`,
 		RunE:         runGdriveSyncPush,
 		SilenceUsage: true,
 	}
+	cmd.Flags().String("propagate", "", "comma-separated allowlist of propagation kinds (create,update,delete)")
+	return cmd
 }
 
 func runGdriveSyncPush(cmd *cobra.Command, _ []string) error {
@@ -308,6 +303,16 @@ func runGdriveSyncPush(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p := printerFrom(cmd)
+
+	if cmd.Flags().Changed("propagate") {
+		raw, _ := cmd.Flags().GetString("propagate")
+		policy, err := parsePropagateFlag(raw)
+		if err != nil {
+			return fmt.Errorf("--propagate: %w", err)
+		}
+		cfg.Propagation = policy
+	}
+
 	if !gdrivePreflight(p, cfg, runner, state, false, false) {
 		return nil
 	}
@@ -320,7 +325,7 @@ func runGdriveSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 	defer release()
 
-	p.Line("Pushing %s → %s", cfg.LocalPath, cfg.MirrorPath)
+	p.Line("Pushing %s → %s (%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation)
 	if dryRun {
 		p.Line("  (dry-run — no changes)")
 	}
@@ -331,6 +336,40 @@ func runGdriveSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 	p.Line("✓ Push complete.")
 	return nil
+}
+
+// parsePropagateFlag parses the --propagate= comma-separated allowlist.
+// Empty (after split + trim) is rejected — there's no meaningful rsync
+// invocation that does nothing.
+func parsePropagateFlag(value string) (gdrivesync.PropagationPolicy, error) {
+	var p gdrivesync.PropagationPolicy
+	seen := map[string]bool{}
+	nonEmpty := 0
+	for _, raw := range strings.Split(value, ",") {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		nonEmpty++
+		if seen[v] {
+			return p, fmt.Errorf("duplicate token %q", v)
+		}
+		seen[v] = true
+		switch v {
+		case "create":
+			p.Create = true
+		case "update":
+			p.Update = true
+		case "delete":
+			p.Delete = true
+		default:
+			return p, fmt.Errorf("unknown token %q (want create|update|delete)", v)
+		}
+	}
+	if nonEmpty == 0 {
+		return p, fmt.Errorf("must list at least one of create,update,delete")
+	}
+	return p, nil
 }
 
 // ── status ───────────────────────────────────────────────────────────────
@@ -366,6 +405,9 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 	}
 	p.KV("Local", st.LocalPath)
 	p.KV("Mirror", st.MirrorPath)
+	if st.StoreDir != "" {
+		p.KV("Config", st.StoreDir)
+	}
 	p.KV("Local exists", boolStr(st.LocalExists))
 	p.KV("Mirror exists", boolStr(st.MirrorExists))
 	if st.Paused {
@@ -373,9 +415,12 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 	} else {
 		p.KV("Paused", "no")
 	}
+	p.KV("Propagation", st.Propagation.String())
 	p.KV("Interval", formatInterval(st.Interval))
 	p.KV("Scheduler", st.SchedulerState.String())
-	p.KV("Max delete", fmt.Sprintf("%d", st.MaxDelete))
+	if st.Propagation.Delete {
+		p.KV("Max delete", fmt.Sprintf("%d", st.MaxDelete))
+	}
 	p.KV("Lock held", boolStr(st.LockHeld))
 	p.KV("Last sync", formatLastSync(st.LastSync))
 	p.KV("Last pull", formatLastSync(st.LastPull))

@@ -14,9 +14,11 @@ import (
 type Status struct {
 	LocalPath      string
 	MirrorPath     string
+	StoreDir       string // <local>/.dotfiles/gdrive-sync/ — empty if unresolved
 	LocalExists    bool
 	MirrorExists   bool
 	Paused         bool
+	Propagation    PropagationPolicy
 	LastPull       time.Time
 	LastPush       time.Time
 	LastSync       time.Time
@@ -36,12 +38,18 @@ type Status struct {
 // SchedulerNotInstalled value back rather than a panic.
 func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *config.UserState, sched *Scheduler) (*Status, error) {
 	gs := state.Modules.GdriveSync
+	storeDir := ""
+	if cfg.LocalPaths != nil {
+		storeDir = cfg.LocalPaths.StoreDir
+	}
 	s := &Status{
 		LocalPath:    strings.TrimRight(cfg.LocalPath, "/"),
 		MirrorPath:   strings.TrimRight(cfg.MirrorPath, "/"),
+		StoreDir:     storeDir,
 		LocalExists:  runner.IsDir(cfg.LocalPath),
 		MirrorExists: runner.IsDir(cfg.MirrorPath),
 		Paused:       cfg.Paused,
+		Propagation:  cfg.Propagation,
 		LastPull:     gs.LastPull,
 		LastPush:     gs.LastPush,
 		LastSync:     gs.LastSync,
