@@ -545,10 +545,12 @@ Top-level aliases: `dot ws-mkdir`, `dot ws-mv`, `dot ws-rm`, `dot ws-audit`, `do
 ### `dotfiles apps` — macOS Cask Install + Settings Backup/Restore
 
 Manage macOS cask applications and their per-app settings (plists, `Application Support/`,
-sandbox `Containers`, `Group Containers`). macOS-only; no-ops on Linux.
+sandbox `Containers`, `Group Containers`). Cask install/backup/restore flows are
+macOS-only; `apps list` also reports terminal tool formula status when Homebrew
+or Linuxbrew is available.
 
 ```bash
-dotfiles apps list                         # show catalog: groups + ★ defaults + ✓ installed
+dotfiles apps list                         # show cask catalog + terminal tool install status
 dotfiles apps install                      # interactive MultiSelect + optional "save to state"
 dotfiles apps install raycast obsidian     # explicit tokens (skip picker)
 dotfiles apps install --defaults           # catalog's default set
