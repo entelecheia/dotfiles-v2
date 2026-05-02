@@ -19,9 +19,9 @@ type Status struct {
 	MirrorExists         bool
 	Paused               bool
 	Propagation          PropagationPolicy
-	LastPull             time.Time
 	LastPush             time.Time
-	LastSync             time.Time
+	LastIntake           time.Time
+	LastIntakeTSDir      string
 	RsyncVersion         string // empty if not installed
 	LockHeld             bool   // someone has gdrive-sync.lock right now
 	MaxDelete            int
@@ -39,26 +39,30 @@ type Status struct {
 // sched may be nil — callers that don't have a Scheduler instance get a
 // SchedulerNotInstalled value back rather than a panic.
 func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *config.UserState, sched *Scheduler) (*Status, error) {
-	gs := state.Modules.GdriveSync
+	_ = state // legacy global state is no longer authoritative for gdrive-sync status.
 	storeDir := ""
+	var localState LocalState
 	if cfg.LocalPaths != nil {
 		storeDir = cfg.LocalPaths.StoreDir
+		if st, err := LoadLocalState(cfg.LocalPaths); err == nil && st != nil {
+			localState = *st
+		}
 	}
 	s := &Status{
-		LocalPath:    strings.TrimRight(cfg.LocalPath, "/"),
-		MirrorPath:   strings.TrimRight(cfg.MirrorPath, "/"),
-		StoreDir:     storeDir,
-		LocalExists:  runner.IsDir(cfg.LocalPath),
-		MirrorExists: runner.IsDir(cfg.MirrorPath),
-		Paused:       cfg.Paused,
-		Propagation:  cfg.Propagation,
-		LastPull:     gs.LastPull,
-		LastPush:     gs.LastPush,
-		LastSync:     gs.LastSync,
-		LockHeld:     pathExists(cfg.LockDir),
-		MaxDelete:    cfg.MaxDelete,
-		Interval:     cfg.Interval,
-		PullInterval: cfg.PullInterval,
+		LocalPath:       strings.TrimRight(cfg.LocalPath, "/"),
+		MirrorPath:      strings.TrimRight(cfg.MirrorPath, "/"),
+		StoreDir:        storeDir,
+		LocalExists:     runner.IsDir(cfg.LocalPath),
+		MirrorExists:    runner.IsDir(cfg.MirrorPath),
+		Paused:          cfg.Paused,
+		Propagation:     cfg.Propagation,
+		LastPush:        localState.LastPush,
+		LastIntake:      localState.LastIntake,
+		LastIntakeTSDir: localState.LastIntakeTSDir,
+		LockHeld:        pathExists(cfg.LockDir),
+		MaxDelete:       cfg.MaxDelete,
+		Interval:        cfg.Interval,
+		PullInterval:    cfg.PullInterval,
 	}
 	if sched != nil {
 		s.SchedulerState = sched.StateKind(ctx, SchedulerKindPush)
@@ -126,10 +130,10 @@ func printNextSteps(info *PreflightInfo) {
 	fmt.Printf("     du -sh %s %s\n", info.LocalPath, info.MirrorPath)
 	fmt.Printf("     ls -la %s/inbox\n", info.LocalPath)
 	fmt.Printf("     test ! -L %s/.gdrive\n", info.LocalPath)
-	fmt.Println("  2. When happy, activate two-way sync:")
+	fmt.Println("  2. When happy, activate push-first sync:")
 	fmt.Println("     dot gdrive-sync resume")
 	fmt.Println("  3. Sanity check (should be a no-op):")
-	fmt.Println("     dot gdrive-sync sync --dry-run")
+	fmt.Println("     dot gdrive-sync push --dry-run")
 }
 
 // humanBytes formats a byte count as a short human-readable string

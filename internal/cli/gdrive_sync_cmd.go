@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,23 +25,23 @@ import (
 func newGdriveSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gdrive-sync",
-		Short: "Sync workspace ⟷ gdrive-workspace mirror via local rsync",
+		Short: "Push workspace to gdrive-workspace mirror via local rsync",
 		Long: `Local-only rsync mirror between ~/workspace/work and the cloud-sync
 client's mirror tree (default ~/gdrive-workspace/work). No SSH; the cloud
 client itself handles upload/download to/from Drive (or Dropbox, etc.).
 
-Workspace is authoritative: pull only fetches newer files (no --delete on
-the workspace side); push uses --delete-after to propagate workspace
-deletions to the mirror, guarded by --max-delete=N.
+Workspace is authoritative: push is the default action. It sends local
+creates and updates to the mirror while leaving deletions off unless
+explicitly enabled with --propagate=create,update,delete.
 
 Getting started:
   dot gdrive-sync setup       Install rsync (if missing) + auto-sync scheduler
   dot gdrive-sync migrate     One-time symlink → real-dir conversion + bring-down
-  dot gdrive-sync resume      Activate two-way sync after migrate verified
-  dot gdrive-sync             Default = sync (pull then push)
+  dot gdrive-sync resume      Activate push-first sync after migrate verified
+  dot gdrive-sync             Default = push
 
 Maintenance:
-  dot gdrive-sync status      Show last sync, conflicts, paused state, scheduler
+  dot gdrive-sync status      Show last push/intake, conflicts, paused state, scheduler
   dot gdrive-sync conflicts   List timestamped backup directories
   dot gdrive-sync pause       Stop auto-sync (scheduler + paused gate)
   dot gdrive-sync resume      Restart auto-sync`,
@@ -139,6 +140,24 @@ func gdriveBootstrap(cmd *cobra.Command) (*config.UserState, *gdrivesync.Config,
 	return state, cfg, runner, nil
 }
 
+func gdriveBootstrapReadOnly(cmd *cobra.Command) (*config.UserState, *gdrivesync.Config, *exec.Runner, error) {
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	state, err := config.LoadState()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("loading state: %w", err)
+	}
+	cfg, err := gdrivesync.ResolveConfigReadOnly(state)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	verbose, _ := cmd.Flags().GetBool("verbose")
+	cfg.Verbose = verbose
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	runner := exec.NewRunner(dryRun, logger)
+	return state, cfg, runner, nil
+}
+
 // gdriveScheduler builds a Scheduler bound to the same runner+cfg used
 // elsewhere in the gdrive-sync subcommands. Returns the Paths used so
 // callers can introspect plist/timer locations.
@@ -180,10 +199,10 @@ func gdrivePreflight(p *Printer, cfg *gdrivesync.Config, runner *exec.Runner, st
 	return true
 }
 
-// recordSyncResult updates the state's Last* timestamps and the on-disk
-// log. Called from sync/pull/push handlers after the operation finishes.
-// Errors are surfaced but do not override the underlying sync result.
+// recordSyncResult updates the on-disk log after a sync operation. Runtime
+// timestamps now live in the workspace-local gdrive-sync state file.
 func recordSyncResult(state *config.UserState, cfg *gdrivesync.Config, op string, syncErr error, dryRun bool) {
+	_ = state
 	if dryRun {
 		return
 	}
@@ -194,20 +213,6 @@ func recordSyncResult(state *config.UserState, cfg *gdrivesync.Config, op string
 	gdrivesync.AppendLog(cfg.LogFile, op, exitCode)
 	gdrivesync.RotateLog(cfg.LogFile, 2000, 1000)
 
-	if syncErr == nil {
-		now := time.Now()
-		switch op {
-		case "pull":
-			state.Modules.GdriveSync.LastPull = now
-		case "push":
-			state.Modules.GdriveSync.LastPush = now
-		case "sync":
-			state.Modules.GdriveSync.LastPull = now
-			state.Modules.GdriveSync.LastPush = now
-			state.Modules.GdriveSync.LastSync = now
-		}
-		_ = config.SaveState(state)
-	}
 }
 
 // ── sync (root default + explicit subcommand) ────────────────────────────
@@ -362,7 +367,7 @@ entirely.
 }
 
 func runGdriveSyncInboxList(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := gdriveBootstrap(cmd)
+	_, cfg, _, err := gdriveBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}
@@ -586,7 +591,7 @@ func newGdriveSyncStatusCmd() *cobra.Command {
 }
 
 func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := gdriveBootstrap(cmd)
+	state, cfg, runner, err := gdriveBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}
@@ -631,9 +636,11 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Max delete", fmt.Sprintf("%d", st.MaxDelete))
 	}
 	p.KV("Lock held", boolStr(st.LockHeld))
-	p.KV("Last sync", formatLastSync(st.LastSync))
-	p.KV("Last pull", formatLastSync(st.LastPull))
 	p.KV("Last push", formatLastSync(st.LastPush))
+	p.KV("Last intake", formatLastSync(st.LastIntake))
+	if st.LastIntakeTSDir != "" {
+		p.KV("Last intake dir", st.LastIntakeTSDir)
+	}
 
 	if len(st.Conflicts) > 0 {
 		p.Section(fmt.Sprintf("Conflicts: %d backup directories", len(st.Conflicts)))
@@ -948,15 +955,20 @@ func parsePullIntervalFlag(raw string) (int, error) {
 	if raw == "" || raw == "0" {
 		return 0, nil
 	}
+	var seconds int
 	// Try Go duration first (handles "15m", "1h", "30s").
 	if d, err := time.ParseDuration(raw); err == nil {
-		return int(d.Seconds()), nil
+		seconds = int(d.Seconds())
+	} else {
+		// Bare integer fallback.
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil {
+			return 0, fmt.Errorf("not a duration or seconds: %q", raw)
+		}
+		seconds = parsed
 	}
-	// Bare integer fallback.
-	var seconds int
-	_, err := fmt.Sscanf(raw, "%d", &seconds)
-	if err != nil {
-		return 0, fmt.Errorf("not a duration or seconds: %q", raw)
+	if seconds != 0 && (seconds < 60 || seconds > 86400) {
+		return 0, fmt.Errorf("must be 0 or 60..86400 seconds (got %d)", seconds)
 	}
 	return seconds, nil
 }
@@ -1062,7 +1074,7 @@ Both layers feed a per-run dynamic excludes file passed to rsync.
 }
 
 func runGdriveSyncSharedList(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := gdriveBootstrap(cmd)
+	_, cfg, _, err := gdriveBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}
@@ -1090,13 +1102,17 @@ func runGdriveSyncSharedList(cmd *cobra.Command, _ []string) error {
 }
 
 func runGdriveSyncSharedAdd(cmd *cobra.Command, args []string) error {
-	state, cfg, _, err := gdriveBootstrap(cmd)
+	_, cfg, _, err := gdriveBootstrap(cmd)
 	if err != nil {
 		return err
 	}
 	mirror := stripTrailingSlash(cfg.MirrorPath)
 	added := make([]string, 0, len(args))
-	current := append([]string(nil), state.Modules.GdriveSync.SharedExcludes...)
+	localCfg, err := editableLocalConfig(cfg)
+	if err != nil {
+		return err
+	}
+	current := append([]string(nil), localCfg.SharedExcludes...)
 
 	for _, raw := range args {
 		rel, err := relativizeForMirror(raw, mirror)
@@ -1110,10 +1126,11 @@ func runGdriveSyncSharedAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	dedupedSorted := dedupSorted(current)
-	state.Modules.GdriveSync.SharedExcludes = dedupedSorted
-	if err := config.SaveState(state); err != nil {
-		return fmt.Errorf("saving state: %w", err)
+	localCfg.SharedExcludes = dedupedSorted
+	if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
+		return fmt.Errorf("saving local config: %w", err)
 	}
+	cfg.SharedExcludes = dedupedSorted
 
 	p := printerFrom(cmd)
 	if len(added) == 0 {
@@ -1127,13 +1144,17 @@ func runGdriveSyncSharedAdd(cmd *cobra.Command, args []string) error {
 }
 
 func runGdriveSyncSharedRemove(cmd *cobra.Command, args []string) error {
-	state, cfg, _, err := gdriveBootstrap(cmd)
+	_, cfg, _, err := gdriveBootstrap(cmd)
 	if err != nil {
 		return err
 	}
 	mirror := stripTrailingSlash(cfg.MirrorPath)
 	removed := make([]string, 0, len(args))
-	current := append([]string(nil), state.Modules.GdriveSync.SharedExcludes...)
+	localCfg, err := editableLocalConfig(cfg)
+	if err != nil {
+		return err
+	}
+	current := append([]string(nil), localCfg.SharedExcludes...)
 
 	for _, raw := range args {
 		rel, err := relativizeForMirror(raw, mirror)
@@ -1155,10 +1176,11 @@ func runGdriveSyncSharedRemove(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	state.Modules.GdriveSync.SharedExcludes = current
-	if err := config.SaveState(state); err != nil {
-		return fmt.Errorf("saving state: %w", err)
+	localCfg.SharedExcludes = current
+	if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
+		return fmt.Errorf("saving local config: %w", err)
 	}
+	cfg.SharedExcludes = current
 
 	p := printerFrom(cmd)
 	if len(removed) == 0 {
@@ -1172,12 +1194,16 @@ func runGdriveSyncSharedRemove(cmd *cobra.Command, args []string) error {
 }
 
 func runGdriveSyncSharedClear(cmd *cobra.Command, _ []string) error {
-	state, _, _, err := gdriveBootstrap(cmd)
+	_, cfg, _, err := gdriveBootstrap(cmd)
 	if err != nil {
 		return err
 	}
 	yes, _ := cmd.Flags().GetBool("yes")
-	n := len(state.Modules.GdriveSync.SharedExcludes)
+	localCfg, err := editableLocalConfig(cfg)
+	if err != nil {
+		return err
+	}
+	n := len(localCfg.SharedExcludes)
 	p := printerFrom(cmd)
 	if n == 0 {
 		p.Line("Manual shared-excludes list is already empty.")
@@ -1191,12 +1217,27 @@ func runGdriveSyncSharedClear(cmd *cobra.Command, _ []string) error {
 		p.Line("Aborted.")
 		return nil
 	}
-	state.Modules.GdriveSync.SharedExcludes = nil
-	if err := config.SaveState(state); err != nil {
-		return fmt.Errorf("saving state: %w", err)
+	localCfg.SharedExcludes = nil
+	if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
+		return fmt.Errorf("saving local config: %w", err)
 	}
+	cfg.SharedExcludes = nil
 	p.Line("✓ Cleared %d manual entries.", n)
 	return nil
+}
+
+func editableLocalConfig(cfg *gdrivesync.Config) (*gdrivesync.LocalConfig, error) {
+	if cfg.LocalPaths == nil {
+		return nil, fmt.Errorf("local paths unresolved")
+	}
+	localCfg, ok, err := gdrivesync.LoadLocalConfig(cfg.LocalPaths)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		localCfg = &gdrivesync.LocalConfig{Propagation: gdrivesync.DefaultPropagationPolicy()}
+	}
+	return localCfg, nil
 }
 
 // relativizeForMirror normalizes a user-supplied path so it lives under

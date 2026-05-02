@@ -228,10 +228,10 @@ func ConvertSymlinks(runner *exec.Runner, localBase string) error {
 }
 
 // Migrate runs the one-shot migration: preflight inspection → symlink
-// conversion → additive pull from mirror → state save with Paused=true.
+// conversion → additive pull from mirror → local config save with Paused=true.
 //
 // The Paused gate is on purpose: the migration brings everything down
-// from gdrive but does NOT auto-enable bidirectional sync. The user
+// from gdrive but does NOT auto-enable push-first sync. The user
 // inspects the result (du, sha256, git status) and runs `dot
 // gdrive-sync resume` to clear the gate when satisfied.
 //
@@ -244,7 +244,11 @@ func Migrate(ctx context.Context, runner *exec.Runner, cfg *Config, state *confi
 	PrintPreflight(info)
 
 	// Defensive: ensure paused stays true through the migration window.
-	state.Modules.GdriveSync.Paused = true
+	if !opts.DryRun {
+		if err := setLocalPausedForMigration(cfg, state, true); err != nil {
+			return err
+		}
+	}
 
 	if opts.DryRun {
 		fmt.Println()
@@ -266,13 +270,26 @@ func Migrate(ctx context.Context, runner *exec.Runner, cfg *Config, state *confi
 		return fmt.Errorf("migrate pull: %w", err)
 	}
 
-	if !opts.DryRun {
-		if err := config.SaveState(state); err != nil {
-			return fmt.Errorf("saving state: %w", err)
-		}
-	}
-
 	printNextSteps(info)
+	return nil
+}
+
+func setLocalPausedForMigration(cfg *Config, state *config.UserState, paused bool) error {
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	localCfg, ok, err := LoadLocalConfig(cfg.LocalPaths)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		localCfg = localConfigFromGlobal(state)
+	}
+	localCfg.Paused = paused
+	if err := SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
+		return fmt.Errorf("saving local config: %w", err)
+	}
+	cfg.Paused = paused
 	return nil
 }
 

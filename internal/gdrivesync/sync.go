@@ -60,6 +60,17 @@ type Config struct {
 // workspace). Once .dotfiles/gdrive-sync/config.yaml exists, the
 // global block is no longer read.
 func ResolveConfig(state *config.UserState) (*Config, error) {
+	return resolveConfig(state, true)
+}
+
+// ResolveConfigReadOnly resolves the same runtime values without creating
+// the local store, migrating global config, or healing .gitignore. Use it for
+// status/list commands that must not mutate the workspace.
+func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
+	return resolveConfig(state, false)
+}
+
+func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
 	systemPaths, err := ResolvePaths()
 	if err != nil {
 		return nil, err
@@ -79,9 +90,20 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 
 	localPaths := ResolveLocalPaths(localPath)
 
-	localCfg, err := LoadOrMigrateLocalConfig(state, localPaths)
-	if err != nil {
-		return nil, err
+	var localCfg *LocalConfig
+	if migrate {
+		localCfg, err = LoadOrMigrateLocalConfig(state, localPaths)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if cfg, ok, err := LoadLocalConfig(localPaths); err != nil {
+			return nil, err
+		} else if ok {
+			localCfg = cfg
+		} else {
+			localCfg = localConfigFromGlobal(state)
+		}
 	}
 
 	mirrorPath := localCfg.MirrorPath
@@ -136,7 +158,7 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		IgnoreFile:     localPaths.IgnoreFile,
 		ConfigDir:      localPaths.StoreDir,
 		SharedExcludes: append([]string(nil), localCfg.SharedExcludes...),
-		LogFile:        systemPaths.LogFile,
+		LogFile:        localPaths.LogFile,
 		LockDir:        systemPaths.LockDir,
 		RsyncPath:      rsyncPath,
 		MaxDelete:      maxDelete,
@@ -326,12 +348,12 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	}
 	if !dryRun && cfg.LocalPaths != nil {
 		if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
-			fmt.Printf("  ⚠ baseline refresh: %v\n", err)
+			return fmt.Errorf("baseline refresh: %w", err)
 		}
 		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
 			s.LastPush = time.Now().UTC()
 		}); err != nil {
-			fmt.Printf("  ⚠ state update: %v\n", err)
+			return fmt.Errorf("state update: %w", err)
 		}
 	}
 	return nil

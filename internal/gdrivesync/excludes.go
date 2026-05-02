@@ -1,8 +1,7 @@
-// Package gdrivesync implements the local↔local rsync mirror that backs
-// `dot gdrive-sync`. It keeps ~/workspace/work and ~/gdrive-workspace/work
-// in sync via plain rsync (no SSH), with workspace-authoritative semantics:
-// pull only fetches newer files; push uses --delete-after to propagate
-// workspace deletions. Drive-side deletions never silently propagate.
+// Package gdrivesync implements the local→mirror rsync flow that backs
+// `dot gdrive-sync`. The workspace is authoritative: push propagates local
+// creates and updates by default, while deletes are opt-in. Mirror-origin
+// changes are staged separately via intake.
 package gdrivesync
 
 import (

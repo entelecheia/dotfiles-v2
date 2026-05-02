@@ -41,13 +41,15 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 		t.Fatalf("EnsureLocalLayout: %v", err)
 	}
 	cfg := &Config{
-		LocalPath:   local + "/",
-		MirrorPath:  mirror + "/",
-		LogFile:     filepath.Join(root, "gdrive-sync.log"),
-		LockDir:     filepath.Join(root, "lock"),
-		MaxDelete:   100,
-		Propagation: DefaultPropagationPolicy(),
-		LocalPaths:  paths,
+		LocalPath:    local + "/",
+		MirrorPath:   mirror + "/",
+		ExcludesFile: paths.ExcludeFile,
+		IgnoreFile:   paths.IgnoreFile,
+		LogFile:      filepath.Join(root, "gdrive-sync.log"),
+		LockDir:      filepath.Join(root, "lock"),
+		MaxDelete:    100,
+		Propagation:  DefaultPropagationPolicy(),
+		LocalPaths:   paths,
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	runner := exec.NewRunner(false, logger)
@@ -332,34 +334,13 @@ func TestIntake_StrictMode_DetectsContentChangeWithSameSizeMtime(t *testing.T) {
 	}
 }
 
-func TestRefreshBaseline_PopulatesFromLocalTree(t *testing.T) {
+func TestRefreshBaseline_PopulatesFromMirrorTree(t *testing.T) {
 	f := newIntakeFixture(t)
-	// Local tree gets some files.
-	if err := os.MkdirAll(filepath.Join(f.local, "notes"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.local, "notes/a.md"), []byte("a"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.local, "notes/b.md"), []byte("bb"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	f.writeMirror("notes/a.md", "a")
+	f.writeMirror("notes/b.md", "bb")
 	// .dotfiles/ and inbox/gdrive/ files must NOT land in baseline.
-	if err := os.WriteFile(filepath.Join(f.local, ".dotfiles/secret.txt"), []byte("x"), 0o644); err != nil {
-		// .dotfiles/ doesn't exist yet; create.
-		if err := os.MkdirAll(filepath.Join(f.local, ".dotfiles"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(f.local, ".dotfiles/secret.txt"), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.MkdirAll(filepath.Join(f.local, "inbox/gdrive/old"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.local, "inbox/gdrive/old/staged.md"), []byte("z"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	f.writeMirror(".dotfiles/secret.txt", "x")
+	f.writeMirror("inbox/gdrive/old/staged.md", "z")
 
 	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
 		t.Fatal(err)
@@ -377,6 +358,82 @@ func TestRefreshBaseline_PopulatesFromLocalTree(t *testing.T) {
 	for k := range base {
 		if strings.HasPrefix(k, ".dotfiles") || strings.HasPrefix(k, "inbox/gdrive") {
 			t.Errorf("baseline includes always-excluded path: %s", k)
+		}
+	}
+}
+
+func TestRefreshBaseline_UsesMirrorSoDeleteOffDoesNotReIntake(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.writeMirror("kept-on-mirror.md", "still there")
+
+	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Intaked) != 0 {
+		t.Errorf("mirror-only baseline entry was re-intaked: %v", res.Intaked)
+	}
+	if len(res.SkippedBase) != 1 || res.SkippedBase[0] != "kept-on-mirror.md" {
+		t.Errorf("SkippedBase = %v, want kept-on-mirror.md", res.SkippedBase)
+	}
+}
+
+func TestIntake_AppliesExcludeIgnoreGitignoreAndSharedFilters(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.SharedExcludes = []string{"shared/drop"}
+
+	gitignoreMtime := f.writeMirror(".gitignore", "ignored-dir/\n*.tmp\n")
+	f.seedBaseline(".gitignore", "ignored-dir/\n*.tmp\n", gitignoreMtime)
+	f.writeMirror("node_modules/pkg/index.js", "skip")
+	f.writeMirror(".git/config", "skip")
+	f.writeMirror("ignored-dir/file.md", "skip")
+	f.writeMirror("scratch.tmp", "skip")
+	f.writeMirror("shared/drop/file.md", "skip")
+	f.writeMirror("normal/file.md", "keep")
+
+	res, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Intaked) != 1 || res.Intaked[0] != "normal/file.md" {
+		t.Fatalf("Intaked = %v, want [normal/file.md]", res.Intaked)
+	}
+}
+
+func TestRefreshBaseline_AppliesExcludeIgnoreGitignoreAndSharedFilters(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.SharedExcludes = []string{"shared/drop"}
+
+	f.writeMirror(".gitignore", "ignored-dir/\n*.tmp\n")
+	f.writeMirror("node_modules/pkg/index.js", "skip")
+	f.writeMirror(".git/config", "skip")
+	f.writeMirror("ignored-dir/file.md", "skip")
+	f.writeMirror("scratch.tmp", "skip")
+	f.writeMirror("shared/drop/file.md", "skip")
+	f.writeMirror("normal/file.md", "keep")
+
+	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
+		t.Fatal(err)
+	}
+	base, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := base["normal/file.md"]; !ok {
+		t.Fatalf("normal/file.md missing from baseline: %v", base)
+	}
+	for _, rel := range []string{
+		"node_modules/pkg/index.js",
+		".git/config",
+		"ignored-dir/file.md",
+		"scratch.tmp",
+		"shared/drop/file.md",
+	} {
+		if _, ok := base[rel]; ok {
+			t.Errorf("baseline included filtered path %s", rel)
 		}
 	}
 }

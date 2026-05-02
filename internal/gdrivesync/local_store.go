@@ -323,15 +323,9 @@ func UpdateLocalState(paths *LocalPaths, mutate func(*LocalState)) error {
 	return SaveLocalState(paths, st)
 }
 
-// MigrateFromGlobal seeds <localStoreDir>/config.yaml from the legacy
-// `state.modules.gdrive_sync` block when no local config exists yet.
-// Returns the freshly-built LocalConfig (also persisted to disk).
-//
-// Subsequent calls find the local config and skip migration entirely —
-// the global block is read at most once per workspace lifetime.
-func MigrateFromGlobal(globalState *config.UserState, paths *LocalPaths) (*LocalConfig, error) {
+func localConfigFromGlobal(globalState *config.UserState) *LocalConfig {
 	gs := globalState.Modules.GdriveSync
-	cfg := &LocalConfig{
+	return &LocalConfig{
 		MirrorPath:     gs.MirrorPath,
 		Propagation:    DefaultPropagationPolicy(),
 		MaxDelete:      gs.MaxDelete,
@@ -340,6 +334,17 @@ func MigrateFromGlobal(globalState *config.UserState, paths *LocalPaths) (*Local
 		Paused:         gs.Paused,
 		SharedExcludes: append([]string(nil), gs.SharedExcludes...),
 	}
+}
+
+// MigrateFromGlobal seeds <localStoreDir>/config.yaml from the legacy
+// `state.modules.gdrive_sync` block when no local config exists yet.
+// Returns the freshly-built LocalConfig (also persisted to disk).
+//
+// Subsequent calls find the local config and skip migration entirely —
+// the global block is read at most once per workspace lifetime.
+func MigrateFromGlobal(globalState *config.UserState, paths *LocalPaths) (*LocalConfig, error) {
+	gs := globalState.Modules.GdriveSync
+	cfg := localConfigFromGlobal(globalState)
 	if err := EnsureLocalLayout(paths); err != nil {
 		return nil, err
 	}

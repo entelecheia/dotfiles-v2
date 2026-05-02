@@ -2,6 +2,8 @@ package gdrivesync
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -307,6 +309,9 @@ func TestResolveConfig_Defaults(t *testing.T) {
 	if cfg.LocalPaths == nil || cfg.LocalPaths.StoreDir == "" {
 		t.Errorf("LocalPaths not resolved: %+v", cfg.LocalPaths)
 	}
+	if cfg.LogFile != cfg.LocalPaths.LogFile {
+		t.Errorf("LogFile = %q, want local store log %q", cfg.LogFile, cfg.LocalPaths.LogFile)
+	}
 }
 
 func TestResolveConfig_StateOverrides(t *testing.T) {
@@ -328,5 +333,27 @@ func TestResolveConfig_StateOverrides(t *testing.T) {
 	}
 	if cfg.MaxDelete != 50 {
 		t.Errorf("MaxDelete = %d, want 50", cfg.MaxDelete)
+	}
+}
+
+func TestResolveConfigReadOnly_DoesNotCreateLocalStore(t *testing.T) {
+	state := newIsolatedState(t)
+	local := strings.TrimRight(state.Modules.GdriveSync.LocalPath, "/")
+
+	cfg, err := ResolveConfigReadOnly(state)
+	if err != nil {
+		t.Fatalf("ResolveConfigReadOnly: %v", err)
+	}
+	if cfg.LocalPaths == nil {
+		t.Fatal("LocalPaths not populated")
+	}
+	if cfg.LocalPaths.WorkspaceRoot != local {
+		t.Errorf("WorkspaceRoot = %q, want %q", cfg.LocalPaths.WorkspaceRoot, local)
+	}
+	if _, err := os.Stat(cfg.LocalPaths.StoreDir); !os.IsNotExist(err) {
+		t.Fatalf("read-only resolve created local store or got unexpected error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(local, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatalf("read-only resolve created .gitignore or got unexpected error: %v", err)
 	}
 }

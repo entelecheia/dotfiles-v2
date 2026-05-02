@@ -83,6 +83,10 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 	if opts.Strict {
 		mode = FingerprintStrict
 	}
+	filter, err := newSyncFilter(cfg, mirror)
+	if err != nil {
+		return nil, fmt.Errorf("loading filters: %w", err)
+	}
 
 	now := time.Now().UTC()
 	intakeTS := newSubSecondTimestamp()
@@ -117,10 +121,7 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 		if err != nil {
 			return err
 		}
-		// Always-on excludes — mirror should never have these (push
-		// excludes them) but if the operator pushed before this
-		// version, don't echo them back to local.
-		if isAlwaysExcluded(rel) {
+		if filter.shouldSkip(absPath, rel, d.IsDir()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -328,32 +329,36 @@ func copyFilePreservingMtime(src, dst string) error {
 	return os.Chtimes(dst, info.ModTime(), info.ModTime())
 }
 
-// RefreshBaseline rebuilds <baseline.manifest> by walking the local
-// tree under cfg.LocalPath and recording each file's fingerprint —
-// the post-push snapshot of "what mirror should look like". Same
-// always-on excludes as intake (don't snapshot .dotfiles/ or
-// inbox/gdrive/).
+// RefreshBaseline rebuilds <baseline.manifest> by walking the mirror tree and
+// recording each file's fingerprint — the post-push snapshot of what actually
+// exists on the mirror. This matters when propagation disables create, update,
+// or delete: the baseline must reflect the destination after rsync, not the
+// local source tree.
 func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("refresh baseline: local paths unresolved")
 	}
-	local := strings.TrimRight(cfg.LocalPath, "/")
+	mirror := strings.TrimRight(cfg.MirrorPath, "/")
+	filter, err := newSyncFilter(cfg, mirror)
+	if err != nil {
+		return fmt.Errorf("loading filters: %w", err)
+	}
 	entries := map[string]Fingerprint{}
-	err := filepath.WalkDir(local, func(absPath string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(mirror, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if d != nil && !d.IsDir() {
 				return nil
 			}
 			return err
 		}
-		if absPath == local {
+		if absPath == mirror {
 			return nil
 		}
-		rel, err := filepath.Rel(local, absPath)
+		rel, err := filepath.Rel(mirror, absPath)
 		if err != nil {
 			return err
 		}
-		if isAlwaysExcluded(rel) {
+		if filter.shouldSkip(absPath, rel, d.IsDir()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
