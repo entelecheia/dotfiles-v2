@@ -8,16 +8,16 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
-// AIToolsModule manages AI tool shell configs and Claude settings.
-type AIToolsModule struct{}
+// AIModule manages AI CLI/config helper shell configs and Claude settings.
+type AIModule struct{}
 
-func (m *AIToolsModule) Name() string { return "ai-tools" }
+func (m *AIModule) Name() string { return "ai" }
 
-func (m *AIToolsModule) managedFiles(rc *RunContext) []shellFile {
+func (m *AIModule) managedFiles(rc *RunContext) []shellFile {
 	return []shellFile{
 		{
-			templatePath: "shell/30-ai-tools.sh.tmpl",
-			destPath:     filepath.Join(rc.HomeDir, ".config", "shell", "30-ai-tools.sh"),
+			templatePath: "shell/30-ai.sh.tmpl",
+			destPath:     filepath.Join(rc.HomeDir, ".config", "shell", "30-ai.sh"),
 			isTemplate:   true,
 		},
 		{
@@ -28,7 +28,7 @@ func (m *AIToolsModule) managedFiles(rc *RunContext) []shellFile {
 	}
 }
 
-func (m *AIToolsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
+func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
 	var changes []Change
 	data := rc.Config.TemplateData()
 
@@ -44,11 +44,18 @@ func (m *AIToolsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult
 			})
 		}
 	}
+	legacy := filepath.Join(rc.HomeDir, ".config", "shell", "30-ai-tools.sh")
+	if rc.Runner.FileExists(legacy) {
+		changes = append(changes, Change{
+			Description: fmt.Sprintf("remove legacy %s", legacy),
+			Command:     fmt.Sprintf("rm %s", legacy),
+		})
+	}
 
 	return &CheckResult{Satisfied: len(changes) == 0, Changes: changes}, nil
 }
 
-func (m *AIToolsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
+func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	var messages []string
 	data := rc.Config.TemplateData()
 
@@ -64,6 +71,13 @@ func (m *AIToolsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult
 		if written {
 			messages = append(messages, fmt.Sprintf("wrote %s", f.destPath))
 		}
+	}
+	legacy := filepath.Join(rc.HomeDir, ".config", "shell", "30-ai-tools.sh")
+	if rc.Runner.FileExists(legacy) {
+		if err := rc.Runner.Remove(legacy); err != nil {
+			return nil, fmt.Errorf("removing legacy %s: %w", legacy, err)
+		}
+		messages = append(messages, fmt.Sprintf("removed legacy %s", legacy))
 	}
 
 	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil

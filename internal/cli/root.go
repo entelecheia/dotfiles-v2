@@ -51,6 +51,7 @@ Also available as 'dot' for convenience.`,
 	root.AddCommand(newVersionCmd(version, commit))
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newUsecaseCmd())
+	root.AddCommand(newAICmd())
 
 	// Workspace cleanup
 	root.AddCommand(newCleanCmd())

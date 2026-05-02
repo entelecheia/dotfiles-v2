@@ -133,7 +133,7 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 		Profile:    "full",
 	}
 	original.Modules.Workspace.Path = "~/workspace"
-	original.Modules.AITools = true
+	original.Modules.AI.Enabled = true
 	original.Modules.Sync.Interval = 600
 
 	if err := saveStateAt(path, original); err != nil {
@@ -157,11 +157,36 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	if loaded.Modules.Workspace.Path != original.Modules.Workspace.Path {
 		t.Errorf("Workspace.Path: got %q, want %q", loaded.Modules.Workspace.Path, original.Modules.Workspace.Path)
 	}
-	if !loaded.Modules.AITools {
-		t.Error("AITools: expected true")
+	if !loaded.Modules.AI.Enabled {
+		t.Error("AI.Enabled: expected true")
 	}
 	if loaded.Modules.Sync.Interval != 600 {
 		t.Errorf("Sync.Interval: got %d, want 600", loaded.Modules.Sync.Interval)
+	}
+}
+
+func TestLoadState_LegacyAIToolsMigratesToAI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("name: Test\nprofile: full\nmodules:\n  ai_tools: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if !loaded.Modules.AI.Enabled {
+		t.Fatal("legacy ai_tools did not enable modules.ai.enabled")
+	}
+	if err := saveStateAt(path, loaded); err != nil {
+		t.Fatalf("saveStateAt: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "ai_tools") {
+		t.Fatalf("legacy ai_tools key was persisted: %s", data)
 	}
 }
 

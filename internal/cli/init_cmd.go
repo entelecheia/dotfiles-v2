@@ -56,6 +56,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	}
 
 	// If state already has data (not from --from), ask whether to reconfigure.
+	freshState := state.Name == "" && fromPath == ""
 	if state.Name != "" && !yes && fromPath == "" {
 		p.Line("Current configuration:")
 		ui.PrintStateSummary(state)
@@ -95,8 +96,8 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// --- AI Tools ---
-	if err := ui.ConfigureAITools(state, yes); err != nil {
+	// --- AI ---
+	if err := ui.ConfigureAI(state, yes, freshState); err != nil {
 		return err
 	}
 

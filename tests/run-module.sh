@@ -9,7 +9,7 @@ echo "=== Module test: $MODULE ==="
 
 # Determine profile — some modules need full or server
 case "$MODULE" in
-  node|tmux|ai-tools|conda)
+  node|tmux|ai|conda)
     PROFILE="full"
     ;;
   *)
@@ -54,7 +54,7 @@ case "$MODULE" in
   tmux)
     assert_file_exists "$HOME/.tmux.conf" "tmux config exists"
     ;;
-  ai-tools)
+  ai)
     assert_dir_exists "$HOME/.config" "Config directory exists"
     ;;
   conda)

@@ -266,8 +266,8 @@ func GeneratePreflightConfig(sys *SystemInfo) *UserState {
 		state.SSH.KeyName = "id_ed25519"
 	}
 
-	// AI tools enabled by default
-	state.Modules.AITools = true
+	// AI CLI/config helpers enabled by default
+	state.Modules.AI.Enabled = true
 
 	// Server profile: no workspace/fonts/warp
 	if state.Profile != "server" {

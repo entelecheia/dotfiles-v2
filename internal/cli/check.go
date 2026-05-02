@@ -71,6 +71,10 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	home, _ := os.UserHomeDir()
 
 	registry := module.NewRegistry()
+	moduleFilter, err = module.NormalizeFilter(moduleFilter)
+	if err != nil {
+		return err
+	}
 	modules := registry.Resolve(cfg, moduleFilter)
 
 	rc := &module.RunContext{

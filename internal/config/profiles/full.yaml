@@ -5,7 +5,7 @@ modules:
     enabled: true
   workspace:
     enabled: true
-  ai_tools:
+  ai:
     enabled: true
   tmux:
     enabled: true

@@ -55,7 +55,7 @@ var defaultOrder = []string{
 	"terminal",
 	"tmux",
 	"workspace",
-	"ai-tools",
+	"ai",
 	"fonts",
 	"macapps",
 	"conda",
@@ -79,13 +79,23 @@ func NewRegistry() *Registry {
 	r.Register(&TerminalModule{})
 	r.Register(&TmuxModule{})
 	r.Register(&WorkspaceModule{})
-	r.Register(&AIToolsModule{})
+	r.Register(&AIModule{})
 	r.Register(&FontsModule{})
 	r.Register(&MacAppsModule{})
 	r.Register(&CondaModule{})
 	r.Register(&GPGModule{})
 	r.Register(&SecretsModule{})
 	return r
+}
+
+// NormalizeFilter validates module filters and catches removed public names.
+func NormalizeFilter(filter []string) ([]string, error) {
+	for _, name := range filter {
+		if name == "ai-tools" {
+			return nil, fmt.Errorf("module %q was renamed to %q; use --module ai", "ai-tools", "ai")
+		}
+	}
+	return filter, nil
 }
 
 // Register adds or replaces a module.

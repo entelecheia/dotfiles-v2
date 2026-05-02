@@ -103,7 +103,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Apply only selected modules"},
 		})
 
-	section(p, "3. Daily workspace — tmux + AI tools",
+	section(p, "3. Daily workspace — tmux + AI",
 		"Launch multi-panel dev workspaces. ('dot' is an alias for 'dotfiles')",
 		[]usecase{
 			{"dotfiles open myproject",
