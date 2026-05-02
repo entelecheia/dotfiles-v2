@@ -161,3 +161,16 @@ func TailLog(logFile string, n int) (string, error) {
 func newTimestamp() string {
 	return strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339), ":", "-")
 }
+
+// newSubSecondTimestamp is like newTimestamp but adds microsecond
+// resolution. Used for intake run-dirs where two runs in the same
+// wall-clock second is plausible (a successful intake completing fast
+// enough that a follow-up run finds new content), and same-dir
+// collisions would silently merge their staged files.
+func newSubSecondTimestamp() string {
+	t := time.Now().UTC()
+	// Format: 2026-05-02T10-00-00.123456Z. Both ':' (none here) and the
+	// fractional separator '.' are filesystem-safe across darwin/linux/
+	// SMB; no replace needed.
+	return t.Format("2006-01-02T15-04-05.000000Z")
+}

@@ -310,6 +310,19 @@ func SaveLocalState(paths *LocalPaths, st *LocalState) error {
 	return atomicWrite(paths.StateFile, data)
 }
 
+// UpdateLocalState loads state.yaml, applies mutate, and saves it back.
+// Mutate runs against a non-nil pointer; the caller doesn't need to
+// guard for missing files. Used by intake/push to bump timestamps
+// without each call site repeating Load → mutate → Save.
+func UpdateLocalState(paths *LocalPaths, mutate func(*LocalState)) error {
+	st, err := LoadLocalState(paths)
+	if err != nil {
+		return err
+	}
+	mutate(st)
+	return SaveLocalState(paths, st)
+}
+
 // MigrateFromGlobal seeds <localStoreDir>/config.yaml from the legacy
 // `state.modules.gdrive_sync` block when no local config exists yet.
 // Returns the freshly-built LocalConfig (also persisted to disk).

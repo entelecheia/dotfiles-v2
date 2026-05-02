@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -51,6 +52,8 @@ Maintenance:
 		newGdriveSyncSyncCmd(),
 		newGdriveSyncPullCmd(),
 		newGdriveSyncPushCmd(),
+		newGdriveSyncIntakeCmd(),
+		newGdriveSyncInboxCmd(),
 		newGdriveSyncStatusCmd(),
 		newGdriveSyncMigrateCmd(),
 		newGdriveSyncConflictsCmd(),
@@ -228,18 +231,50 @@ func runGdriveSync(cmd *cobra.Command, args []string) error {
 	return runGdriveSyncPush(cmd, args)
 }
 
-// ── pull ─────────────────────────────────────────────────────────────────
+// ── pull (alias for intake, kept for back-compat) ────────────────────────
 
 func newGdriveSyncPullCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:          "pull",
-		Short:        "Fetch newer files from mirror (--update, no --delete)",
-		RunE:         runGdriveSyncPull,
+		Short:        "Alias for `intake` (kept for back-compat; prefer `dot gdrive-sync intake`)",
+		RunE:         runGdriveSyncPullAlias,
 		SilenceUsage: true,
 	}
+	cmd.Flags().Bool("strict", false, "use sha256 fingerprints instead of size+mtime")
+	return cmd
 }
 
-func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
+func runGdriveSyncPullAlias(cmd *cobra.Command, args []string) error {
+	printerFrom(cmd).Line("(note: `pull` is now an alias for `intake`; mirror→inbox/gdrive staging only)")
+	return runGdriveSyncIntake(cmd, args)
+}
+
+// ── intake ───────────────────────────────────────────────────────────────
+
+func newGdriveSyncIntakeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "intake",
+		Short: "Stage GDrive-origin changes into <local>/inbox/gdrive/<ts>/",
+		Long: `Compares the mirror against the baseline (what we last pushed) and the
+imports manifest (what we've already staged) to find GDrive-origin
+new and modified files. Each candidate is copied into a timestamped
+subdirectory of <local>/inbox/gdrive/<intake-ts>/ for the operator to
+review and route. The local tree outside that staging area is never
+modified.
+
+Mirror-side deletions detected against baseline become tombstones in
+.dotfiles/gdrive-sync/tombstones.log — they are NOT propagated to local.
+
+  --strict   Use sha256 fingerprints (catches content changes that
+             preserve mtime). Default is fast size+mtime mode.`,
+		RunE:         runGdriveSyncIntake,
+		SilenceUsage: true,
+	}
+	cmd.Flags().Bool("strict", false, "use sha256 fingerprints instead of size+mtime")
+	return cmd
+}
+
+func runGdriveSyncIntake(cmd *cobra.Command, _ []string) error {
 	state, cfg, runner, err := gdriveBootstrap(cmd)
 	if err != nil {
 		return err
@@ -249,6 +284,7 @@ func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	strict, _ := cmd.Flags().GetBool("strict")
 
 	release, lockErr := gdrivesync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
@@ -257,16 +293,183 @@ func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
 	}
 	defer release()
 
-	p.Line("Pulling %s → %s", cfg.MirrorPath, cfg.LocalPath)
+	mode := "fast"
+	if strict {
+		mode = "strict"
+	}
+	p.Line("Intaking %s → %s/inbox/gdrive/<ts>/ (%s mode)", cfg.MirrorPath, stripTrailingSlash(cfg.LocalPath), mode)
 	if dryRun {
 		p.Line("  (dry-run — no changes)")
 	}
-	pullErr := gdrivesync.Pull(cmd.Context(), runner, cfg, dryRun)
-	recordSyncResult(state, cfg, "pull", pullErr, dryRun)
-	if pullErr != nil {
-		return fmt.Errorf("pull failed: %w", pullErr)
+	res, err := gdrivesync.Intake(cmd.Context(), runner, cfg, gdrivesync.IntakeOptions{
+		Strict: strict,
+		DryRun: dryRun,
+	})
+	if err != nil {
+		return fmt.Errorf("intake failed: %w", err)
 	}
-	p.Line("✓ Pull complete.")
+
+	if res.StagingDir != "" {
+		p.Line("  ✓ %d intaked into %s", len(res.Intaked), res.StagingDir)
+	} else {
+		p.Line("  %d intaked", len(res.Intaked))
+	}
+	p.Line("  %d skipped (baseline match)", len(res.SkippedBase))
+	p.Line("  %d skipped (imports match)", len(res.SkippedImports))
+	if len(res.Tombstones) > 0 {
+		p.Line("  %d tombstones recorded — see %s", len(res.Tombstones), cfg.LocalPaths.TombstonesFile)
+	}
+	return nil
+}
+
+// ── inbox (list / forget / clear) ────────────────────────────────────────
+
+func newGdriveSyncInboxCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "inbox",
+		Short: "Inspect and manage the GDrive intake staging area",
+		Long: `View what's staged + tracked under .dotfiles/gdrive-sync/, force a
+re-intake of one path, or clear the imports + tombstones manifests
+entirely.
+
+  dot gdrive-sync inbox                  # alias for list
+  dot gdrive-sync inbox list
+  dot gdrive-sync inbox forget <relpath> # next intake re-stages this path
+  dot gdrive-sync inbox clear            # empty imports + tombstones`,
+		RunE: runGdriveSyncInboxList,
+	}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "Show staged run-dirs, imports manifest entries, and tombstones",
+			RunE:  runGdriveSyncInboxList,
+		},
+		&cobra.Command{
+			Use:          "forget <relpath>",
+			Short:        "Drop a path from imports.manifest so the next intake re-stages it",
+			Args:         cobra.ExactArgs(1),
+			RunE:         runGdriveSyncInboxForget,
+			SilenceUsage: true,
+		},
+		&cobra.Command{
+			Use:          "clear",
+			Short:        "Empty imports.manifest and tombstones.log",
+			RunE:         runGdriveSyncInboxClear,
+			SilenceUsage: true,
+		},
+	)
+	return cmd
+}
+
+func runGdriveSyncInboxList(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	p := printerFrom(cmd)
+
+	stagingRoot := stripTrailingSlash(cfg.LocalPath) + "/inbox/gdrive"
+	runDirs, _ := os.ReadDir(stagingRoot)
+	dirCount := 0
+	totalFiles := 0
+	for _, e := range runDirs {
+		if !e.IsDir() {
+			continue
+		}
+		dirCount++
+		_ = filepath.WalkDir(filepath.Join(stagingRoot, e.Name()), func(_ string, d fs.DirEntry, _ error) error {
+			if d != nil && !d.IsDir() {
+				totalFiles++
+			}
+			return nil
+		})
+	}
+
+	imports, err := gdrivesync.LoadImportsManifest(cfg.LocalPaths.ImportsFile)
+	if err != nil {
+		return fmt.Errorf("loading imports: %w", err)
+	}
+	tomb, err := gdrivesync.LoadTombstones(cfg.LocalPaths.TombstonesFile)
+	if err != nil {
+		return fmt.Errorf("loading tombstones: %w", err)
+	}
+
+	p.Header("gdrive-sync inbox")
+	p.KV("Staging root", stagingRoot)
+	p.KV("Pending run-dirs", fmt.Sprintf("%d (%d files)", dirCount, totalFiles))
+	p.KV("Imports manifest", fmt.Sprintf("%d entries", len(imports)))
+	p.KV("Tombstones", fmt.Sprintf("%d entries", len(tomb)))
+	if len(tomb) > 0 {
+		p.Section("Recent tombstones (newest 5):")
+		shown := tomb
+		if len(shown) > 5 {
+			shown = shown[len(shown)-5:]
+		}
+		for _, t := range shown {
+			p.Bullet("•", fmt.Sprintf("%s (detected %s)", t.RelPath, t.DetectedAt.Format(time.RFC3339)))
+		}
+	}
+	p.Blank()
+	return nil
+}
+
+func runGdriveSyncInboxForget(cmd *cobra.Command, args []string) error {
+	_, cfg, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	rel := strings.TrimSpace(args[0])
+	if rel == "" {
+		return fmt.Errorf("relpath cannot be empty")
+	}
+	dropped, err := gdrivesync.ForgetImport(cfg.LocalPaths, rel)
+	if err != nil {
+		return err
+	}
+	p := printerFrom(cmd)
+	if dropped {
+		p.Line("✓ forgot %q — next intake will re-stage it if mirror still has it", rel)
+	} else {
+		p.Line("no entry for %q in imports.manifest — nothing to forget", rel)
+	}
+	return nil
+}
+
+func runGdriveSyncInboxClear(cmd *cobra.Command, _ []string) error {
+	state, cfg, _, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	yes, _ := cmd.Flags().GetBool("yes")
+	imports, _ := gdrivesync.LoadImportsManifest(cfg.LocalPaths.ImportsFile)
+	tomb, _ := gdrivesync.LoadTombstones(cfg.LocalPaths.TombstonesFile)
+	p := printerFrom(cmd)
+	if len(imports) == 0 && len(tomb) == 0 {
+		p.Line("imports.manifest and tombstones.log are already empty.")
+		return nil
+	}
+	confirmed, err := ui.Confirm(fmt.Sprintf("Clear %d imports + %d tombstones? Next intake will re-stage anything still on mirror.", len(imports), len(tomb)), yes)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		p.Line("Aborted.")
+		return nil
+	}
+	if err := gdrivesync.ClearImportsAndTombstones(cfg.LocalPaths); err != nil {
+		return err
+	}
+	p.Line("✓ cleared %d imports + %d tombstones.", len(imports), len(tomb))
+	_ = state
 	return nil
 }
 

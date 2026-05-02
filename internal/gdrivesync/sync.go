@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
@@ -299,6 +300,10 @@ func Pull(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 // rsync invocation. The workspace's per-workspace store (`.dotfiles/`)
 // and intake staging area (`inbox/gdrive/`) are always excluded so they
 // never bounce back to mirror, regardless of operator excludes.
+//
+// On a successful non-dry-run push, the baseline manifest is refreshed
+// from the post-rsync local tree so the next Intake can distinguish
+// our content from GDrive-origin changes.
 func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("push refused: %w", err)
@@ -316,7 +321,20 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	conflict := NewConflictDir()
 	args := pushArgs(cfg, conflict, dyn, dryRun)
 	fmt.Printf("  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation)
-	return runRsync(ctx, runner, cfg, args)
+	if err := runRsync(ctx, runner, cfg, args); err != nil {
+		return err
+	}
+	if !dryRun && cfg.LocalPaths != nil {
+		if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
+			fmt.Printf("  ⚠ baseline refresh: %v\n", err)
+		}
+		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
+			s.LastPush = time.Now().UTC()
+		}); err != nil {
+			fmt.Printf("  ⚠ state update: %v\n", err)
+		}
+	}
+	return nil
 }
 
 // Sync is now a thin alias for Push — the historical bidirectional Pull
