@@ -19,8 +19,14 @@ func PrintStateSummary(state *config.UserState) {
 	printKV("Timezone", state.Timezone)
 	printKV("SSH key", state.SSH.KeyName)
 	printKV("AI", formatBool(state.Modules.AI.Enabled))
-	if state.Modules.Warp {
-		printKV("Warp", formatBool(state.Modules.Warp))
+	if len(state.Modules.TerminalApps.Casks) > 0 {
+		printKV("Terminal apps", fmt.Sprintf("%d selected", len(state.Modules.TerminalApps.Casks)))
+	} else if state.Modules.Warp {
+		printKV("Terminal apps", "warp")
+	}
+	if state.Modules.TerminalTools.Enabled || len(state.Modules.TerminalTools.Formulas) > 0 || len(state.Modules.TerminalTools.FormulasExtra) > 0 {
+		printKV("Terminal tools", fmt.Sprintf("%d selected + %d extra",
+			len(state.Modules.TerminalTools.Formulas), len(state.Modules.TerminalTools.FormulasExtra)))
 	}
 	if state.Modules.Workspace.Path != "" {
 		printKV("Workspace", state.Modules.Workspace.Path)

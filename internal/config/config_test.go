@@ -107,6 +107,31 @@ func TestAllPackages_EmptyExtra(t *testing.T) {
 	}
 }
 
+func TestAllPackages_IncludesTerminalTools(t *testing.T) {
+	cfg := &Config{
+		Packages:      []string{"git", "curl"},
+		PackagesExtra: []string{"lazygit"},
+		Modules: ModulesConfig{
+			Terminal: TermConfig{
+				Enabled:    true,
+				Tools:      []string{"bat", "zoxide"},
+				ToolsExtra: []string{"atuin", "bat"},
+			},
+		},
+	}
+
+	all := cfg.AllPackages()
+	expected := []string{"git", "curl", "bat", "zoxide", "lazygit", "atuin"}
+	if len(all) != len(expected) {
+		t.Fatalf("AllPackages: expected %d, got %d: %v", len(expected), len(all), all)
+	}
+	for i, want := range expected {
+		if all[i] != want {
+			t.Errorf("AllPackages[%d] = %q, want %q", i, all[i], want)
+		}
+	}
+}
+
 func TestAllCasks_DeduplicatesAndPreservesOrder(t *testing.T) {
 	cfg := &Config{
 		Casks:      []string{"raycast", "obsidian", "arc"},
@@ -120,6 +145,19 @@ func TestAllCasks_DeduplicatesAndPreservesOrder(t *testing.T) {
 	for i, v := range expected {
 		if all[i] != v {
 			t.Errorf("AllCasks[%d] = %q, want %q", i, all[i], v)
+		}
+	}
+}
+
+func TestTerminalCatalogIncludesRequestedOptions(t *testing.T) {
+	for _, token := range []string{"warp", "cmux", "iterm2"} {
+		if !IsTerminalAppToken(token) {
+			t.Fatalf("terminal app catalog missing %q", token)
+		}
+	}
+	for _, formula := range []string{"yazi", "bat", "zoxide"} {
+		if !IsTerminalToolFormula(formula) {
+			t.Fatalf("terminal tool catalog missing %q", formula)
 		}
 	}
 }

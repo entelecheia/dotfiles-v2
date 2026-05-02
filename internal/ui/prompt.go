@@ -7,6 +7,12 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
+// SelectOption is a labeled value used by select-style prompts.
+type SelectOption struct {
+	Label string
+	Value string
+}
+
 // Styles for consistent output across the CLI.
 //
 // Semantic contract for the colour layer (glyphs live in markers.go):
@@ -132,6 +138,28 @@ func MultiSelect(message string, options, defaultVals []string, unattended bool)
 	opts := make([]huh.Option[string], len(options))
 	for i, o := range options {
 		opts[i] = huh.NewOption(o, o).Selected(sliceutil.Contains(defaultVals, o))
+	}
+	err := huh.NewMultiSelect[string]().
+		Title(message).
+		Options(opts...).
+		Value(&selected).
+		Run()
+	if err != nil {
+		return defaultVals, err
+	}
+	return selected, nil
+}
+
+// MultiSelectLabeled presents a checkbox-style multi-select with labels that
+// can differ from the persisted values.
+func MultiSelectLabeled(message string, options []SelectOption, defaultVals []string, unattended bool) ([]string, error) {
+	if unattended {
+		return defaultVals, nil
+	}
+	selected := append([]string(nil), defaultVals...)
+	opts := make([]huh.Option[string], len(options))
+	for i, o := range options {
+		opts[i] = huh.NewOption(o.Label, o.Value).Selected(sliceutil.Contains(defaultVals, o.Value))
 	}
 	err := huh.NewMultiSelect[string]().
 		Title(message).

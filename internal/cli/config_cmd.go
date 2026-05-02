@@ -269,6 +269,12 @@ func terminalDetail(cfg *config.Config) string {
 	if cfg.Modules.Terminal.Warp {
 		parts = append(parts, "warp")
 	}
+	if len(cfg.Modules.Terminal.Apps) > 0 {
+		parts = append(parts, fmt.Sprintf("%d app(s)", len(cfg.Modules.Terminal.Apps)))
+	}
+	if len(cfg.Modules.Terminal.Tools)+len(cfg.Modules.Terminal.ToolsExtra) > 0 {
+		parts = append(parts, fmt.Sprintf("%d tool(s)", len(cfg.Modules.Terminal.Tools)+len(cfg.Modules.Terminal.ToolsExtra)))
+	}
 	return strings.Join(parts, ", ")
 }
 

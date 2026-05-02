@@ -19,16 +19,32 @@ func (m *MacAppsModule) Name() string { return "macapps" }
 // Config.Casks wins; when empty we fall back to the embedded catalog defaults
 // so a profile can opt in without repeating the list.
 func (m *MacAppsModule) resolveCasks(rc *RunContext) []string {
-	configured := rc.Config.AllCasks()
-	if len(configured) > 0 {
-		return configured
-	}
 	cat, err := catalog.LoadMacApps()
 	if err != nil {
 		rc.Runner.Logger.Warn("macapps catalog load", "err", err)
 		return nil
 	}
-	return cat.Defaults
+	base := rc.Config.Casks
+	if len(base) == 0 {
+		base = cat.Defaults
+	}
+	seen := make(map[string]bool, len(base)+len(rc.Config.CasksExtra))
+	var casks []string
+	for _, token := range base {
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		casks = append(casks, token)
+	}
+	for _, token := range rc.Config.CasksExtra {
+		if seen[token] {
+			continue
+		}
+		seen[token] = true
+		casks = append(casks, token)
+	}
+	return casks
 }
 
 func (m *MacAppsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {

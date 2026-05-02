@@ -22,19 +22,31 @@ modules:
     enabled: true
     warp: true
     prompt_style: rich
+    apps:
+      - warp
+    tools:
+      - fzf
+      - ripgrep
+      - fd
+      - bat
+      - jq
+      - yq
+      - direnv
+      - zoxide
+      - eza
+      - btop
+      - lazygit
+      - yazi
+      - glow
+      - csvlens
+      - chafa
   macapps:
     enabled: true
     # Cask list is pulled from the embedded catalog (internal/config/catalog/macos-apps.yaml).
     # Override casks / casks_extra at the Config level to install a custom set.
 
 packages_extra:
-  - btop
-  - lazygit
   - rclone
-  - yazi
-  - glow
-  - csvlens
-  - chafa
   - fnm
   - uv
   - pipx

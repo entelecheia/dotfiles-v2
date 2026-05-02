@@ -91,9 +91,12 @@ type SSHModConfig struct {
 
 // TermConfig configures the terminal module.
 type TermConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	Warp        bool   `yaml:"warp"`
-	PromptStyle string `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Enabled     bool     `yaml:"enabled"`
+	Warp        bool     `yaml:"warp"`
+	PromptStyle string   `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Apps        []string `yaml:"apps,omitempty"`         // GUI terminal casks: warp, cmux, iterm2
+	Tools       []string `yaml:"tools,omitempty"`        // curated CLI terminal formulas
+	ToolsExtra  []string `yaml:"tools_extra,omitempty"`  // free-form CLI terminal formulas
 }
 
 // WorkConfig configures the workspace module.
@@ -164,19 +167,15 @@ func (c *Config) IsModuleEnabled(name string) bool {
 
 // AllPackages returns the merged package list (base + extra).
 func (c *Config) AllPackages() []string {
-	seen := make(map[string]bool, len(c.Packages)+len(c.PackagesExtra))
+	seen := make(map[string]bool, len(c.Packages)+len(c.PackagesExtra)+len(c.Modules.Terminal.Tools)+len(c.Modules.Terminal.ToolsExtra))
 	var result []string
-	for _, p := range c.Packages {
-		if !seen[p] {
-			seen[p] = true
-			result = append(result, p)
-		}
+	result = appendUnique(result, seen, c.Packages...)
+	if c.Modules.Terminal.Enabled {
+		result = appendUnique(result, seen, c.Modules.Terminal.Tools...)
 	}
-	for _, p := range c.PackagesExtra {
-		if !seen[p] {
-			seen[p] = true
-			result = append(result, p)
-		}
+	result = appendUnique(result, seen, c.PackagesExtra...)
+	if c.Modules.Terminal.Enabled {
+		result = appendUnique(result, seen, c.Modules.Terminal.ToolsExtra...)
 	}
 	return result
 }
@@ -185,17 +184,18 @@ func (c *Config) AllPackages() []string {
 func (c *Config) AllCasks() []string {
 	seen := make(map[string]bool, len(c.Casks)+len(c.CasksExtra))
 	var result []string
-	for _, p := range c.Casks {
-		if !seen[p] {
-			seen[p] = true
-			result = append(result, p)
+	result = appendUnique(result, seen, c.Casks...)
+	result = appendUnique(result, seen, c.CasksExtra...)
+	return result
+}
+
+func appendUnique(result []string, seen map[string]bool, values ...string) []string {
+	for _, v := range values {
+		if seen[v] {
+			continue
 		}
-	}
-	for _, p := range c.CasksExtra {
-		if !seen[p] {
-			seen[p] = true
-			result = append(result, p)
-		}
+		seen[v] = true
+		result = append(result, v)
 	}
 	return result
 }

@@ -12,6 +12,16 @@ modules:
     enabled: true
     warp: false
     prompt_style: minimal
+    tools:
+      - fzf
+      - ripgrep
+      - fd
+      - bat
+      - jq
+      - yq
+      - direnv
+      - zoxide
+      - eza
 
 packages:
   - git
@@ -19,14 +29,5 @@ packages:
   - gh
   - age
   - rsync
-  - fzf
-  - ripgrep
-  - fd
-  - bat
-  - jq
-  - yq
-  - direnv
-  - zoxide
-  - eza
   - starship
   - curl

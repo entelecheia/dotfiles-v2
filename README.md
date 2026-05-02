@@ -118,7 +118,8 @@ Prompts for:
 - Profile (`minimal` / `full` / `server`)
 - GPU/CUDA auto-detection (suggests `server` when NVIDIA GPU detected)
 - Prompt style (`minimal` / `rich`) — see below
-- Module opt-ins: workspace, AI CLI/config helpers, Warp, fonts
+- Terminal app choices (`warp`, `cmux`, `iterm2` on macOS) and terminal tools (`yazi`, `bat`, `zoxide`, etc.)
+- Module opt-ins: workspace, AI CLI/config helpers, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
 - GitHub authentication via `gh auth login` with broad scopes (optional, for private repos)
@@ -683,7 +684,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **node** | full | pnpm store relocation outside Google Drive (~/.config/pnpm/npmrc) |
 | **git** | minimal | git config, aliases, global ignore |
 | **ssh** | minimal | SSH config, config.d includes |
-| **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
+| **terminal** | minimal | starship prompt, terminal app choices (macOS), terminal tool formula choices |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
 | **ai** | full | AI CLI/config helpers, Claude/Codex settings backup |
@@ -710,13 +711,34 @@ dotfiles reconfigure                 # switch between minimal ↔ rich
 
 Config key: `modules.terminal.prompt_style` (state: `modules.prompt_style`).
 
+### Terminal Apps & Tools
+
+`dotfiles init` and `dotfiles reconfigure` include terminal-specific
+multi-select prompts:
+
+- **Terminal apps** (macOS non-server): `warp`, `cmux`, `iterm2`
+- **Terminal tools** (all profiles): `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`,
+  `direnv`, `zoxide` (`z`/`zi`), `eza`, `btop`, `lazygit`, `yazi`, `glow`,
+  `csvlens`, `chafa`
+
+Terminal apps are merged into the macOS cask install list. Terminal tools are
+merged into the Homebrew formula install list. Selecting `warp` also enables the
+managed Warp theme file on macOS.
+
+State keys:
+`modules.terminal_apps.casks`, `modules.terminal_tools.formulas`,
+`modules.terminal_tools.formulas_extra`.
+
 ### Packages
 
-**minimal** (16):
-`git`, `git-lfs`, `gh`, `age`, `rsync`, `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`, `direnv`, `zoxide`, `eza`, `starship`, `curl`
+**minimal effective install set**:
+core formulas `git`, `git-lfs`, `gh`, `age`, `rsync`, `starship`, `curl`,
+plus terminal tools `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`, `direnv`,
+`zoxide`, `eza`.
 
-**full** adds (+12):
-`btop`, `lazygit`, `rclone`, `yazi`, `glow`, `csvlens`, `chafa`, `fnm`, `uv`, `pipx`, `tmux`, `gnupg`
+**full effective additions**:
+terminal tools `btop`, `lazygit`, `yazi`, `glow`, `csvlens`, `chafa`, plus
+formulas `rclone`, `fnm`, `uv`, `pipx`, `tmux`, `gnupg`.
 
 ---
 
@@ -838,8 +860,20 @@ modules:
         remote: "git@github.com:user/vault.git"
   ai:
     enabled: true
-  warp: false
   prompt_style: rich    # "minimal" or "rich"
+  terminal_apps:
+    enabled: true
+    casks:
+      - warp
+      - iterm2
+  terminal_tools:
+    enabled: true
+    formulas:
+      - yazi
+      - bat
+      - zoxide    # provides the z/zi commands
+    formulas_extra:
+      - atuin
   fonts:
     family: "FiraCode"
   macapps:
