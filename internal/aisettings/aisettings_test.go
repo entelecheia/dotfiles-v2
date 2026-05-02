@@ -84,6 +84,23 @@ func TestRestoreLatestAlias(t *testing.T) {
 	}
 }
 
+func TestCountTreeUsesRelativeRootExclusion(t *testing.T) {
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "config.json"), []byte(`{"ok":true}`))
+
+	info, err := os.Lstat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, bytes, err := countTree(src, info, ".claude/session-env")
+	if err != nil {
+		t.Fatalf("count tree: %v", err)
+	}
+	if files != 0 || bytes != 0 {
+		t.Fatalf("excluded relative root counted files=%d bytes=%d", files, bytes)
+	}
+}
+
 func TestIncludeAuthBackup(t *testing.T) {
 	eng, home, _ := testEngine(t)
 	mustWrite(t, filepath.Join(home, ".codex", "auth.json"), []byte(`{"token":"secret"}`))

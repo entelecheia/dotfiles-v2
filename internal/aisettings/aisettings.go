@@ -396,7 +396,7 @@ func (e *Engine) copyFromHome(destRoot string, includeAuth bool) (*Summary, erro
 			continue
 		}
 		if destRoot == "" {
-			files, bytes, err := countTree(src, info)
+			files, bytes, err := countTree(src, info, entry.Path)
 			if err != nil {
 				return nil, fmt.Errorf("count %s: %w", entry.Path, err)
 			}
@@ -526,91 +526,93 @@ func (e *Engine) backupExisting(path, rel string) error {
 	return nil
 }
 
-func (e *Engine) copyTree(src, dst string, info os.FileInfo, relRoot string) (int, int64, error) {
+type managedTreeItem struct {
+	src  string
+	sub  string
+	info os.FileInfo
+}
+
+func walkManagedTree(src string, info os.FileInfo, relRoot string, visit func(managedTreeItem) error) error {
 	if isExcluded(relRoot) {
-		return 0, 0, nil
+		return nil
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(src)
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return visit(managedTreeItem{src: src, sub: ".", info: info})
+	}
+
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return 0, 0, err
+			return err
 		}
-		if err := e.Runner.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return 0, 0, err
+		sub, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
 		}
-		if e.Runner.DryRun {
-			return 1, 0, nil
+		entryRel := relRoot
+		if sub != "." {
+			entryRel = filepath.Join(relRoot, sub)
 		}
-		_ = os.Remove(dst)
-		return 1, 0, e.Runner.Symlink(target, dst)
-	}
-	if info.IsDir() {
-		var files int
-		var bytes int64
-		err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
+		if isExcluded(entryRel) {
+			if d.IsDir() {
+				return filepath.SkipDir
 			}
-			rel, err := filepath.Rel(src, path)
-			if err != nil {
-				return err
-			}
-			entryRel := relRoot
-			if rel != "." {
-				entryRel = filepath.Join(relRoot, rel)
-			}
-			if isExcluded(entryRel) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			target := filepath.Join(dst, rel)
-			if rel == "." {
-				return e.Runner.MkdirAll(target, info.Mode()&0o777)
-			}
-			di, err := d.Info()
-			if err != nil {
-				return err
-			}
-			if di.Mode()&os.ModeSymlink != 0 {
-				link, err := os.Readlink(path)
-				if err != nil {
-					return nil
-				}
-				if err := e.Runner.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-					return err
-				}
-				if !e.Runner.DryRun {
-					_ = os.Remove(target)
-					if err := e.Runner.Symlink(link, target); err != nil {
-						return err
-					}
-				}
-				files++
-				return nil
-			}
-			if di.IsDir() {
-				return e.Runner.MkdirAll(target, di.Mode()&0o777)
-			}
-			n, err := copyFile(e.Runner, path, target, di.Mode())
-			if err != nil {
-				return err
-			}
-			files++
-			bytes += n
 			return nil
+		}
+		di := info
+		if sub != "." {
+			di, err = d.Info()
+			if err != nil {
+				return err
+			}
+		}
+		return visit(managedTreeItem{
+			src:  path,
+			sub:  sub,
+			info: di,
 		})
-		return files, bytes, err
+	})
+}
+
+func (e *Engine) copyTree(src, dst string, info os.FileInfo, relRoot string) (int, int64, error) {
+	var files int
+	var bytes int64
+	err := walkManagedTree(src, info, relRoot, func(item managedTreeItem) error {
+		target := dst
+		if item.sub != "." {
+			target = filepath.Join(dst, item.sub)
+		}
+		if item.info.Mode()&os.ModeSymlink != 0 {
+			n, err := e.copySymlink(item.src, target)
+			files += n
+			return err
+		}
+		if item.info.IsDir() {
+			return e.Runner.MkdirAll(target, item.info.Mode()&0o777)
+		}
+		n, err := copyFile(e.Runner, item.src, target, item.info.Mode())
+		if err != nil {
+			return err
+		}
+		files++
+		bytes += n
+		return nil
+	})
+	return files, bytes, err
+}
+
+func (e *Engine) copySymlink(src, dst string) (int, error) {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return 0, err
 	}
 	if err := e.Runner.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return 0, 0, err
+		return 0, err
 	}
-	n, err := copyFile(e.Runner, src, dst, info.Mode())
-	if err != nil {
-		return 0, 0, err
+	if e.Runner.DryRun {
+		return 1, nil
 	}
-	return 1, n, nil
+	_ = os.Remove(dst)
+	return 1, e.Runner.Symlink(target, dst)
 }
 
 func copyFile(runner *exec.Runner, src, dst string, mode os.FileMode) (int64, error) {
@@ -647,42 +649,16 @@ func copyFile(runner *exec.Runner, src, dst string, mode os.FileMode) (int64, er
 	return n, nil
 }
 
-func countTree(src string, info os.FileInfo) (int, int64, error) {
-	if isExcluded(src) {
-		return 0, 0, nil
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return 1, 0, nil
-	}
-	if !info.IsDir() {
-		return 1, info.Size(), nil
-	}
+func countTree(src string, info os.FileInfo, relRoot string) (int, int64, error) {
 	var files int
 	var bytes int64
-	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if rel != "." && isExcluded(rel) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
+	err := walkManagedTree(src, info, relRoot, func(item managedTreeItem) error {
+		if item.info.IsDir() {
 			return nil
 		}
 		files++
-		if info.Mode()&os.ModeSymlink == 0 {
-			bytes += info.Size()
+		if item.info.Mode()&os.ModeSymlink == 0 {
+			bytes += item.info.Size()
 		}
 		return nil
 	})
@@ -690,43 +666,19 @@ func countTree(src string, info os.FileInfo) (int, int64, error) {
 }
 
 func addPathToTar(tw *tar.Writer, src, name string, info os.FileInfo, relRoot string) (int, int64, error) {
-	if isExcluded(relRoot) {
-		return 0, 0, nil
-	}
-	if info.IsDir() {
-		var files int
-		var bytes int64
-		err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(src, path)
-			if err != nil {
-				return err
-			}
-			entryRel := relRoot
-			if rel != "." {
-				entryRel = filepath.Join(relRoot, rel)
-			}
-			if isExcluded(entryRel) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			archiveName := filepath.ToSlash(filepath.Join(name, rel))
-			di, err := d.Info()
-			if err != nil {
-				return err
-			}
-			f, b, err := addOneToTar(tw, path, archiveName, di)
-			files += f
-			bytes += b
-			return err
-		})
-		return files, bytes, err
-	}
-	return addOneToTar(tw, src, filepath.ToSlash(name), info)
+	var files int
+	var bytes int64
+	err := walkManagedTree(src, info, relRoot, func(item managedTreeItem) error {
+		archiveName := filepath.ToSlash(name)
+		if item.sub != "." {
+			archiveName = filepath.ToSlash(filepath.Join(name, item.sub))
+		}
+		f, b, err := addOneToTar(tw, item.src, archiveName, item.info)
+		files += f
+		bytes += b
+		return err
+	})
+	return files, bytes, err
 }
 
 func addOneToTar(tw *tar.Writer, src, name string, info os.FileInfo) (int, int64, error) {
@@ -893,6 +845,8 @@ func isSafeRel(path string) bool {
 	return clean != "." && clean != ".." && !strings.HasPrefix(clean, ".."+string(os.PathSeparator))
 }
 
+// isExcluded reports whether a home-relative managed path should be skipped.
+// Callers must pass paths relative to HomeDir, never absolute filesystem paths.
 func isExcluded(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	parts := strings.Split(rel, "/")

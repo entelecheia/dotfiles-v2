@@ -6,8 +6,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
+
+const kvKeyWidth = 22 // width of "Pull+intake scheduler:"
 
 // WriteHeader writes a styled report title to w with one leading blank line.
 // The title is rendered with a single space of horizontal padding so the
@@ -32,7 +36,12 @@ func WriteKV(w io.Writer, key, value string) {
 	} else {
 		value = StyleValue.Render(value)
 	}
-	fmt.Fprintf(w, "  %s  %s\n", StyleKey.Render(key+":"), value)
+	label := key + ":"
+	width := kvKeyWidth
+	if labelWidth := lipgloss.Width(label); labelWidth > width {
+		width = labelWidth
+	}
+	fmt.Fprintf(w, "  %s  %s\n", StyleKey.Width(width).Render(label), value)
 }
 
 // printSection emits a section divider to os.Stdout. Ui-internal wrapper over
