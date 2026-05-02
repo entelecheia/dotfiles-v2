@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -443,15 +444,15 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	terminalAppsSet := state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0
 	if terminalAppsSet {
 		cfg.Modules.Terminal.Apps = append([]string(nil), state.Modules.TerminalApps.Casks...)
-		cfg.Modules.Terminal.Warp = containsString(cfg.Modules.Terminal.Apps, "warp")
-	} else if state.Modules.Warp {
-		cfg.Modules.Terminal.Apps = appendUnique(cfg.Modules.Terminal.Apps, mapFromSlice(cfg.Modules.Terminal.Apps), "warp")
+		cfg.Modules.Terminal.Warp = sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp")
+	} else if state.Modules.Warp && !sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp") {
+		cfg.Modules.Terminal.Apps = append(cfg.Modules.Terminal.Apps, "warp")
 	}
 	if state.Modules.TerminalTools.Enabled || len(state.Modules.TerminalTools.Formulas) > 0 || len(state.Modules.TerminalTools.FormulasExtra) > 0 {
 		cfg.Modules.Terminal.Tools = append([]string(nil), state.Modules.TerminalTools.Formulas...)
 		cfg.Modules.Terminal.ToolsExtra = append([]string(nil), state.Modules.TerminalTools.FormulasExtra...)
 	}
-	if !terminalAppsSet && (state.Modules.Warp || containsString(cfg.Modules.Terminal.Apps, "warp")) {
+	if !terminalAppsSet && (state.Modules.Warp || sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp")) {
 		cfg.Modules.Terminal.Warp = true
 	}
 	if state.Modules.PromptStyle != "" {
@@ -482,19 +483,3 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	}
 }
 
-func containsString(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}
-
-func mapFromSlice(values []string) map[string]bool {
-	seen := make(map[string]bool, len(values))
-	for _, v := range values {
-		seen[v] = true
-	}
-	return seen
-}
