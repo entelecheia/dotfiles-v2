@@ -482,4 +482,3 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 		cfg.CasksExtra = append(cfg.CasksExtra, cfg.Modules.Terminal.Apps...)
 	}
 }
-
