@@ -1,7 +1,7 @@
 // Package gdrivesync implements the local→mirror rsync flow that backs
-// `dot gdrive-sync`. The workspace is authoritative: push propagates local
-// creates and updates by default, while deletes are opt-in. Mirror-origin
-// changes are staged separately via intake.
+// `dot gdrive-sync`. Git owns tracked source files, baseline.manifest is the
+// Git-shared Drive payload index for untracked artifacts, and push propagates
+// local artifact creates/updates by default while deletes are opt-in.
 package gdrivesync
 
 import (
@@ -71,17 +71,17 @@ func LoadExcludePatterns() ([]string, error) {
 // excludeFiles must be real paths on disk (use MaterializeExcludesFile
 // + MaterializeSharedExcludesFile). Empty paths are skipped.
 //
-// Layered exclusions: static baseline (embedded excludes) + dynamic
-// shared excludes (auto-detected Drive shortcuts + operator manual
-// list) + --filter=:- .gitignore (per-directory gitignore) +
-// --no-links (skip symlinks entirely). All four are always-on.
+// Layered exclusions: static baseline (embedded excludes) + user ignore.txt +
+// dynamic shared excludes (auto-detected Drive shortcuts + operator manual
+// list) + --no-links (skip symlinks entirely). Git-tracked files are handled
+// separately through baseline/pull planning; .gitignore is intentionally not a
+// sync filter because gitignored binaries are a primary gdrive-sync use case.
 func commonArgs(excludeFiles []string, verbose bool) []string {
 	args := []string{
 		"-a",
 		"--human-readable",
 		"--info=stats2,progress2",
 		"--no-links",
-		"--filter=:- .gitignore",
 	}
 	for _, f := range excludeFiles {
 		if f == "" {

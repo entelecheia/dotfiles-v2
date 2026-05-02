@@ -30,9 +30,11 @@ func newGdriveSyncCmd() *cobra.Command {
 client's mirror tree (default ~/gdrive-workspace/work). No SSH; the cloud
 client itself handles upload/download to/from Drive (or Dropbox, etc.).
 
-Workspace is authoritative: push is the default action. It sends local
-creates and updates to the mirror while leaving deletions off unless
-explicitly enabled with --propagate=create,update,delete.
+Workspace is authoritative for new local artifacts, while
+.dotfiles/gdrive-sync/baseline.manifest is the Git-shared index for
+Drive-backed payloads. Push sends local creates and updates to the mirror;
+pull restores or updates baseline-tracked payloads from Drive. New
+Drive-origin files still stage into inbox/gdrive for manual routing.
 
 Getting started:
   dot gdrive-sync setup       Install rsync (if missing) + auto-sync scheduler
@@ -41,7 +43,7 @@ Getting started:
   dot gdrive-sync             Default = push
 
 Maintenance:
-  dot gdrive-sync status      Show last push/intake, conflicts, paused state, scheduler
+  dot gdrive-sync status      Show last pull/push/intake, conflicts, paused state, scheduler
   dot gdrive-sync conflicts   List timestamped backup directories
   dot gdrive-sync pause       Stop auto-sync (scheduler + paused gate)
   dot gdrive-sync resume      Restart auto-sync`,
@@ -232,26 +234,61 @@ func newGdriveSyncSyncCmd() *cobra.Command {
 // push that prints a one-line deprecation hint so callers gradually
 // migrate to the new name.
 func runGdriveSync(cmd *cobra.Command, args []string) error {
-	printerFrom(cmd).Line("(note: `sync` is now an alias for `push`; use `dot gdrive-sync intake` for mirror→inbox/gdrive staging)")
+	printerFrom(cmd).Line("(note: `sync` is now an alias for `push`; use `dot gdrive-sync pull` for baseline-tracked Drive payloads)")
 	return runGdriveSyncPush(cmd, args)
 }
 
-// ── pull (alias for intake, kept for back-compat) ────────────────────────
+// ── pull ─────────────────────────────────────────────────────────────────
 
 func newGdriveSyncPullCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "pull",
-		Short:        "Alias for `intake` (kept for back-compat; prefer `dot gdrive-sync intake`)",
-		RunE:         runGdriveSyncPullAlias,
+		Use:   "pull",
+		Short: "Restore/update baseline-tracked Drive payloads into the workspace",
+		Long: `Pull applies Drive-side changes only for paths listed in
+.dotfiles/gdrive-sync/baseline.manifest. Baseline is expected to be tracked in
+Git, so a second machine can git pull the index and then restore binary
+payloads from the Google Drive mirror.
+
+Files absent from baseline are not copied into the workspace by pull; run
+intake to stage new Drive-origin files under inbox/gdrive/<ts>/ for manual
+review. If local and Drive both changed a baseline-tracked file, pull preserves
+the local file and copies the Drive version into .sync-conflicts/<ts>/from-gdrive/.`,
+		RunE:         runGdriveSyncPull,
 		SilenceUsage: true,
 	}
-	cmd.Flags().Bool("strict", false, "use sha256 fingerprints instead of size+mtime")
+	cmd.Flags().Bool("strict", false, "accepted for compatibility; pull uses sha256 baseline fingerprints")
 	return cmd
 }
 
-func runGdriveSyncPullAlias(cmd *cobra.Command, args []string) error {
-	printerFrom(cmd).Line("(note: `pull` is now an alias for `intake`; mirror→inbox/gdrive staging only)")
-	return runGdriveSyncIntake(cmd, args)
+func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
+	state, cfg, runner, err := gdriveBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	p := printerFrom(cmd)
+	if !gdrivePreflight(p, cfg, runner, state, false, false) {
+		return nil
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	release, lockErr := gdrivesync.AcquireLock(cfg.LockDir)
+	if lockErr != nil {
+		p.Line("  %s", lockErr)
+		return nil
+	}
+	defer release()
+
+	p.Line("Pulling baseline-tracked payloads %s → %s", cfg.MirrorPath, cfg.LocalPath)
+	if dryRun {
+		p.Line("  (dry-run — no changes)")
+	}
+	res, err := gdrivesync.PullTracked(cmd.Context(), runner, cfg, gdrivesync.PullOptions{DryRun: dryRun})
+	recordSyncResult(state, cfg, "pull", err, dryRun)
+	if err != nil {
+		return fmt.Errorf("pull failed: %w", err)
+	}
+	printPullResult(p, cfg, res)
+	return nil
 }
 
 // ── intake ───────────────────────────────────────────────────────────────
@@ -259,16 +296,15 @@ func runGdriveSyncPullAlias(cmd *cobra.Command, args []string) error {
 func newGdriveSyncIntakeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "intake",
-		Short: "Stage GDrive-origin changes into <local>/inbox/gdrive/<ts>/",
-		Long: `Compares the mirror against the baseline (what we last pushed) and the
-imports manifest (what we've already staged) to find GDrive-origin
-new and modified files. Each candidate is copied into a timestamped
-subdirectory of <local>/inbox/gdrive/<intake-ts>/ for the operator to
-review and route. The local tree outside that staging area is never
-modified.
+		Short: "Pull tracked Drive payloads, then stage new GDrive-origin files",
+		Long: `First applies Drive-side changes for baseline-tracked payloads, then
+compares the mirror against baseline.manifest and imports.manifest to find
+new Drive-origin files. New candidates are copied into a timestamped
+subdirectory of <local>/inbox/gdrive/<intake-ts>/ for the operator to review
+and route.
 
 Mirror-side deletions detected against baseline become tombstones in
-.dotfiles/gdrive-sync/tombstones.log — they are NOT propagated to local.
+.dotfiles/gdrive-sync/tombstones.log — they are NOT propagated as local deletes.
 
   --strict   Use sha256 fingerprints (catches content changes that
              preserve mtime). Default is fast size+mtime mode.`,
@@ -314,17 +350,35 @@ func runGdriveSyncIntake(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("intake failed: %w", err)
 	}
 
+	printPullResult(p, cfg, res.Pull)
 	if res.StagingDir != "" {
 		p.Line("  ✓ %d intaked into %s", len(res.Intaked), res.StagingDir)
 	} else {
 		p.Line("  %d intaked", len(res.Intaked))
 	}
 	p.Line("  %d skipped (baseline match)", len(res.SkippedBase))
+	if len(res.SkippedTracked) > 0 {
+		p.Line("  %d skipped (tracked conflict/unresolved)", len(res.SkippedTracked))
+	}
 	p.Line("  %d skipped (imports match)", len(res.SkippedImports))
+	return nil
+}
+
+func printPullResult(p *Printer, cfg *gdrivesync.Config, res *gdrivesync.PullResult) {
+	if res == nil {
+		return
+	}
+	p.Line("  %d pulled (%d restored)", len(res.Pulled), len(res.Restored))
+	if len(res.LocalModified) > 0 {
+		p.Line("  %d local-modified tracked files left for push", len(res.LocalModified))
+	}
+	if len(res.Conflicts) > 0 {
+		p.Line("  %d tracked conflicts — Drive copies saved under %s", len(res.Conflicts),
+			filepath.Join(stripTrailingSlash(cfg.LocalPath), ".sync-conflicts"))
+	}
 	if len(res.Tombstones) > 0 {
 		p.Line("  %d tombstones recorded — see %s", len(res.Tombstones), cfg.LocalPaths.TombstonesFile)
 	}
-	return nil
 }
 
 // ── inbox (list / forget / clear) ────────────────────────────────────────
@@ -627,15 +681,16 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 	p.KV("Push interval", formatInterval(st.Interval))
 	p.KV("Push scheduler", st.SchedulerState.String())
 	if st.PullInterval > 0 {
-		p.KV("Intake interval", formatInterval(st.PullInterval))
-		p.KV("Intake scheduler", st.IntakeSchedulerState.String())
+		p.KV("Pull+intake interval", formatInterval(st.PullInterval))
+		p.KV("Pull+intake scheduler", st.IntakeSchedulerState.String())
 	} else {
-		p.KV("Intake scheduler", "(off — `dot gdrive-sync setup --pull-interval=DUR` to enable)")
+		p.KV("Pull+intake scheduler", "(off — `dot gdrive-sync setup --pull-interval=DUR` to enable)")
 	}
 	if st.Propagation.Delete {
 		p.KV("Max delete", fmt.Sprintf("%d", st.MaxDelete))
 	}
 	p.KV("Lock held", boolStr(st.LockHeld))
+	p.KV("Last pull", formatLastSync(st.LastPull))
 	p.KV("Last push", formatLastSync(st.LastPush))
 	p.KV("Last intake", formatLastSync(st.LastIntake))
 	if st.LastIntakeTSDir != "" {
@@ -850,22 +905,22 @@ func runGdriveSyncPause(cmd *cobra.Command, _ []string) error {
 func newGdriveSyncSetupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Install rsync (if missing) and deploy auto-sync scheduler",
+		Short: "Install rsync (if missing) and deploy gdrive-sync schedulers",
 		Long: `One-time setup. Verifies rsync is available (offers to install via brew/apt
 if not), then deploys the platform's user-scheduler (launchd LaunchAgent on
 macOS, systemd user-timer on Linux) to run ` + "`dot gdrive-sync push`" + ` every
 Interval seconds (default 300).
 
-  --pull-interval=DUR    Also deploy a parallel intake scheduler that runs
+  --pull-interval=DUR    Also deploy a parallel pull+intake scheduler that runs
                          ` + "`dot gdrive-sync intake`" + ` every DUR (e.g. 15m, 1h).
                          Pass 0 (or omit) to skip; pass --pull-interval=0
-                         to remove an existing intake unit.
+                         to remove an existing pull+intake unit.
 
 Idempotent — re-run safely after an interval change to reload the unit.`,
 		RunE:         runGdriveSyncSetup,
 		SilenceUsage: true,
 	}
-	cmd.Flags().String("pull-interval", "", "deploy intake scheduler at this cadence (e.g. 15m, 1h, 0 to remove)")
+	cmd.Flags().String("pull-interval", "", "deploy pull+intake scheduler at this cadence (e.g. 15m, 1h, 0 to remove)")
 	return cmd
 }
 
@@ -932,9 +987,9 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 	p.Line("  ✓ push unit installed (interval: %s)", formatInterval(cfg.Interval))
 	p.Line("  unit: %s", scheduleUnitLabel(paths))
 	if cfg.PullInterval > 0 {
-		p.Line("  ✓ intake unit installed (interval: %s)", formatInterval(cfg.PullInterval))
+		p.Line("  ✓ pull+intake unit installed (interval: %s)", formatInterval(cfg.PullInterval))
 	} else {
-		p.Line("  (no intake scheduler — pass --pull-interval=DUR to enable)")
+		p.Line("  (no pull+intake scheduler — pass --pull-interval=DUR to enable)")
 	}
 	p.Line("  log:  %s", cfg.LogFile)
 

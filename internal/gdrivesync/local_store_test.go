@@ -108,13 +108,16 @@ func TestEnsureLocalLayout_CreatesAllDefaults(t *testing.T) {
 			t.Errorf("file %s should have a header, got empty", p)
 		}
 	}
-	// Workspace .gitignore must contain the /.dotfiles/ entry.
+	// Workspace .gitignore must allow the Git-shared baseline while ignoring
+	// machine-local gdrive-sync state.
 	body, err := os.ReadFile(paths.WorkspaceIgnore)
 	if err != nil {
 		t.Fatalf("reading workspace .gitignore: %v", err)
 	}
-	if !strings.Contains(string(body), gitignoreEntry) {
-		t.Errorf(".gitignore missing %q\n--- got ---\n%s", gitignoreEntry, body)
+	for _, want := range gitignoreEntries {
+		if !strings.Contains(string(body), want) {
+			t.Errorf(".gitignore missing %q\n--- got ---\n%s", want, body)
+		}
 	}
 }
 
@@ -141,14 +144,14 @@ func TestEnsureLocalLayout_Idempotent(t *testing.T) {
 	}
 }
 
-func TestAppendGitignoreLine_Idempotent(t *testing.T) {
+func TestAppendGitignoreBlock_Idempotent(t *testing.T) {
 	tmp := t.TempDir()
 	gi := filepath.Join(tmp, ".gitignore")
 
-	if err := appendGitignoreLine(gi, "/.dotfiles/"); err != nil {
+	if err := appendGitignoreBlock(gi, gitignoreEntries); err != nil {
 		t.Fatalf("first append: %v", err)
 	}
-	if err := appendGitignoreLine(gi, "/.dotfiles/"); err != nil {
+	if err := appendGitignoreBlock(gi, gitignoreEntries); err != nil {
 		t.Fatalf("second append: %v", err)
 	}
 
@@ -156,12 +159,18 @@ func TestAppendGitignoreLine_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	if n := strings.Count(string(body), "/.dotfiles/"); n != 1 {
-		t.Errorf("got %d copies of /.dotfiles/, want 1\n%s", n, body)
+	lines := map[string]int{}
+	for _, line := range strings.Split(string(body), "\n") {
+		lines[strings.TrimSpace(line)]++
+	}
+	for _, want := range gitignoreEntries {
+		if n := lines[want]; n != 1 {
+			t.Errorf("%q count = %d, want 1\n%s", want, n, body)
+		}
 	}
 }
 
-func TestAppendGitignoreLine_PreservesExistingContent(t *testing.T) {
+func TestAppendGitignoreBlock_PreservesExistingContent(t *testing.T) {
 	tmp := t.TempDir()
 	gi := filepath.Join(tmp, ".gitignore")
 	existing := "# project ignores\n.env\n*.log\n"
@@ -169,7 +178,7 @@ func TestAppendGitignoreLine_PreservesExistingContent(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if err := appendGitignoreLine(gi, "/.dotfiles/"); err != nil {
+	if err := appendGitignoreBlock(gi, gitignoreEntries); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 
@@ -180,8 +189,10 @@ func TestAppendGitignoreLine_PreservesExistingContent(t *testing.T) {
 	if !strings.Contains(string(got), ".env") || !strings.Contains(string(got), "*.log") {
 		t.Errorf("existing entries lost\n%s", got)
 	}
-	if !strings.Contains(string(got), "/.dotfiles/") {
-		t.Errorf("new entry missing\n%s", got)
+	for _, want := range gitignoreEntries {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("new entry %q missing\n%s", want, got)
+		}
 	}
 }
 
@@ -330,7 +341,7 @@ func TestLoadLocalState_MissingReturnsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLocalState: %v", err)
 	}
-	if got == nil || !got.LastPush.IsZero() || !got.LastIntake.IsZero() {
+	if got == nil || !got.LastPull.IsZero() || !got.LastPush.IsZero() || !got.LastIntake.IsZero() {
 		t.Errorf("expected zero state, got %+v", got)
 	}
 }

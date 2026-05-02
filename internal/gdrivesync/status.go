@@ -19,6 +19,7 @@ type Status struct {
 	MirrorExists         bool
 	Paused               bool
 	Propagation          PropagationPolicy
+	LastPull             time.Time
 	LastPush             time.Time
 	LastIntake           time.Time
 	LastIntakeTSDir      string
@@ -26,7 +27,7 @@ type Status struct {
 	LockHeld             bool   // someone has gdrive-sync.lock right now
 	MaxDelete            int
 	Interval             int
-	PullInterval         int            // 0 → no intake scheduler
+	PullInterval         int            // 0 → no pull+intake scheduler
 	SchedulerState       SchedulerState // push unit
 	IntakeSchedulerState SchedulerState // intake unit (if installed)
 	Conflicts            []ConflictEntry
@@ -56,6 +57,7 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		MirrorExists:    runner.IsDir(cfg.MirrorPath),
 		Paused:          cfg.Paused,
 		Propagation:     cfg.Propagation,
+		LastPull:        localState.LastPull,
 		LastPush:        localState.LastPush,
 		LastIntake:      localState.LastIntake,
 		LastIntakeTSDir: localState.LastIntakeTSDir,

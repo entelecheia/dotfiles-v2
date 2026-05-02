@@ -231,6 +231,9 @@ func LoadImportsManifest(path string) (map[string]ImportEntry, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		if isMergeConflictMarker(line) {
+			return nil, fmt.Errorf("imports manifest %s contains git merge conflict marker %q", path, line)
+		}
 		parts := strings.SplitN(line, "\t", 5)
 		if len(parts) != 5 {
 			return nil, fmt.Errorf("imports manifest %s: bad line %q", path, line)
@@ -347,6 +350,9 @@ func LoadTombstones(path string) ([]Tombstone, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		if isMergeConflictMarker(line) {
+			return nil, fmt.Errorf("tombstones %s contains git merge conflict marker %q", path, line)
+		}
 		parts := strings.SplitN(line, "\t", 3)
 		if len(parts) != 3 {
 			return nil, fmt.Errorf("tombstones %s: bad line %q", path, line)
@@ -414,6 +420,9 @@ func loadFingerprintMap(path string) (map[string]Fingerprint, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		if isMergeConflictMarker(line) {
+			return nil, fmt.Errorf("manifest %s contains git merge conflict marker %q", path, line)
+		}
 		parts := strings.SplitN(line, "\t", 4)
 		if len(parts) != 4 {
 			return nil, fmt.Errorf("manifest %s: bad line %q", path, line)
@@ -425,6 +434,12 @@ func loadFingerprintMap(path string) (map[string]Fingerprint, error) {
 		out[parts[0]] = fp
 	}
 	return out, sc.Err()
+}
+
+func isMergeConflictMarker(line string) bool {
+	return strings.HasPrefix(line, "<<<<<<<") ||
+		strings.HasPrefix(line, "=======") ||
+		strings.HasPrefix(line, ">>>>>>>")
 }
 
 func sortedKeys(m map[string]Fingerprint) []string {

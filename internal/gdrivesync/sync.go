@@ -39,7 +39,7 @@ type Config struct {
 	RsyncPath      string // resolved rsync binary; empty if not installed
 	MaxDelete      int
 	Interval       int               // push scheduler cadence (seconds)
-	PullInterval   int               // intake scheduler cadence (0 = no intake unit)
+	PullInterval   int               // pull+intake scheduler cadence (0 = no unit)
 	Propagation    PropagationPolicy // default {true,true,false}
 	Paused         bool              // mirrors LocalConfig.Paused; the auth source for sync gating
 	Verbose        bool
@@ -297,35 +297,23 @@ func refuseSharedDriveMirror(cfg *Config) error {
 
 // ── pull / push / sync ──────────────────────────────────────────────────
 
-// Pull mirrors → local, --update only. Workspace deletions are NOT reverted.
-// New files appearing in the mirror (e.g. via Drive client) flow into the
-// workspace.
+// Pull restores/updates only baseline-tracked Drive payloads. Baseline-unknown
+// mirror files are left for Intake to stage into inbox/gdrive.
 func Pull(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return err
-	}
-	if err := refuseSharedDriveMirror(cfg); err != nil {
-		return err
-	}
-	dyn, err := prepareDynamicExcludes(cfg)
-	if err != nil {
-		return err
-	}
-	conflict := NewConflictDir()
-	args := pullArgs(cfg, conflict, dyn, dryRun)
-	fmt.Printf("  Pull: %s → %s\n", cfg.MirrorPath, cfg.LocalPath)
-	return runRsync(ctx, runner, cfg, args)
+	_, err := PullTracked(ctx, runner, cfg, PullOptions{DryRun: dryRun})
+	return err
 }
 
-// Push local → mirror under cfg.Propagation. The policy maps to rsync
-// flags (see propagationFlags); an all-false policy is refused before any
-// rsync invocation. The workspace's per-workspace store (`.dotfiles/`)
-// and intake staging area (`inbox/gdrive/`) are always excluded so they
-// never bounce back to mirror, regardless of operator excludes.
+// Push local → mirror under cfg.Propagation. It first runs a tracked pull guard
+// so Drive edits to baseline-managed payloads are not overwritten by stale local
+// content. The policy maps to rsync flags (see propagationFlags); an all-false
+// policy is refused before any rsync invocation. The workspace's per-workspace
+// store (`.dotfiles/`) and intake staging area (`inbox/gdrive/`) are always
+// excluded so they never bounce back to mirror, regardless of operator excludes.
 //
-// On a successful non-dry-run push, the baseline manifest is refreshed
-// from the post-rsync local tree so the next Intake can distinguish
-// our content from GDrive-origin changes.
+// On a successful non-dry-run push, the baseline manifest is refreshed as the
+// Git-shared Drive payload index so other machines can restore accepted
+// artifacts from the mirror.
 func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("push refused: %w", err)
@@ -335,6 +323,14 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	}
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return err
+	}
+	pre, err := PullTracked(ctx, runner, cfg, PullOptions{DryRun: dryRun})
+	if err != nil {
+		return fmt.Errorf("tracked pull guard: %w", err)
+	}
+	if len(pre.Conflicts) > 0 {
+		return fmt.Errorf("push refused: %d tracked Drive conflict(s) need manual review under %s",
+			len(pre.Conflicts), filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), conflictsDirName))
 	}
 	dyn, err := prepareDynamicExcludes(cfg)
 	if err != nil {
@@ -347,7 +343,7 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 		return err
 	}
 	if !dryRun && cfg.LocalPaths != nil {
-		if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
+		if err := RefreshBaseline(cfg, FingerprintStrict); err != nil {
 			return fmt.Errorf("baseline refresh: %w", err)
 		}
 		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {

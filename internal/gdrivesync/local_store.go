@@ -31,8 +31,17 @@ const (
 	localLogDirRel      = "log"
 	localLogFileName    = "gdrive-sync.log"
 
-	gitignoreEntry = "/.dotfiles/"
+	gitignoreBlockHeader = "# dotfiles gdrive-sync: track shared baseline, ignore machine-local state"
 )
+
+var gitignoreEntries = []string{
+	gitignoreBlockHeader,
+	"!/.dotfiles/",
+	"/.dotfiles/*",
+	"!/.dotfiles/gdrive-sync/",
+	"/.dotfiles/gdrive-sync/*",
+	"!/.dotfiles/gdrive-sync/baseline.manifest",
+}
 
 // PropagationPolicy controls which kinds of workspace changes Push
 // propagates to the mirror. Default is `{true, true, false}` so the
@@ -99,15 +108,16 @@ type LocalConfig struct {
 	Propagation    PropagationPolicy `yaml:"propagation"`
 	MaxDelete      int               `yaml:"max_delete,omitempty"`
 	Interval       int               `yaml:"interval,omitempty"`      // push scheduler cadence (seconds)
-	PullInterval   int               `yaml:"pull_interval,omitempty"` // intake scheduler cadence (0 = off)
+	PullInterval   int               `yaml:"pull_interval,omitempty"` // pull+intake scheduler cadence (0 = off)
 	Paused         bool              `yaml:"paused,omitempty"`
 	SharedExcludes []string          `yaml:"shared_excludes,omitempty"`
 }
 
 // LocalState holds non-config runtime telemetry — the sticky timestamps
-// that change every push/intake. Splitting them from LocalConfig keeps
+// that change every pull/push/intake. Splitting them from LocalConfig keeps
 // the editable file (config.yaml) churn-free.
 type LocalState struct {
+	LastPull        time.Time `yaml:"last_pull,omitempty"`
 	LastPush        time.Time `yaml:"last_push,omitempty"`
 	LastIntake      time.Time `yaml:"last_intake,omitempty"`
 	LastIntakeTSDir string    `yaml:"last_intake_ts_dir,omitempty"`
@@ -183,7 +193,7 @@ func EnsureLocalLayout(paths *LocalPaths) error {
 			return err
 		}
 	}
-	return appendGitignoreLine(paths.WorkspaceIgnore, gitignoreEntry)
+	return appendGitignoreBlock(paths.WorkspaceIgnore, gitignoreEntries)
 }
 
 // materializeExcludeIfMissing copies the embedded excludes baseline to
@@ -210,6 +220,43 @@ func writeIfMissing(path string, data []byte) error {
 	}
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// appendGitignoreBlock appends missing `lines` to the workspace .gitignore.
+// Creates the file if missing. Idempotent — repeated calls are no-ops once
+// every line is present. The order matters because the block can re-include
+// baseline.manifest after an older broad "/.dotfiles/" ignore.
+func appendGitignoreBlock(gitignorePath string, lines []string) error {
+	body, err := os.ReadFile(gitignorePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading %s: %w", gitignorePath, err)
+	}
+
+	existing := map[string]bool{}
+	for _, line := range strings.Split(string(body), "\n") {
+		existing[strings.TrimSpace(line)] = true
+	}
+
+	out := append([]byte{}, body...)
+	if len(out) > 0 && !strings.HasSuffix(string(out), "\n") {
+		out = append(out, '\n')
+	}
+	wrote := false
+	for _, line := range lines {
+		want := strings.TrimSpace(line)
+		if want == "" || existing[want] {
+			continue
+		}
+		out = append(out, []byte(want+"\n")...)
+		wrote = true
+	}
+	if !wrote {
+		return nil
+	}
+	if err := os.WriteFile(gitignorePath, out, 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", gitignorePath, err)
 	}
 	return nil
 }
@@ -353,6 +400,7 @@ func MigrateFromGlobal(globalState *config.UserState, paths *LocalPaths) (*Local
 	}
 	// Seed state.yaml with the legacy timestamps so `status` keeps continuity.
 	st := &LocalState{
+		LastPull:   gs.LastPull,
 		LastPush:   gs.LastPush,
 		LastIntake: gs.LastPull, // legacy `Pull` retired into `intake` semantics
 	}
@@ -370,7 +418,7 @@ func LoadOrMigrateLocalConfig(globalState *config.UserState, paths *LocalPaths) 
 		return nil, err
 	} else if ok {
 		// Even when config.yaml exists, ensure the surrounding layout
-		// (manifests, ignore.txt, gitignore line) is intact — operators
+		// (manifests, ignore.txt, gitignore block) is intact — operators
 		// can delete these and we should heal silently.
 		if err := EnsureLocalLayout(paths); err != nil {
 			return nil, err

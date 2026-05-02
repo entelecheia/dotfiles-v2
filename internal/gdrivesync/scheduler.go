@@ -21,7 +21,8 @@ const (
 )
 
 // SchedulerKind selects which periodic action a Scheduler call targets.
-// Push is the always-on default; Intake is opt-in via PullInterval > 0.
+// Push is the always-on default; Intake runs tracked pull + new-file intake and
+// is opt-in via PullInterval > 0.
 type SchedulerKind int
 
 const (
@@ -65,7 +66,7 @@ func (k SchedulerKind) SystemdTimerName() string {
 // systemd units (and used for log/status banners).
 func (k SchedulerKind) Description() string {
 	if k == SchedulerKindIntake {
-		return "gdrive-sync intake (mirror → workspace inbox/gdrive staging)"
+		return "gdrive-sync pull+intake (tracked payload restore + inbox/gdrive staging)"
 	}
 	return "gdrive-sync push (workspace → mirror)"
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,6 +75,22 @@ func (f *intakeFixture) writeMirror(rel, body string) time.Time {
 	return info.ModTime()
 }
 
+func (f *intakeFixture) writeLocal(rel, body string) time.Time {
+	f.t.Helper()
+	abs := filepath.Join(f.local, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return info.ModTime()
+}
+
 func (f *intakeFixture) seedBaseline(rel, body string, mtime time.Time) {
 	f.t.Helper()
 	existing, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
@@ -101,6 +118,123 @@ func TestIntake_SkipsBaselineMatches(t *testing.T) {
 	}
 }
 
+func TestPullTracked_RestoresMissingBaselineFile(t *testing.T) {
+	f := newIntakeFixture(t)
+	body := "binary-payload"
+	mtime := f.writeMirror("assets/image.bin", body)
+	f.seedBaseline("assets/image.bin", body, mtime)
+
+	res, err := PullTracked(context.Background(), f.runner, f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatalf("PullTracked: %v", err)
+	}
+	if len(res.Restored) != 1 || res.Restored[0] != "assets/image.bin" {
+		t.Fatalf("Restored = %v, want assets/image.bin", res.Restored)
+	}
+	got, err := os.ReadFile(filepath.Join(f.local, "assets/image.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Errorf("restored body = %q, want %q", got, body)
+	}
+}
+
+func TestPullTracked_UpdatesLocalWhenOnlyDriveChanged(t *testing.T) {
+	f := newIntakeFixture(t)
+	v1Mtime := f.writeMirror("reports/chart.png", "v1")
+	f.writeLocal("reports/chart.png", "v1")
+	if err := os.Chtimes(filepath.Join(f.local, "reports/chart.png"), v1Mtime, v1Mtime); err != nil {
+		t.Fatal(err)
+	}
+	f.seedBaseline("reports/chart.png", "v1", v1Mtime)
+
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(filepath.Join(f.mirror, "reports/chart.png"), []byte("v2-from-drive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PullTracked(context.Background(), f.runner, f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatalf("PullTracked: %v", err)
+	}
+	if len(res.Pulled) != 1 || res.Pulled[0] != "reports/chart.png" {
+		t.Fatalf("Pulled = %v, want reports/chart.png", res.Pulled)
+	}
+	got, err := os.ReadFile(filepath.Join(f.local, "reports/chart.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "v2-from-drive" {
+		t.Errorf("local body = %q, want Drive version", got)
+	}
+	base, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base["reports/chart.png"].Sha == "" {
+		t.Errorf("baseline should be strict sha after pull update: %+v", base["reports/chart.png"])
+	}
+}
+
+func TestPullTracked_ConflictPreservesLocalAndBacksUpDrive(t *testing.T) {
+	f := newIntakeFixture(t)
+	v1Mtime := f.writeMirror("shared/deck.pptx", "v1")
+	f.writeLocal("shared/deck.pptx", "v1")
+	f.seedBaseline("shared/deck.pptx", "v1", v1Mtime)
+
+	if err := os.WriteFile(filepath.Join(f.local, "shared/deck.pptx"), []byte("v2-local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.mirror, "shared/deck.pptx"), []byte("v2-drive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PullTracked(context.Background(), f.runner, f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatalf("PullTracked: %v", err)
+	}
+	if len(res.Conflicts) != 1 || res.Conflicts[0].RelPath != "shared/deck.pptx" {
+		t.Fatalf("Conflicts = %+v, want shared/deck.pptx", res.Conflicts)
+	}
+	localBody, err := os.ReadFile(filepath.Join(f.local, "shared/deck.pptx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(localBody) != "v2-local" {
+		t.Errorf("local file overwritten during conflict: %q", localBody)
+	}
+	backupBody, err := os.ReadFile(res.Conflicts[0].BackupPath)
+	if err != nil {
+		t.Fatalf("missing conflict backup %s: %v", res.Conflicts[0].BackupPath, err)
+	}
+	if string(backupBody) != "v2-drive" {
+		t.Errorf("backup body = %q, want Drive version", backupBody)
+	}
+}
+
+func TestPush_BlocksWhenTrackedPullHasConflict(t *testing.T) {
+	f := newIntakeFixture(t)
+	v1Mtime := f.writeMirror("shared/deck.pptx", "v1")
+	f.writeLocal("shared/deck.pptx", "v1")
+	f.seedBaseline("shared/deck.pptx", "v1", v1Mtime)
+
+	if err := os.WriteFile(filepath.Join(f.local, "shared/deck.pptx"), []byte("v2-local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.mirror, "shared/deck.pptx"), []byte("v2-drive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Push(context.Background(), f.runner, f.cfg, true)
+	if err == nil {
+		t.Fatal("Push should refuse when tracked pull sees a conflict")
+	}
+	if !strings.Contains(err.Error(), "push refused") {
+		t.Fatalf("Push error = %v, want push refused", err)
+	}
+}
+
 func TestIntake_StagesGdriveOriginNewFile(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.writeMirror("from-cloud/note.md", "from drive")
@@ -122,10 +256,14 @@ func TestIntake_StagesGdriveOriginNewFile(t *testing.T) {
 	}
 }
 
-func TestIntake_StagesGdriveOriginModifiedFile(t *testing.T) {
+func TestIntake_PullsTrackedGdriveModifiedFile(t *testing.T) {
 	f := newIntakeFixture(t)
 	// We pushed v1 (recorded in baseline); GDrive editor changed it to v2.
 	v1Mtime := f.writeMirror("doc.md", "v1-from-us")
+	f.writeLocal("doc.md", "v1-from-us")
+	if err := os.Chtimes(filepath.Join(f.local, "doc.md"), v1Mtime, v1Mtime); err != nil {
+		t.Fatal(err)
+	}
 	f.seedBaseline("doc.md", "v1-from-us", v1Mtime)
 	// Now overwrite mirror with v2 (longer + later).
 	time.Sleep(10 * time.Millisecond) // ensure mtime advances
@@ -137,8 +275,18 @@ func TestIntake_StagesGdriveOriginModifiedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Intake: %v", err)
 	}
-	if len(res.Intaked) != 1 {
-		t.Errorf("Intaked = %v, want 1 (modified file)", res.Intaked)
+	if len(res.Intaked) != 0 {
+		t.Errorf("Intaked = %v, want 0 (tracked change should pull)", res.Intaked)
+	}
+	if res.Pull == nil || len(res.Pull.Pulled) != 1 || res.Pull.Pulled[0] != "doc.md" {
+		t.Fatalf("Pull = %+v, want tracked doc.md pulled", res.Pull)
+	}
+	got, err := os.ReadFile(filepath.Join(f.local, "doc.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "v2-from-collaborator" {
+		t.Errorf("local doc = %q, want Drive version", got)
 	}
 }
 
@@ -288,6 +436,7 @@ func TestIntake_StrictMode_DetectsContentChangeWithSameSizeMtime(t *testing.T) {
 	f := newIntakeFixture(t)
 	body := "exactly10b"
 	mtime := f.writeMirror("paranoid.md", body)
+	f.writeLocal("paranoid.md", body)
 	// Baseline records strict-mode fingerprint of v1.
 	v1FP, err := FingerprintFile(filepath.Join(f.mirror, "paranoid.md"), FingerprintStrict)
 	if err != nil {
@@ -308,16 +457,28 @@ func TestIntake_StrictMode_DetectsContentChangeWithSameSizeMtime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Fast mode misses it.
+	// Fast intake no longer stages tracked changes; PullTracked hashes against
+	// the strict baseline and updates the local file directly.
 	resFast, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{Strict: false})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resFast.Intaked) != 0 {
-		t.Logf("note: fast mode caught the change (FingerprintsCompatible re-hashes when manifest has sha) — %v", resFast.Intaked)
+	if len(resFast.Intaked) != 0 || resFast.Pull == nil || len(resFast.Pull.Pulled) != 1 {
+		t.Fatalf("tracked strict change should pull, not intake: intaked=%v pull=%+v", resFast.Intaked, resFast.Pull)
 	}
 
-	// Reset imports manifest before strict re-run so we observe baseline-vs-mirror only.
+	// Reset local/baseline before strict re-run so we observe the same behavior.
+	if err := os.WriteFile(filepath.Join(f.local, "paranoid.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(f.local, "paranoid.md"), mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveBaselineManifest(f.cfg.LocalPaths.BaselineFile, map[string]Fingerprint{
+		"paranoid.md": v1FP,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(f.cfg.LocalPaths.ImportsFile); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -329,8 +490,8 @@ func TestIntake_StrictMode_DetectsContentChangeWithSameSizeMtime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resStrict.Intaked) != 1 {
-		t.Errorf("strict-mode Intake didn't catch content change: %v", resStrict.Intaked)
+	if len(resStrict.Intaked) != 0 || resStrict.Pull == nil || len(resStrict.Pull.Pulled) != 1 {
+		t.Errorf("strict-mode Intake should pull tracked content change: intaked=%v pull=%+v", resStrict.Intaked, resStrict.Pull)
 	}
 }
 
@@ -338,6 +499,8 @@ func TestRefreshBaseline_PopulatesFromMirrorTree(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.writeMirror("notes/a.md", "a")
 	f.writeMirror("notes/b.md", "bb")
+	f.writeLocal("notes/a.md", "a")
+	f.writeLocal("notes/b.md", "bb")
 	// .dotfiles/ and inbox/gdrive/ files must NOT land in baseline.
 	f.writeMirror(".dotfiles/secret.txt", "x")
 	f.writeMirror("inbox/gdrive/old/staged.md", "z")
@@ -362,31 +525,36 @@ func TestRefreshBaseline_PopulatesFromMirrorTree(t *testing.T) {
 	}
 }
 
-func TestRefreshBaseline_UsesMirrorSoDeleteOffDoesNotReIntake(t *testing.T) {
+func TestRefreshBaseline_DoesNotAdoptMirrorOnlyNewFiles(t *testing.T) {
 	f := newIntakeFixture(t)
-	f.writeMirror("kept-on-mirror.md", "still there")
+	f.writeMirror("unaccepted-drive-only.md", "still needs review")
 
 	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
 		t.Fatal(err)
+	}
+	base, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := base["unaccepted-drive-only.md"]; ok {
+		t.Fatalf("mirror-only file was adopted into baseline: %v", base)
 	}
 	res, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Intaked) != 0 {
-		t.Errorf("mirror-only baseline entry was re-intaked: %v", res.Intaked)
-	}
-	if len(res.SkippedBase) != 1 || res.SkippedBase[0] != "kept-on-mirror.md" {
-		t.Errorf("SkippedBase = %v, want kept-on-mirror.md", res.SkippedBase)
+	if len(res.Intaked) != 1 || res.Intaked[0] != "unaccepted-drive-only.md" {
+		t.Errorf("Intaked = %v, want unaccepted-drive-only.md", res.Intaked)
 	}
 }
 
-func TestIntake_AppliesExcludeIgnoreGitignoreAndSharedFilters(t *testing.T) {
+func TestIntake_AppliesExcludeIgnoreAndSharedFilters(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.cfg.SharedExcludes = []string{"shared/drop"}
+	if err := os.WriteFile(f.cfg.LocalPaths.IgnoreFile, []byte("ignored-dir/\n*.tmp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	gitignoreMtime := f.writeMirror(".gitignore", "ignored-dir/\n*.tmp\n")
-	f.seedBaseline(".gitignore", "ignored-dir/\n*.tmp\n", gitignoreMtime)
 	f.writeMirror("node_modules/pkg/index.js", "skip")
 	f.writeMirror(".git/config", "skip")
 	f.writeMirror("ignored-dir/file.md", "skip")
@@ -403,17 +571,20 @@ func TestIntake_AppliesExcludeIgnoreGitignoreAndSharedFilters(t *testing.T) {
 	}
 }
 
-func TestRefreshBaseline_AppliesExcludeIgnoreGitignoreAndSharedFilters(t *testing.T) {
+func TestRefreshBaseline_AppliesExcludeIgnoreAndSharedFilters(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.cfg.SharedExcludes = []string{"shared/drop"}
+	if err := os.WriteFile(f.cfg.LocalPaths.IgnoreFile, []byte("ignored-dir/\n*.tmp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	f.writeMirror(".gitignore", "ignored-dir/\n*.tmp\n")
 	f.writeMirror("node_modules/pkg/index.js", "skip")
 	f.writeMirror(".git/config", "skip")
 	f.writeMirror("ignored-dir/file.md", "skip")
 	f.writeMirror("scratch.tmp", "skip")
 	f.writeMirror("shared/drop/file.md", "skip")
 	f.writeMirror("normal/file.md", "keep")
+	f.writeLocal("normal/file.md", "keep")
 
 	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
 		t.Fatal(err)
@@ -435,5 +606,54 @@ func TestRefreshBaseline_AppliesExcludeIgnoreGitignoreAndSharedFilters(t *testin
 		if _, ok := base[rel]; ok {
 			t.Errorf("baseline included filtered path %s", rel)
 		}
+	}
+}
+
+func TestRefreshBaseline_ExcludesGitTrackedFiles(t *testing.T) {
+	f := newIntakeFixture(t)
+	if err := osexec.Command("git", "-C", f.local, "init").Run(); err != nil {
+		t.Skipf("git init unavailable: %v", err)
+	}
+	f.writeLocal("tracked.md", "git-owned")
+	f.writeMirror("tracked.md", "git-owned")
+	f.writeLocal("asset.bin", "drive-owned")
+	f.writeMirror("asset.bin", "drive-owned")
+	if err := osexec.Command("git", "-C", f.local, "add", "tracked.md").Run(); err != nil {
+		t.Skipf("git add unavailable: %v", err)
+	}
+
+	if err := RefreshBaseline(f.cfg, FingerprintStrict); err != nil {
+		t.Fatal(err)
+	}
+	base, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := base["tracked.md"]; ok {
+		t.Fatalf("Git-tracked file should not be in baseline: %v", base)
+	}
+	if _, ok := base["asset.bin"]; !ok {
+		t.Fatalf("untracked Drive asset missing from baseline: %v", base)
+	}
+}
+
+func TestIntake_ExcludesGitTrackedFiles(t *testing.T) {
+	f := newIntakeFixture(t)
+	if err := osexec.Command("git", "-C", f.local, "init").Run(); err != nil {
+		t.Skipf("git init unavailable: %v", err)
+	}
+	f.writeLocal("tracked.md", "git-owned")
+	f.writeMirror("tracked.md", "drive-copy")
+	f.writeMirror("asset.bin", "drive-owned")
+	if err := osexec.Command("git", "-C", f.local, "add", "tracked.md").Run(); err != nil {
+		t.Skipf("git add unavailable: %v", err)
+	}
+
+	res, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Intaked) != 1 || res.Intaked[0] != "asset.bin" {
+		t.Fatalf("Intaked = %v, want only asset.bin", res.Intaked)
 	}
 }

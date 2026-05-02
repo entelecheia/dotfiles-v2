@@ -24,9 +24,11 @@ type IntakeOptions struct {
 type IntakeResult struct {
 	StagingDir     string // <local>/inbox/gdrive/<ts>/ — empty if no files staged
 	TimestampDir   string // <ts> alone, e.g. 2026-05-02T10-00-00Z
+	Pull           *PullResult
 	Intaked        []string
 	SkippedBase    []string
 	SkippedImports []string
+	SkippedTracked []string
 	Tombstones     []Tombstone
 	Strict         bool
 }
@@ -49,10 +51,11 @@ var driveMetadataExt = map[string]bool{
 	".gshortcut": true,
 }
 
-// Intake compares mirror against the baseline + imports manifests and
-// stages GDrive-origin new/modified files into
-// <local>/inbox/gdrive/<intake-ts>/. The local tree outside the staging
-// dir is never modified. Mirror-side deletions become tombstones.
+// Intake first applies Drive-side changes for baseline-tracked files via
+// PullTracked, then compares mirror against baseline + imports manifests and
+// stages only baseline-unknown GDrive-origin files into
+// <local>/inbox/gdrive/<intake-ts>/. Mirror-side deletions for tracked files
+// become tombstones in the pull phase; intake itself never deletes local files.
 //
 // Idempotency: once a file is in imports.manifest with a matching
 // fingerprint, the next intake skips it — even if the operator moved
@@ -69,6 +72,12 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 	paths := cfg.LocalPaths
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
 	local := strings.TrimRight(cfg.LocalPath, "/")
+	tracked := gitTrackedRelPaths(local)
+
+	pullRes, err := PullTracked(ctx, runner, cfg, PullOptions{DryRun: opts.DryRun})
+	if err != nil {
+		return nil, err
+	}
 
 	baseline, err := LoadBaselineManifest(paths.BaselineFile)
 	if err != nil {
@@ -91,7 +100,6 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 	now := time.Now().UTC()
 	intakeTS := newSubSecondTimestamp()
 
-	mirrorSeen := map[string]bool{}
 	importsToWrite := make(map[string]ImportEntry, len(imports))
 	for k, v := range imports {
 		importsToWrite[k] = v
@@ -101,6 +109,7 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 		intaked        []string
 		skippedBase    []string
 		skippedImports []string
+		skippedTracked []string
 		toCopy         []string
 	)
 
@@ -121,6 +130,13 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 		if err != nil {
 			return err
 		}
+		rel = normalizeRel(rel)
+		if tracked[rel] {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if filter.shouldSkip(absPath, rel, d.IsDir()) {
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -140,8 +156,6 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 			return nil
 		}
 
-		mirrorSeen[rel] = true
-
 		fp, err := FingerprintFile(absPath, mode)
 		if err != nil {
 			// Unreadable file — skip silently. Best-effort intake.
@@ -150,6 +164,9 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 
 		if base, ok := baseline[rel]; ok && FingerprintsCompatible(base, fp, absPath) {
 			skippedBase = append(skippedBase, rel)
+			return nil
+		} else if ok {
+			skippedTracked = append(skippedTracked, rel)
 			return nil
 		}
 		if imp, ok := imports[rel]; ok && FingerprintsCompatible(imp.FP, fp, absPath) {
@@ -166,28 +183,19 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 		return nil, fmt.Errorf("walking mirror: %w", walkErr)
 	}
 
-	var tombstones []Tombstone
-	for rel, fp := range baseline {
-		if mirrorSeen[rel] {
-			continue
-		}
-		tombstones = append(tombstones, Tombstone{
-			RelPath: rel, BaselineFP: fp, DetectedAt: now,
-		})
-	}
-	sort.Slice(tombstones, func(i, j int) bool {
-		return tombstones[i].RelPath < tombstones[j].RelPath
-	})
 	sort.Strings(intaked)
 	sort.Strings(skippedBase)
 	sort.Strings(skippedImports)
+	sort.Strings(skippedTracked)
 	sort.Strings(toCopy)
 
 	result := &IntakeResult{
+		Pull:           pullRes,
 		Intaked:        intaked,
 		SkippedBase:    skippedBase,
 		SkippedImports: skippedImports,
-		Tombstones:     tombstones,
+		SkippedTracked: skippedTracked,
+		Tombstones:     pullRes.Tombstones,
 		Strict:         opts.Strict,
 	}
 
@@ -210,13 +218,7 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 		result.TimestampDir = intakeTS
 	}
 
-	if len(tombstones) > 0 {
-		if err := AppendTombstones(paths.TombstonesFile, tombstones); err != nil {
-			return nil, fmt.Errorf("appending tombstones: %w", err)
-		}
-	}
-
-	if len(toCopy) > 0 || len(tombstones) > 0 {
+	if len(toCopy) > 0 {
 		if err := UpdateLocalState(paths, func(s *LocalState) {
 			s.LastIntake = now
 			if len(toCopy) > 0 {
@@ -329,20 +331,21 @@ func copyFilePreservingMtime(src, dst string) error {
 	return os.Chtimes(dst, info.ModTime(), info.ModTime())
 }
 
-// RefreshBaseline rebuilds <baseline.manifest> by walking the mirror tree and
-// recording each file's fingerprint — the post-push snapshot of what actually
-// exists on the mirror. This matters when propagation disables create, update,
-// or delete: the baseline must reflect the destination after rsync, not the
-// local source tree.
+// RefreshBaseline rebuilds <baseline.manifest> as the Git-shared Drive payload
+// index. It records files that exist on both mirror and local and are not
+// Git-tracked. Mirror-only files stay out of baseline so GDrive-origin new
+// files continue to flow through inbox/gdrive until an operator accepts them.
 func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("refresh baseline: local paths unresolved")
 	}
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
+	local := strings.TrimRight(cfg.LocalPath, "/")
 	filter, err := newSyncFilter(cfg, mirror)
 	if err != nil {
 		return fmt.Errorf("loading filters: %w", err)
 	}
+	tracked := gitTrackedRelPaths(local)
 	entries := map[string]Fingerprint{}
 	err = filepath.WalkDir(mirror, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -358,6 +361,10 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 		if err != nil {
 			return err
 		}
+		rel = normalizeRel(rel)
+		if tracked[rel] {
+			return nil
+		}
 		if filter.shouldSkip(absPath, rel, d.IsDir()) {
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -371,6 +378,11 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 			return nil
 		}
 		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		localAbs := filepath.Join(local, rel)
+		localInfo, err := os.Lstat(localAbs)
+		if err != nil || localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 		fp, err := FingerprintFile(absPath, mode)
