@@ -38,11 +38,13 @@ dotfiles usecase    # detailed workflow examples
 # On the existing machine
 dotfiles profile backup --tag "pre-migration" --include-secrets
 dotfiles apps backup                       # also snapshot per-app settings
+dotfiles ai backup                         # portable Claude/Codex/MCP/skills settings
 
 # On the new machine (Drive already mounted)
 dotfiles profile restore --include-secrets # restores ~/.config/dotfiles + ~/.ssh/age_key*
 dotfiles apply                             # brew formulas + casks from install list
 dotfiles apps restore                      # plists, Application Support, containers
+dotfiles ai restore                        # Claude/Codex/MCP/skills settings
 ```
 
 The shared backup root lives in a single Drive folder
@@ -116,7 +118,7 @@ Prompts for:
 - Profile (`minimal` / `full` / `server`)
 - GPU/CUDA auto-detection (suggests `server` when NVIDIA GPU detected)
 - Prompt style (`minimal` / `rich`) — see below
-- Module opt-ins: workspace, AI tools, Warp, fonts
+- Module opt-ins: workspace, AI CLI/config helpers, Warp, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
 - GitHub authentication via `gh auth login` with broad scopes (optional, for private repos)
@@ -486,6 +488,41 @@ Workspace tool status:
   ✓ eza          /opt/homebrew/bin/eza
 ```
 
+### `dotfiles ai` — AI CLI/Config Helpers + Settings Backup/Restore
+
+Manage assistant helper files and portable user-level AI configuration. This is
+separate from app installation: Claude, Codex, ChatGPT, and similar GUI apps are
+installed through `dotfiles apps install` from the macOS cask catalog.
+
+```bash
+dotfiles ai list                         # helper files, detected CLIs, AI casks
+dotfiles ai status                       # live + backup status for managed paths
+
+dotfiles ai backup                       # versioned snapshot under BackupRoot
+dotfiles ai backup --tag "pre-migration"
+dotfiles ai backup --include-auth        # include auth/local-secret files explicitly
+dotfiles ai restore                      # restore latest snapshot
+dotfiles ai restore --version latest     # explicit alias for latest.txt
+dotfiles ai restore --version 20260502T010203Z
+dotfiles ai restore --include-auth       # restore auth/local-secret files explicitly
+
+dotfiles ai export ~/workspace/secrets/ai-config.tar.gz
+dotfiles ai import ~/workspace/secrets/ai-config.tar.gz
+```
+
+The `ai` module writes shell/config helper files:
+
+| Path | Purpose |
+|------|---------|
+| `~/.config/shell/30-ai.sh` | Claude Code env, GitHub Models aliases, Fabric alias, GPU helper aliases |
+| `~/.config/claude/settings.json` | Minimal dotfiles-managed Claude settings |
+
+Portable backup includes Claude/Codex settings, MCP config, agents, hooks,
+prompts, rules, and user skills. It excludes auth tokens, local overrides,
+caches, logs, sessions, histories, telemetry, sqlite DBs, plugin caches, and
+generated/system skill bundles by default. Use `--include-auth` only when you
+explicitly want known auth/local-secret files included.
+
 ### `dotfiles ws` — Dual-Workspace Folder Ops
 
 Operate on both `~/workspace/work/` (git-tracked text) and `~/gdrive-workspace/work/` (Drive binaries) simultaneously to keep their folder structures in sync.
@@ -567,11 +604,17 @@ dotfiles profile prune --keep 5                    # delete older snapshots
 dotfiles profile backup --to <root>                # override backup root
 ```
 
-**Layout** (one Drive folder holds both app settings and profile snapshots):
+**Layout** (one Drive folder holds app settings, profile snapshots, and AI settings):
 
 ```
 <BackupRoot>/
 ├── app-settings/<hostname>/<cask>/Library/<rel-path>...
+├── ai-config/<hostname>/
+│   ├── latest.txt
+│   └── 20260502T010203Z/
+│       ├── meta.yaml
+│       ├── manifest.yaml
+│       └── home/.codex/config.toml
 └── profiles/<hostname>/
     ├── latest.txt                       # points at current version
     ├── 20260416T000829Z/
@@ -587,7 +630,7 @@ Versions are UTC `YYYYMMDDTHHMMSSZ`. The `latest.txt` pointer is what `restore`
 reads by default; pass `--version` to pick any earlier snapshot. On a fresh
 machine the first `profile restore` boots state before you've run `dotfiles init`.
 
-### Backup-root resolution (shared by `apps` and `profile`)
+### Backup-root resolution (shared by `apps`, `profile`, and `ai`)
 
 Precedence, highest wins:
 
@@ -596,8 +639,8 @@ Precedence, highest wins:
 3. Auto-detected Drive secrets folder (`<drive>/secrets/dotfiles-backup`).
 4. Local fallback: `~/.local/share/dotfiles/backup`.
 
-Set it once in `dotfiles init` — both subcommands read the same value so your
-Drive folder holds everything.
+Set it once in `dotfiles init` — all backup subcommands read the same value so
+your Drive folder holds everything.
 
 **`ws init`** clones each configured repo (from user state `workspace.repos`) into `<workspace.path>/<name>` using `git clone --recurse-submodules`. Targets that are missing, empty, or contain only a `.gdrive` symlink are cloned without `--force` (the symlink is preserved). Populated targets are skipped unless `--force` is given.
 
@@ -628,7 +671,7 @@ Drive folder holds everything.
 
 ```
 packages → shell → node → git → ssh → terminal → tmux →
-workspace → ai-tools → fonts → macapps → conda → gpg → secrets
+workspace → ai → fonts → macapps → conda → gpg → secrets
 ```
 
 ### Module Details
@@ -643,7 +686,7 @@ workspace → ai-tools → fonts → macapps → conda → gpg → secrets
 | **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
-| **ai-tools** | full | Claude Code config, GitHub Models aliases |
+| **ai** | full | AI CLI/config helpers, Claude/Codex settings backup |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |
 | **conda** | full | Conda/Mamba shell initialization |
@@ -769,7 +812,7 @@ Profiles use YAML inheritance. `full` extends `minimal`.
 | **full** | 14 | 28 | Complete workstation (macapps enabled on darwin) |
 | **server** | 8 | 20 | GPU/DGX server |
 
-**server**: Extends `minimal` + tmux, ai-tools, conda. Disables workspace, fonts, macapps, gpg, secrets. Auto-suggested when NVIDIA GPU or CUDA is detected.
+**server**: Extends `minimal` + tmux, ai, conda. Disables workspace, fonts, macapps, gpg, secrets. Auto-suggested when NVIDIA GPU or CUDA is detected.
 
 ---
 
@@ -793,7 +836,8 @@ modules:
         remote: "git@github.com:user/work.git"
       - name: vault
         remote: "git@github.com:user/vault.git"
-  ai_tools: true
+  ai:
+    enabled: true
   warp: false
   prompt_style: rich    # "minimal" or "rich"
   fonts:
@@ -849,7 +893,7 @@ Same modular Go architecture as [rootfiles-v2](https://github.com/entelecheia/ro
 rootfiles-v2 (root, server)     dotfiles-v2 (user, workstation)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Packages (APT), users, SSH       Packages (Homebrew), shell, git
-Docker, GPUs, tunnels            Terminal, fonts, AI tools
+Docker, GPUs, tunnels            Terminal, fonts, AI
 Locale, firewall, storage        Workspace, secrets, sync, tmux
 ```
 
@@ -869,6 +913,7 @@ dotfiles-v2/
 │   │   └── workspace_cmds.go     # stop, list, register, unregister, layouts, doctor
 │   ├── config/                   # Config struct, loader, detector, state
 │   │   └── profiles/             # Embedded YAML profiles (go:embed)
+│   ├── aisettings/               # AI assistant settings backup/restore/export/import
 │   ├── clean/                    # Workspace cleanup scanner + deletion
 │   ├── driveexclude/             # Google Drive xattr exclusion logic
 │   ├── exec/                     # Runner (dry-run), Brew wrapper
@@ -919,7 +964,7 @@ dotfiles-v2/
 |-----|--------|-------------|
 | **unit** | ubuntu-latest, macos-latest | Go unit tests + coverage |
 | **integration** | ubuntu-{22.04,24.04} × {minimal,full,server} + GPU sim | Docker-based profile tests |
-| **module** | 8 modules × ubuntu-22.04 | Individual module tests |
+| **module** | 9 modules × ubuntu-22.04 | Individual module tests |
 | **scenario** | 9 E2E scenarios | dry-run, idempotency, server, upgrade, home-override, workspace, drive-exclude, sync |
 
 **Release**: Triggered by `workflow_run` — only after Test succeeds on a `v*` tag. Uses GoReleaser for cross-platform builds (darwin/linux × amd64/arm64).
@@ -941,7 +986,7 @@ On a fresh DGX or GPU server — auto-detects NVIDIA GPU + CUDA:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash
 dotfiles init --yes     # auto-selects 'server' profile
-dotfiles apply --yes    # packages (incl. rsync), shell, git, ssh, terminal, tmux, ai-tools, conda
+dotfiles apply --yes    # packages (incl. rsync), shell, git, ssh, terminal, tmux, ai, conda
 ```
 
 Or import config from your workstation:

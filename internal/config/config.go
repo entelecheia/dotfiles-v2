@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Config is the root configuration struct, mapped from profile YAML + user state.
@@ -24,20 +26,39 @@ type Config struct {
 
 // ModulesConfig holds per-module configuration.
 type ModulesConfig struct {
-	Packages ModuleToggle  `yaml:"packages"`
-	Shell    ShellConfig   `yaml:"shell"`
-	Node     ModuleToggle  `yaml:"node"`
-	Git      GitConfig     `yaml:"git"`
-	SSH      SSHModConfig  `yaml:"ssh"`
-	Terminal TermConfig    `yaml:"terminal"`
-	Tmux     ModuleToggle  `yaml:"tmux"`
-	Workspace WorkConfig  `yaml:"workspace"`
-	AITools  ModuleToggle  `yaml:"ai_tools"`
-	Fonts    FontsConfig   `yaml:"fonts"`
-	Conda    ModuleToggle  `yaml:"conda"`
-	GPG      ModuleToggle  `yaml:"gpg"`
-	Secrets  ModuleToggle  `yaml:"secrets"`
-	MacApps  MacAppsConfig `yaml:"macapps"`
+	Packages  ModuleToggle  `yaml:"packages"`
+	Shell     ShellConfig   `yaml:"shell"`
+	Node      ModuleToggle  `yaml:"node"`
+	Git       GitConfig     `yaml:"git"`
+	SSH       SSHModConfig  `yaml:"ssh"`
+	Terminal  TermConfig    `yaml:"terminal"`
+	Tmux      ModuleToggle  `yaml:"tmux"`
+	Workspace WorkConfig    `yaml:"workspace"`
+	AI        ModuleToggle  `yaml:"ai"`
+	Fonts     FontsConfig   `yaml:"fonts"`
+	Conda     ModuleToggle  `yaml:"conda"`
+	GPG       ModuleToggle  `yaml:"gpg"`
+	Secrets   ModuleToggle  `yaml:"secrets"`
+	MacApps   MacAppsConfig `yaml:"macapps"`
+}
+
+// UnmarshalYAML accepts the legacy modules.ai_tools key as read-only input and
+// normalizes it into modules.ai.
+func (m *ModulesConfig) UnmarshalYAML(value *yaml.Node) error {
+	type raw ModulesConfig
+	aux := struct {
+		*raw     `yaml:",inline"`
+		LegacyAI ModuleToggle `yaml:"ai_tools"`
+	}{
+		raw: (*raw)(m),
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	if !m.AI.Enabled && aux.LegacyAI.Enabled {
+		m.AI = aux.LegacyAI
+	}
+	return nil
 }
 
 // MacAppsConfig configures the macapps module.
@@ -77,12 +98,12 @@ type TermConfig struct {
 
 // WorkConfig configures the workspace module.
 type WorkConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	Path          string `yaml:"path,omitempty"`            // workspace root (e.g. ~/workspace)
-	Gdrive        string `yaml:"gdrive,omitempty"`          // Google Drive physical path
-	GdriveSymlink string `yaml:"gdrive_symlink,omitempty"`  // symlink name for Drive (e.g. ~/gdrive-workspace)
-	Symlink       string       `yaml:"symlink,omitempty"`         // explicit symlink target for Path (if set, Path → Symlink)
-	Repos         []RepoConfig `yaml:"repos,omitempty"`           // git repos to clone into workspace
+	Enabled       bool         `yaml:"enabled"`
+	Path          string       `yaml:"path,omitempty"`           // workspace root (e.g. ~/workspace)
+	Gdrive        string       `yaml:"gdrive,omitempty"`         // Google Drive physical path
+	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for Drive (e.g. ~/gdrive-workspace)
+	Symlink       string       `yaml:"symlink,omitempty"`        // explicit symlink target for Path (if set, Path → Symlink)
+	Repos         []RepoConfig `yaml:"repos,omitempty"`          // git repos to clone into workspace
 }
 
 // FontsConfig configures the fonts module.
@@ -124,8 +145,8 @@ func (c *Config) IsModuleEnabled(name string) bool {
 		return c.Modules.Tmux.Enabled
 	case "workspace":
 		return c.Modules.Workspace.Enabled
-	case "ai-tools":
-		return c.Modules.AITools.Enabled
+	case "ai":
+		return c.Modules.AI.Enabled
 	case "fonts":
 		return c.Modules.Fonts.Enabled
 	case "conda":
@@ -222,13 +243,13 @@ func (c *Config) TemplateData() map[string]any {
 		"IsLinux":         isLinux,
 		"Profile":         "", // set by caller
 		"EnableWorkspace": c.Modules.Workspace.Enabled,
-		"EnableAITools":   c.Modules.AITools.Enabled,
+		"EnableAI":        c.Modules.AI.Enabled,
 		"EnableWarp":      c.Modules.Terminal.Warp,
 		"PromptStyle":     c.Modules.Terminal.PromptStyle,
 		"WorkspacePath":   c.Modules.Workspace.Path,
-		"WorkspaceGdrive":  c.Modules.Workspace.Gdrive,
-		"GdriveSymlink":    c.Modules.Workspace.GdriveSymlink,
-		"WorkRepos":        c.Modules.Workspace.Repos,
+		"WorkspaceGdrive": c.Modules.Workspace.Gdrive,
+		"GdriveSymlink":   c.Modules.Workspace.GdriveSymlink,
+		"WorkRepos":       c.Modules.Workspace.Repos,
 		"SSHKeyName":      c.Modules.SSH.KeyName,
 		"GitSigning":      c.Modules.Git.Signing,
 		"FontFamily":      c.Modules.Fonts.Family,

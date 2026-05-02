@@ -37,6 +37,7 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	printWelcomeCmd(p, "dotfiles clean", "Remove junk directories (node_modules, caches)")
 	printWelcomeCmd(p, "dotfiles sync", "Sync binaries with remote server via rsync")
 	printWelcomeCmd(p, "dotfiles clone", "Sync workspace with Google Drive via rclone")
+	printWelcomeCmd(p, "dotfiles gdrive-sync", "Sync workspace artifacts with Drive mirror")
 	printWelcomeCmd(p, "dotfiles apps install", "Install macOS cask apps (interactive picker)")
 	printWelcomeCmd(p, "dotfiles apps backup", "Snapshot macOS app settings")
 	printWelcomeCmd(p, "dotfiles profile backup", "Version-snapshot config + app lists + secrets")
@@ -103,7 +104,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Apply only selected modules"},
 		})
 
-	section(p, "3. Daily workspace — tmux + AI tools",
+	section(p, "3. Daily workspace — tmux + AI",
 		"Launch multi-panel dev workspaces. ('dot' is an alias for 'dotfiles')",
 		[]usecase{
 			{"dotfiles open myproject",

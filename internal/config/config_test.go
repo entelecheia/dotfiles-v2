@@ -15,7 +15,7 @@ func TestIsModuleEnabled(t *testing.T) {
 			Terminal:  TermConfig{Enabled: false},
 			Tmux:      ModuleToggle{Enabled: true},
 			Workspace: WorkConfig{Enabled: false},
-			AITools:   ModuleToggle{Enabled: true},
+			AI:        ModuleToggle{Enabled: true},
 			Fonts:     FontsConfig{Enabled: false},
 			Conda:     ModuleToggle{Enabled: true},
 			GPG:       ModuleToggle{Enabled: false},
@@ -25,8 +25,8 @@ func TestIsModuleEnabled(t *testing.T) {
 	}
 
 	cases := []struct {
-		name    string
-		want    bool
+		name string
+		want bool
 	}{
 		{"packages", true},
 		{"shell", true},
@@ -36,7 +36,7 @@ func TestIsModuleEnabled(t *testing.T) {
 		{"terminal", false},
 		{"tmux", true},
 		{"workspace", false},
-		{"ai-tools", true},
+		{"ai", true},
 		{"fonts", false},
 		{"conda", true},
 		{"gpg", false},
@@ -137,7 +137,7 @@ func TestTemplateData_Keys(t *testing.T) {
 		},
 		Modules: ModulesConfig{
 			Workspace: WorkConfig{Enabled: true, Path: "/home/test", Gdrive: "gdrive"},
-			AITools:   ModuleToggle{Enabled: true},
+			AI:        ModuleToggle{Enabled: true},
 			Terminal:  TermConfig{Warp: true},
 			SSH:       SSHModConfig{KeyName: "id_ed25519"},
 			Git:       GitConfig{Signing: true},
@@ -152,7 +152,7 @@ func TestTemplateData_Keys(t *testing.T) {
 		"Name", "Email", "GithubUser", "Timezone",
 		"OS", "Arch", "Hostname",
 		"IsDarwin", "IsLinux", "Profile",
-		"EnableWorkspace", "EnableAITools", "EnableWarp",
+		"EnableWorkspace", "EnableAI", "EnableWarp",
 		"WorkspacePath", "WorkspaceGdrive",
 		"SSHKeyName", "GitSigning", "FontFamily",
 	}

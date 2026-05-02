@@ -126,6 +126,24 @@ func TestPrinter_KVEmptyValueRendersUnset(t *testing.T) {
 	}
 }
 
+func TestPrinter_KVLongLabelDoesNotWrap(t *testing.T) {
+	var short, long bytes.Buffer
+	(&Printer{Out: &short}).KV("Profile", "full")
+	(&Printer{Out: &long}).KV("Pull+intake scheduler", "stopped")
+
+	shortRow := short.String()
+	longRow := long.String()
+	if strings.Contains(longRow, "Pull+intake\nscheduler") {
+		t.Errorf("long KV label wrapped: %q", longRow)
+	}
+	if !strings.Contains(longRow, "Pull+intake scheduler:") || !strings.Contains(longRow, "stopped") {
+		t.Errorf("long KV row missing label or value: %q", longRow)
+	}
+	if shortCol, longCol := strings.Index(shortRow, "full"), strings.Index(longRow, "stopped"); shortCol != longCol {
+		t.Errorf("KV values should align: short=%q long=%q", shortRow, longRow)
+	}
+}
+
 // TestPrinter_BlankEmitsSingleNewline is a small guard that Blank is a
 // one-byte emitter — callers should be able to use it interchangeably with
 // `p.Line("")`.

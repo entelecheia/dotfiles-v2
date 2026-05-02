@@ -25,7 +25,7 @@ type UserState struct {
 // UserModulesState holds module opt-in/config from user state.
 type UserModulesState struct {
 	Workspace   UserWorkspaceState  `yaml:"workspace,omitempty"`
-	AITools     bool                `yaml:"ai_tools,omitempty"`
+	AI          UserAIState         `yaml:"ai,omitempty"`
 	Warp        bool                `yaml:"warp,omitempty"`
 	PromptStyle string              `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
 	Fonts       UserFontsState      `yaml:"fonts,omitempty"`
@@ -33,6 +33,55 @@ type UserModulesState struct {
 	Rsync       UserRsyncState      `yaml:"rsync,omitempty"`
 	GdriveSync  UserGdriveSyncState `yaml:"gdrive_sync,omitempty"`
 	MacApps     UserMacAppsState    `yaml:"macapps,omitempty"`
+}
+
+// UserAIState holds user selections for AI CLI/config helpers.
+type UserAIState struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset AI block from user state.
+func (a UserAIState) IsZero() bool {
+	return !a.Enabled
+}
+
+// UnmarshalYAML accepts either:
+//
+//	modules:
+//	  ai:
+//	    enabled: true
+//
+// or the shorthand `ai: true`.
+func (a *UserAIState) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var enabled bool
+		if err := value.Decode(&enabled); err != nil {
+			return err
+		}
+		a.Enabled = enabled
+		return nil
+	}
+	type raw UserAIState
+	return value.Decode((*raw)(a))
+}
+
+// UnmarshalYAML accepts the legacy modules.ai_tools key as read-only input and
+// normalizes it into modules.ai.enabled.
+func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
+	type raw UserModulesState
+	aux := struct {
+		*raw     `yaml:",inline"`
+		LegacyAI bool `yaml:"ai_tools"`
+	}{
+		raw: (*raw)(s),
+	}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	if !s.AI.Enabled && aux.LegacyAI {
+		s.AI.Enabled = true
+	}
+	return nil
 }
 
 // UserMacAppsState holds user selections for the macapps module.
@@ -339,8 +388,8 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 		cfg.Modules.Workspace.Symlink = state.Modules.Workspace.Symlink
 		cfg.Modules.Workspace.Repos = state.Modules.Workspace.Repos
 	}
-	if state.Modules.AITools {
-		cfg.Modules.AITools.Enabled = true
+	if state.Modules.AI.Enabled {
+		cfg.Modules.AI.Enabled = true
 	}
 	if state.Modules.Warp {
 		cfg.Modules.Terminal.Warp = true

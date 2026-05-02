@@ -13,17 +13,22 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
-// ConfigureAITools prompts for AI tools toggle.
-func ConfigureAITools(state *config.UserState, yes bool) error {
-	printSection("AI Tools")
+// ConfigureAI prompts for AI CLI/config helper setup.
+func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
+	printSection("AI")
 
-	aiDefault := state.Modules.AITools
-	if state.Name == "" {
+	aiDefault := state.Modules.AI.Enabled
+	if freshDefault {
 		aiDefault = true
 	}
 
+	if !yes {
+		fmt.Println(StyleHint.Render("  Enables shell aliases and assistant config files; app installation is managed by `dotfiles apps`."))
+		fmt.Println(StyleHint.Render("  Managed files: ~/.config/shell/30-ai.sh, ~/.config/claude/settings.json"))
+	}
+
 	var err error
-	state.Modules.AITools, err = ConfirmBool("Enable AI tools (Claude Code, etc.)?", aiDefault, yes)
+	state.Modules.AI.Enabled, err = ConfirmBool("Enable AI CLI/config helpers?", aiDefault, yes)
 	return err
 }
 

@@ -3,7 +3,7 @@ extends: minimal
 modules:
   tmux:
     enabled: true
-  ai_tools:
+  ai:
     enabled: true
   conda:
     enabled: true

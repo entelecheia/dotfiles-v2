@@ -168,7 +168,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		{"terminal", cfg.Modules.Terminal.Enabled, terminalDetail(cfg)},
 		{"tmux", cfg.Modules.Tmux.Enabled, ""},
 		{"workspace", cfg.Modules.Workspace.Enabled, workspaceDetail(cfg)},
-		{"ai-tools", cfg.Modules.AITools.Enabled, ""},
+		{"ai", cfg.Modules.AI.Enabled, "CLI/config helpers"},
 		{"fonts", cfg.Modules.Fonts.Enabled, cfg.Modules.Fonts.Family},
 		{"macapps", cfg.Modules.MacApps.Enabled, macappsDetail(state)},
 		{"conda", cfg.Modules.Conda.Enabled, ""},

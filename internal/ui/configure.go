@@ -18,7 +18,7 @@ func PrintStateSummary(state *config.UserState) {
 	printKV("GitHub", state.GithubUser)
 	printKV("Timezone", state.Timezone)
 	printKV("SSH key", state.SSH.KeyName)
-	printKV("AI tools", formatBool(state.Modules.AITools))
+	printKV("AI", formatBool(state.Modules.AI.Enabled))
 	if state.Modules.Warp {
 		printKV("Warp", formatBool(state.Modules.Warp))
 	}

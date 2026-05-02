@@ -139,8 +139,8 @@ func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	if overlay.Workspace.Enabled {
 		m.Workspace = overlay.Workspace
 	}
-	if overlay.AITools.Enabled {
-		m.AITools = overlay.AITools
+	if overlay.AI.Enabled {
+		m.AI = overlay.AI
 	}
 	if overlay.Fonts.Enabled {
 		m.Fonts = overlay.Fonts

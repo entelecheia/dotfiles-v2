@@ -46,8 +46,8 @@ func TestLoad_MinimalProfile(t *testing.T) {
 	if cfg.Modules.Workspace.Enabled {
 		t.Error("minimal profile: workspace should be disabled")
 	}
-	if cfg.Modules.AITools.Enabled {
-		t.Error("minimal profile: ai_tools should be disabled")
+	if cfg.Modules.AI.Enabled {
+		t.Error("minimal profile: ai should be disabled")
 	}
 	if cfg.Modules.Tmux.Enabled {
 		t.Error("minimal profile: tmux should be disabled")
@@ -95,8 +95,8 @@ func TestLoad_FullProfile(t *testing.T) {
 	if !cfg.Modules.Workspace.Enabled {
 		t.Error("full profile: workspace should be enabled")
 	}
-	if !cfg.Modules.AITools.Enabled {
-		t.Error("full profile: ai_tools should be enabled")
+	if !cfg.Modules.AI.Enabled {
+		t.Error("full profile: ai should be enabled")
 	}
 	if !cfg.Modules.Tmux.Enabled {
 		t.Error("full profile: tmux should be enabled")

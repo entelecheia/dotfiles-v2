@@ -8,13 +8,13 @@ import (
 
 func TestRunPreflightChecks(t *testing.T) {
 	sys := &SystemInfo{
-		OS:       "linux",
-		Arch:     "amd64",
-		Hostname: "test-host",
-		Shell:    "zsh",
-		HasGit:   true,
+		OS:         "linux",
+		Arch:       "amd64",
+		Hostname:   "test-host",
+		Shell:      "zsh",
+		HasGit:     true,
 		GitVersion: "2.43.0",
-		HasBrew:  false,
+		HasBrew:    false,
 	}
 
 	home := t.TempDir()
@@ -120,8 +120,8 @@ func TestGeneratePreflightConfig_ServerProfile(t *testing.T) {
 	if state.Profile != "server" {
 		t.Errorf("expected server profile, got %s", state.Profile)
 	}
-	if !state.Modules.AITools {
-		t.Error("expected AI tools enabled")
+	if !state.Modules.AI.Enabled {
+		t.Error("expected AI enabled")
 	}
 	if state.Modules.Fonts.Family != "" {
 		t.Errorf("expected no font family for server, got %s", state.Modules.Fonts.Family)

@@ -140,6 +140,10 @@ func runApply(cmd *cobra.Command, _ []string) error {
 
 	// Build module list
 	registry := module.NewRegistry()
+	moduleFilter, err = module.NormalizeFilter(moduleFilter)
+	if err != nil {
+		return err
+	}
 	modules := registry.Resolve(cfg, moduleFilter)
 
 	if len(modules) == 0 {
@@ -208,6 +212,7 @@ func configureInteractive(p *Printer, state *config.UserState, profile string, y
 	}
 
 	p.Line("\n=== Configuration ===")
+	freshState := state.Name == ""
 
 	if err := ui.ConfigureIdentity(state, false); err != nil {
 		return err
@@ -221,7 +226,7 @@ func configureInteractive(p *Printer, state *config.UserState, profile string, y
 		return err
 	}
 
-	if err := ui.ConfigureAITools(state, false); err != nil {
+	if err := ui.ConfigureAI(state, false, freshState); err != nil {
 		return err
 	}
 
