@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
@@ -29,22 +30,48 @@ const (
 type Config struct {
 	LocalPath      string   // workspace tree, with trailing slash
 	MirrorPath     string   // gdrive tree, with trailing slash
-	ExcludesFile   string   // materialized static exclude list (embedded baseline)
-	ConfigDir      string   // dotfiles config dir, used for dynamic excludes file
+	ExcludesFile   string   // materialized static exclude list (under .dotfiles/gdrive-sync/)
+	IgnoreFile     string   // user-supplied ignore patterns (under .dotfiles/gdrive-sync/)
+	ConfigDir      string   // workspace-local store dir (.dotfiles/gdrive-sync/) — dynamic files land here
 	SharedExcludes []string // operator-curated shared paths (relative to MirrorPath)
 	LogFile        string
 	LockDir        string
 	RsyncPath      string // resolved rsync binary; empty if not installed
 	MaxDelete      int
-	Interval       int // auto-sync interval in seconds (used by Scheduler templates)
+	Interval       int               // push scheduler cadence (seconds)
+	PullInterval   int               // pull+intake scheduler cadence (0 = no unit)
+	Propagation    PropagationPolicy // default {true,true,false}
+	Paused         bool              // mirrors LocalConfig.Paused; the auth source for sync gating
 	Verbose        bool
+
+	// LocalPaths exposes the resolved per-workspace layout for
+	// callers (status, init, manifest readers) that need granular
+	// access beyond what the convenience fields above expose.
+	LocalPaths *LocalPaths
 }
 
-// ResolveConfig merges UserState fields with defaults and materializes
-// the embedded exclude rules to disk so rsync can read them via
-// --exclude-from. Trailing slashes are normalized for rsync semantics.
+// ResolveConfig builds the runtime Config by reading the per-workspace
+// local store (.dotfiles/gdrive-sync/), migrating from the legacy
+// global state on first call. Trailing slashes are normalized for
+// rsync semantics.
+//
+// The global UserGdriveSyncState is consulted only as a migration
+// source (and for LocalPath, the entry point that locates the
+// workspace). Once .dotfiles/gdrive-sync/config.yaml exists, the
+// global block is no longer read.
 func ResolveConfig(state *config.UserState) (*Config, error) {
-	paths, err := ResolvePaths()
+	return resolveConfig(state, true)
+}
+
+// ResolveConfigReadOnly resolves the same runtime values without creating
+// the local store, migrating global config, or healing .gitignore. Use it for
+// status/list commands that must not mutate the workspace.
+func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
+	return resolveConfig(state, false)
+}
+
+func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
+	systemPaths, err := ResolvePaths()
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +88,28 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		localPath += "/"
 	}
 
-	mirrorPath := gs.MirrorPath
+	localPaths := ResolveLocalPaths(localPath)
+
+	var localCfg *LocalConfig
+	if migrate {
+		localCfg, err = LoadOrMigrateLocalConfig(state, localPaths)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if cfg, ok, err := LoadLocalConfig(localPaths); err != nil {
+			return nil, err
+		} else if ok {
+			localCfg = cfg
+		} else {
+			localCfg = localConfigFromGlobal(state)
+		}
+	}
+
+	mirrorPath := localCfg.MirrorPath
+	if mirrorPath == "" {
+		mirrorPath = gs.MirrorPath
+	}
 	if mirrorPath == "" {
 		mirrorPath = filepath.Join(home, defaultMirrorRel)
 	}
@@ -70,17 +118,12 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		mirrorPath += "/"
 	}
 
-	excludesFile, err := MaterializeExcludesFile(paths.ConfigDir)
-	if err != nil {
-		return nil, err
-	}
-
-	maxDelete := gs.MaxDelete
+	maxDelete := localCfg.MaxDelete
 	if maxDelete <= 0 {
 		maxDelete = defaultMaxDelete
 	}
 
-	interval := gs.Interval
+	interval := localCfg.Interval
 	switch {
 	case interval <= 0:
 		interval = defaultInterval
@@ -90,19 +133,40 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 		interval = intervalMax
 	}
 
+	pullInterval := localCfg.PullInterval
+	if pullInterval > 0 {
+		switch {
+		case pullInterval < intervalMin:
+			pullInterval = intervalMin
+		case pullInterval > intervalMax:
+			pullInterval = intervalMax
+		}
+	}
+
+	policy := localCfg.Propagation
+	if err := policy.Validate(); err != nil {
+		// Defensive: heal a corrupt on-disk policy back to defaults.
+		policy = DefaultPropagationPolicy()
+	}
+
 	rsyncPath, _ := osexec.LookPath("rsync")
 
 	return &Config{
 		LocalPath:      localPath,
 		MirrorPath:     mirrorPath,
-		ExcludesFile:   excludesFile,
-		ConfigDir:      paths.ConfigDir,
-		SharedExcludes: append([]string(nil), gs.SharedExcludes...),
-		LogFile:        paths.LogFile,
-		LockDir:        paths.LockDir,
+		ExcludesFile:   localPaths.ExcludeFile,
+		IgnoreFile:     localPaths.IgnoreFile,
+		ConfigDir:      localPaths.StoreDir,
+		SharedExcludes: append([]string(nil), localCfg.SharedExcludes...),
+		LogFile:        localPaths.LogFile,
+		LockDir:        systemPaths.LockDir,
 		RsyncPath:      rsyncPath,
 		MaxDelete:      maxDelete,
 		Interval:       interval,
+		PullInterval:   pullInterval,
+		Propagation:    policy,
+		Paused:         localCfg.Paused,
+		LocalPaths:     localPaths,
 	}, nil
 }
 
@@ -120,7 +184,7 @@ func expandHome(path, home string) string {
 // never deleted. --backup snapshots overwrites into the conflict dir.
 // dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
 func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
 	args = append(args,
 		"--update",
 		"--backup",
@@ -134,14 +198,16 @@ func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 }
 
 // pushArgs builds the rsync argv for the push (local → mirror) pass.
-// Uses --delete-after to propagate workspace deletions to the mirror,
-// guarded by --max-delete=N to abort runaway deletions.
+// Translates cfg.Propagation into rsync flags (--existing /
+// --ignore-existing for create/update toggles; --delete-after with
+// --max-delete cap for delete) and always excludes the workspace's
+// staging dirs so they never bounce back to mirror.
 // dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
 func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
+	args = append(args, pushAlwaysExcludes()...)
+	args = append(args, propagationFlags(cfg.Propagation, cfg.MaxDelete)...)
 	args = append(args,
-		"--delete-after",
-		"--max-delete="+strconv.Itoa(cfg.MaxDelete),
 		"--backup",
 		"--backup-dir="+conflict.PushBackupRel(),
 	)
@@ -152,11 +218,47 @@ func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 	return args
 }
 
+// pushAlwaysExcludes returns the workspace-anchored excludes that push
+// must enforce regardless of operator config: the per-workspace store
+// (`.dotfiles/`) and the GDrive intake staging area (`inbox/gdrive/`).
+// Anchored with leading `/` so deeper subtrees with the same names are
+// untouched.
+func pushAlwaysExcludes() []string {
+	return []string{
+		"--exclude=/.dotfiles/",
+		"--exclude=/inbox/gdrive/",
+	}
+}
+
+// propagationFlags translates a PropagationPolicy into the rsync flags
+// that enforce it. Default policy `{true, true, false}` returns nil
+// (rsync's natural behavior copies new + modified, no delete).
+func propagationFlags(p PropagationPolicy, maxDelete int) []string {
+	var flags []string
+	if !p.Create {
+		// `--existing` makes rsync skip files absent in destination,
+		// effectively scoping it to updates of files mirror already has.
+		flags = append(flags, "--existing")
+	}
+	if !p.Update {
+		// `--ignore-existing` skips files that already exist in dest,
+		// scoping to creates only.
+		flags = append(flags, "--ignore-existing")
+	}
+	if p.Delete {
+		flags = append(flags,
+			"--delete-after",
+			"--max-delete="+strconv.Itoa(maxDelete),
+		)
+	}
+	return flags
+}
+
 // migrateArgs builds the rsync argv for the one-shot migration pull.
 // No --update, no --delete: pure additive bring-everything-in.
 // dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
 func migrateArgs(cfg *Config, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
@@ -195,35 +297,33 @@ func refuseSharedDriveMirror(cfg *Config) error {
 
 // ── pull / push / sync ──────────────────────────────────────────────────
 
-// Pull mirrors → local, --update only. Workspace deletions are NOT reverted.
-// New files appearing in the mirror (e.g. via Drive client) flow into the
-// workspace.
-func Pull(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return err
-	}
-	if err := refuseSharedDriveMirror(cfg); err != nil {
-		return err
-	}
-	dyn, err := prepareDynamicExcludes(cfg)
-	if err != nil {
-		return err
-	}
-	conflict := NewConflictDir()
-	args := pullArgs(cfg, conflict, dyn, dryRun)
-	fmt.Printf("  Pull: %s → %s\n", cfg.MirrorPath, cfg.LocalPath)
-	return runRsync(ctx, runner, cfg, args)
-}
-
-// Push local → mirror with --delete-after. Workspace is authoritative;
-// mirror's view of "what should exist" is rebuilt from workspace each push.
-// --max-delete guards against catastrophic accidents.
+// Push local → mirror under cfg.Propagation. It first runs a tracked pull guard
+// so Drive edits to baseline-managed payloads are not overwritten by stale local
+// content. The policy maps to rsync flags (see propagationFlags); an all-false
+// policy is refused before any rsync invocation. The workspace's per-workspace
+// store (`.dotfiles/`) and intake staging area (`inbox/gdrive/`) are always
+// excluded so they never bounce back to mirror, regardless of operator excludes.
+//
+// On a successful non-dry-run push, the baseline manifest is refreshed as the
+// Git-shared Drive payload index so other machines can restore accepted
+// artifacts from the mirror.
 func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
+	if err := cfg.Propagation.Validate(); err != nil {
+		return fmt.Errorf("push refused: %w", err)
+	}
 	if err := ensureLogDir(cfg.LogFile); err != nil {
 		return err
 	}
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return err
+	}
+	pre, err := PullTracked(cfg, PullOptions{DryRun: dryRun})
+	if err != nil {
+		return fmt.Errorf("tracked pull guard: %w", err)
+	}
+	if len(pre.Conflicts) > 0 {
+		return fmt.Errorf("push refused: %d tracked Drive conflict(s) need manual review under %s",
+			len(pre.Conflicts), filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), conflictsDirName))
 	}
 	dyn, err := prepareDynamicExcludes(cfg)
 	if err != nil {
@@ -231,39 +331,29 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	}
 	conflict := NewConflictDir()
 	args := pushArgs(cfg, conflict, dyn, dryRun)
-	fmt.Printf("  Push: %s → %s\n", cfg.LocalPath, cfg.MirrorPath)
-	return runRsync(ctx, runner, cfg, args)
+	fmt.Printf("  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation)
+	if err := runRsync(ctx, runner, cfg, args); err != nil {
+		return err
+	}
+	if !dryRun && cfg.LocalPaths != nil {
+		if err := RefreshBaseline(cfg, FingerprintStrict); err != nil {
+			return fmt.Errorf("baseline refresh: %w", err)
+		}
+		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
+			s.LastPush = time.Now().UTC()
+		}); err != nil {
+			return fmt.Errorf("state update: %w", err)
+		}
+	}
+	return nil
 }
 
-// Sync runs Pull then Push within a single conflict-timestamp window so
-// any backups created across both passes share one parent directory.
-// Pull errors are logged but do not abort the push (matches existing
-// internal/rsync.Sync semantics).
+// Sync is now a thin alias for Push — the historical bidirectional Pull
+// + Push behavior was retired in favor of push-first semantics with a
+// separate Intake step (see `dot gdrive-sync intake`). Kept as an entry
+// point so callers (and the existing scheduler unit) keep working.
 func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return err
-	}
-	if err := refuseSharedDriveMirror(cfg); err != nil {
-		return err
-	}
-	dyn, err := prepareDynamicExcludes(cfg)
-	if err != nil {
-		return err
-	}
-	conflict := NewConflictDir()
-
-	pullErr := runRsync(ctx, runner, cfg, pullArgs(cfg, conflict, dyn, dryRun))
-	if pullErr != nil {
-		fmt.Printf("  ⚠ pull: %v — continuing to push\n", pullErr)
-	} else {
-		fmt.Printf("  ✓ pull: %s → %s\n", cfg.MirrorPath, cfg.LocalPath)
-	}
-
-	pushErr := runRsync(ctx, runner, cfg, pushArgs(cfg, conflict, dyn, dryRun))
-	if pullErr != nil {
-		return pullErr
-	}
-	return pushErr
+	return Push(ctx, runner, cfg, dryRun)
 }
 
 // MigratePull is the additive one-shot pull used by the `migrate`

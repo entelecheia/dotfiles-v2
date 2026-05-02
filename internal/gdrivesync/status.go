@@ -12,21 +12,26 @@ import (
 
 // Status is the snapshot returned by GetStatus for the `status` command.
 type Status struct {
-	LocalPath      string
-	MirrorPath     string
-	LocalExists    bool
-	MirrorExists   bool
-	Paused         bool
-	LastPull       time.Time
-	LastPush       time.Time
-	LastSync       time.Time
-	RsyncVersion   string // empty if not installed
-	LockHeld       bool   // someone has gdrive-sync.lock right now
-	MaxDelete      int
-	Interval       int
-	SchedulerState SchedulerState
-	Conflicts      []ConflictEntry // local-tree backups (oldest first)
-	Shared         []SharedEntry   // detected shortcuts + manual list
+	LocalPath            string
+	MirrorPath           string
+	StoreDir             string // <local>/.dotfiles/gdrive-sync/ — empty if unresolved
+	LocalExists          bool
+	MirrorExists         bool
+	Paused               bool
+	Propagation          PropagationPolicy
+	LastPull             time.Time
+	LastPush             time.Time
+	LastIntake           time.Time
+	LastIntakeTSDir      string
+	RsyncVersion         string // empty if not installed
+	LockHeld             bool   // someone has gdrive-sync.lock right now
+	MaxDelete            int
+	Interval             int
+	PullInterval         int            // 0 → no pull+intake scheduler
+	SchedulerState       SchedulerState // push unit
+	IntakeSchedulerState SchedulerState // intake unit (if installed)
+	Conflicts            []ConflictEntry
+	Shared               []SharedEntry
 }
 
 // GetStatus collects current sync state from cfg + state + filesystem.
@@ -35,22 +40,35 @@ type Status struct {
 // sched may be nil — callers that don't have a Scheduler instance get a
 // SchedulerNotInstalled value back rather than a panic.
 func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *config.UserState, sched *Scheduler) (*Status, error) {
-	gs := state.Modules.GdriveSync
+	_ = state // legacy global state is no longer authoritative for gdrive-sync status.
+	storeDir := ""
+	var localState LocalState
+	if cfg.LocalPaths != nil {
+		storeDir = cfg.LocalPaths.StoreDir
+		if st, err := LoadLocalState(cfg.LocalPaths); err == nil && st != nil {
+			localState = *st
+		}
+	}
 	s := &Status{
-		LocalPath:    strings.TrimRight(cfg.LocalPath, "/"),
-		MirrorPath:   strings.TrimRight(cfg.MirrorPath, "/"),
-		LocalExists:  runner.IsDir(cfg.LocalPath),
-		MirrorExists: runner.IsDir(cfg.MirrorPath),
-		Paused:       gs.Paused,
-		LastPull:     gs.LastPull,
-		LastPush:     gs.LastPush,
-		LastSync:     gs.LastSync,
-		LockHeld:     pathExists(cfg.LockDir),
-		MaxDelete:    cfg.MaxDelete,
-		Interval:     cfg.Interval,
+		LocalPath:       strings.TrimRight(cfg.LocalPath, "/"),
+		MirrorPath:      strings.TrimRight(cfg.MirrorPath, "/"),
+		StoreDir:        storeDir,
+		LocalExists:     runner.IsDir(cfg.LocalPath),
+		MirrorExists:    runner.IsDir(cfg.MirrorPath),
+		Paused:          cfg.Paused,
+		Propagation:     cfg.Propagation,
+		LastPull:        localState.LastPull,
+		LastPush:        localState.LastPush,
+		LastIntake:      localState.LastIntake,
+		LastIntakeTSDir: localState.LastIntakeTSDir,
+		LockHeld:        pathExists(cfg.LockDir),
+		MaxDelete:       cfg.MaxDelete,
+		Interval:        cfg.Interval,
+		PullInterval:    cfg.PullInterval,
 	}
 	if sched != nil {
-		s.SchedulerState = sched.State(ctx)
+		s.SchedulerState = sched.StateKind(ctx, SchedulerKindPush)
+		s.IntakeSchedulerState = sched.StateKind(ctx, SchedulerKindIntake)
 	}
 
 	if runner.CommandExists("rsync") {
@@ -114,10 +132,10 @@ func printNextSteps(info *PreflightInfo) {
 	fmt.Printf("     du -sh %s %s\n", info.LocalPath, info.MirrorPath)
 	fmt.Printf("     ls -la %s/inbox\n", info.LocalPath)
 	fmt.Printf("     test ! -L %s/.gdrive\n", info.LocalPath)
-	fmt.Println("  2. When happy, activate two-way sync:")
+	fmt.Println("  2. When happy, activate push-first sync:")
 	fmt.Println("     dot gdrive-sync resume")
 	fmt.Println("  3. Sanity check (should be a no-op):")
-	fmt.Println("     dot gdrive-sync sync --dry-run")
+	fmt.Println("     dot gdrive-sync push --dry-run")
 }
 
 // humanBytes formats a byte count as a short human-readable string

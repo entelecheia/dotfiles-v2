@@ -1,8 +1,10 @@
 # Static exclude rules for `dot gdrive-sync`.
 #
 # Layered with two other mechanisms:
-#   - `--filter=:- .gitignore` reads each directory's .gitignore at sync time
+#   - `.dotfiles/gdrive-sync/ignore.txt` for operator-specific excludes
 #   - `--no-links` skips all symlinks
+# `.gitignore` is intentionally not a gdrive-sync filter: Git-ignored
+# binaries are the main payload class this command is meant to cover.
 # This file is the always-on baseline.
 
 # git internals — match file AND directory at any depth.
@@ -54,7 +56,7 @@ Icon?
 *.tmp.driveupload
 *.tmp.drivedownload
 
-# build / cache directories (gitignore catches most; keep as safety net)
+# build / cache directories
 node_modules/
 .venv/
 __pycache__/

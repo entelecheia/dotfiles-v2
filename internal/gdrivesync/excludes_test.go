@@ -122,7 +122,6 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 	wantContains := []string{
 		"-a",
 		"--no-links",
-		"--filter=:- .gitignore",
 		"--exclude-from=/tmp/excludes.conf",
 	}
 	for _, w := range wantContains {

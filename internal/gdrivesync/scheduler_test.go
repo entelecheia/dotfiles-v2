@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
 
@@ -41,13 +40,18 @@ func TestSchedulerLabels_DistinctFromRsync(t *testing.T) {
 	}
 }
 
-func TestPlistTemplate_RendersWithIntervalAndCommand(t *testing.T) {
+func TestPlistTemplate_RendersPushUnit(t *testing.T) {
 	engine := template.NewEngine()
-	out, err := engine.Render("gdrivesync/com.dotfiles.gdrive-sync.plist.tmpl", SchedulerTemplateData{
+	data := SchedulerTemplateData{
 		DotfilesPath: "/usr/local/bin/dotfiles",
 		LogFile:      "/tmp/gd.log",
 		Interval:     420,
-	})
+		Label:        SchedulerKindPush.LaunchdLabel(),
+		Action:       SchedulerKindPush.Action(),
+		Description:  SchedulerKindPush.Description(),
+		ServiceName:  SchedulerKindPush.SystemdServiceName(),
+	}
+	out, err := engine.Render("gdrivesync/com.dotfiles.gdrive-sync.plist.tmpl", data)
 	if err != nil {
 		t.Fatalf("render plist: %v", err)
 	}
@@ -56,7 +60,7 @@ func TestPlistTemplate_RendersWithIntervalAndCommand(t *testing.T) {
 		"<string>com.dotfiles.gdrive-sync</string>",
 		"<string>/usr/local/bin/dotfiles</string>",
 		"<string>gdrive-sync</string>",
-		"<string>sync</string>",
+		"<string>push</string>",
 		"<integer>420</integer>",
 		"<string>/tmp/gd.log</string>",
 		// PATH must list Homebrew prefixes so launchd resolves rsync 3.x
@@ -70,21 +74,62 @@ func TestPlistTemplate_RendersWithIntervalAndCommand(t *testing.T) {
 			t.Errorf("rendered plist missing %q\n--- got ---\n%s", want, body)
 		}
 	}
+	// Push unit must NOT contain `sync` (the deprecated alias) or `intake`.
+	if strings.Contains(body, "<string>sync</string>") {
+		t.Error("push plist still references deprecated `sync` action")
+	}
+	if strings.Contains(body, "<string>intake</string>") {
+		t.Error("push plist leaked intake action")
+	}
 }
 
-func TestSystemdTemplates_RenderWithIntervalAndCommand(t *testing.T) {
+func TestPlistTemplate_RendersIntakeUnit(t *testing.T) {
+	engine := template.NewEngine()
+	data := SchedulerTemplateData{
+		DotfilesPath: "/usr/local/bin/dotfiles",
+		LogFile:      "/tmp/gd.log",
+		Interval:     900,
+		Label:        SchedulerKindIntake.LaunchdLabel(),
+		Action:       SchedulerKindIntake.Action(),
+		Description:  SchedulerKindIntake.Description(),
+		ServiceName:  SchedulerKindIntake.SystemdServiceName(),
+	}
+	out, err := engine.Render("gdrivesync/com.dotfiles.gdrive-sync.plist.tmpl", data)
+	if err != nil {
+		t.Fatalf("render intake plist: %v", err)
+	}
+	body := string(out)
+	for _, want := range []string{
+		"<string>com.dotfiles.gdrive-sync-intake</string>",
+		"<string>intake</string>",
+		"<integer>900</integer>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("intake plist missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<string>push</string>") {
+		t.Error("intake plist leaked push action")
+	}
+}
+
+func TestSystemdTemplates_RenderPushUnit(t *testing.T) {
 	engine := template.NewEngine()
 	data := SchedulerTemplateData{
 		DotfilesPath: "/home/u/.local/bin/dotfiles",
 		LogFile:      "/home/u/.local/log/g.log",
 		Interval:     900,
+		Label:        SchedulerKindPush.LaunchdLabel(),
+		Action:       SchedulerKindPush.Action(),
+		Description:  SchedulerKindPush.Description(),
+		ServiceName:  SchedulerKindPush.SystemdServiceName(),
 	}
 
 	svc, err := engine.Render("gdrivesync/dotfiles-gdrive-sync.service.tmpl", data)
 	if err != nil {
 		t.Fatalf("render service: %v", err)
 	}
-	if !strings.Contains(string(svc), "ExecStart=/home/u/.local/bin/dotfiles gdrive-sync sync") {
+	if !strings.Contains(string(svc), "ExecStart=/home/u/.local/bin/dotfiles gdrive-sync push") {
 		t.Errorf("service ExecStart wrong:\n%s", svc)
 	}
 
@@ -103,9 +148,75 @@ func TestSystemdTemplates_RenderWithIntervalAndCommand(t *testing.T) {
 	}
 }
 
+func TestSystemdTemplates_RenderIntakeUnit(t *testing.T) {
+	engine := template.NewEngine()
+	data := SchedulerTemplateData{
+		DotfilesPath: "/home/u/.local/bin/dotfiles",
+		LogFile:      "/home/u/.local/log/g.log",
+		Interval:     900,
+		Label:        SchedulerKindIntake.LaunchdLabel(),
+		Action:       SchedulerKindIntake.Action(),
+		Description:  SchedulerKindIntake.Description(),
+		ServiceName:  SchedulerKindIntake.SystemdServiceName(),
+	}
+
+	svc, err := engine.Render("gdrivesync/dotfiles-gdrive-sync.service.tmpl", data)
+	if err != nil {
+		t.Fatalf("render intake service: %v", err)
+	}
+	if !strings.Contains(string(svc), "ExecStart=/home/u/.local/bin/dotfiles gdrive-sync intake") {
+		t.Errorf("intake service ExecStart wrong:\n%s", svc)
+	}
+
+	timer, err := engine.Render("gdrivesync/dotfiles-gdrive-sync.timer.tmpl", data)
+	if err != nil {
+		t.Fatalf("render intake timer: %v", err)
+	}
+	if !strings.Contains(string(timer), "Unit=dotfiles-gdrive-sync-intake.service") {
+		t.Errorf("intake timer must reference -intake service:\n%s", timer)
+	}
+}
+
+func TestSchedulerKind_LabelsAreDistinct(t *testing.T) {
+	if SchedulerKindPush.LaunchdLabel() == SchedulerKindIntake.LaunchdLabel() {
+		t.Error("push and intake share a launchd label")
+	}
+	if SchedulerKindPush.SystemdTimerName() == SchedulerKindIntake.SystemdTimerName() {
+		t.Error("push and intake share a systemd timer name")
+	}
+	if SchedulerKindPush.Action() != "push" || SchedulerKindIntake.Action() != "intake" {
+		t.Errorf("Action() mismatch: push=%s intake=%s",
+			SchedulerKindPush.Action(), SchedulerKindIntake.Action())
+	}
+}
+
+func TestPathsFor_Kind(t *testing.T) {
+	paths, err := ResolvePaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths.PlistFor(SchedulerKindPush) != paths.LaunchdPlist {
+		t.Errorf("PlistFor(push) should equal LaunchdPlist: %q vs %q",
+			paths.PlistFor(SchedulerKindPush), paths.LaunchdPlist)
+	}
+	intakePlist := paths.PlistFor(SchedulerKindIntake)
+	if intakePlist == paths.LaunchdPlist {
+		t.Error("intake plist must differ from push plist")
+	}
+	if !strings.HasSuffix(intakePlist, "com.dotfiles.gdrive-sync-intake.plist") {
+		t.Errorf("intake plist tail wrong: %s", intakePlist)
+	}
+	if !strings.HasSuffix(paths.SystemdServiceFor(SchedulerKindIntake), "dotfiles-gdrive-sync-intake.service") {
+		t.Errorf("intake service path wrong: %s", paths.SystemdServiceFor(SchedulerKindIntake))
+	}
+	if !strings.HasSuffix(paths.SystemdTimerFor(SchedulerKindIntake), "dotfiles-gdrive-sync-intake.timer") {
+		t.Errorf("intake timer path wrong: %s", paths.SystemdTimerFor(SchedulerKindIntake))
+	}
+}
+
 func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	t.Run("zero -> default 300", func(t *testing.T) {
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		cfg, err := ResolveConfig(state)
 		if err != nil {
 			t.Fatalf("ResolveConfig: %v", err)
@@ -118,7 +229,7 @@ func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	t.Run("below min clamps up", func(t *testing.T) {
 		// state.Validate would reject this, but ResolveConfig is a
 		// downstream defense — test it directly with a hand-built state.
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		state.Modules.GdriveSync.Interval = 5
 		cfg, err := ResolveConfig(state)
 		if err != nil {
@@ -130,7 +241,7 @@ func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	})
 
 	t.Run("above max clamps down", func(t *testing.T) {
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		state.Modules.GdriveSync.Interval = 200_000
 		cfg, err := ResolveConfig(state)
 		if err != nil {
@@ -142,7 +253,7 @@ func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 	})
 
 	t.Run("valid passes through", func(t *testing.T) {
-		state := &config.UserState{}
+		state := newIsolatedState(t)
 		state.Modules.GdriveSync.Interval = 600
 		cfg, err := ResolveConfig(state)
 		if err != nil {

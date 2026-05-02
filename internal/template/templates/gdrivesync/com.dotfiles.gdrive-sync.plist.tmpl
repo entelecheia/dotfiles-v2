@@ -4,12 +4,12 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.dotfiles.gdrive-sync</string>
+  <string>{{.Label}}</string>
   <key>ProgramArguments</key>
   <array>
     <string>{{.DotfilesPath}}</string>
     <string>gdrive-sync</string>
-    <string>sync</string>
+    <string>{{.Action}}</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
