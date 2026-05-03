@@ -566,8 +566,8 @@ dotfiles ai agents apply --tool claude,codex
 directory and the rendered tool targets. `dotfiles ai restore --reapply-agents`
 restores the snapshot and then reapplies the restored SSOT to selected tool
 targets. Automatic deployment during `dotfiles apply` is off by default; enable
-`modules.ai.agents_ssot: true` only when you want apply to re-render agent
-targets.
+`modules.ai.agents_ssot: true` only when you want `dotfiles apply` to re-render
+agent targets.
 
 ### `dotfiles ws` — Dual-Workspace Folder Ops
 

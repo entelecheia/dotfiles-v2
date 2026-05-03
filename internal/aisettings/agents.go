@@ -62,8 +62,6 @@ type AgentStatus struct {
 type ApplyOptions struct {
 	Tools  []string
 	DryRun bool
-	Force  bool
-	Yes    bool
 }
 
 // ApplyResult summarizes an agents apply operation.
@@ -282,7 +280,8 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := &ApplyResult{DryRun: opts.DryRun || m.runner().DryRun}
+	effectiveDryRun := opts.DryRun || m.runner().DryRun
+	result := &ApplyResult{DryRun: effectiveDryRun}
 	for _, id := range ids {
 		target, err := m.TargetPath(id)
 		if err != nil {
@@ -311,17 +310,17 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 		}
 
 		if changed && targetExists && targetHash != "" && targetHash != state.LastApplied[id] {
-			backupPath := m.backupTargetPath(id)
-			if !result.DryRun {
-				var err error
-				backupPath, err = m.backupTarget(id, target)
+			if result.DryRun {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s target was changed outside agents SSOT; would back it up before overwrite", id))
+			} else {
+				backupPath, err := m.backupTarget(id, target)
 				if err != nil {
 					return nil, err
 				}
+				item.BackedUp = true
+				item.BackupPath = backupPath
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s target was changed outside agents SSOT; backed up to %s", id, backupPath))
 			}
-			item.BackedUp = true
-			item.BackupPath = backupPath
-			result.Warnings = append(result.Warnings, fmt.Sprintf("%s target was changed outside agents SSOT; backed up to %s", id, backupPath))
 		}
 
 		if changed && !result.DryRun {
@@ -358,6 +357,7 @@ func (m *AgentsManager) Pull(opts PullOptions) (*PullResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", source, err)
 	}
+	data = stripManagedHeader(data)
 	ssot := m.SSOTPath()
 	result := &PullResult{
 		FromTool:   opts.FromTool,
@@ -478,6 +478,21 @@ func (m *AgentsManager) Show(opts ShowOptions) (string, error) {
 	return data, nil
 }
 
+// Edit opens the shared SSOT in the configured editor.
+func (m *AgentsManager) Edit(ctx context.Context, editor string) error {
+	if _, err := os.Stat(m.SSOTPath()); os.IsNotExist(err) {
+		if _, err := m.Init(InitOptions{}); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	return runEditor(ctx, editor, m.SSOTPath())
+}
+
 // Diff returns a unified text diff between rendered desired content and the
 // current live target.
 func (m *AgentsManager) Diff(toolID string) (string, error) {
@@ -553,7 +568,7 @@ func (m *AgentsManager) authorInteractive() (*AuthorResult, error) {
 			doc = setMarkdownSection(doc, section, value)
 			changed = append(changed, section)
 		case "d", "delete":
-			doc = setMarkdownSection(doc, section, "")
+			doc = deleteMarkdownSection(doc, section)
 			changed = append(changed, section)
 		default:
 			fmt.Println("unrecognized action; keeping section")
@@ -569,17 +584,19 @@ func (m *AgentsManager) authorInteractive() (*AuthorResult, error) {
 }
 
 func (m *AgentsManager) renderTool(tool AgentTool, ssotBytes []byte) (string, bool, error) {
-	out := string(stripManagedHeader(ssotBytes))
+	body := string(stripManagedHeader(ssotBytes))
 	overlayPath := filepath.Join(m.ssotDir(), "overlays", tool.OverlayFile)
 	overlay, err := os.ReadFile(overlayPath)
+	overlayExists := false
 	if err != nil {
-		if os.IsNotExist(err) {
-			return out, false, nil
+		if !os.IsNotExist(err) {
+			return "", false, fmt.Errorf("read overlay %s: %w", overlayPath, err)
 		}
-		return "", false, fmt.Errorf("read overlay %s: %w", overlayPath, err)
+	} else {
+		overlayExists = true
+		body = strings.TrimRight(body, "\n") + "\n\n" + fmt.Sprintf(agentsOverlayPattern, tool.ID) + "\n" + string(overlay)
 	}
-	out = strings.TrimRight(out, "\n") + "\n\n" + fmt.Sprintf(agentsOverlayPattern, tool.ID) + "\n" + string(overlay)
-	return out, true, nil
+	return agentsManagedHeader + "\n\n" + strings.TrimLeft(body, "\n"), overlayExists, nil
 }
 
 func (m *AgentsManager) resolveToolIDs(ids []string) ([]string, error) {
@@ -744,6 +761,17 @@ func setMarkdownSection(doc, section, value string) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n\n" + strings.Join(replacement, "\n") + "\n"
 }
 
+func deleteMarkdownSection(doc, section string) string {
+	lines := splitMarkdownLines(strings.TrimRight(doc, "\r\n"))
+	start, end := findMarkdownSection(lines, section)
+	if start < 0 {
+		return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
+	}
+	next := append([]string{}, lines[:start]...)
+	next = append(next, lines[end:]...)
+	return strings.TrimRight(strings.Join(next, "\n"), "\n") + "\n"
+}
+
 func markdownSection(doc, section string) string {
 	lines := splitMarkdownLines(strings.TrimRight(doc, "\r\n"))
 	start, end := findMarkdownSection(lines, section)
@@ -826,11 +854,7 @@ func editTextInEditor(initial string) (string, error) {
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	cmd := osexec.CommandContext(context.Background(), editor, path)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runEditor(context.Background(), editor, path); err != nil {
 		return "", err
 	}
 	data, err := os.ReadFile(path)
@@ -838,6 +862,46 @@ func editTextInEditor(initial string) (string, error) {
 		return "", err
 	}
 	return strings.TrimRight(string(data), "\r\n"), nil
+}
+
+func runEditor(ctx context.Context, editor, path string) error {
+	name, args, err := resolveEditorInvocation(editor)
+	if err != nil {
+		return err
+	}
+	args = append(args, path)
+	// The editor is intentionally user-controlled via $EDITOR, but it is
+	// resolved to an executable path and run without shell expansion.
+	// #nosec G204
+	cmd := osexec.CommandContext(ctx, name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func resolveEditorInvocation(editor string) (string, []string, error) {
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		return "", nil, fmt.Errorf("$EDITOR is not set")
+	}
+	for _, part := range parts {
+		if strings.ContainsAny(part, "\x00\r\n") {
+			return "", nil, fmt.Errorf("editor command contains an invalid control character")
+		}
+	}
+	name := parts[0]
+	if strings.ContainsRune(name, os.PathSeparator) {
+		if !filepath.IsAbs(name) {
+			return "", nil, fmt.Errorf("editor path %q must be absolute", name)
+		}
+		return filepath.Clean(name), parts[1:], nil
+	}
+	resolved, err := osexec.LookPath(name)
+	if err != nil {
+		return "", nil, fmt.Errorf("editor %q not found in PATH", name)
+	}
+	return resolved, parts[1:], nil
 }
 
 func unifiedTextDiff(from, to, a, b string) string {

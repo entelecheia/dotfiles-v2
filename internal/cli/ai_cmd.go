@@ -222,18 +222,13 @@ func runAIRestore(cmd *cobra.Command, _ []string) error {
 	printAISummary(p, "AI Restore", sum)
 	if reapplyAgents {
 		mgr := newAgentsManagerFromCmd(cmd)
-		result, err := mgr.Apply(aisettings.ApplyOptions{Tools: mgr.DefaultApplyTools(), Yes: yes})
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		result, err := mgr.Apply(aisettings.ApplyOptions{Tools: mgr.DefaultApplyTools(), DryRun: dryRun})
 		if err != nil {
 			return err
 		}
 		p.Section("Agents SSOT Reapply")
-		for _, item := range result.Items {
-			state := "in-sync"
-			if item.Changed {
-				state = "wrote"
-			}
-			p.Bullet(ui.StyleValue.Render(ui.MarkPartial), fmt.Sprintf("%-8s %-8s %s", item.ToolID, state, item.TargetPath))
-		}
+		printAgentsApplyResult(p, result)
 	}
 	return nil
 }
@@ -475,22 +470,8 @@ func newAIAgentsEditCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			mgr := newAgentsManagerFromCmd(cmd)
-			if _, err := os.Stat(mgr.SSOTPath()); os.IsNotExist(err) {
-				if _, err := mgr.Init(aisettings.InitOptions{}); err != nil {
-					return err
-				}
-			} else if err != nil {
-				return err
-			}
 			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vi"
-			}
-			editorCmd := exec.CommandContext(context.Background(), editor, mgr.SSOTPath())
-			editorCmd.Stdin = os.Stdin
-			editorCmd.Stdout = os.Stdout
-			editorCmd.Stderr = os.Stderr
-			return editorCmd.Run()
+			return mgr.Edit(context.Background(), editor)
 		},
 	}
 }
@@ -502,47 +483,23 @@ func newAIAgentsApplyCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			toolFlag, _ := cmd.Flags().GetString("tool")
-			force, _ := cmd.Flags().GetBool("force")
-			yes, _ := cmd.Flags().GetBool("yes")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			mgr := newAgentsManagerFromCmd(cmd)
 			ids := parseAgentToolIDs(toolFlag)
 			if len(ids) == 0 {
 				ids = mgr.DefaultApplyTools()
 			}
-			result, err := mgr.Apply(aisettings.ApplyOptions{Tools: ids, Force: force, Yes: yes})
+			result, err := mgr.Apply(aisettings.ApplyOptions{Tools: ids, DryRun: dryRun})
 			if err != nil {
 				return err
 			}
 			p := printerFrom(cmd)
 			p.Header("AI Agents Apply")
-			for _, warning := range result.Warnings {
-				p.Warn(warning)
-			}
-			changed := 0
-			for _, item := range result.Items {
-				marker := ui.StyleSuccess.Render(ui.MarkPresent)
-				state := "in-sync"
-				if item.Changed {
-					changed++
-					marker = ui.StyleHint.Render(ui.MarkPending)
-					state = "would write"
-					if !result.DryRun {
-						state = "wrote"
-					}
-				}
-				p.Bullet(marker, fmt.Sprintf("%-8s %-10s %s", ui.StyleValue.Render(item.ToolID), state, item.TargetPath))
-				if result.DryRun && item.Diff != "" {
-					p.Line("%s", item.Diff)
-				}
-			}
-			if changed == 0 {
-				p.Success("all selected targets already match")
-			}
+			printAgentsApplyResult(p, result)
 			return nil
 		},
 	}
 	c.Flags().String("tool", "", "Comma-separated tool IDs to apply")
-	c.Flags().Bool("force", false, "Reserved for hand-edit conflict workflows")
 	return c
 }
 
@@ -618,6 +575,32 @@ func newAIAgentsPathCmd() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), mgr.SSOTDirPath())
 			return nil
 		},
+	}
+}
+
+func printAgentsApplyResult(p *Printer, result *aisettings.ApplyResult) {
+	for _, warning := range result.Warnings {
+		p.Warn(warning)
+	}
+	changed := 0
+	for _, item := range result.Items {
+		marker := ui.StyleSuccess.Render(ui.MarkPresent)
+		state := "in-sync"
+		if item.Changed {
+			changed++
+			marker = ui.StyleHint.Render(ui.MarkPending)
+			state = "would write"
+			if !result.DryRun {
+				state = "wrote"
+			}
+		}
+		p.Bullet(marker, fmt.Sprintf("%-8s %-10s %s", ui.StyleValue.Render(item.ToolID), state, item.TargetPath))
+		if result.DryRun && item.Diff != "" {
+			p.Line("%s", item.Diff)
+		}
+	}
+	if changed == 0 {
+		p.Success("all selected targets already match")
 	}
 }
 

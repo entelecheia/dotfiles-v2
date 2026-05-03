@@ -105,7 +105,7 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
-		result, err := manager.Apply(aisettings.ApplyOptions{Tools: manager.DefaultApplyTools(), Yes: rc.Yes})
+		result, err := manager.Apply(aisettings.ApplyOptions{Tools: manager.DefaultApplyTools(), DryRun: rc.DryRun})
 		if err != nil {
 			return nil, fmt.Errorf("applying agents SSOT: %w", err)
 		}

@@ -36,7 +36,10 @@ func TestAgentsApplyCopiesSSOTToTargets(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", target, err)
 		}
-		if string(got) != "shared instructions\n" {
+		if !strings.HasPrefix(string(got), agentsManagedHeader+"\n\n") {
+			t.Fatalf("%s target missing managed header: %q", tool.ID, got)
+		}
+		if !strings.Contains(string(got), "shared instructions\n") {
 			t.Fatalf("%s target = %q", tool.ID, got)
 		}
 	}
@@ -95,11 +98,120 @@ func TestAgentsApplyBacksUpHandEditedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "ssot\n" {
+	if !strings.HasPrefix(string(got), agentsManagedHeader+"\n\n") || !strings.Contains(string(got), "ssot\n") {
 		t.Fatalf("target = %q", got)
 	}
 	if !strings.HasPrefix(res.Items[0].BackupPath, filepath.Join(home, ".local", "share", "dotfiles", "backup", "agents")) {
 		t.Fatalf("backup path outside agents backup root: %s", res.Items[0].BackupPath)
+	}
+}
+
+func TestAgentsApplyDryRunDoesNotWriteAndSetsFlags(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("shared instructions\n"))
+
+	targetPath, err := mgr.TargetPath("codex")
+	if err != nil {
+		t.Fatalf("TargetPath: %v", err)
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		t.Fatalf("target %s unexpectedly exists before dry-run apply", targetPath)
+	}
+
+	res, err := mgr.Apply(ApplyOptions{
+		DryRun: true,
+		Tools:  []string{"codex"},
+	})
+	if err != nil {
+		t.Fatalf("Apply dry-run: %v", err)
+	}
+	if !res.DryRun {
+		t.Fatalf("res.DryRun = %v, want true", res.DryRun)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("len(res.Items) = %d, want 1", len(res.Items))
+	}
+	item := res.Items[0]
+	if !item.Changed {
+		t.Fatalf("item.Changed = %v, want true for pending write in dry-run", item.Changed)
+	}
+	if item.BackedUp {
+		t.Fatalf("item.BackedUp = %v, want false in dry-run", item.BackedUp)
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		t.Fatalf("target %s exists after dry-run apply, expected no write", targetPath)
+	}
+}
+
+func TestAgentsApplyDryRunRunnerSetsDryRunAndDoesNotWrite(t *testing.T) {
+	home := t.TempDir()
+	mgr := NewAgentsManager(exec.NewRunner(true, slog.Default()), home)
+	mustWrite(t, mgr.SSOTPath(), []byte("shared instructions\n"))
+
+	targetPath, err := mgr.TargetPath("codex")
+	if err != nil {
+		t.Fatalf("TargetPath: %v", err)
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		t.Fatalf("target %s unexpectedly exists before dry-run apply with dry-run runner", targetPath)
+	}
+
+	res, err := mgr.Apply(ApplyOptions{Tools: []string{"codex"}})
+	if err != nil {
+		t.Fatalf("Apply dry-run with dry-run runner: %v", err)
+	}
+	if !res.DryRun {
+		t.Fatalf("res.DryRun = %v, want true", res.DryRun)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("len(res.Items) = %d, want 1", len(res.Items))
+	}
+	item := res.Items[0]
+	if !item.Changed {
+		t.Fatalf("item.Changed = %v, want true for pending write in dry-run", item.Changed)
+	}
+	if item.BackedUp {
+		t.Fatalf("item.BackedUp = %v, want false in dry-run", item.BackedUp)
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		t.Fatalf("target %s exists after dry-run apply with dry-run runner, expected no write", targetPath)
+	}
+}
+
+func TestAgentsApplyDryRunDoesNotCreateBackup(t *testing.T) {
+	mgr, home := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("ssot\n"))
+	targetPath, err := mgr.TargetPath("codex")
+	if err != nil {
+		t.Fatalf("TargetPath: %v", err)
+	}
+	mustWrite(t, targetPath, []byte("hand edit\n"))
+
+	res, err := mgr.Apply(ApplyOptions{DryRun: true, Tools: []string{"codex"}})
+	if err != nil {
+		t.Fatalf("Apply dry-run: %v", err)
+	}
+	if !res.DryRun {
+		t.Fatalf("res.DryRun = %v, want true", res.DryRun)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("len(res.Items) = %d, want 1", len(res.Items))
+	}
+	if !res.Items[0].Changed {
+		t.Fatal("expected dry-run to report pending change")
+	}
+	if res.Items[0].BackedUp {
+		t.Fatal("dry-run must not mark the target as backed up")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "share", "dotfiles", "backup", "agents")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run should not create agents backup dir, stat err=%v", err)
+	}
+	got, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hand edit\n" {
+		t.Fatalf("dry-run modified target = %q", got)
 	}
 }
 
@@ -152,6 +264,20 @@ func TestAgentsAuthorNonInteractiveSection(t *testing.T) {
 	}
 	if !strings.Contains(got, "## Custom\nTail") {
 		t.Fatalf("custom tail was not preserved: %q", got)
+	}
+}
+
+func TestDeleteMarkdownSectionRemovesHeadingAndBody(t *testing.T) {
+	doc := "preface\n\n## Identity\nKeep me\n\n## How I Work\nold\n\n## Custom\nTail\n"
+	got := deleteMarkdownSection(doc, "How I Work")
+	if strings.Contains(got, "## How I Work") || strings.Contains(got, "old") {
+		t.Fatalf("section was not removed: %q", got)
+	}
+	if !strings.Contains(got, "## Identity\nKeep me") {
+		t.Fatalf("identity section was not preserved: %q", got)
+	}
+	if !strings.Contains(got, "## Custom\nTail") {
+		t.Fatalf("custom section was not preserved: %q", got)
 	}
 }
 
