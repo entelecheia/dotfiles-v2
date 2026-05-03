@@ -59,11 +59,6 @@ apps:
       - {type: support,   path: "Application Support/Hazel"}
       - {type: group,     path: "Group Containers/86Z3GCJ4MF.com.noodlesoft.Hazel"}
 
-  - token: iterm2
-    paths:
-      - {type: pref,      path: "Preferences/com.googlecode.iterm2.plist"}
-      - {type: support,   path: "Application Support/iTerm2"}
-
   - token: keyboard-maestro
     paths:
       - {type: pref,      path: "Preferences/com.stairways.keyboardmaestro.plist"}

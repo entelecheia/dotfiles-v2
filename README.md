@@ -118,8 +118,7 @@ Prompts for:
 - Profile (`minimal` / `full` / `server`)
 - GPU/CUDA auto-detection (suggests `server` when NVIDIA GPU detected)
 - Prompt style (`minimal` / `rich`) — see below
-- Terminal app choices (`warp`, `cmux`, `iterm2` on macOS) and terminal tools (`yazi`, `bat`, `zoxide`, etc.)
-- Module opt-ins: workspace, AI CLI/config helpers, fonts
+- Module opt-ins: workspace, AI CLI/config helpers, Warp, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
 - GitHub authentication via `gh auth login` with broad scopes (optional, for private repos)
@@ -524,51 +523,6 @@ caches, logs, sessions, histories, telemetry, sqlite DBs, plugin caches, and
 generated/system skill bundles by default. Use `--include-auth` only when you
 explicitly want known auth/local-secret files included.
 
-**AI agents SSOT**
-
-`dotfiles ai agents` manages one shared global instruction file at
-`~/.config/dotfiles/agents/AGENTS.md` and copy-deploys rendered content to each
-tool's expected global path:
-
-| Tool | Target |
-|------|--------|
-| Claude Code | `~/.claude/CLAUDE.md` |
-| Codex CLI | `~/.codex/AGENTS.md` |
-| Cursor | `~/.cursor/AGENTS.md` |
-| Gemini CLI | `~/.gemini/GEMINI.md` |
-| GitHub Copilot | `~/.config/github-copilot/AGENTS.md` |
-| Aider | `~/.aider.conf.md` |
-
-The deploy model is copy-based, not symlink-based. The SSOT stays authoritative,
-but local tool files can be inspected or edited without immediately mutating the
-source file. Optional per-tool addenda live under
-`~/.config/dotfiles/agents/overlays/<tool>.md` and are appended only when that
-tool is rendered.
-
-```bash
-# bootstrap from an existing tool file
-dotfiles ai agents init --from-current claude
-
-# or run the section-based assistant from scratch
-dotfiles ai agents author
-
-# review
-dotfiles ai agents show
-dotfiles ai agents show --rendered codex --with-line-numbers
-dotfiles ai agents diff --tool codex
-
-# deploy to Claude, Codex, Cursor, plus optional tools that already exist
-dotfiles ai agents apply
-dotfiles ai agents apply --tool claude,codex
-```
-
-`dotfiles ai backup`, `restore`, `export`, and `import` include the SSOT
-directory and the rendered tool targets. `dotfiles ai restore --reapply-agents`
-restores the snapshot and then reapplies the restored SSOT to selected tool
-targets. Automatic deployment during `dotfiles apply` is off by default; enable
-`modules.ai.agents_ssot: true` only when you want `dotfiles apply` to re-render
-agent targets.
-
 ### `dotfiles ws` — Dual-Workspace Folder Ops
 
 Operate on both `~/workspace/work/` (git-tracked text) and `~/gdrive-workspace/work/` (Drive binaries) simultaneously to keep their folder structures in sync.
@@ -590,12 +544,10 @@ Top-level aliases: `dot ws-mkdir`, `dot ws-mv`, `dot ws-rm`, `dot ws-audit`, `do
 ### `dotfiles apps` — macOS Cask Install + Settings Backup/Restore
 
 Manage macOS cask applications and their per-app settings (plists, `Application Support/`,
-sandbox `Containers`, `Group Containers`). Cask install/backup/restore flows are
-macOS-only; `apps list` also reports terminal tool formula status when Homebrew
-or Linuxbrew is available.
+sandbox `Containers`, `Group Containers`). macOS-only; no-ops on Linux.
 
 ```bash
-dotfiles apps list                         # show cask catalog + terminal tool install status
+dotfiles apps list                         # show catalog: groups + ★ defaults + ✓ installed
 dotfiles apps install                      # interactive MultiSelect + optional "save to state"
 dotfiles apps install raycast obsidian     # explicit tokens (skip picker)
 dotfiles apps install --defaults           # catalog's default set
@@ -731,7 +683,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **node** | full | pnpm store relocation outside Google Drive (~/.config/pnpm/npmrc) |
 | **git** | minimal | git config, aliases, global ignore |
 | **ssh** | minimal | SSH config, config.d includes |
-| **terminal** | minimal | starship prompt, terminal app choices (macOS), terminal tool formula choices |
+| **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
 | **ai** | full | AI CLI/config helpers, Claude/Codex settings backup |
@@ -758,34 +710,13 @@ dotfiles reconfigure                 # switch between minimal ↔ rich
 
 Config key: `modules.terminal.prompt_style` (state: `modules.prompt_style`).
 
-### Terminal Apps & Tools
-
-`dotfiles init` and `dotfiles reconfigure` include terminal-specific
-multi-select prompts:
-
-- **Terminal apps** (macOS non-server): `warp`, `cmux`, `iterm2`
-- **Terminal tools** (all profiles): `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`,
-  `direnv`, `zoxide` (`z`/`zi`), `eza`, `btop`, `lazygit`, `yazi`, `glow`,
-  `csvlens`, `chafa`
-
-Terminal apps are merged into the macOS cask install list. Terminal tools are
-merged into the Homebrew formula install list. Selecting `warp` also enables the
-managed Warp theme file on macOS.
-
-State keys:
-`modules.terminal_apps.casks`, `modules.terminal_tools.formulas`,
-`modules.terminal_tools.formulas_extra`.
-
 ### Packages
 
-**minimal effective install set**:
-core formulas `git`, `git-lfs`, `gh`, `age`, `rsync`, `starship`, `curl`,
-plus terminal tools `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`, `direnv`,
-`zoxide`, `eza`.
+**minimal** (16):
+`git`, `git-lfs`, `gh`, `age`, `rsync`, `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`, `direnv`, `zoxide`, `eza`, `starship`, `curl`
 
-**full effective additions**:
-terminal tools `btop`, `lazygit`, `yazi`, `glow`, `csvlens`, `chafa`, plus
-formulas `rclone`, `fnm`, `uv`, `pipx`, `tmux`, `gnupg`.
+**full** adds (+12):
+`btop`, `lazygit`, `rclone`, `yazi`, `glow`, `csvlens`, `chafa`, `fnm`, `uv`, `pipx`, `tmux`, `gnupg`
 
 ---
 
@@ -907,20 +838,8 @@ modules:
         remote: "git@github.com:user/vault.git"
   ai:
     enabled: true
+  warp: false
   prompt_style: rich    # "minimal" or "rich"
-  terminal_apps:
-    enabled: true
-    casks:
-      - warp
-      - iterm2
-  terminal_tools:
-    enabled: true
-    formulas:
-      - yazi
-      - bat
-      - zoxide    # provides the z/zi commands
-    formulas_extra:
-      - atuin
   fonts:
     family: "FiraCode"
   macapps:

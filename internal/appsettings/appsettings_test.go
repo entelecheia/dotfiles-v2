@@ -19,7 +19,7 @@ func TestLoadManifestHasExpectedTokens(t *testing.T) {
 	}
 	expected := []string{
 		"1password", "raycast", "obsidian", "fantastical", "arc",
-		"cmux", "cursor", "iterm2", "chatgpt", "claude", "slack",
+		"cmux", "cursor", "chatgpt", "claude", "slack",
 		"bartender", "one-switch", "popclip", "shottr", "wispr-flow",
 		"forklift", "yoink", "hazel", "termius", "keyboard-maestro", "moom",
 	}
@@ -88,11 +88,11 @@ func TestEngineBackupAndRestoreRoundtrip(t *testing.T) {
 
 	runner := exec.NewRunner(false, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	eng := &Engine{
-		Runner:   runner,
-		HomeDir:  home,
-		Root:     backup,
-		Hostname: "testhost",
-		Manifest: mf,
+		Runner:    runner,
+		HomeDir:   home,
+		Root: backup,
+		Hostname:  "testhost",
+		Manifest:  mf,
 	}
 
 	sum, err := eng.Backup(context.Background(), []string{"testmoom"})

@@ -29,20 +29,11 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 
 	var err error
 	state.Modules.AI.Enabled, err = ConfirmBool("Enable AI CLI/config helpers?", aiDefault, yes)
-	if err != nil {
-		return err
-	}
-	if !state.Modules.AI.Enabled {
-		state.Modules.AI.AgentsSSOT = false
-		return nil
-	}
-	state.Modules.AI.AgentsSSOT, err = ConfirmBool("Reapply AI agents SSOT during dotfiles apply?", state.Modules.AI.AgentsSSOT, yes)
 	return err
 }
 
-// ConfigureTerminal prompts for prompt style, GUI terminal apps, and CLI
-// terminal tools. Prompt style and tools apply on all platforms; GUI apps are
-// macOS-only.
+// ConfigureTerminal prompts for prompt style and Warp toggle.
+// Prompt style applies on all platforms; Warp is macOS-only.
 func ConfigureTerminal(state *config.UserState, profile string, yes bool) error {
 	printSection("Terminal")
 
@@ -62,66 +53,16 @@ func ConfigureTerminal(state *config.UserState, profile string, yes bool) error 
 		return err
 	}
 
-	if runtime.GOOS == "darwin" && profile != "server" {
-		appDefault := state.Modules.TerminalApps.Casks
-		if !state.Modules.TerminalApps.Enabled && len(appDefault) == 0 {
-			appDefault = config.DefaultTerminalApps(profile)
-		}
-		selectedApps, err := MultiSelectLabeled("Terminal apps to install", terminalAppSelectOptions(), appDefault, yes)
-		if err != nil {
-			return err
-		}
-		state.Modules.TerminalApps.Enabled = true
-		state.Modules.TerminalApps.Casks = selectedApps
-		state.Modules.Warp = sliceutil.Contains(selectedApps, "warp")
-	} else if profile == "server" {
+	// Warp — macOS non-server only.
+	if profile == "server" {
 		state.Modules.Warp = false
-		state.Modules.TerminalApps = config.UserTerminalAppsState{}
+		return nil
 	}
-
-	toolDefault := state.Modules.TerminalTools.Formulas
-	if !state.Modules.TerminalTools.Enabled && len(toolDefault) == 0 {
-		toolDefault = config.DefaultTerminalTools(profile)
+	if runtime.GOOS != "darwin" {
+		return nil
 	}
-	selectedTools, err := MultiSelectLabeled("Terminal tools to install", terminalToolSelectOptions(), toolDefault, yes)
-	if err != nil {
-		return err
-	}
-	state.Modules.TerminalTools.Enabled = true
-	state.Modules.TerminalTools.Formulas = selectedTools
-
-	extraDefault := strings.Join(state.Modules.TerminalTools.FormulasExtra, " ")
-	extraStr, err := Input("Additional terminal formulas (space-separated, optional)", extraDefault, yes)
-	if err != nil {
-		return err
-	}
-	state.Modules.TerminalTools.FormulasExtra = splitCaskList(extraStr)
-
-	return nil
-}
-
-func terminalAppSelectOptions() []SelectOption {
-	apps := config.TerminalAppOptions()
-	options := make([]SelectOption, len(apps))
-	for i, app := range apps {
-		options[i] = SelectOption{
-			Label: app.Token + " — " + app.Name,
-			Value: app.Token,
-		}
-	}
-	return options
-}
-
-func terminalToolSelectOptions() []SelectOption {
-	tools := config.TerminalToolOptions()
-	options := make([]SelectOption, len(tools))
-	for i, tool := range tools {
-		options[i] = SelectOption{
-			Label: tool.Formula + " — " + tool.Name,
-			Value: tool.Formula,
-		}
-	}
-	return options
+	state.Modules.Warp, err = ConfirmBool("Enable Warp terminal?", state.Modules.Warp, yes)
+	return err
 }
 
 // ConfigureFonts prompts for font family. Skipped for server/minimal profile.

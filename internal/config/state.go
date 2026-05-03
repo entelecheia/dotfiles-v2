@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,28 +24,25 @@ type UserState struct {
 
 // UserModulesState holds module opt-in/config from user state.
 type UserModulesState struct {
-	Workspace     UserWorkspaceState     `yaml:"workspace,omitempty"`
-	AI            UserAIState            `yaml:"ai,omitempty"`
-	Warp          bool                   `yaml:"-"`
-	PromptStyle   string                 `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
-	TerminalApps  UserTerminalAppsState  `yaml:"terminal_apps,omitempty"`
-	TerminalTools UserTerminalToolsState `yaml:"terminal_tools,omitempty"`
-	Fonts         UserFontsState         `yaml:"fonts,omitempty"`
-	Sync          UserSyncState          `yaml:"sync,omitempty"`
-	Rsync         UserRsyncState         `yaml:"rsync,omitempty"`
-	GdriveSync    UserGdriveSyncState    `yaml:"gdrive_sync,omitempty"`
-	MacApps       UserMacAppsState       `yaml:"macapps,omitempty"`
+	Workspace   UserWorkspaceState  `yaml:"workspace,omitempty"`
+	AI          UserAIState         `yaml:"ai,omitempty"`
+	Warp        bool                `yaml:"warp,omitempty"`
+	PromptStyle string              `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Fonts       UserFontsState      `yaml:"fonts,omitempty"`
+	Sync        UserSyncState       `yaml:"sync,omitempty"`
+	Rsync       UserRsyncState      `yaml:"rsync,omitempty"`
+	GdriveSync  UserGdriveSyncState `yaml:"gdrive_sync,omitempty"`
+	MacApps     UserMacAppsState    `yaml:"macapps,omitempty"`
 }
 
 // UserAIState holds user selections for AI CLI/config helpers.
 type UserAIState struct {
-	Enabled    bool `yaml:"enabled,omitempty"`
-	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
+	Enabled bool `yaml:"enabled,omitempty"`
 }
 
 // IsZero lets yaml.v3 omit an unset AI block from user state.
 func (a UserAIState) IsZero() bool {
-	return !a.Enabled && !a.AgentsSSOT
+	return !a.Enabled
 }
 
 // UnmarshalYAML accepts either:
@@ -70,14 +66,12 @@ func (a *UserAIState) UnmarshalYAML(value *yaml.Node) error {
 }
 
 // UnmarshalYAML accepts the legacy modules.ai_tools key as read-only input and
-// normalizes it into modules.ai.enabled. It also accepts the legacy modules.warp
-// key and converts it into the terminal app selection without persisting it.
+// normalizes it into modules.ai.enabled.
 func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
 	type raw UserModulesState
 	aux := struct {
-		*raw       `yaml:",inline"`
-		LegacyAI   bool `yaml:"ai_tools"`
-		LegacyWarp bool `yaml:"warp"`
+		*raw     `yaml:",inline"`
+		LegacyAI bool `yaml:"ai_tools"`
 	}{
 		raw: (*raw)(s),
 	}
@@ -87,37 +81,7 @@ func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
 	if !s.AI.Enabled && aux.LegacyAI {
 		s.AI.Enabled = true
 	}
-	if aux.LegacyWarp {
-		s.Warp = true
-		if !s.TerminalApps.Enabled && len(s.TerminalApps.Casks) == 0 {
-			s.TerminalApps.Enabled = true
-			s.TerminalApps.Casks = []string{"warp"}
-		}
-	}
 	return nil
-}
-
-// UserTerminalAppsState holds GUI terminal cask selections.
-type UserTerminalAppsState struct {
-	Enabled bool     `yaml:"enabled,omitempty"`
-	Casks   []string `yaml:"casks,omitempty"`
-}
-
-// IsZero lets yaml.v3 omit an unset terminal_apps block from user state.
-func (s UserTerminalAppsState) IsZero() bool {
-	return !s.Enabled && len(s.Casks) == 0
-}
-
-// UserTerminalToolsState holds CLI terminal formula selections.
-type UserTerminalToolsState struct {
-	Enabled       bool     `yaml:"enabled,omitempty"`
-	Formulas      []string `yaml:"formulas,omitempty"`
-	FormulasExtra []string `yaml:"formulas_extra,omitempty"`
-}
-
-// IsZero lets yaml.v3 omit an unset terminal_tools block from user state.
-func (s UserTerminalToolsState) IsZero() bool {
-	return !s.Enabled && len(s.Formulas) == 0 && len(s.FormulasExtra) == 0
 }
 
 // UserMacAppsState holds user selections for the macapps module.
@@ -238,21 +202,6 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.GdriveSync.Interval != 0 && (s.Modules.GdriveSync.Interval < 60 || s.Modules.GdriveSync.Interval > 86400) {
 		return fmt.Errorf("gdrive_sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.GdriveSync.Interval)
-	}
-	for _, cask := range s.Modules.TerminalApps.Casks {
-		if !IsTerminalAppToken(cask) {
-			return fmt.Errorf("terminal_apps.casks entry %q must be one of the curated terminal apps", cask)
-		}
-	}
-	for _, formula := range s.Modules.TerminalTools.Formulas {
-		if !IsTerminalToolFormula(formula) {
-			return fmt.Errorf("terminal_tools.formulas entry %q must be one of the curated terminal tools", formula)
-		}
-	}
-	for _, formula := range s.Modules.TerminalTools.FormulasExtra {
-		if !IsBrewToken(formula) {
-			return fmt.Errorf("terminal_tools.formulas_extra entry %q is not a valid Homebrew formula token", formula)
-		}
 	}
 	for _, p := range s.Modules.GdriveSync.SharedExcludes {
 		// Paths must be relative to mirror_path. Absolute paths and parent
@@ -442,22 +391,7 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	if state.Modules.AI.Enabled {
 		cfg.Modules.AI.Enabled = true
 	}
-	if state.Modules.AI.AgentsSSOT {
-		cfg.Modules.AI.Enabled = true
-		cfg.Modules.AI.AgentsSSOT = true
-	}
-	terminalAppsSet := state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0
-	if terminalAppsSet {
-		cfg.Modules.Terminal.Apps = append([]string(nil), state.Modules.TerminalApps.Casks...)
-		cfg.Modules.Terminal.Warp = sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp")
-	} else if state.Modules.Warp && !sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp") {
-		cfg.Modules.Terminal.Apps = append(cfg.Modules.Terminal.Apps, "warp")
-	}
-	if state.Modules.TerminalTools.Enabled || len(state.Modules.TerminalTools.Formulas) > 0 || len(state.Modules.TerminalTools.FormulasExtra) > 0 {
-		cfg.Modules.Terminal.Tools = append([]string(nil), state.Modules.TerminalTools.Formulas...)
-		cfg.Modules.Terminal.ToolsExtra = append([]string(nil), state.Modules.TerminalTools.FormulasExtra...)
-	}
-	if !terminalAppsSet && (state.Modules.Warp || sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp")) {
+	if state.Modules.Warp {
 		cfg.Modules.Terminal.Warp = true
 	}
 	if state.Modules.PromptStyle != "" {
@@ -481,9 +415,5 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	}
 	if len(state.Modules.MacApps.CasksExtra) > 0 {
 		cfg.CasksExtra = append(cfg.CasksExtra, state.Modules.MacApps.CasksExtra...)
-	}
-	if len(cfg.Modules.Terminal.Apps) > 0 {
-		cfg.Modules.MacApps.Enabled = true
-		cfg.CasksExtra = append(cfg.CasksExtra, cfg.Modules.Terminal.Apps...)
 	}
 }

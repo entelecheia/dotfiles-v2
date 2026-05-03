@@ -34,7 +34,7 @@ type ModulesConfig struct {
 	Terminal  TermConfig    `yaml:"terminal"`
 	Tmux      ModuleToggle  `yaml:"tmux"`
 	Workspace WorkConfig    `yaml:"workspace"`
-	AI        AIConfig      `yaml:"ai"`
+	AI        ModuleToggle  `yaml:"ai"`
 	Fonts     FontsConfig   `yaml:"fonts"`
 	Conda     ModuleToggle  `yaml:"conda"`
 	GPG       ModuleToggle  `yaml:"gpg"`
@@ -48,7 +48,7 @@ func (m *ModulesConfig) UnmarshalYAML(value *yaml.Node) error {
 	type raw ModulesConfig
 	aux := struct {
 		*raw     `yaml:",inline"`
-		LegacyAI AIConfig `yaml:"ai_tools"`
+		LegacyAI ModuleToggle `yaml:"ai_tools"`
 	}{
 		raw: (*raw)(m),
 	}
@@ -72,12 +72,6 @@ type ModuleToggle struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// AIConfig configures AI helper files and optional agents SSOT deployment.
-type AIConfig struct {
-	Enabled    bool `yaml:"enabled"`
-	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
-}
-
 // ShellConfig configures the shell module.
 type ShellConfig struct {
 	Enabled bool `yaml:"enabled"`
@@ -97,12 +91,9 @@ type SSHModConfig struct {
 
 // TermConfig configures the terminal module.
 type TermConfig struct {
-	Enabled     bool     `yaml:"enabled"`
-	Warp        bool     `yaml:"warp"`
-	PromptStyle string   `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
-	Apps        []string `yaml:"apps,omitempty"`         // GUI terminal casks: warp, cmux, iterm2
-	Tools       []string `yaml:"tools,omitempty"`        // curated CLI terminal formulas
-	ToolsExtra  []string `yaml:"tools_extra,omitempty"`  // free-form CLI terminal formulas
+	Enabled     bool   `yaml:"enabled"`
+	Warp        bool   `yaml:"warp"`
+	PromptStyle string `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
 }
 
 // WorkConfig configures the workspace module.
@@ -173,15 +164,19 @@ func (c *Config) IsModuleEnabled(name string) bool {
 
 // AllPackages returns the merged package list (base + extra).
 func (c *Config) AllPackages() []string {
-	seen := make(map[string]bool, len(c.Packages)+len(c.PackagesExtra)+len(c.Modules.Terminal.Tools)+len(c.Modules.Terminal.ToolsExtra))
+	seen := make(map[string]bool, len(c.Packages)+len(c.PackagesExtra))
 	var result []string
-	result = appendUnique(result, seen, c.Packages...)
-	if c.Modules.Terminal.Enabled {
-		result = appendUnique(result, seen, c.Modules.Terminal.Tools...)
+	for _, p := range c.Packages {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
 	}
-	result = appendUnique(result, seen, c.PackagesExtra...)
-	if c.Modules.Terminal.Enabled {
-		result = appendUnique(result, seen, c.Modules.Terminal.ToolsExtra...)
+	for _, p := range c.PackagesExtra {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
 	}
 	return result
 }
@@ -190,18 +185,17 @@ func (c *Config) AllPackages() []string {
 func (c *Config) AllCasks() []string {
 	seen := make(map[string]bool, len(c.Casks)+len(c.CasksExtra))
 	var result []string
-	result = appendUnique(result, seen, c.Casks...)
-	result = appendUnique(result, seen, c.CasksExtra...)
-	return result
-}
-
-func appendUnique(result []string, seen map[string]bool, values ...string) []string {
-	for _, v := range values {
-		if seen[v] {
-			continue
+	for _, p := range c.Casks {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
 		}
-		seen[v] = true
-		result = append(result, v)
+	}
+	for _, p := range c.CasksExtra {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
 	}
 	return result
 }
@@ -237,29 +231,28 @@ func (c *Config) TemplateData() map[string]any {
 	}
 
 	return map[string]any{
-		"Home":             home,
-		"Name":             c.Name,
-		"Email":            c.Email,
-		"GithubUser":       c.GithubUser,
-		"Timezone":         c.Timezone,
-		"OS":               os,
-		"Arch":             arch,
-		"Hostname":         hostname,
-		"IsDarwin":         isDarwin,
-		"IsLinux":          isLinux,
-		"Profile":          "", // set by caller
-		"EnableWorkspace":  c.Modules.Workspace.Enabled,
-		"EnableAI":         c.Modules.AI.Enabled,
-		"EnableAgentsSSOT": c.Modules.AI.AgentsSSOT,
-		"EnableWarp":       c.Modules.Terminal.Warp,
-		"PromptStyle":      c.Modules.Terminal.PromptStyle,
-		"WorkspacePath":    c.Modules.Workspace.Path,
-		"WorkspaceGdrive":  c.Modules.Workspace.Gdrive,
-		"GdriveSymlink":    c.Modules.Workspace.GdriveSymlink,
-		"WorkRepos":        c.Modules.Workspace.Repos,
-		"SSHKeyName":       c.Modules.SSH.KeyName,
-		"GitSigning":       c.Modules.Git.Signing,
-		"FontFamily":       c.Modules.Fonts.Family,
+		"Home":            home,
+		"Name":            c.Name,
+		"Email":           c.Email,
+		"GithubUser":      c.GithubUser,
+		"Timezone":        c.Timezone,
+		"OS":              os,
+		"Arch":            arch,
+		"Hostname":        hostname,
+		"IsDarwin":        isDarwin,
+		"IsLinux":         isLinux,
+		"Profile":         "", // set by caller
+		"EnableWorkspace": c.Modules.Workspace.Enabled,
+		"EnableAI":        c.Modules.AI.Enabled,
+		"EnableWarp":      c.Modules.Terminal.Warp,
+		"PromptStyle":     c.Modules.Terminal.PromptStyle,
+		"WorkspacePath":   c.Modules.Workspace.Path,
+		"WorkspaceGdrive": c.Modules.Workspace.Gdrive,
+		"GdriveSymlink":   c.Modules.Workspace.GdriveSymlink,
+		"WorkRepos":       c.Modules.Workspace.Repos,
+		"SSHKeyName":      c.Modules.SSH.KeyName,
+		"GitSigning":      c.Modules.Git.Signing,
+		"FontFamily":      c.Modules.Fonts.Family,
 		// GPU/CUDA
 		"HasCUDA":      hasCUDA,
 		"CUDAHome":     cudaHome,

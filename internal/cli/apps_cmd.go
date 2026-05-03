@@ -29,7 +29,7 @@ func newAppsCmd() *cobra.Command {
 		Long: `Manage macOS cask applications and their user settings.
 
 Subcommands:
-  list     Show the embedded cask catalog and terminal tool status.
+  list     Show the embedded cask catalog (groups, defaults).
   install  Install the selected casks (uses saved state, brew install --cask).
   status   Report install + backup presence for each tracked app.
   backup   Copy app settings to the host-scoped backup archive.
@@ -48,7 +48,7 @@ Subcommands:
 func newAppsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "Show the cask catalog and terminal tool status",
+		Short: "Show the cask catalog (groups + defaults)",
 		Args:  cobra.NoArgs,
 		RunE:  runAppsList,
 	}
@@ -60,14 +60,11 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	var installed map[string]bool
-	var installedTools map[string]bool
-	toolStatusKnown := false
-	_, brew, _, _ := appsBrewCtx(cmd)
-	if brew != nil && brew.IsAvailable() {
-		if runtime.GOOS == "darwin" {
+	if runtime.GOOS == "darwin" {
+		_, brew, _, _ := appsBrewCtx(cmd)
+		if brew != nil && brew.IsAvailable() {
 			installed = brew.InstalledCasks()
 		}
-		installedTools, toolStatusKnown = brew.InstalledFormulas()
 	}
 	defaults := make(map[string]bool, len(cat.Defaults))
 	for _, t := range cat.Defaults {
@@ -102,22 +99,8 @@ func runAppsList(cmd *cobra.Command, _ []string) error {
 				ui.StyleHint.Render(a.Name)))
 		}
 	}
-	p.Section("Terminal Tools")
-	for _, tool := range config.TerminalToolOptions() {
-		marker := ui.StyleHint.Render(ui.MarkPartial)
-		if toolStatusKnown {
-			if installedTools[tool.Formula] {
-				marker = ui.StyleSuccess.Render(ui.MarkPresent)
-			} else {
-				marker = ui.StyleHint.Render(ui.MarkAbsent)
-			}
-		}
-		p.Bullet(marker, fmt.Sprintf("%s  %s",
-			ui.StyleValue.Render(tool.Formula),
-			ui.StyleHint.Render(tool.Name)))
-	}
 	p.Blank()
-	p.Line("  %s", ui.StyleHint.Render(ui.MarkStarred+" default   "+ui.MarkPreferred+" recommended   "+ui.MarkPresent+" installed   "+ui.MarkAbsent+" missing   "+ui.MarkPartial+" unknown"))
+	p.Line("  %s", ui.StyleHint.Render(ui.MarkStarred+" default   "+ui.MarkPreferred+" recommended   "+ui.MarkPresent+" installed"))
 	return nil
 }
 
@@ -901,3 +884,4 @@ func recordLastBackup(cmd *cobra.Command, path string, files int) error {
 	}
 	return config.SaveState(state)
 }
+
