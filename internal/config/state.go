@@ -40,12 +40,13 @@ type UserModulesState struct {
 
 // UserAIState holds user selections for AI CLI/config helpers.
 type UserAIState struct {
-	Enabled bool `yaml:"enabled,omitempty"`
+	Enabled    bool `yaml:"enabled,omitempty"`
+	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
 }
 
 // IsZero lets yaml.v3 omit an unset AI block from user state.
 func (a UserAIState) IsZero() bool {
-	return !a.Enabled
+	return !a.Enabled && !a.AgentsSSOT
 }
 
 // UnmarshalYAML accepts either:
@@ -440,6 +441,10 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	}
 	if state.Modules.AI.Enabled {
 		cfg.Modules.AI.Enabled = true
+	}
+	if state.Modules.AI.AgentsSSOT {
+		cfg.Modules.AI.Enabled = true
+		cfg.Modules.AI.AgentsSSOT = true
 	}
 	terminalAppsSet := state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0
 	if terminalAppsSet {

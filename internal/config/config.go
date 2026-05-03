@@ -34,7 +34,7 @@ type ModulesConfig struct {
 	Terminal  TermConfig    `yaml:"terminal"`
 	Tmux      ModuleToggle  `yaml:"tmux"`
 	Workspace WorkConfig    `yaml:"workspace"`
-	AI        ModuleToggle  `yaml:"ai"`
+	AI        AIConfig      `yaml:"ai"`
 	Fonts     FontsConfig   `yaml:"fonts"`
 	Conda     ModuleToggle  `yaml:"conda"`
 	GPG       ModuleToggle  `yaml:"gpg"`
@@ -48,7 +48,7 @@ func (m *ModulesConfig) UnmarshalYAML(value *yaml.Node) error {
 	type raw ModulesConfig
 	aux := struct {
 		*raw     `yaml:",inline"`
-		LegacyAI ModuleToggle `yaml:"ai_tools"`
+		LegacyAI AIConfig `yaml:"ai_tools"`
 	}{
 		raw: (*raw)(m),
 	}
@@ -70,6 +70,12 @@ type MacAppsConfig struct {
 // ModuleToggle is a simple enabled/disabled toggle.
 type ModuleToggle struct {
 	Enabled bool `yaml:"enabled"`
+}
+
+// AIConfig configures AI helper files and optional agents SSOT deployment.
+type AIConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
 }
 
 // ShellConfig configures the shell module.
@@ -231,28 +237,29 @@ func (c *Config) TemplateData() map[string]any {
 	}
 
 	return map[string]any{
-		"Home":            home,
-		"Name":            c.Name,
-		"Email":           c.Email,
-		"GithubUser":      c.GithubUser,
-		"Timezone":        c.Timezone,
-		"OS":              os,
-		"Arch":            arch,
-		"Hostname":        hostname,
-		"IsDarwin":        isDarwin,
-		"IsLinux":         isLinux,
-		"Profile":         "", // set by caller
-		"EnableWorkspace": c.Modules.Workspace.Enabled,
-		"EnableAI":        c.Modules.AI.Enabled,
-		"EnableWarp":      c.Modules.Terminal.Warp,
-		"PromptStyle":     c.Modules.Terminal.PromptStyle,
-		"WorkspacePath":   c.Modules.Workspace.Path,
-		"WorkspaceGdrive": c.Modules.Workspace.Gdrive,
-		"GdriveSymlink":   c.Modules.Workspace.GdriveSymlink,
-		"WorkRepos":       c.Modules.Workspace.Repos,
-		"SSHKeyName":      c.Modules.SSH.KeyName,
-		"GitSigning":      c.Modules.Git.Signing,
-		"FontFamily":      c.Modules.Fonts.Family,
+		"Home":             home,
+		"Name":             c.Name,
+		"Email":            c.Email,
+		"GithubUser":       c.GithubUser,
+		"Timezone":         c.Timezone,
+		"OS":               os,
+		"Arch":             arch,
+		"Hostname":         hostname,
+		"IsDarwin":         isDarwin,
+		"IsLinux":          isLinux,
+		"Profile":          "", // set by caller
+		"EnableWorkspace":  c.Modules.Workspace.Enabled,
+		"EnableAI":         c.Modules.AI.Enabled,
+		"EnableAgentsSSOT": c.Modules.AI.AgentsSSOT,
+		"EnableWarp":       c.Modules.Terminal.Warp,
+		"PromptStyle":      c.Modules.Terminal.PromptStyle,
+		"WorkspacePath":    c.Modules.Workspace.Path,
+		"WorkspaceGdrive":  c.Modules.Workspace.Gdrive,
+		"GdriveSymlink":    c.Modules.Workspace.GdriveSymlink,
+		"WorkRepos":        c.Modules.Workspace.Repos,
+		"SSHKeyName":       c.Modules.SSH.KeyName,
+		"GitSigning":       c.Modules.Git.Signing,
+		"FontFamily":       c.Modules.Fonts.Family,
 		// GPU/CUDA
 		"HasCUDA":      hasCUDA,
 		"CUDAHome":     cudaHome,

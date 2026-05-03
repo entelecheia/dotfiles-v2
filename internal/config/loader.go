@@ -139,8 +139,8 @@ func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	if overlay.Workspace.Enabled {
 		m.Workspace = overlay.Workspace
 	}
-	if overlay.AI.Enabled {
-		m.AI = overlay.AI
+	if overlay.AI.Enabled || overlay.AI.AgentsSSOT {
+		m.AI = mergeAI(base.AI, overlay.AI)
 	}
 	if overlay.Fonts.Enabled {
 		m.Fonts = overlay.Fonts
@@ -156,6 +156,18 @@ func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	}
 	if overlay.MacApps.Enabled {
 		m.MacApps = overlay.MacApps
+	}
+	return m
+}
+
+func mergeAI(base, overlay AIConfig) AIConfig {
+	m := base
+	if overlay.Enabled {
+		m.Enabled = true
+	}
+	if overlay.AgentsSSOT {
+		m.Enabled = true
+		m.AgentsSSOT = true
 	}
 	return m
 }
