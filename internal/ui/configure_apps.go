@@ -29,6 +29,14 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 
 	var err error
 	state.Modules.AI.Enabled, err = ConfirmBool("Enable AI CLI/config helpers?", aiDefault, yes)
+	if err != nil {
+		return err
+	}
+	if !state.Modules.AI.Enabled {
+		state.Modules.AI.AgentsSSOT = false
+		return nil
+	}
+	state.Modules.AI.AgentsSSOT, err = ConfirmBool("Reapply AI agents SSOT during dotfiles apply?", state.Modules.AI.AgentsSSOT, yes)
 	return err
 }
 
