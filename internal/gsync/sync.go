@@ -201,6 +201,9 @@ func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
 	args := commonArgs(cfg, dynExcludesFile)
 	args = append(args, propagationFlags(cfg.Propagation, cfg.MaxDelete)...)
+	// Skip directories that would be empty on the mirror after filtering, so
+	// gitignored leaves do not leave behind shells of folder structure.
+	args = append(args, "--prune-empty-dirs")
 	args = append(args,
 		"--backup",
 		"--backup-dir="+conflict.PushBackupRel(),

@@ -241,6 +241,37 @@ func TestPushArgs_AlwaysExcludesInboxGdriveAndDotfiles(t *testing.T) {
 	}
 }
 
+func TestPushArgs_PrunesEmptyDirs(t *testing.T) {
+	conflict := &ConflictDir{Timestamp: "ts"}
+	for name, policy := range map[string]PropagationPolicy{
+		"default":     DefaultPropagationPolicy(),
+		"all-on":      {Create: true, Update: true, Delete: true},
+		"creates":     {Create: true, Update: false, Delete: false},
+		"updates":     {Create: false, Update: true, Delete: false},
+		"delete-only": {Create: false, Update: false, Delete: true},
+	} {
+		cfg := newTestConfig(t)
+		cfg.Propagation = policy
+
+		args := pushArgs(cfg, conflict, "", false)
+
+		if !slices.Contains(args, "--prune-empty-dirs") {
+			t.Errorf("[%s] pushArgs missing --prune-empty-dirs; got %v", name, args)
+		}
+	}
+}
+
+func TestPullArgs_DoesNotPruneEmptyDirs(t *testing.T) {
+	cfg := newTestConfig(t)
+	conflict := &ConflictDir{Timestamp: "ts"}
+
+	args := pullArgs(cfg, conflict, "", false)
+
+	if slices.Contains(args, "--prune-empty-dirs") {
+		t.Errorf("pullArgs leaked --prune-empty-dirs; user only opted into push-side pruning. got %v", args)
+	}
+}
+
 func TestPushArgs_NoMaxDeleteWhenDeleteOff(t *testing.T) {
 	conflict := &ConflictDir{Timestamp: "ts"}
 	for name, policy := range map[string]PropagationPolicy{
