@@ -32,7 +32,7 @@ const (
 	localLogDirRel      = "log"
 	localLogFileName    = "gdrive-sync.log"
 
-	gitignoreBlockHeader = "# dot gdrive-sync: track shared baseline, ignore machine-local state"
+	gitignoreBlockHeader = "# dot gsync: track shared baseline, ignore machine-local state"
 )
 
 var gitignoreEntries = []string{

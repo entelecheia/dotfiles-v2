@@ -321,9 +321,10 @@ dot gsync inbox                           # show staging + manifest counters
 dot gsync inbox forget <relpath>          # force re-intake of one path
 dot gsync inbox clear                     # empty imports + tombstones manifests
 
-# Aliases (back-compat; emit a deprecation hint):
-dot gsync                # alias for `push`
-dot gsync sync           # alias for `push`
+# Compatibility:
+dot gsync                # print gsync help
+dot gsync sync           # legacy subcommand alias for `push`
+dot gdrive-sync ...      # legacy top-level alias for `dot gsync ...`
 
 # Maintenance:
 dot gsync status         # paths, filter mode, propagation, schedulers, last-pull/push/intake

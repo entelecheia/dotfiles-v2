@@ -62,7 +62,7 @@ Also available as 'dotfiles' for back-compat.`,
 	// Sync (rsync binary sync to remote server)
 	root.AddCommand(newSyncCmd())
 
-	// Gdrive-sync (local rsync mirror between workspace and gdrive-workspace)
+	// Gsync (local rsync mirror between workspace and gdrive-workspace)
 	root.AddCommand(newGsyncCmd())
 
 	// Clone (rclone Google Drive sync)
