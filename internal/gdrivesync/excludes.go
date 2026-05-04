@@ -80,7 +80,7 @@ func commonArgs(excludeFiles []string, verbose bool) []string {
 	args := []string{
 		"-a",
 		"--human-readable",
-		"--info=stats2,progress2",
+		"--stats",
 		"--no-links",
 	}
 	for _, f := range excludeFiles {

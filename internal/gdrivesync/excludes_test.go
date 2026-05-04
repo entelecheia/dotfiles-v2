@@ -121,6 +121,7 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 
 	wantContains := []string{
 		"-a",
+		"--stats",
 		"--no-links",
 		"--exclude-from=/tmp/excludes.conf",
 	}
@@ -133,6 +134,11 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 	// Without verbose: --progress should NOT be present.
 	if slices.Contains(args, "--progress") {
 		t.Error("commonArgs added --progress without verbose=true")
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "--info=") {
+			t.Errorf("commonArgs leaked Apple-rsync-incompatible flag %q", a)
+		}
 	}
 
 	// With verbose=true: --progress should be present.

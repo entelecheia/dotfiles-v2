@@ -66,8 +66,8 @@ func TestPlistTemplate_RendersPushUnit(t *testing.T) {
 		"<string>--mode=clean</string>",
 		"<integer>420</integer>",
 		"<string>/tmp/gd.log</string>",
-		// PATH must list Homebrew prefixes so launchd resolves rsync 3.x
-		// (Apple's /usr/bin/rsync is openrsync 2.6.9 and lacks --info).
+		// PATH must list Homebrew prefixes so launchd can prefer modern
+		// rsync when installed, while CLI args remain Apple-rsync compatible.
 		"<key>EnvironmentVariables</key>",
 		"<key>PATH</key>",
 		"/opt/homebrew/bin",
