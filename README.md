@@ -290,49 +290,51 @@ dot sync resume          # resume auto-sync scheduler
 
 > Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux).
 
-### `dot gdrive-sync`
+### `dot gsync`
+
+> Legacy alias `dot gdrive-sync` continues to work — same command, shorter name.
 
 Local rsync mirror between `~/workspace/work` (single primary) and the cloud-sync client's mirror tree (default `~/gdrive-workspace/work`). No SSH; the cloud client (Google Drive, Dropbox, etc.) handles the round-trip to the cloud.
 
-**Git + Drive payload model.** Git remains the source of truth for text/source files. `gdrive-sync` fills the LFS-shaped gap for binaries and large artifacts while preserving Google Drive sharing benefits. The Git-tracked `<workspace>/.dotfiles/gdrive-sync/baseline.manifest` is the shared Drive payload index: `pull` restores or updates files listed there from the mirror, while baseline-unknown Drive files are staged by `intake` into `<workspace>/inbox/gdrive/<intake-ts>/` for manual routing. Deletes remain non-destructive by default.
+**Git + Drive payload model.** Git remains the source of truth for text/source files. `gsync` fills the LFS-shaped gap for binaries and large artifacts while preserving Google Drive sharing benefits. The Git-tracked `<workspace>/.dotfiles/gdrive-sync/baseline.manifest` is the shared Drive payload index: `pull` restores or updates files listed there from the mirror, while baseline-unknown Drive files are staged by `intake` into `<workspace>/inbox/gdrive/<intake-ts>/` for manual routing. Deletes remain non-destructive by default.
 
 ```bash
-dot gdrive-sync init               # one-time: create <workspace>/.dotfiles/gdrive-sync/ + migrate global state
-dot gdrive-sync setup              # rsync check + disable managed schedulers by default
-dot gdrive-sync setup --push-interval=15m --push-mode=clean
-dot gdrive-sync setup --pull-interval=15m --pull-mode=force
+dot gsync init               # one-time: create <workspace>/.dotfiles/gdrive-sync/ + migrate global state
+dot gsync setup              # rsync check + disable managed schedulers by default
+dot gsync setup --push-interval=15m --push-mode=clean
+dot gsync setup --pull-interval=15m --pull-mode=force
 
-dot gdrive-sync push                            # preview workspace → mirror, then confirm
-dot gdrive-sync push --mode=clean               # auto-push only if no Drive conflicts
-dot gdrive-sync push --mode=force               # auto-push, backing up overwritten Drive files
-dot gdrive-sync push --propagate=create,update,delete  # include deletes
-dot gdrive-sync push --propagate=create         # additive only
-dot gdrive-sync push --propagate=update         # in-place updates only
+dot gsync push                            # preview workspace → mirror, then confirm
+dot gsync push --mode=clean               # auto-push only if no Drive conflicts
+dot gsync push --mode=force               # auto-push, backing up overwritten Drive files
+dot gsync push --propagate=create,update,delete  # include deletes
+dot gsync push --propagate=create         # additive only
+dot gsync push --propagate=update         # in-place updates only
 
-dot gdrive-sync pull                            # preview baseline-tracked Drive payloads, then confirm
-dot gdrive-sync pull --mode=clean               # auto-pull only if no local conflicts
-dot gdrive-sync pull --mode=force               # auto-pull, backing up overwritten local files
-dot gdrive-sync intake                          # stage new Drive files only
-dot gdrive-sync intake --strict                 # use sha256 fingerprints
+dot gsync pull                            # preview baseline-tracked Drive payloads, then confirm
+dot gsync pull --mode=clean               # auto-pull only if no local conflicts
+dot gsync pull --mode=force               # auto-pull, backing up overwritten local files
+dot gsync intake                          # stage new Drive files only
+dot gsync intake --strict                 # use sha256 fingerprints
 
-dot gdrive-sync inbox                           # show staging + manifest counters
-dot gdrive-sync inbox forget <relpath>          # force re-intake of one path
-dot gdrive-sync inbox clear                     # empty imports + tombstones manifests
+dot gsync inbox                           # show staging + manifest counters
+dot gsync inbox forget <relpath>          # force re-intake of one path
+dot gsync inbox clear                     # empty imports + tombstones manifests
 
 # Aliases (back-compat; emit a deprecation hint):
-dot gdrive-sync                # alias for `push`
-dot gdrive-sync sync           # alias for `push`
+dot gsync                # alias for `push`
+dot gsync sync           # alias for `push`
 
 # Maintenance:
-dot gdrive-sync status         # paths, filter mode, propagation, schedulers, last-pull/push/intake
-dot gdrive-sync conflicts      # list .sync-conflicts/<ts>/ entries with ages
-dot gdrive-sync pause          # stop managed schedulers (paused gate)
-dot gdrive-sync resume         # clear paused gate, re-arm installed schedulers
-dot gdrive-sync shared         # manage shared-folder exclusions (auto + manual)
-dot gdrive-sync migrate        # one-shot: convert legacy symlinks + bring mirror in (idempotent)
+dot gsync status         # paths, filter mode, propagation, schedulers, last-pull/push/intake
+dot gsync conflicts      # list .sync-conflicts/<ts>/ entries with ages
+dot gsync pause          # stop managed schedulers (paused gate)
+dot gsync resume         # clear paused gate, re-arm installed schedulers
+dot gsync shared         # manage shared-folder exclusions (auto + manual)
+dot gsync migrate        # one-shot: convert legacy symlinks + bring mirror in (idempotent)
 
 # One-shot filter override:
-dot gdrive-sync push --filter-mode=exclude
+dot gsync push --filter-mode=exclude
 ```
 
 **Per-workspace store** at `<workspace>/.dotfiles/gdrive-sync/` is the authoritative config + state location:
@@ -383,21 +385,21 @@ Default include patterns: `*.tgz`, `*.gz`, `*.zst`, `*.ogg`, `*.mp3`, `*.mp4`, `
 **Pull + intake algorithm.**
 
 1. `pull` reads Git-shared `baseline.manifest`, prints a plan, and only applies after `manual` confirmation or an automatic `clean`/`force` mode. If local and Drive both diverged, `clean` aborts; `force` overwrites local with Drive and backs up the local file under `.sync-conflicts/<ts>/from-workspace/`.
-2. `intake` scans mirror files not present in `baseline.manifest`. It does not run tracked pull; changed baseline-tracked files are skipped and left for `dot gdrive-sync pull`.
+2. `intake` scans mirror files not present in `baseline.manifest`. It does not run tracked pull; changed baseline-tracked files are skipped and left for `dot gsync pull`.
 3. If a baseline-unknown file fingerprint matches `imports.manifest` → skip (already intaked; idempotent even after operator moves it out of staging).
 4. Else → copy into `<workspace>/inbox/gdrive/<microsecond-timestamp>/<relpath>` preserving subtree, and append to `imports.manifest`.
 
-Files in baseline that are missing from mirror become tombstones — recorded in `tombstones.log`, never propagated as local deletions. Use `dot gdrive-sync inbox forget <relpath>` to revoke an imports entry and force a re-intake for baseline-unknown files.
+Files in baseline that are missing from mirror become tombstones — recorded in `tombstones.log`, never propagated as local deletions. Use `dot gsync inbox forget <relpath>` to revoke an imports entry and force a re-intake for baseline-unknown files.
 
 **Key features:**
-- **Git-tracked baseline, Drive-backed payloads**: Git syncs the manifest across machines; Google Drive carries the large/binary payloads. Git-tracked files are excluded from baseline and handled by Git, not gdrive-sync.
-- **Include-first binary sync**: default `filter_mode: include` limits gdrive-sync to configured binary/artifact extensions. Use `filter_mode: exclude` or `--filter-mode=exclude` for the older broad-sync behavior.
+- **Git-tracked baseline, Drive-backed payloads**: Git syncs the manifest across machines; Google Drive carries the large/binary payloads. Git-tracked files are excluded from baseline and handled by Git, not gsync.
+- **Include-first binary sync**: default `filter_mode: include` limits gsync to configured binary/artifact extensions. Use `filter_mode: exclude` or `--filter-mode=exclude` for the older broad-sync behavior.
 - **Preview-first push/pull**: `push` and `pull` show file lists and conflict status before applying. Direct commands default to `--mode=manual`; automation must opt into `clean` or `force`.
 - **Push-first for local artifacts**: `push` propagates workspace artifact state to mirror under the propagation policy. Default policy never deletes — operator opts into delete via `--propagate=...,delete` or by flipping `propagation.delete` in `config.yaml`.
 - **Always-on excludes**: `<workspace>/.dotfiles/` and `<workspace>/inbox/gdrive/` are anchored-excluded from rsync passes so the per-workspace store and intake staging area never round-trip to mirror — regardless of operator filters.
 - **Post-push baseline refresh**: a successful push rebuilds `baseline.manifest` from files present on both local and mirror, excluding Git-tracked files and using sha256 fingerprints for stable cross-machine diffs.
-- **Opt-in schedulers**: `setup` installs no automatic sync by default and removes managed gdrive-sync scheduler units. Pass `--push-interval=DUR --push-mode=clean|force` and/or `--pull-interval=DUR --pull-mode=clean|force` to enable automatic push or pull.
-- **Safety filters**: `exclude.txt`, `ignore.txt`, dynamic shared-folder excludes, Git-tracked relpaths, `--no-links`, `.dotfiles/`, and `inbox/gdrive/` are applied before include matching. `.gitignore` is intentionally not used as a sync filter because gitignored binaries are a primary gdrive-sync use case.
+- **Opt-in schedulers**: `setup` installs no automatic sync by default and removes managed gsync scheduler units. Pass `--push-interval=DUR --push-mode=clean|force` and/or `--pull-interval=DUR --pull-mode=clean|force` to enable automatic push or pull.
+- **Safety filters**: `exclude.txt`, `ignore.txt`, dynamic shared-folder excludes, Git-tracked relpaths, `--no-links`, `.dotfiles/`, and `inbox/gdrive/` are applied before include matching. `.gitignore` is intentionally not used as a sync filter because gitignored binaries are a primary gsync use case.
 - **Migration gate**: refuses to run while legacy symlinks (`.gdrive`, `inbox/downloads`, `inbox/incoming`) are still in place — point user to `migrate`.
 - **Pause gate**: `migrate` leaves `Paused=true` so the operator verifies first; `resume` clears it.
 - **Shared-drive refusal**: refuses to sync if `mirror_path` resolves under a Drive `Shared drives/` root — workspace-authoritative semantics would propagate deletions into a team drive.
@@ -405,7 +407,7 @@ Files in baseline that are missing from mirror become tombstones — recorded in
 - **Safety cap**: `--max-delete=1000` (configurable) aborts runaway push deletions when delete propagation is on.
 - **Stale-aware lock**: PID file inside `~/Library/Caches/dotfiles/gdrive-sync.lock`; signal-0 probes detect crashed-process locks.
 
-> Automatic gdrive-sync is disabled by default. Its scheduler identifiers remain distinct from rsync's scheduler (`com.dotfiles.gdrive-sync` vs `com.dotfiles.workspace-sync`) so both can coexist when explicitly enabled.
+> Automatic gsync is disabled by default. Its scheduler identifiers remain distinct from rsync's scheduler (`com.dotfiles.gdrive-sync` vs `com.dotfiles.workspace-sync`) so both can coexist when explicitly enabled.
 
 ### `dot clone`
 

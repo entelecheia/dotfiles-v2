@@ -24,15 +24,15 @@ type UserState struct {
 
 // UserModulesState holds module opt-in/config from user state.
 type UserModulesState struct {
-	Workspace   UserWorkspaceState  `yaml:"workspace,omitempty"`
-	AI          UserAIState         `yaml:"ai,omitempty"`
-	Warp        bool                `yaml:"warp,omitempty"`
-	PromptStyle string              `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
-	Fonts       UserFontsState      `yaml:"fonts,omitempty"`
-	Sync        UserSyncState       `yaml:"sync,omitempty"`
-	Rsync       UserRsyncState      `yaml:"rsync,omitempty"`
-	GdriveSync  UserGdriveSyncState `yaml:"gdrive_sync,omitempty"`
-	MacApps     UserMacAppsState    `yaml:"macapps,omitempty"`
+	Workspace   UserWorkspaceState `yaml:"workspace,omitempty"`
+	AI          UserAIState        `yaml:"ai,omitempty"`
+	Warp        bool               `yaml:"warp,omitempty"`
+	PromptStyle string             `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Fonts       UserFontsState     `yaml:"fonts,omitempty"`
+	Sync        UserSyncState      `yaml:"sync,omitempty"`
+	Rsync       UserRsyncState     `yaml:"rsync,omitempty"`
+	Gsync       UserGsyncState     `yaml:"gdrive_sync,omitempty"`
+	MacApps     UserMacAppsState   `yaml:"macapps,omitempty"`
 }
 
 // UserAIState holds user selections for AI CLI/config helpers.
@@ -115,15 +115,15 @@ type UserSyncState struct {
 	Interval int    `yaml:"interval,omitempty"` // sync interval in seconds, default 300
 }
 
-// UserGdriveSyncState holds local↔local rsync mirror config from user state.
+// UserGsyncState holds local↔local rsync mirror config from user state.
 //
-// `dot gdrive-sync` keeps ~/workspace/work and ~/gdrive-workspace/work in sync
+// `dot gsync` keeps ~/workspace/work and ~/gdrive-workspace/work in sync
 // via local rsync (no SSH). Workspace is authoritative: pull uses --update only,
 // push uses --delete-after. Last* timestamps are advisory (status display).
 //
 // Paused defaults to true on a fresh state so `migrate` can run a one-shot
 // pull and the user can verify before flipping to false via `resume`.
-type UserGdriveSyncState struct {
+type UserGsyncState struct {
 	LocalPath      string    `yaml:"local_path,omitempty"`  // primary tree, default ~/workspace/work
 	MirrorPath     string    `yaml:"mirror_path,omitempty"` // mirror tree, default ~/gdrive-workspace/work
 	LastPull       time.Time `yaml:"last_pull,omitempty"`
@@ -198,13 +198,13 @@ func (s *UserState) Validate() error {
 	if s.Modules.Rsync.Interval != 0 && (s.Modules.Rsync.Interval < 60 || s.Modules.Rsync.Interval > 86400) {
 		return fmt.Errorf("rsync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Rsync.Interval)
 	}
-	if s.Modules.GdriveSync.MaxDelete != 0 && (s.Modules.GdriveSync.MaxDelete < 1 || s.Modules.GdriveSync.MaxDelete > 1000000) {
-		return fmt.Errorf("gdrive_sync.max_delete must be 0 or 1..1000000 (got %d)", s.Modules.GdriveSync.MaxDelete)
+	if s.Modules.Gsync.MaxDelete != 0 && (s.Modules.Gsync.MaxDelete < 1 || s.Modules.Gsync.MaxDelete > 1000000) {
+		return fmt.Errorf("gdrive_sync.max_delete must be 0 or 1..1000000 (got %d)", s.Modules.Gsync.MaxDelete)
 	}
-	if s.Modules.GdriveSync.Interval != 0 && (s.Modules.GdriveSync.Interval < 60 || s.Modules.GdriveSync.Interval > 86400) {
-		return fmt.Errorf("gdrive_sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.GdriveSync.Interval)
+	if s.Modules.Gsync.Interval != 0 && (s.Modules.Gsync.Interval < 60 || s.Modules.Gsync.Interval > 86400) {
+		return fmt.Errorf("gdrive_sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Gsync.Interval)
 	}
-	for _, p := range s.Modules.GdriveSync.SharedExcludes {
+	for _, p := range s.Modules.Gsync.SharedExcludes {
 		// Paths must be relative to mirror_path. Absolute paths and parent
 		// escapes would let the manual list reach outside the mirror tree
 		// and exclude unrelated content (or be portable across machines

@@ -193,7 +193,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Refresh shell completion scripts from the current cobra tree so any
-	// new subcommand (e.g. gdrive-sync) tab-completes after the next shell
+	// new subcommand (e.g. gsync) tab-completes after the next shell
 	// session. Failures here are logged but don't fail apply — completion
 	// is a UX nicety, not a correctness requirement.
 	if changed, err := installCompletions(cmd.Root(), runner, home); err != nil {

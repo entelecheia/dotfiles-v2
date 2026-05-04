@@ -95,7 +95,7 @@ func TestValidate_SyncInterval(t *testing.T) {
 	}
 }
 
-func TestValidate_GdriveSyncSharedExcludes(t *testing.T) {
+func TestValidate_GsyncSharedExcludes(t *testing.T) {
 	tests := []struct {
 		name    string
 		entries []string
@@ -112,7 +112,7 @@ func TestValidate_GdriveSyncSharedExcludes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &UserState{}
-			s.Modules.GdriveSync.SharedExcludes = tt.entries
+			s.Modules.Gsync.SharedExcludes = tt.entries
 			err := s.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate(shared_excludes=%v) err=%v, wantErr=%v", tt.entries, err, tt.wantErr)

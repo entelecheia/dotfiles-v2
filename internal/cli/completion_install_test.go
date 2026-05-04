@@ -80,7 +80,7 @@ func TestCompletionAliases_DedupesRootName(t *testing.T) {
 func TestInstallCompletions_WritesFilesAndIsIdempotent(t *testing.T) {
 	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles"}}
 	root.AddCommand(&cobra.Command{Use: "apply"})
-	root.AddCommand(&cobra.Command{Use: "gdrive-sync"})
+	root.AddCommand(&cobra.Command{Use: "gsync"})
 
 	home := t.TempDir()
 	runner := exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil)))

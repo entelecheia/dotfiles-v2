@@ -37,7 +37,7 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	printWelcomeCmd(p, "dot clean", "Remove junk directories (node_modules, caches)")
 	printWelcomeCmd(p, "dot sync", "Sync binaries with remote server via rsync")
 	printWelcomeCmd(p, "dot clone", "Sync workspace with Google Drive via rclone")
-	printWelcomeCmd(p, "dot gdrive-sync", "Sync workspace artifacts with Drive mirror")
+	printWelcomeCmd(p, "dot gsync", "Sync workspace artifacts with Drive mirror")
 	printWelcomeCmd(p, "dot apps install", "Install macOS cask apps (interactive picker)")
 	printWelcomeCmd(p, "dot apps backup", "Snapshot macOS app settings")
 	printWelcomeCmd(p, "dot profile backup", "Version-snapshot config + app lists + secrets")
@@ -166,42 +166,42 @@ func printUsecases(cmd *cobra.Command) {
 				"Show sync health, last run, scheduler state"},
 		})
 
-	section(p, "7. Local rsync mirror (gdrive-sync)",
+	section(p, "7. Local rsync mirror (gsync)",
 		"Git-shared baseline tracks Drive payloads; push/pull preview first, intake stages new Drive files.",
 		[]usecase{
-			{"dot gdrive-sync init",
+			{"dot gsync init",
 				"One-time: create <workspace>/.dotfiles/gdrive-sync/ + migrate global state"},
-			{"dot gdrive-sync setup",
+			{"dot gsync setup",
 				"Check rsync and keep managed schedulers off by default"},
-			{"dot gdrive-sync setup --push-interval=15m --push-mode=clean",
+			{"dot gsync setup --push-interval=15m --push-mode=clean",
 				"Opt into automatic push only when no Drive conflicts are detected"},
-			{"dot gdrive-sync setup --pull-interval=15m --pull-mode=force",
+			{"dot gsync setup --pull-interval=15m --pull-mode=force",
 				"Opt into automatic pull with overwrite backups"},
-			{"dot gdrive-sync push",
+			{"dot gsync push",
 				"Preview workspace → mirror changes, then confirm"},
-			{"dot gdrive-sync push --propagate=create,update,delete",
+			{"dot gsync push --propagate=create,update,delete",
 				"Override policy for one run (refused if list is empty)"},
-			{"dot gdrive-sync pull",
+			{"dot gsync pull",
 				"Preview baseline-tracked Drive payload changes, then confirm"},
-			{"dot gdrive-sync intake",
+			{"dot gsync intake",
 				"Stage new Drive-origin files into inbox/gdrive/<ts>/"},
-			{"dot gdrive-sync intake --strict",
+			{"dot gsync intake --strict",
 				"Use sha256 fingerprints (catches mtime-preserved content edits)"},
-			{"dot gdrive-sync inbox list",
+			{"dot gsync inbox list",
 				"Show staged run-dirs, imports manifest, tombstones"},
-			{"dot gdrive-sync inbox forget <relpath>",
+			{"dot gsync inbox forget <relpath>",
 				"Drop one imports entry — next intake re-stages this path"},
-			{"dot gdrive-sync inbox clear",
+			{"dot gsync inbox clear",
 				"Empty imports.manifest and tombstones.log"},
-			{"dot gdrive-sync status",
+			{"dot gsync status",
 				"Paths, filter mode, propagation policy, schedulers, last-pull/push/intake"},
-			{"dot gdrive-sync pause",
+			{"dot gsync pause",
 				"Stop managed schedulers + set the paused gate"},
-			{"dot gdrive-sync resume",
+			{"dot gsync resume",
 				"Clear paused gate, re-arm installed schedulers"},
-			{"dot gdrive-sync shared",
+			{"dot gsync shared",
 				"Manage shared-folder exclusions (auto-detected shortcuts + manual list)"},
-			{"dot gdrive-sync migrate",
+			{"dot gsync migrate",
 				"One-shot: convert legacy symlinks + additive bring-down (idempotent)"},
 		})
 
