@@ -108,7 +108,9 @@ type LocalConfig struct {
 	Propagation    PropagationPolicy `yaml:"propagation"`
 	MaxDelete      int               `yaml:"max_delete,omitempty"`
 	Interval       int               `yaml:"interval,omitempty"`      // push scheduler cadence (seconds)
-	PullInterval   int               `yaml:"pull_interval,omitempty"` // pull+intake scheduler cadence (0 = off)
+	PullInterval   int               `yaml:"pull_interval,omitempty"` // pull scheduler cadence (0 = off)
+	PushMode       RunMode           `yaml:"push_mode,omitempty"`     // automatic push mode (clean|force)
+	PullMode       RunMode           `yaml:"pull_mode,omitempty"`     // automatic pull mode (clean|force)
 	Paused         bool              `yaml:"paused,omitempty"`
 	SharedExcludes []string          `yaml:"shared_excludes,omitempty"`
 }
@@ -282,6 +284,18 @@ func LoadLocalConfig(paths *LocalPaths) (*LocalConfig, bool, error) {
 		fmt.Fprintf(os.Stderr, "warning: %s has invalid propagation (%v); using defaults\n", paths.ConfigFile, err)
 		cfg.Propagation = DefaultPropagationPolicy()
 	}
+	if cfg.PushMode != "" {
+		if _, err := normalizeAutomaticMode(cfg.PushMode); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %s has invalid push_mode (%v); using clean\n", paths.ConfigFile, err)
+			cfg.PushMode = ModeClean
+		}
+	}
+	if cfg.PullMode != "" {
+		if _, err := normalizeAutomaticMode(cfg.PullMode); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %s has invalid pull_mode (%v); using clean\n", paths.ConfigFile, err)
+			cfg.PullMode = ModeClean
+		}
+	}
 	return &cfg, true, nil
 }
 
@@ -289,6 +303,16 @@ func LoadLocalConfig(paths *LocalPaths) (*LocalConfig, bool, error) {
 func SaveLocalConfig(paths *LocalPaths, cfg *LocalConfig) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid propagation policy: %w", err)
+	}
+	if cfg.PushMode != "" {
+		if _, err := normalizeAutomaticMode(cfg.PushMode); err != nil {
+			return fmt.Errorf("refusing to save invalid push_mode: %w", err)
+		}
+	}
+	if cfg.PullMode != "" {
+		if _, err := normalizeAutomaticMode(cfg.PullMode); err != nil {
+			return fmt.Errorf("refusing to save invalid pull_mode: %w", err)
+		}
 	}
 	if err := os.MkdirAll(paths.StoreDir, 0755); err != nil {
 		return fmt.Errorf("creating %s: %w", paths.StoreDir, err)
@@ -347,8 +371,10 @@ func localConfigFromGlobal(globalState *config.UserState) *LocalConfig {
 		MirrorPath:     gs.MirrorPath,
 		Propagation:    DefaultPropagationPolicy(),
 		MaxDelete:      gs.MaxDelete,
-		Interval:       gs.Interval,
+		Interval:       0,
 		PullInterval:   0,
+		PushMode:       ModeClean,
+		PullMode:       ModeClean,
 		Paused:         gs.Paused,
 		SharedExcludes: append([]string(nil), gs.SharedExcludes...),
 	}

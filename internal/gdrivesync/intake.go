@@ -51,11 +51,10 @@ var driveMetadataExt = map[string]bool{
 	".gshortcut": true,
 }
 
-// Intake first applies Drive-side changes for baseline-tracked files via
-// PullTracked, then compares mirror against baseline + imports manifests and
-// stages only baseline-unknown GDrive-origin files into
-// <local>/inbox/gdrive/<intake-ts>/. Mirror-side deletions for tracked files
-// become tombstones in the pull phase; intake itself never deletes local files.
+// Intake compares mirror against baseline + imports manifests and stages only
+// baseline-unknown GDrive-origin files into <local>/inbox/gdrive/<intake-ts>/.
+// Changed baseline-tracked files are reported as skipped so the operator can
+// review them with `dot gdrive-sync pull`.
 //
 // Idempotency: once a file is in imports.manifest with a matching
 // fingerprint, the next intake skips it — even if the operator moved
@@ -73,11 +72,6 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
 	local := strings.TrimRight(cfg.LocalPath, "/")
 	tracked := gitTrackedRelPaths(local)
-
-	pullRes, err := PullTracked(cfg, PullOptions{DryRun: opts.DryRun})
-	if err != nil {
-		return nil, err
-	}
 
 	baseline, err := LoadBaselineManifest(paths.BaselineFile)
 	if err != nil {
@@ -190,12 +184,10 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 	sort.Strings(toCopy)
 
 	result := &IntakeResult{
-		Pull:           pullRes,
 		Intaked:        intaked,
 		SkippedBase:    skippedBase,
 		SkippedImports: skippedImports,
 		SkippedTracked: skippedTracked,
-		Tombstones:     pullRes.Tombstones,
 		Strict:         opts.Strict,
 	}
 

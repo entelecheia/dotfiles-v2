@@ -36,21 +36,22 @@ Drive-backed payloads. Push sends local creates and updates to the mirror;
 pull restores or updates baseline-tracked payloads from Drive. New
 Drive-origin files still stage into inbox/gdrive for manual routing.
 
-Getting started:
-  dot gdrive-sync setup       Install rsync (if missing) + auto-sync scheduler
-  dot gdrive-sync migrate     One-time symlink → real-dir conversion + bring-down
-  dot gdrive-sync resume      Activate push-first sync after migrate verified
-  dot gdrive-sync             Default = push
+	Getting started:
+	  dot gdrive-sync setup       Check rsync and disable managed schedulers by default
+	  dot gdrive-sync migrate     One-time symlink → real-dir conversion + bring-down
+	  dot gdrive-sync resume      Clear the paused gate after migrate verified
+	  dot gdrive-sync             Default = push plan, then confirm
 
-Maintenance:
-  dot gdrive-sync status      Show last pull/push/intake, conflicts, paused state, scheduler
-  dot gdrive-sync conflicts   List timestamped backup directories
-  dot gdrive-sync pause       Stop auto-sync (scheduler + paused gate)
-  dot gdrive-sync resume      Restart auto-sync`,
+	Maintenance:
+	  dot gdrive-sync status      Show last pull/push/intake, conflicts, paused state, scheduler
+	  dot gdrive-sync conflicts   List timestamped backup directories
+	  dot gdrive-sync pause       Stop managed schedulers + set paused gate
+	  dot gdrive-sync resume      Clear paused gate and re-arm installed schedulers`,
 		RunE:         runGdriveSync,
 		SilenceUsage: true,
 	}
 	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rsync progress output")
+	cmd.PersistentFlags().String("mode", gdrivesync.ModeManual.String(), "execution mode for push/pull: manual, clean, or force")
 	cmd.AddCommand(
 		newGdriveSyncSyncCmd(),
 		newGdriveSyncPullCmd(),
@@ -118,7 +119,7 @@ func runGdriveSyncInit(cmd *cobra.Command, _ []string) error {
 	p.KV("Inbox staging", inboxGdrive)
 	p.Blank()
 	p.Line("Edit %s to customize behavior; %s for additional ignore patterns.", paths.ConfigFile, paths.IgnoreFile)
-	p.Line("Run 'dot gdrive-sync setup' to deploy the auto-sync scheduler.")
+	p.Line("Run 'dot gdrive-sync setup' to verify rsync and keep automatic sync disabled unless intervals are passed.")
 	return nil
 }
 
@@ -230,9 +231,8 @@ func newGdriveSyncSyncCmd() *cobra.Command {
 
 // runGdriveSync is the handler for both the bare `dot gdrive-sync` and
 // the explicit `sync` subcommand. The historical Pull+Push semantics
-// were retired in favor of push-first; this is now a thin alias for
-// push that prints a one-line deprecation hint so callers gradually
-// migrate to the new name.
+// were retired; this is now a thin alias for push that prints a one-line
+// deprecation hint so callers gradually migrate to the new name.
 func runGdriveSync(cmd *cobra.Command, args []string) error {
 	printerFrom(cmd).Line("(note: `sync` is now an alias for `push`; use `dot gdrive-sync pull` for baseline-tracked Drive payloads)")
 	return runGdriveSyncPush(cmd, args)
@@ -251,8 +251,9 @@ payloads from the Google Drive mirror.
 
 Files absent from baseline are not copied into the workspace by pull; run
 intake to stage new Drive-origin files under inbox/gdrive/<ts>/ for manual
-review. If local and Drive both changed a baseline-tracked file, pull preserves
-the local file and copies the Drive version into .sync-conflicts/<ts>/from-gdrive/.`,
+review. If local and Drive both changed a baseline-tracked file, manual mode
+asks before applying, clean mode aborts, and force mode overwrites local after
+backing up the local version into .sync-conflicts/<ts>/from-workspace/.`,
 		RunE:         runGdriveSyncPull,
 		SilenceUsage: true,
 	}
@@ -270,6 +271,10 @@ func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	mode, err := gdriveSyncModeFrom(cmd)
+	if err != nil {
+		return err
+	}
 
 	release, lockErr := gdrivesync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
@@ -278,12 +283,36 @@ func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
 	}
 	defer release()
 
-	p.Line("Pulling baseline-tracked payloads %s → %s", cfg.MirrorPath, cfg.LocalPath)
+	p.Line("Pull plan for baseline-tracked payloads %s → %s (%s)", cfg.MirrorPath, cfg.LocalPath, mode)
 	if dryRun {
 		p.Line("  (dry-run — no changes)")
 	}
-	res, err := gdrivesync.PullTracked(cfg, gdrivesync.PullOptions{DryRun: dryRun})
-	recordSyncResult(state, cfg, "pull", err, dryRun)
+	plan, err := gdrivesync.PullTracked(cfg, gdrivesync.PullOptions{DryRun: true})
+	if err != nil {
+		return fmt.Errorf("planning pull: %w", err)
+	}
+	printPullPlan(p, cfg, plan)
+	if dryRun || !plan.HasChanges() {
+		return nil
+	}
+	if mode == gdrivesync.ModeClean && len(plan.Conflicts) > 0 {
+		return fmt.Errorf("pull refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
+	}
+	force := mode == gdrivesync.ModeForce
+	if mode == gdrivesync.ModeManual {
+		yes, _ := cmd.Flags().GetBool("yes")
+		confirmed, err := ui.Confirm("Apply this pull plan?", yes)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			p.Line("Aborted.")
+			return nil
+		}
+		force = len(plan.Conflicts) > 0
+	}
+	res, err := gdrivesync.PullTracked(cfg, gdrivesync.PullOptions{Force: force})
+	recordSyncResult(state, cfg, "pull", err, false)
 	if err != nil {
 		return fmt.Errorf("pull failed: %w", err)
 	}
@@ -296,15 +325,14 @@ func runGdriveSyncPull(cmd *cobra.Command, _ []string) error {
 func newGdriveSyncIntakeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "intake",
-		Short: "Pull tracked Drive payloads, then stage new GDrive-origin files",
-		Long: `First applies Drive-side changes for baseline-tracked payloads, then
-compares the mirror against baseline.manifest and imports.manifest to find
-new Drive-origin files. New candidates are copied into a timestamped
+		Short: "Stage new GDrive-origin files for manual routing",
+		Long: `Compares the mirror against baseline.manifest and imports.manifest to
+find new Drive-origin files. New candidates are copied into a timestamped
 subdirectory of <local>/inbox/gdrive/<intake-ts>/ for the operator to review
 and route.
 
-Mirror-side deletions detected against baseline become tombstones in
-.dotfiles/gdrive-sync/tombstones.log — they are NOT propagated as local deletes.
+Changed baseline-tracked files are skipped and left for ` + "`dot gdrive-sync pull`" + `.
+Mirror-side deletions against baseline are detected by pull, not intake.
 
   --strict   Use sha256 fingerprints (catches content changes that
              preserve mtime). Default is fast size+mtime mode.`,
@@ -326,6 +354,9 @@ func runGdriveSyncIntake(cmd *cobra.Command, _ []string) error {
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	strict, _ := cmd.Flags().GetBool("strict")
+	if _, err := gdriveSyncModeFrom(cmd); err != nil {
+		return err
+	}
 
 	release, lockErr := gdrivesync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
@@ -378,6 +409,51 @@ func printPullResult(p *Printer, cfg *gdrivesync.Config, res *gdrivesync.PullRes
 	}
 	if len(res.Tombstones) > 0 {
 		p.Line("  %d tombstones recorded — see %s", len(res.Tombstones), cfg.LocalPaths.TombstonesFile)
+	}
+}
+
+func printPullPlan(p *Printer, cfg *gdrivesync.Config, res *gdrivesync.PullResult) {
+	if res == nil {
+		return
+	}
+	updates := differenceStrings(res.Pulled, res.Restored)
+	affected := affectedDirsFromLists(res.Pulled, res.Restored, res.LocalModified, pullConflictPaths(res.Conflicts), tombstonePaths(res.Tombstones))
+	if len(affected) > 0 {
+		p.Section("Affected folders")
+		printPathList(p, affected)
+	}
+	if len(updates) > 0 {
+		p.Section(fmt.Sprintf("Updates from Drive: %d", len(updates)))
+		printPathList(p, updates)
+	}
+	if len(res.Restored) > 0 {
+		p.Section(fmt.Sprintf("Restores from Drive: %d", len(res.Restored)))
+		printPathList(p, res.Restored)
+	}
+	if len(res.LocalModified) > 0 {
+		p.Section(fmt.Sprintf("Local-only changes: %d", len(res.LocalModified)))
+		printPathList(p, res.LocalModified)
+	}
+	if len(res.Conflicts) > 0 {
+		p.Section(fmt.Sprintf("Conflicts: %d", len(res.Conflicts)))
+		for _, c := range res.Conflicts {
+			reason := c.Reason
+			if reason == "" {
+				reason = "local and Drive both changed"
+			}
+			p.Line("  !  %s — %s", c.RelPath, reason)
+			if c.BackupPath != "" {
+				p.Line("     backup: %s", c.BackupPath)
+			}
+		}
+	}
+	if len(res.Tombstones) > 0 {
+		p.Section(fmt.Sprintf("Mirror deletions: %d", len(res.Tombstones)))
+		printPathList(p, tombstonePaths(res.Tombstones))
+		p.Line("  tombstones: %s", cfg.LocalPaths.TombstonesFile)
+	}
+	if len(affected) == 0 && len(res.LocalModified) == 0 {
+		p.Line("  No pull changes.")
 	}
 }
 
@@ -537,15 +613,18 @@ func runGdriveSyncInboxClear(cmd *cobra.Command, _ []string) error {
 func newGdriveSyncPushCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "push",
-		Short: "Send workspace to mirror under a propagation policy (default: create+update, no delete)",
+		Short: "Preview and send workspace changes to mirror under a propagation policy",
 		Long: `Push the workspace tree to the gdrive mirror under a propagation
 policy. The default policy '{create:true, update:true, delete:false}'
-copies new and modified files but never deletes mirror-side content.
+copies new and modified files but never deletes mirror-side content. By default
+push prints the upload plan and asks before applying.
 
 Flag --propagate= takes a comma-separated allowlist; absent items are
 disabled. Examples:
 
-  dot gdrive-sync push                              # default policy
+  dot gdrive-sync push                              # preview, then confirm
+  dot gdrive-sync push --mode=clean                 # apply only if no conflicts
+  dot gdrive-sync push --mode=force                 # overwrite with backups
   dot gdrive-sync push --propagate=create,update,delete   # full sync
   dot gdrive-sync push --propagate=create           # additive only
   dot gdrive-sync push --propagate=update           # in-place updates only
@@ -579,6 +658,10 @@ func runGdriveSyncPush(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	mode, err := gdriveSyncModeFrom(cmd)
+	if err != nil {
+		return err
+	}
 
 	release, lockErr := gdrivesync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
@@ -587,17 +670,79 @@ func runGdriveSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 	defer release()
 
-	p.Line("Pushing %s → %s (%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation)
+	p.Line("Push plan for %s → %s (%s, mode=%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation, mode)
 	if dryRun {
 		p.Line("  (dry-run — no changes)")
 	}
-	pushErr := gdrivesync.Push(cmd.Context(), runner, cfg, dryRun)
-	recordSyncResult(state, cfg, "push", pushErr, dryRun)
+	plan, err := gdrivesync.PlanPush(cfg)
+	if err != nil {
+		return fmt.Errorf("planning push: %w", err)
+	}
+	printPushPlan(p, plan)
+	if dryRun || (!plan.HasChanges() && !plan.HasConflicts()) {
+		return nil
+	}
+	if mode == gdrivesync.ModeClean && plan.HasConflicts() {
+		return fmt.Errorf("push refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
+	}
+	if mode == gdrivesync.ModeManual {
+		yes, _ := cmd.Flags().GetBool("yes")
+		confirmed, err := ui.Confirm("Apply this push plan?", yes)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			p.Line("Aborted.")
+			return nil
+		}
+	}
+	pushErr := gdrivesync.Push(cmd.Context(), runner, cfg, false)
+	recordSyncResult(state, cfg, "push", pushErr, false)
 	if pushErr != nil {
 		return fmt.Errorf("push failed: %w", pushErr)
 	}
 	p.Line("✓ Push complete.")
 	return nil
+}
+
+func printPushPlan(p *Printer, plan *gdrivesync.PushPlan) {
+	if plan == nil {
+		return
+	}
+	affected := affectedDirsFromLists(plan.Creates, plan.Updates, plan.Deletes, pushConflictPaths(plan.Conflicts))
+	if len(affected) > 0 {
+		p.Section("Affected folders")
+		printPathList(p, affected)
+	}
+	if len(plan.Creates) > 0 {
+		p.Section(fmt.Sprintf("Uploads: %d", len(plan.Creates)))
+		printPathList(p, plan.Creates)
+	}
+	if len(plan.Updates) > 0 {
+		p.Section(fmt.Sprintf("Updates: %d", len(plan.Updates)))
+		printPathList(p, plan.Updates)
+	}
+	if len(plan.Deletes) > 0 {
+		p.Section(fmt.Sprintf("Deletes: %d", len(plan.Deletes)))
+		printPathList(p, plan.Deletes)
+	}
+	if len(plan.SkippedPolicy) > 0 {
+		p.Section(fmt.Sprintf("Skipped by propagation policy: %d", len(plan.SkippedPolicy)))
+		printPathList(p, plan.SkippedPolicy)
+	}
+	if len(plan.Conflicts) > 0 {
+		p.Section(fmt.Sprintf("Drive conflicts: %d", len(plan.Conflicts)))
+		for _, c := range plan.Conflicts {
+			reason := c.Reason
+			if reason == "" {
+				reason = "local and mirror differ"
+			}
+			p.Line("  !  %s — %s", c.RelPath, reason)
+		}
+	}
+	if len(affected) == 0 && len(plan.SkippedPolicy) == 0 {
+		p.Line("  No push changes.")
+	}
 }
 
 // parsePropagateFlag parses the --propagate= comma-separated allowlist.
@@ -632,6 +777,86 @@ func parsePropagateFlag(value string) (gdrivesync.PropagationPolicy, error) {
 		return p, fmt.Errorf("must list at least one of create,update,delete")
 	}
 	return p, nil
+}
+
+func gdriveSyncModeFrom(cmd *cobra.Command) (gdrivesync.RunMode, error) {
+	raw, _ := cmd.Flags().GetString("mode")
+	mode, err := gdrivesync.ParseRunMode(raw)
+	if err != nil {
+		return "", fmt.Errorf("--mode: %w", err)
+	}
+	return mode, nil
+}
+
+func printPathList(p *Printer, paths []string) {
+	for _, path := range paths {
+		p.Line("  -  %s", path)
+	}
+}
+
+func affectedDirsFromLists(groups ...[]string) []string {
+	seen := map[string]struct{}{}
+	for _, group := range groups {
+		for _, rel := range group {
+			dir := filepath.ToSlash(filepath.Dir(rel))
+			if dir == "." || dir == "/" {
+				dir = "."
+			}
+			seen[dir] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for dir := range seen {
+		out = append(out, dir)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func differenceStrings(all, subtract []string) []string {
+	if len(all) == 0 {
+		return nil
+	}
+	remove := map[string]struct{}{}
+	for _, s := range subtract {
+		remove[s] = struct{}{}
+	}
+	out := make([]string, 0, len(all))
+	for _, s := range all {
+		if _, ok := remove[s]; ok {
+			continue
+		}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func pullConflictPaths(conflicts []gdrivesync.PullConflict) []string {
+	out := make([]string, 0, len(conflicts))
+	for _, c := range conflicts {
+		out = append(out, c.RelPath)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func pushConflictPaths(conflicts []gdrivesync.PushConflict) []string {
+	out := make([]string, 0, len(conflicts))
+	for _, c := range conflicts {
+		out = append(out, c.RelPath)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func tombstonePaths(tombstones []gdrivesync.Tombstone) []string {
+	out := make([]string, 0, len(tombstones))
+	for _, t := range tombstones {
+		out = append(out, t.RelPath)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ── status ───────────────────────────────────────────────────────────────
@@ -678,13 +903,19 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Paused", "no")
 	}
 	p.KV("Propagation", st.Propagation.String())
-	p.KV("Push interval", formatInterval(st.Interval))
-	p.KV("Push scheduler", st.SchedulerState.String())
-	if st.PullInterval > 0 {
-		p.KV("Pull+intake interval", formatInterval(st.PullInterval))
-		p.KV("Pull+intake scheduler", st.IntakeSchedulerState.String())
+	if st.Interval > 0 {
+		p.KV("Push interval", formatInterval(st.Interval))
+		p.KV("Push mode", st.PushMode.String())
+		p.KV("Push scheduler", st.SchedulerState.String())
 	} else {
-		p.KV("Pull+intake scheduler", "(off — `dot gdrive-sync setup --pull-interval=DUR` to enable)")
+		p.KV("Push scheduler", "(off — `dot gdrive-sync setup --push-interval=DUR` to enable)")
+	}
+	if st.PullInterval > 0 {
+		p.KV("Pull interval", formatInterval(st.PullInterval))
+		p.KV("Pull mode", st.PullMode.String())
+		p.KV("Pull scheduler", st.IntakeSchedulerState.String())
+	} else {
+		p.KV("Pull scheduler", "(off — `dot gdrive-sync setup --pull-interval=DUR` to enable)")
 	}
 	if st.Propagation.Delete {
 		p.KV("Max delete", fmt.Sprintf("%d", st.MaxDelete))
@@ -844,7 +1075,11 @@ func runGdriveSyncResume(cmd *cobra.Command, _ []string) error {
 		p.Line("gdrive-sync was not paused.")
 	}
 
-	// If the scheduler is installed, reattach it so periodic runs resume.
+	if cfg.Interval == 0 && cfg.PullInterval == 0 {
+		p.Line("scheduler remains off — run `dot gdrive-sync setup --push-interval=DUR` or `--pull-interval=DUR` to enable.")
+		return nil
+	}
+	// If the scheduler is configured and installed, reattach it so periodic runs resume.
 	sched, _, err := gdriveScheduler(cfg, runner)
 	if err != nil {
 		return nil // state save succeeded; scheduler is best-effort
@@ -905,22 +1140,25 @@ func runGdriveSyncPause(cmd *cobra.Command, _ []string) error {
 func newGdriveSyncSetupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Install rsync (if missing) and deploy gdrive-sync schedulers",
+		Short: "Install rsync (if missing) and manage opt-in gdrive-sync schedulers",
 		Long: `One-time setup. Verifies rsync is available (offers to install via brew/apt
-if not), then deploys the platform's user-scheduler (launchd LaunchAgent on
-macOS, systemd user-timer on Linux) to run ` + "`dot gdrive-sync push`" + ` every
-Interval seconds (default 300).
+if not), then configures the platform's user-scheduler (launchd LaunchAgent on
+macOS, systemd user-timer on Linux). Automatic sync is off by default; pass an
+interval flag to opt in.
 
-  --pull-interval=DUR    Also deploy a parallel pull+intake scheduler that runs
-                         ` + "`dot gdrive-sync intake`" + ` every DUR (e.g. 15m, 1h).
-                         Pass 0 (or omit) to skip; pass --pull-interval=0
-                         to remove an existing pull+intake unit.
+  --push-interval=DUR    Deploy automatic ` + "`dot gdrive-sync push --mode=MODE`" + `.
+  --pull-interval=DUR    Deploy automatic ` + "`dot gdrive-sync pull --mode=MODE`" + `.
+  --push-mode=MODE       Automatic push mode: clean or force (default clean).
+  --pull-mode=MODE       Automatic intake mode: clean or force (default clean).
 
 Idempotent — re-run safely after an interval change to reload the unit.`,
 		RunE:         runGdriveSyncSetup,
 		SilenceUsage: true,
 	}
-	cmd.Flags().String("pull-interval", "", "deploy pull+intake scheduler at this cadence (e.g. 15m, 1h, 0 to remove)")
+	cmd.Flags().String("push-interval", "", "deploy push scheduler at this cadence (e.g. 15m, 1h, 0 to remove)")
+	cmd.Flags().String("pull-interval", "", "deploy pull scheduler at this cadence (e.g. 15m, 1h, 0 to remove)")
+	cmd.Flags().String("push-mode", gdrivesync.ModeClean.String(), "automatic push mode: clean or force")
+	cmd.Flags().String("pull-mode", gdrivesync.ModeClean.String(), "automatic intake mode: clean or force")
 	return cmd
 }
 
@@ -938,17 +1176,35 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 		p.Line("(dry-run — no changes)")
 	}
 
-	// 0. Resolve --pull-interval flag (if passed) into cfg.PullInterval
-	//    and persist into LocalConfig before installing the scheduler.
+	pushInterval, pullInterval := 0, 0
+	if cmd.Flags().Changed("push-interval") {
+		raw, _ := cmd.Flags().GetString("push-interval")
+		seconds, err := parseIntervalFlag(raw)
+		if err != nil {
+			return fmt.Errorf("--push-interval: %w", err)
+		}
+		pushInterval = seconds
+	}
 	if cmd.Flags().Changed("pull-interval") {
 		raw, _ := cmd.Flags().GetString("pull-interval")
-		seconds, err := parsePullIntervalFlag(raw)
+		seconds, err := parseIntervalFlag(raw)
 		if err != nil {
 			return fmt.Errorf("--pull-interval: %w", err)
 		}
-		if err := setLocalPullInterval(cfg, seconds); err != nil {
-			return fmt.Errorf("saving pull interval: %w", err)
-		}
+		pullInterval = seconds
+	}
+	pushModeRaw, _ := cmd.Flags().GetString("push-mode")
+	pushMode, err := parseAutomaticModeFlag(pushModeRaw)
+	if err != nil {
+		return fmt.Errorf("--push-mode: %w", err)
+	}
+	pullModeRaw, _ := cmd.Flags().GetString("pull-mode")
+	pullMode, err := parseAutomaticModeFlag(pullModeRaw)
+	if err != nil {
+		return fmt.Errorf("--pull-mode: %w", err)
+	}
+	if err := setLocalSchedule(cfg, pushInterval, pullInterval, pushMode, pullMode, dryRun); err != nil {
+		return fmt.Errorf("saving scheduler config: %w", err)
 	}
 
 	// 1. Check / install rsync
@@ -975,8 +1231,8 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 		p.Line("  ✓ rsync installed (%s)", ver)
 	}
 
-	// 2. Deploy scheduler(s) — push always, intake when PullInterval > 0.
-	p.Line("Deploying auto-sync scheduler...")
+	// 2. Deploy scheduler(s) only when explicitly enabled.
+	p.Line("Configuring opt-in scheduler...")
 	sched, paths, err := gdriveScheduler(cfg, runner)
 	if err != nil {
 		return err
@@ -984,12 +1240,16 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 	if err := sched.Install(ctx); err != nil {
 		return fmt.Errorf("installing scheduler: %w", err)
 	}
-	p.Line("  ✓ push unit installed (interval: %s)", formatInterval(cfg.Interval))
-	p.Line("  unit: %s", scheduleUnitLabel(paths))
-	if cfg.PullInterval > 0 {
-		p.Line("  ✓ pull+intake unit installed (interval: %s)", formatInterval(cfg.PullInterval))
+	if cfg.Interval > 0 {
+		p.Line("  ✓ push unit installed (interval: %s, mode: %s)", formatInterval(cfg.Interval), cfg.PushMode)
+		p.Line("  unit: %s", scheduleUnitLabel(paths))
 	} else {
-		p.Line("  (no pull+intake scheduler — pass --pull-interval=DUR to enable)")
+		p.Line("  (push scheduler off — pass --push-interval=DUR to enable)")
+	}
+	if cfg.PullInterval > 0 {
+		p.Line("  ✓ pull unit installed (interval: %s, mode: %s)", formatInterval(cfg.PullInterval), cfg.PullMode)
+	} else {
+		p.Line("  (pull scheduler off — pass --pull-interval=DUR to enable)")
 	}
 	p.Line("  log:  %s", cfg.LogFile)
 
@@ -998,14 +1258,14 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 	if cfg.Paused {
 		p.Line("  Paused gate is set — run `dot gdrive-sync resume` to start syncing.")
 	} else {
-		p.Line("  Run `dot gdrive-sync push` for an immediate push, or wait for the timer.")
+		p.Line("  Run `dot gdrive-sync push` or `dot gdrive-sync pull` when you want to sync manually.")
 	}
 	return nil
 }
 
-// parsePullIntervalFlag accepts a Go duration string ("15m", "1h"),
+// parseIntervalFlag accepts a Go duration string ("15m", "1h"),
 // a bare integer (seconds), or "0" to disable. Returns seconds.
-func parsePullIntervalFlag(raw string) (int, error) {
+func parseIntervalFlag(raw string) (int, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {
 		return 0, nil
@@ -1028,9 +1288,24 @@ func parsePullIntervalFlag(raw string) (int, error) {
 	return seconds, nil
 }
 
-// setLocalPullInterval mutates LocalConfig.PullInterval, persists, and
+func parsePullIntervalFlag(raw string) (int, error) {
+	return parseIntervalFlag(raw)
+}
+
+func parseAutomaticModeFlag(raw string) (gdrivesync.RunMode, error) {
+	mode, err := gdrivesync.ParseRunMode(raw)
+	if err != nil {
+		return "", err
+	}
+	if mode == gdrivesync.ModeManual {
+		return "", fmt.Errorf("manual mode cannot be used for automatic schedulers")
+	}
+	return mode, nil
+}
+
+// setLocalSchedule mutates LocalConfig scheduler settings, persists, and
 // keeps cfg in sync.
-func setLocalPullInterval(cfg *gdrivesync.Config, seconds int) error {
+func setLocalSchedule(cfg *gdrivesync.Config, pushInterval, pullInterval int, pushMode, pullMode gdrivesync.RunMode, dryRun bool) error {
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("local paths unresolved")
 	}
@@ -1041,11 +1316,19 @@ func setLocalPullInterval(cfg *gdrivesync.Config, seconds int) error {
 	if !ok {
 		local = &gdrivesync.LocalConfig{Propagation: gdrivesync.DefaultPropagationPolicy()}
 	}
-	local.PullInterval = seconds
-	if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
-		return err
+	local.Interval = pushInterval
+	local.PullInterval = pullInterval
+	local.PushMode = pushMode
+	local.PullMode = pullMode
+	if !dryRun {
+		if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
+			return err
+		}
 	}
-	cfg.PullInterval = seconds
+	cfg.Interval = pushInterval
+	cfg.PullInterval = pullInterval
+	cfg.PushMode = pushMode
+	cfg.PullMode = pullMode
 	return nil
 }
 

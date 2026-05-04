@@ -21,8 +21,7 @@ const (
 )
 
 // SchedulerKind selects which periodic action a Scheduler call targets.
-// Push is the always-on default; Intake runs tracked pull + new-file intake and
-// is opt-in via PullInterval > 0.
+// Push and intake are both opt-in via Interval/PullInterval > 0.
 type SchedulerKind int
 
 const (
@@ -33,7 +32,7 @@ const (
 // Action returns the gdrive-sync subcommand the unit should invoke.
 func (k SchedulerKind) Action() string {
 	if k == SchedulerKindIntake {
-		return "intake"
+		return "pull"
 	}
 	return "push"
 }
@@ -66,7 +65,7 @@ func (k SchedulerKind) SystemdTimerName() string {
 // systemd units (and used for log/status banners).
 func (k SchedulerKind) Description() string {
 	if k == SchedulerKindIntake {
-		return "gdrive-sync pull+intake (tracked payload restore + inbox/gdrive staging)"
+		return "gdrive-sync pull (baseline-tracked payload restore)"
 	}
 	return "gdrive-sync push (workspace → mirror)"
 }
@@ -101,6 +100,7 @@ type SchedulerTemplateData struct {
 	// distinct labels/actions so push and intake units don't collide.
 	Label       string // launchd Label
 	Action      string // gdrive-sync subcommand to run
+	Mode        string // non-interactive run mode (clean|force)
 	Description string // systemd Description= line
 	ServiceName string // systemd Unit= reference (timer → service)
 }
@@ -128,18 +128,18 @@ func NewScheduler(runner *exec.Runner, paths *Paths, cfg *Config, engine *templa
 	return &Scheduler{Runner: runner, Paths: paths, Config: cfg, Engine: engine}
 }
 
-// Install installs the push unit always; the intake unit is installed
-// when cfg.PullInterval > 0 and uninstalled otherwise. Idempotent.
+// Install installs only explicitly enabled units. Idempotent.
 func (s *Scheduler) Install(ctx context.Context) error {
-	if err := s.InstallKind(ctx, SchedulerKindPush); err != nil {
+	if s.Config.Interval > 0 {
+		if err := s.InstallKind(ctx, SchedulerKindPush); err != nil {
+			return err
+		}
+	} else if err := s.UninstallKind(ctx, SchedulerKindPush); err != nil {
 		return err
 	}
 	if s.Config.PullInterval > 0 {
 		return s.InstallKind(ctx, SchedulerKindIntake)
 	}
-	// Operator may have flipped pull_interval to 0 (or removed the
-	// field) — drop a previously installed intake unit so the system
-	// reflects current config.
 	return s.UninstallKind(ctx, SchedulerKindIntake)
 }
 
@@ -168,8 +168,7 @@ func (s *Scheduler) Resume(ctx context.Context) error {
 	return s.ResumeKind(ctx, SchedulerKindIntake)
 }
 
-// State reports the push unit's status — the always-on default that
-// status displays headline. Use StateKind(ctx, SchedulerKindIntake)
+// State reports the push unit's status. Use StateKind(ctx, SchedulerKindIntake)
 // for the optional intake unit's state.
 func (s *Scheduler) State(ctx context.Context) SchedulerState {
 	return s.StateKind(ctx, SchedulerKindPush)
@@ -184,8 +183,13 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 		dotfilesPath, _ = osexec.LookPath("dot")
 	}
 	interval := s.Config.Interval
+	mode := s.Config.PushMode
 	if kind == SchedulerKindIntake {
 		interval = s.Config.PullInterval
+		mode = s.Config.PullMode
+	}
+	if mode == "" {
+		mode = ModeClean
 	}
 	return SchedulerTemplateData{
 		DotfilesPath: dotfilesPath,
@@ -193,6 +197,7 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 		Interval:     interval,
 		Label:        kind.LaunchdLabel(),
 		Action:       kind.Action(),
+		Mode:         mode.String(),
 		Description:  kind.Description(),
 		ServiceName:  kind.SystemdServiceName(),
 	}

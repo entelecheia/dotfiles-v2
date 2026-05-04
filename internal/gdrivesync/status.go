@@ -27,9 +27,11 @@ type Status struct {
 	LockHeld             bool   // someone has gdrive-sync.lock right now
 	MaxDelete            int
 	Interval             int
-	PullInterval         int            // 0 → no pull+intake scheduler
+	PullInterval         int            // 0 → no pull scheduler
+	PushMode             RunMode        // automatic push mode
+	PullMode             RunMode        // automatic intake mode
 	SchedulerState       SchedulerState // push unit
-	IntakeSchedulerState SchedulerState // intake unit (if installed)
+	IntakeSchedulerState SchedulerState // pull unit (if installed)
 	Conflicts            []ConflictEntry
 	Shared               []SharedEntry
 }
@@ -65,6 +67,8 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		MaxDelete:       cfg.MaxDelete,
 		Interval:        cfg.Interval,
 		PullInterval:    cfg.PullInterval,
+		PushMode:        cfg.PushMode,
+		PullMode:        cfg.PullMode,
 	}
 	if sched != nil {
 		s.SchedulerState = sched.StateKind(ctx, SchedulerKindPush)
@@ -132,7 +136,7 @@ func printNextSteps(info *PreflightInfo) {
 	fmt.Printf("     du -sh %s %s\n", info.LocalPath, info.MirrorPath)
 	fmt.Printf("     ls -la %s/inbox\n", info.LocalPath)
 	fmt.Printf("     test ! -L %s/.gdrive\n", info.LocalPath)
-	fmt.Println("  2. When happy, activate push-first sync:")
+	fmt.Println("  2. When happy, clear the paused gate:")
 	fmt.Println("     dot gdrive-sync resume")
 	fmt.Println("  3. Sanity check (should be a no-op):")
 	fmt.Println("     dot gdrive-sync push --dry-run")

@@ -206,6 +206,8 @@ func TestLocalConfig_RoundTrip(t *testing.T) {
 		MaxDelete:      500,
 		Interval:       600,
 		PullInterval:   900,
+		PushMode:       ModeClean,
+		PullMode:       ModeForce,
 		Paused:         true,
 		SharedExcludes: []string{"projects/foo", "projects/bar"},
 	}
@@ -225,6 +227,8 @@ func TestLocalConfig_RoundTrip(t *testing.T) {
 		got.MaxDelete != original.MaxDelete ||
 		got.Interval != original.Interval ||
 		got.PullInterval != original.PullInterval ||
+		got.PushMode != original.PushMode ||
+		got.PullMode != original.PullMode ||
 		got.Paused != original.Paused ||
 		len(got.SharedExcludes) != len(original.SharedExcludes) {
 		t.Errorf("round-trip mismatch:\n  got %+v\n  want %+v", got, original)
@@ -270,8 +274,11 @@ func TestMigrateFromGlobal_PopulatesLocalLayout(t *testing.T) {
 		t.Fatalf("MigrateFromGlobal: %v", err)
 	}
 	// Migrated fields:
-	if cfg.MirrorPath != "/legacy/mirror" || cfg.MaxDelete != 250 || cfg.Interval != 600 || !cfg.Paused {
+	if cfg.MirrorPath != "/legacy/mirror" || cfg.MaxDelete != 250 || cfg.Interval != 0 || !cfg.Paused {
 		t.Errorf("migrated fields wrong: %+v", cfg)
+	}
+	if cfg.PushMode != ModeClean || cfg.PullMode != ModeClean {
+		t.Errorf("migrated modes wrong: %+v", cfg)
 	}
 	if len(cfg.SharedExcludes) != 1 || cfg.SharedExcludes[0] != "projects/legacy" {
 		t.Errorf("SharedExcludes not migrated: %+v", cfg.SharedExcludes)

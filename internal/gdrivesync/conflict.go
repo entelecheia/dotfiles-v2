@@ -44,6 +44,12 @@ func (c *ConflictDir) PushBackupRel() string {
 	return filepath.Join(conflictsDirName, c.Timestamp, backupSubFromWorkspace)
 }
 
+// PullLocalBackupRel returns the backup path for a pull that overwrites a
+// local file after the operator selected source-wins semantics.
+func (c *ConflictDir) PullLocalBackupRel() string {
+	return filepath.Join(conflictsDirName, c.Timestamp, backupSubFromWorkspace)
+}
+
 // ConflictEntry summarizes one timestamped conflict directory under a
 // tree's .sync-conflicts/ folder.
 type ConflictEntry struct {
