@@ -19,9 +19,6 @@ const (
 	defaultLocalRel    = "workspace/work"
 	defaultMirrorRel   = "gdrive-workspace/work"
 	defaultMaxDelete   = 1000
-	defaultInterval    = 0 // automatic gdrive-sync is opt-in
-	intervalMin        = 60
-	intervalMax        = 86400
 	logRotateMaxLines  = 2000
 	logRotateKeepLines = 1000
 )
@@ -125,34 +122,7 @@ func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
 		maxDelete = defaultMaxDelete
 	}
 
-	interval := localCfg.Interval
-	switch {
-	case interval <= 0:
-		interval = 0
-	case interval < intervalMin:
-		interval = intervalMin
-	case interval > intervalMax:
-		interval = intervalMax
-	}
-
-	pullInterval := localCfg.PullInterval
-	if pullInterval > 0 {
-		switch {
-		case pullInterval < intervalMin:
-			pullInterval = intervalMin
-		case pullInterval > intervalMax:
-			pullInterval = intervalMax
-		}
-	}
-
-	pushMode, err := normalizeAutomaticMode(localCfg.PushMode)
-	if err != nil {
-		pushMode = ModeClean
-	}
-	pullMode, err := normalizeAutomaticMode(localCfg.PullMode)
-	if err != nil {
-		pullMode = ModeClean
-	}
+	schedule := ScheduleSettingsFromLocalConfig(localCfg).NormalizeLenient(nil)
 
 	policy := localCfg.Propagation
 	if err := policy.Validate(); err != nil {
@@ -173,10 +143,10 @@ func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
 		LockDir:        systemPaths.LockDir,
 		RsyncPath:      rsyncPath,
 		MaxDelete:      maxDelete,
-		Interval:       interval,
-		PullInterval:   pullInterval,
-		PushMode:       pushMode,
-		PullMode:       pullMode,
+		Interval:       schedule.Interval,
+		PullInterval:   schedule.PullInterval,
+		PushMode:       schedule.PushMode,
+		PullMode:       schedule.PullMode,
 		Propagation:    policy,
 		Paused:         localCfg.Paused,
 		LocalPaths:     localPaths,

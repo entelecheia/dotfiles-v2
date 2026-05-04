@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -46,7 +47,7 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	if err := root.GenZshCompletion(&zshBuf); err != nil {
 		return changed, fmt.Errorf("generating zsh completion: %w", err)
 	}
-	zshScript := patchZshForAlias(zshBuf.Bytes(), "dotfiles")
+	zshScript := patchZshForAliases(zshBuf.Bytes(), root.Name(), root.Aliases)
 	zshFile := filepath.Join(dir, "_dot")
 	written, err := fileutil.EnsureFile(runner, zshFile, zshScript, 0644)
 	if err != nil {
@@ -61,7 +62,7 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	if err := root.GenBashCompletionV2(&bashBuf, true); err != nil {
 		return changed, fmt.Errorf("generating bash completion: %w", err)
 	}
-	bashScript := patchBashForAlias(bashBuf.Bytes(), "dotfiles")
+	bashScript := patchBashForAliases(bashBuf.Bytes(), root.Name(), root.Aliases)
 	bashFile := filepath.Join(dir, "dot.bash")
 	written, err = fileutil.EnsureFile(runner, bashFile, bashScript, 0644)
 	if err != nil {
@@ -84,39 +85,69 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	return changed, nil
 }
 
-// patchZshForAlias rewrites the `compdef _dot dot` directive so the
-// same handler also fires for the alias name. Cobra's standard output
+// completionAliases returns the root command aliases that should receive
+// shell completion registration. The list is derived from root.Aliases so
+// command alias changes have one source of truth.
+func completionAliases(command string, aliases []string) []string {
+	seen := map[string]bool{command: true}
+	out := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		alias = strings.TrimSpace(alias)
+		if alias == "" || seen[alias] {
+			continue
+		}
+		seen[alias] = true
+		out = append(out, alias)
+	}
+	return out
+}
+
+// patchZshForAliases rewrites the `compdef _dot dot` directive so the
+// same handler also fires for alias names. Cobra's standard output
 // binds only to root.Name(); without this, `dotfiles <Tab>` does
 // nothing while `dot <Tab>` works.
-func patchZshForAlias(script []byte, alias string) []byte {
-	old := []byte("\ncompdef _dot dot\n")
+func patchZshForAliases(script []byte, command string, aliases []string) []byte {
+	aliases = completionAliases(command, aliases)
+	if len(aliases) == 0 {
+		return script
+	}
+	handler := "_" + command
+	old := []byte(fmt.Sprintf("\ncompdef %s %s\n", handler, command))
 	if !bytes.Contains(script, old) {
 		// Cobra format changed; leave the script as-is rather than corrupt it.
 		return script
 	}
-	replacement := []byte("\ncompdef _dot dot " + alias + "\n")
+	names := append([]string{handler, command}, aliases...)
+	replacement := []byte("\ncompdef " + strings.Join(names, " ") + "\n")
 	out := bytes.Replace(script, old, replacement, 1)
 
-	// Also fix the `#compdef dot` header so both names are recognized
+	// Also fix the `#compdef dot` header so all names are recognized
 	// when the file is autoloaded standalone.
-	headerOld := []byte("#compdef dot\n")
-	headerNew := []byte("#compdef dot " + alias + "\n")
+	headerOld := []byte("#compdef " + command + "\n")
+	headerNames := append([]string{command}, aliases...)
+	headerNew := []byte("#compdef " + strings.Join(headerNames, " ") + "\n")
 	out = bytes.Replace(out, headerOld, headerNew, 1)
 	return out
 }
 
-// patchBashForAlias appends a second `complete` registration so the
-// alias name fires the same handler. Cobra v2 bash output ends with
+// patchBashForAliases appends extra `complete` registrations so alias
+// names fire the same handler. Cobra v2 bash output ends with
 // the registration block for the canonical name only.
-func patchBashForAlias(script []byte, alias string) []byte {
+func patchBashForAliases(script []byte, command string, aliases []string) []byte {
+	aliases = completionAliases(command, aliases)
+	if len(aliases) == 0 {
+		return script
+	}
+	aliasList := strings.Join(aliases, " ")
+	handler := "__start_" + strings.NewReplacer("-", "_", ":", "_").Replace(command)
 	addition := []byte(fmt.Sprintf(`
-# Register handler for alias `+"`%s`"+` so it tab-completes the same as dot.
+# Register handlers for aliases `+"`%s`"+` so they tab-complete the same as %s.
 if [[ $(type -t compopt) = "builtin" ]]; then
-    complete -o default -F __start_dot %s
+    complete -o default -F %s %s
 else
-    complete -o default -o nospace -F __start_dot %s
+    complete -o default -o nospace -F %s %s
 fi
-`, alias, alias, alias))
+`, aliasList, command, handler, aliasList, handler, aliasList))
 
 	// Insert before the trailing "ex:" mode-line so the file still
 	// looks tidy; if the marker isn't there, just append.

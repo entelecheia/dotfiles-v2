@@ -14,8 +14,8 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
-func TestPatchZshForAlias_AddsAliasToCompdef(t *testing.T) {
-	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles"}}
+func TestPatchZshForAliases_AddsRootAliasesToCompdef(t *testing.T) {
+	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles", "d"}}
 	root.AddCommand(&cobra.Command{Use: "apply"})
 
 	var buf bytes.Buffer
@@ -23,30 +23,30 @@ func TestPatchZshForAlias_AddsAliasToCompdef(t *testing.T) {
 		t.Fatalf("GenZshCompletion: %v", err)
 	}
 
-	patched := patchZshForAlias(buf.Bytes(), "dotfiles")
+	patched := patchZshForAliases(buf.Bytes(), root.Name(), root.Aliases)
 
-	if !bytes.Contains(patched, []byte("compdef _dot dot dotfiles\n")) {
+	if !bytes.Contains(patched, []byte("compdef _dot dot dotfiles d\n")) {
 		t.Errorf("patched script missing alias compdef line; got snippet:\n%s",
 			snippetAround(patched, "compdef"))
 	}
-	if !bytes.Contains(patched, []byte("#compdef dot dotfiles\n")) {
+	if !bytes.Contains(patched, []byte("#compdef dot dotfiles d\n")) {
 		t.Errorf("header missing alias; got snippet:\n%s", snippetAround(patched, "#compdef"))
 	}
 }
 
-func TestPatchZshForAlias_NoOpWhenMarkerAbsent(t *testing.T) {
+func TestPatchZshForAliases_NoOpWhenMarkerAbsent(t *testing.T) {
 	// If cobra ever changes its output format, the patcher must not corrupt
 	// the script — better to leave it as-is and ship slightly-degraded
 	// completion than break installation entirely.
 	weird := []byte("#! /bin/zsh\n# unfamiliar format\n")
-	out := patchZshForAlias(weird, "dotfiles")
+	out := patchZshForAliases(weird, "dot", []string{"dotfiles"})
 	if !bytes.Equal(weird, out) {
 		t.Errorf("patcher mutated script lacking the expected marker; got:\n%s", out)
 	}
 }
 
-func TestPatchBashForAlias_RegistersAliasComplete(t *testing.T) {
-	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles"}}
+func TestPatchBashForAliases_RegistersRootAliases(t *testing.T) {
+	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles", "d"}}
 	root.AddCommand(&cobra.Command{Use: "apply"})
 
 	var buf bytes.Buffer
@@ -54,8 +54,8 @@ func TestPatchBashForAlias_RegistersAliasComplete(t *testing.T) {
 		t.Fatalf("GenBashCompletionV2: %v", err)
 	}
 
-	patched := patchBashForAlias(buf.Bytes(), "dotfiles")
-	if !bytes.Contains(patched, []byte("complete -o default -F __start_dot dotfiles")) {
+	patched := patchBashForAliases(buf.Bytes(), root.Name(), root.Aliases)
+	if !bytes.Contains(patched, []byte("complete -o default -F __start_dot dotfiles d")) {
 		t.Errorf("patched bash completion missing alias registration; got tail:\n%s",
 			tailString(patched, 400))
 	}
@@ -66,6 +66,14 @@ func TestPatchBashForAlias_RegistersAliasComplete(t *testing.T) {
 	// Mode line must remain at the very end.
 	if !bytes.HasSuffix(bytes.TrimRight(patched, "\n"), []byte("filetype=sh")) {
 		t.Errorf("mode line not preserved at EOF; tail:\n%s", tailString(patched, 80))
+	}
+}
+
+func TestCompletionAliases_DedupesRootName(t *testing.T) {
+	got := completionAliases("dot", []string{"dotfiles", "dot", "", "dotfiles", "d"})
+	want := []string{"dotfiles", "d"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("completionAliases = %v, want %v", got, want)
 	}
 }
 

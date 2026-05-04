@@ -1,6 +1,7 @@
 package gdrivesync
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -235,25 +236,25 @@ func TestResolveConfig_IntervalDefaultsAndClamps(t *testing.T) {
 
 	t.Run("below min clamps up", func(t *testing.T) {
 		state := newIsolatedState(t)
-		seedLocalConfig(t, state, LocalConfig{Propagation: DefaultPropagationPolicy(), Interval: 5})
+		seedRawLocalConfig(t, state, "interval: 5\n")
 		cfg, err := ResolveConfig(state)
 		if err != nil {
 			t.Fatalf("ResolveConfig: %v", err)
 		}
-		if cfg.Interval != intervalMin {
-			t.Errorf("Interval = %d, want %d (clamped to min)", cfg.Interval, intervalMin)
+		if cfg.Interval != ScheduleIntervalMin {
+			t.Errorf("Interval = %d, want %d (clamped to min)", cfg.Interval, ScheduleIntervalMin)
 		}
 	})
 
 	t.Run("above max clamps down", func(t *testing.T) {
 		state := newIsolatedState(t)
-		seedLocalConfig(t, state, LocalConfig{Propagation: DefaultPropagationPolicy(), Interval: 200_000})
+		seedRawLocalConfig(t, state, "interval: 200000\n")
 		cfg, err := ResolveConfig(state)
 		if err != nil {
 			t.Fatalf("ResolveConfig: %v", err)
 		}
-		if cfg.Interval != intervalMax {
-			t.Errorf("Interval = %d, want %d (clamped to max)", cfg.Interval, intervalMax)
+		if cfg.Interval != ScheduleIntervalMax {
+			t.Errorf("Interval = %d, want %d (clamped to max)", cfg.Interval, ScheduleIntervalMax)
 		}
 	})
 
@@ -281,6 +282,18 @@ func seedLocalConfig(t *testing.T, state *config.UserState, local LocalConfig) {
 	}
 	if err := SaveLocalConfig(paths, &local); err != nil {
 		t.Fatalf("SaveLocalConfig: %v", err)
+	}
+}
+
+func seedRawLocalConfig(t *testing.T, state *config.UserState, extraYAML string) {
+	t.Helper()
+	paths := ResolveLocalPaths(state.Modules.GdriveSync.LocalPath)
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("EnsureLocalLayout: %v", err)
+	}
+	body := "propagation:\n  create: true\n  update: true\n  delete: false\n" + extraYAML
+	if err := os.WriteFile(paths.ConfigFile, []byte(body), 0o644); err != nil {
+		t.Fatalf("write raw local config: %v", err)
 	}
 }
 

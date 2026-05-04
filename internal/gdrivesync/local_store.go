@@ -284,18 +284,10 @@ func LoadLocalConfig(paths *LocalPaths) (*LocalConfig, bool, error) {
 		fmt.Fprintf(os.Stderr, "warning: %s has invalid propagation (%v); using defaults\n", paths.ConfigFile, err)
 		cfg.Propagation = DefaultPropagationPolicy()
 	}
-	if cfg.PushMode != "" {
-		if _, err := normalizeAutomaticMode(cfg.PushMode); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s has invalid push_mode (%v); using clean\n", paths.ConfigFile, err)
-			cfg.PushMode = ModeClean
-		}
-	}
-	if cfg.PullMode != "" {
-		if _, err := normalizeAutomaticMode(cfg.PullMode); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s has invalid pull_mode (%v); using clean\n", paths.ConfigFile, err)
-			cfg.PullMode = ModeClean
-		}
-	}
+	schedule := ScheduleSettingsFromLocalConfig(&cfg).NormalizeLenient(func(field string, err error, fallback any) {
+		fmt.Fprintf(os.Stderr, "warning: %s has invalid %s (%v); using %v\n", paths.ConfigFile, field, err, fallback)
+	})
+	schedule.ApplyToLocalConfig(&cfg)
 	return &cfg, true, nil
 }
 
@@ -304,16 +296,11 @@ func SaveLocalConfig(paths *LocalPaths, cfg *LocalConfig) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid propagation policy: %w", err)
 	}
-	if cfg.PushMode != "" {
-		if _, err := normalizeAutomaticMode(cfg.PushMode); err != nil {
-			return fmt.Errorf("refusing to save invalid push_mode: %w", err)
-		}
+	schedule, err := ScheduleSettingsFromLocalConfig(cfg).Normalize()
+	if err != nil {
+		return fmt.Errorf("refusing to save invalid schedule config: %w", err)
 	}
-	if cfg.PullMode != "" {
-		if _, err := normalizeAutomaticMode(cfg.PullMode); err != nil {
-			return fmt.Errorf("refusing to save invalid pull_mode: %w", err)
-		}
-	}
+	schedule.ApplyToLocalConfig(cfg)
 	if err := os.MkdirAll(paths.StoreDir, 0755); err != nil {
 		return fmt.Errorf("creating %s: %w", paths.StoreDir, err)
 	}

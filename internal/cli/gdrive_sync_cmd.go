@@ -1168,12 +1168,19 @@ Idempotent — re-run safely after an interval change to reload the unit.`,
 }
 
 func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
-	_, cfg, runner, err := gdriveBootstrap(cmd)
+	yes, _ := cmd.Flags().GetBool("yes")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	var cfg *gdrivesync.Config
+	var runner *exec.Runner
+	var err error
+	if dryRun {
+		_, cfg, runner, err = gdriveBootstrapReadOnly(cmd)
+	} else {
+		_, cfg, runner, err = gdriveBootstrap(cmd)
+	}
 	if err != nil {
 		return err
 	}
-	yes, _ := cmd.Flags().GetBool("yes")
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	ctx := cmd.Context()
 	p := printerFrom(cmd)
 
@@ -1218,22 +1225,26 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 	if ok {
 		p.Line("  ✓ rsync installed (%s)", ver)
 	} else {
-		confirmed, err := ui.Confirm("rsync not found. Install it?", yes)
-		if err != nil {
-			return err
+		if dryRun {
+			p.Line("  ~ rsync not found; would install after confirmation")
+		} else {
+			confirmed, err := ui.Confirm("rsync not found. Install it?", yes)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				p.Line("Aborted.")
+				return nil
+			}
+			if err := rsync.InstallRsync(ctx, runner); err != nil {
+				return fmt.Errorf("installing rsync: %w", err)
+			}
+			ver, ok = rsync.CheckRsync(runner)
+			if !ok {
+				return fmt.Errorf("rsync not found in PATH after install")
+			}
+			p.Line("  ✓ rsync installed (%s)", ver)
 		}
-		if !confirmed {
-			p.Line("Aborted.")
-			return nil
-		}
-		if err := rsync.InstallRsync(ctx, runner); err != nil {
-			return fmt.Errorf("installing rsync: %w", err)
-		}
-		ver, ok = rsync.CheckRsync(runner)
-		if !ok {
-			return fmt.Errorf("rsync not found in PATH after install")
-		}
-		p.Line("  ✓ rsync installed (%s)", ver)
 	}
 
 	// 2. Deploy scheduler(s) only when explicitly enabled.
@@ -1241,6 +1252,23 @@ func runGdriveSyncSetup(cmd *cobra.Command, _ []string) error {
 	sched, paths, err := gdriveScheduler(cfg, runner)
 	if err != nil {
 		return err
+	}
+	if dryRun {
+		if cfg.Interval > 0 {
+			p.Line("  ~ would install push unit (interval: %s, mode: %s)", formatInterval(cfg.Interval), cfg.PushMode)
+			p.Line("  unit: %s", scheduleUnitLabel(paths))
+		} else {
+			p.Line("  ~ would ensure push scheduler is off")
+		}
+		if cfg.PullInterval > 0 {
+			p.Line("  ~ would install pull unit (interval: %s, mode: %s)", formatInterval(cfg.PullInterval), cfg.PullMode)
+		} else {
+			p.Line("  ~ would ensure pull scheduler is off")
+		}
+		p.Line("  log:  %s", cfg.LogFile)
+		p.Blank()
+		p.Line("✓ gdrive-sync setup dry-run complete.")
+		return nil
 	}
 	if err := sched.Install(ctx); err != nil {
 		return fmt.Errorf("installing scheduler: %w", err)
@@ -1287,8 +1315,8 @@ func parseIntervalFlag(raw string) (int, error) {
 		}
 		seconds = parsed
 	}
-	if seconds != 0 && (seconds < 60 || seconds > 86400) {
-		return 0, fmt.Errorf("must be 0 or 60..86400 seconds (got %d)", seconds)
+	if err := gdrivesync.ValidateScheduleInterval(seconds); err != nil {
+		return 0, err
 	}
 	return seconds, nil
 }
@@ -1302,10 +1330,7 @@ func parseAutomaticModeFlag(raw string) (gdrivesync.RunMode, error) {
 	if err != nil {
 		return "", err
 	}
-	if mode == gdrivesync.ModeManual {
-		return "", fmt.Errorf("manual mode cannot be used for automatic schedulers")
-	}
-	return mode, nil
+	return gdrivesync.NormalizeAutomaticMode(mode)
 }
 
 // setLocalSchedule mutates LocalConfig scheduler settings, persists, and
@@ -1314,6 +1339,15 @@ func setLocalSchedule(cfg *gdrivesync.Config, pushInterval, pullInterval int, pu
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("local paths unresolved")
 	}
+	schedule, err := (gdrivesync.ScheduleSettings{
+		Interval:     pushInterval,
+		PullInterval: pullInterval,
+		PushMode:     pushMode,
+		PullMode:     pullMode,
+	}).Normalize()
+	if err != nil {
+		return err
+	}
 	local, ok, err := gdrivesync.LoadLocalConfig(cfg.LocalPaths)
 	if err != nil {
 		return err
@@ -1321,19 +1355,16 @@ func setLocalSchedule(cfg *gdrivesync.Config, pushInterval, pullInterval int, pu
 	if !ok {
 		local = &gdrivesync.LocalConfig{Propagation: gdrivesync.DefaultPropagationPolicy()}
 	}
-	local.Interval = pushInterval
-	local.PullInterval = pullInterval
-	local.PushMode = pushMode
-	local.PullMode = pullMode
+	schedule.ApplyToLocalConfig(local)
 	if !dryRun {
 		if err := gdrivesync.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
 			return err
 		}
 	}
-	cfg.Interval = pushInterval
-	cfg.PullInterval = pullInterval
-	cfg.PushMode = pushMode
-	cfg.PullMode = pullMode
+	cfg.Interval = schedule.Interval
+	cfg.PullInterval = schedule.PullInterval
+	cfg.PushMode = schedule.PushMode
+	cfg.PullMode = schedule.PullMode
 	return nil
 }
 

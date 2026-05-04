@@ -205,8 +205,38 @@ func TestPullTracked_ConflictPreservesLocalUntilForced(t *testing.T) {
 	if string(localBody) != "v2-local" {
 		t.Errorf("local file overwritten during conflict: %q", localBody)
 	}
-	if _, err := os.Stat(res.Conflicts[0].BackupPath); !os.IsNotExist(err) {
-		t.Fatalf("non-forced conflict wrote backup unexpectedly: %v", err)
+	if res.Conflicts[0].BackupPath != "" {
+		t.Fatalf("non-forced conflict advertised backup path unexpectedly: %s", res.Conflicts[0].BackupPath)
+	}
+}
+
+func TestPullTracked_DirectoryConflictDoesNotAdvertiseMissingBackup(t *testing.T) {
+	f := newIntakeFixture(t)
+	rel := "shared/deck.pptx"
+	v1Mtime := f.writeMirror(rel, "v1")
+	f.seedBaseline(rel, "v1", v1Mtime)
+	if err := os.MkdirAll(filepath.Join(f.local, rel), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.mirror, rel), []byte("v2-drive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PullTracked(f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatalf("PullTracked: %v", err)
+	}
+	if len(res.Conflicts) != 1 || res.Conflicts[0].RelPath != rel {
+		t.Fatalf("Conflicts = %+v, want %s", res.Conflicts, rel)
+	}
+	if res.Conflicts[0].BackupPath != "" {
+		t.Fatalf("directory conflict advertised missing backup path: %s", res.Conflicts[0].BackupPath)
+	}
+	if !strings.Contains(res.Conflicts[0].Reason, "no backup was created") {
+		t.Fatalf("conflict reason should explain backup absence, got %q", res.Conflicts[0].Reason)
+	}
+	if fi, err := os.Stat(filepath.Join(f.local, rel)); err != nil || !fi.IsDir() {
+		t.Fatalf("local directory should remain untouched; stat=%v err=%v", fi, err)
 	}
 }
 

@@ -1,6 +1,11 @@
 package cli
 
-import "testing"
+import (
+	"os"
+	"testing"
+
+	"github.com/entelecheia/dotfiles-v2/internal/gdrivesync"
+)
 
 func TestParseIntervalFlag(t *testing.T) {
 	cases := []struct {
@@ -37,5 +42,20 @@ func TestParseAutomaticModeFlag(t *testing.T) {
 		if _, err := parseAutomaticModeFlag(raw); err == nil {
 			t.Fatalf("parseAutomaticModeFlag(%q) should fail", raw)
 		}
+	}
+}
+
+func TestSetLocalSchedule_DryRunDoesNotPersist(t *testing.T) {
+	paths := gdrivesync.ResolveLocalPaths(t.TempDir())
+	cfg := &gdrivesync.Config{LocalPaths: paths}
+
+	if err := setLocalSchedule(cfg, 600, 900, gdrivesync.ModeClean, gdrivesync.ModeForce, true); err != nil {
+		t.Fatalf("setLocalSchedule dry-run: %v", err)
+	}
+	if cfg.Interval != 600 || cfg.PullInterval != 900 || cfg.PushMode != gdrivesync.ModeClean || cfg.PullMode != gdrivesync.ModeForce {
+		t.Fatalf("dry-run should still update runtime cfg for planning, got %+v", cfg)
+	}
+	if _, err := os.Stat(paths.ConfigFile); !os.IsNotExist(err) {
+		t.Fatalf("dry-run should not write local config; stat err=%v", err)
 	}
 }

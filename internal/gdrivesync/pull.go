@@ -132,10 +132,9 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			continue
 		}
 		if localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {
-			backup := plannedPullLocalBackup(local, rel, conflict)
 			result.Conflicts = append(result.Conflicts, PullConflict{
-				RelPath: rel, LocalPath: localAbs, MirrorPath: mirrorAbs, BackupPath: backup,
-				Reason: "local path is a directory or symlink",
+				RelPath: rel, LocalPath: localAbs, MirrorPath: mirrorAbs,
+				Reason: "local path is a directory or symlink; no backup was created",
 			})
 			continue
 		}
@@ -167,8 +166,9 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			baselineChanged = true
 			result.SkippedBase = append(result.SkippedBase, rel)
 		default:
-			backup := plannedPullLocalBackup(local, rel, conflict)
+			backup := ""
 			if opts.Force {
+				backup = plannedPullLocalBackup(local, rel, conflict)
 				if err := backupLocalBeforePull(localAbs, backup, opts.DryRun); err != nil {
 					return nil, fmt.Errorf("backup local %s: %w", rel, err)
 				}
