@@ -536,6 +536,51 @@ caches, logs, sessions, histories, telemetry, sqlite DBs, plugin caches, and
 generated/system skill bundles by default. Use `--include-auth` only when you
 explicitly want known auth/local-secret files included.
 
+**AI agents SSOT**
+
+`dot ai agents` manages one shared global instruction file at
+`~/.config/dotfiles/agents/AGENTS.md` and copy-deploys rendered content to each
+tool's expected global path:
+
+| Tool | Target |
+|------|--------|
+| Claude Code | `~/.claude/CLAUDE.md` |
+| Codex CLI | `~/.codex/AGENTS.md` |
+| Cursor | `~/.cursor/AGENTS.md` |
+| Gemini CLI | `~/.gemini/GEMINI.md` |
+| GitHub Copilot | `~/.config/github-copilot/AGENTS.md` |
+| Aider | `~/.aider.conf.md` |
+
+The deploy model is copy-based, not symlink-based. The SSOT stays authoritative,
+but local tool files can be inspected or edited without immediately mutating the
+source file. Optional per-tool addenda live under
+`~/.config/dotfiles/agents/overlays/<tool>.md` and are appended only when that
+tool is rendered.
+
+```bash
+# bootstrap from an existing tool file
+dot ai agents init --from-current claude
+
+# or run the section-based assistant from scratch
+dot ai agents author
+
+# review
+dot ai agents show
+dot ai agents show --rendered codex --with-line-numbers
+dot ai agents diff --tool codex
+
+# deploy to Claude, Codex, Cursor, plus optional tools that already exist
+dot ai agents apply
+dot ai agents apply --tool claude,codex
+```
+
+`dot ai backup`, `restore`, `export`, and `import` include the SSOT directory
+and the rendered tool targets. `dot ai restore --reapply-agents` restores the
+snapshot and then reapplies the restored SSOT to selected tool targets.
+Automatic deployment during `dot apply` is off by default; enable
+`modules.ai.agents_ssot: true` only when you want `dot apply` to re-render
+agent targets.
+
 ### `dot ws` — Dual-Workspace Folder Ops
 
 Operate on both `~/workspace/work/` (git-tracked text) and `~/gdrive-workspace/work/` (Drive binaries) simultaneously to keep their folder structures in sync.
