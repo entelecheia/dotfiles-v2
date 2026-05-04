@@ -124,7 +124,7 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	} else {
 		p.Line("%d/%d modules satisfied, %d pending (%d change(s)).",
 			okCount, okCount+pendingCount, pendingCount, totalChanges)
-		p.Line("Run 'dotfiles apply' to apply pending changes.")
+		p.Line("Run 'dot apply' to apply pending changes.")
 	}
 
 	return nil

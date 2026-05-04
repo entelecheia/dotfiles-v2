@@ -3,10 +3,10 @@
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
-BIN     := bin/dotfiles
+BIN     := bin/dot
 
 build:
-	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/dotfiles/
+	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/dot/
 
 test:
 	go test ./... -race -count=1
@@ -19,5 +19,5 @@ clean:
 
 install: build
 	@mkdir -p $(HOME)/.local/bin
-	cp $(BIN) $(HOME)/.local/bin/dotfiles
-	ln -sf $(HOME)/.local/bin/dotfiles $(HOME)/.local/bin/dot
+	cp $(BIN) $(HOME)/.local/bin/dot
+	ln -sf $(HOME)/.local/bin/dot $(HOME)/.local/bin/dotfiles

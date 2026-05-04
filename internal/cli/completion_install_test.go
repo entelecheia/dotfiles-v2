@@ -15,7 +15,7 @@ import (
 )
 
 func TestPatchZshForAlias_AddsAliasToCompdef(t *testing.T) {
-	root := &cobra.Command{Use: "dotfiles", Aliases: []string{"dot"}}
+	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles"}}
 	root.AddCommand(&cobra.Command{Use: "apply"})
 
 	var buf bytes.Buffer
@@ -23,9 +23,9 @@ func TestPatchZshForAlias_AddsAliasToCompdef(t *testing.T) {
 		t.Fatalf("GenZshCompletion: %v", err)
 	}
 
-	patched := patchZshForAlias(buf.Bytes(), "dot")
+	patched := patchZshForAlias(buf.Bytes(), "dotfiles")
 
-	if !bytes.Contains(patched, []byte("compdef _dotfiles dot dotfiles\n")) {
+	if !bytes.Contains(patched, []byte("compdef _dot dot dotfiles\n")) {
 		t.Errorf("patched script missing alias compdef line; got snippet:\n%s",
 			snippetAround(patched, "compdef"))
 	}
@@ -39,14 +39,14 @@ func TestPatchZshForAlias_NoOpWhenMarkerAbsent(t *testing.T) {
 	// the script — better to leave it as-is and ship slightly-degraded
 	// completion than break installation entirely.
 	weird := []byte("#! /bin/zsh\n# unfamiliar format\n")
-	out := patchZshForAlias(weird, "dot")
+	out := patchZshForAlias(weird, "dotfiles")
 	if !bytes.Equal(weird, out) {
 		t.Errorf("patcher mutated script lacking the expected marker; got:\n%s", out)
 	}
 }
 
 func TestPatchBashForAlias_RegistersAliasComplete(t *testing.T) {
-	root := &cobra.Command{Use: "dotfiles", Aliases: []string{"dot"}}
+	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles"}}
 	root.AddCommand(&cobra.Command{Use: "apply"})
 
 	var buf bytes.Buffer
@@ -54,12 +54,12 @@ func TestPatchBashForAlias_RegistersAliasComplete(t *testing.T) {
 		t.Fatalf("GenBashCompletionV2: %v", err)
 	}
 
-	patched := patchBashForAlias(buf.Bytes(), "dot")
-	if !bytes.Contains(patched, []byte("complete -o default -F __start_dotfiles dot")) {
+	patched := patchBashForAlias(buf.Bytes(), "dotfiles")
+	if !bytes.Contains(patched, []byte("complete -o default -F __start_dot dotfiles")) {
 		t.Errorf("patched bash completion missing alias registration; got tail:\n%s",
 			tailString(patched, 400))
 	}
-	if !bytes.Contains(patched, []byte("complete -o default -F __start_dotfiles dotfiles")) {
+	if !bytes.Contains(patched, []byte("complete -o default -F __start_dot dot")) {
 		t.Errorf("patched bash dropped the canonical registration; got tail:\n%s",
 			tailString(patched, 400))
 	}
@@ -70,7 +70,7 @@ func TestPatchBashForAlias_RegistersAliasComplete(t *testing.T) {
 }
 
 func TestInstallCompletions_WritesFilesAndIsIdempotent(t *testing.T) {
-	root := &cobra.Command{Use: "dotfiles", Aliases: []string{"dot"}}
+	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles"}}
 	root.AddCommand(&cobra.Command{Use: "apply"})
 	root.AddCommand(&cobra.Command{Use: "gdrive-sync"})
 
@@ -114,7 +114,7 @@ func TestInstallCompletions_DelegatingScriptShape(t *testing.T) {
 	// independent of the subcommand list. The on-disk file therefore only
 	// needs refreshing when the binary itself (or cobra version) changes.
 	// Verify the installed scripts have the runtime-delegation shape.
-	root := &cobra.Command{Use: "dotfiles", Aliases: []string{"dot"}}
+	root := &cobra.Command{Use: "dot", Aliases: []string{"dotfiles"}}
 	root.AddCommand(&cobra.Command{Use: "apply"})
 
 	home := t.TempDir()

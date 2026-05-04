@@ -8,7 +8,7 @@ command -v zoxide &>/dev/null && eval "$(zoxide init bash)"
 command -v starship &>/dev/null && eval "$(starship init bash)"
 command -v direnv &>/dev/null && eval "$(direnv hook bash)"
 
-# dotfiles-managed shell completion for `dot` / `dotfiles` (refreshed on `dot apply`)
+# dot-managed shell completion for `dot` / `dotfiles` (refreshed on `dot apply`)
 [ -r "$HOME/.local/share/dotfiles/completions/dot.bash" ] && \
   source "$HOME/.local/share/dotfiles/completions/dot.bash"
 

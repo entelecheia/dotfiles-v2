@@ -14,7 +14,7 @@ func newPreflightCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preflight",
 		Short: "Check environment and generate config",
-		Long:  "Run environment checks and generate a dotfiles configuration based on the detected system.",
+		Long:  "Run environment checks and generate a dot configuration based on the detected system.",
 		RunE:  runPreflight,
 	}
 	cmd.Flags().Bool("check-only", false, "Only run checks, don't generate config")
@@ -77,7 +77,7 @@ func runPreflight(cmd *cobra.Command, _ []string) error {
 	ui.PrintStateSummary(state)
 	p.Blank()
 	p.KV("Config saved", statePath)
-	p.Line("  Run 'dotfiles apply' to apply the configuration.")
+	p.Line("  Run 'dot apply' to apply the configuration.")
 
 	return nil
 }

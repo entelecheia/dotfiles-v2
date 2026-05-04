@@ -86,9 +86,9 @@ func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
 
 // UserMacAppsState holds user selections for the macapps module.
 //
-// Install vs. backup are separated: Casks/CasksExtra drive `dotfiles apps install`,
-// while BackupApps scopes `dotfiles apps backup/restore`. BackupRoot is shared
-// with `dotfiles profile backup/restore` so a single folder (typically a Drive
+// Install vs. backup are separated: Casks/CasksExtra drive `dot apps install`,
+// while BackupApps scopes `dot apps backup/restore`. BackupRoot is shared
+// with `dot profile backup/restore` so a single folder (typically a Drive
 // secrets dir) holds both app-settings snapshots and profile snapshots.
 type UserMacAppsState struct {
 	Enabled    bool     `yaml:"enabled,omitempty"`
@@ -250,7 +250,7 @@ func StatePath() string {
 // LoadState reads user state from disk.
 // Returns an empty state on missing file, an error on parse failure.
 // Validation warnings are printed to stderr but do not fail the load
-// (so users can recover by running 'dotfiles reconfigure').
+// (so users can recover by running 'dot reconfigure').
 func LoadState() (*UserState, error) {
 	return loadStateAt(StatePath())
 }
@@ -270,7 +270,7 @@ func loadStateAt(path string) (*UserState, error) {
 	}
 	if err := state.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: state file has invalid values: %v\n", err)
-		fmt.Fprintln(os.Stderr, "  Run 'dotfiles reconfigure' to fix.")
+		fmt.Fprintln(os.Stderr, "  Run 'dot reconfigure' to fix.")
 	}
 	return &state, nil
 }

@@ -19,7 +19,7 @@ const secretsDir = ".local/share/dotfiles-secrets"
 
 const shellSecretsTemplate = `# Shell secrets — sourced by zsh at login via zshrc.
 # Add environment exports for API keys, tokens, and other secrets.
-# This file is encrypted by 'dotfiles secrets init' into
+# This file is encrypted by 'dot secrets init' into
 #   ~/.local/share/dotfiles-secrets/90-secrets.sh.age
 # Never commit the plaintext version to git or sync it to Drive.
 #
@@ -32,7 +32,7 @@ func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "Manage encrypted secrets",
-		Long:  "Encrypt, backup, restore, and inspect dotfiles secrets using age.",
+		Long:  "Encrypt, backup, restore, and inspect dot secrets using age.",
 	}
 
 	cmd.AddCommand(newSecretsInitCmd())
@@ -97,7 +97,7 @@ func newSecretsInitCmd() *cobra.Command {
 			p := printerFrom(cmd)
 
 			if !runner.CommandExists("age") {
-				return fmt.Errorf("age is not installed — run 'dotfiles apply' to install it")
+				return fmt.Errorf("age is not installed — run 'dot apply' to install it")
 			}
 
 			// Build common recipient args.
@@ -152,7 +152,7 @@ func newSecretsInitCmd() *cobra.Command {
 				p.Line("  Shell secrets not found, skipping: %s", shellSecrets)
 			}
 
-			p.Line("Done. Run 'dotfiles secrets list' to verify.")
+			p.Line("Done. Run 'dot secrets list' to verify.")
 			return nil
 		},
 	}
@@ -185,7 +185,7 @@ func newSecretsBackupCmd() *cobra.Command {
 			entries, err := os.ReadDir(storeDir)
 			if err != nil {
 				if os.IsNotExist(err) {
-					p.Line("No secrets store found. Run 'dotfiles secrets init' first.")
+					p.Line("No secrets store found. Run 'dot secrets init' first.")
 					return nil
 				}
 				return fmt.Errorf("reading secrets dir: %w", err)
@@ -277,7 +277,7 @@ func newSecretsRestoreCmd() *cobra.Command {
 			p := printerFrom(cmd)
 
 			if !runner.CommandExists("age") {
-				return fmt.Errorf("age is not installed — run 'dotfiles apply' to install it")
+				return fmt.Errorf("age is not installed — run 'dot apply' to install it")
 			}
 
 			keyName := state.SSH.KeyName
@@ -435,7 +435,7 @@ func newSecretsListCmd() *cobra.Command {
 			p := printerFrom(cmd)
 			if err != nil {
 				if os.IsNotExist(err) {
-					p.Line("No secrets store found. Run 'dotfiles secrets init' first.")
+					p.Line("No secrets store found. Run 'dot secrets init' first.")
 					return nil
 				}
 				return fmt.Errorf("reading secrets dir: %w", err)

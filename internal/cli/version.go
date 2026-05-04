@@ -48,7 +48,7 @@ func newVersionCmd(version, commit string) *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			v, c := ResolveVersion(version, commit)
 			p := printerFrom(cmd)
-			p.Line("dotfiles %s (%s)", v, c)
+			p.Line("dot %s (%s)", v, c)
 			p.Line("  go:   %s", runtime.Version())
 			p.Line("  os:   %s/%s", runtime.GOOS, runtime.GOARCH)
 		},

@@ -20,14 +20,14 @@ func completionDir(homeDir string) string {
 // installCompletions generates zsh + bash + fish completion scripts for
 // root and writes them to <home>/.local/share/dotfiles/completions/.
 //
-// Cobra writes completions tied to the root command's Name (dotfiles).
-// We post-process so both `dot` (alias) and `dotfiles` (canonical) are
-// registered with the same handler — otherwise tab-completion would
-// only fire for the long form.
+// Cobra writes completions tied to the root command's Name (dot).
+// We post-process so both `dot` (canonical) and `dotfiles` (back-compat
+// alias) are registered with the same handler — otherwise tab-completion
+// would only fire for the canonical name.
 //
 // Files written (only rewritten when content changes):
 //
-//	_dot           zsh autoload-style; registers `compdef _dotfiles dot dotfiles`
+//	_dot           zsh autoload-style; registers `compdef _dot dot dotfiles`
 //	dot.bash       bash, source-style; registers complete for both names
 //	dot.fish       fish, best-effort
 //
@@ -46,7 +46,7 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	if err := root.GenZshCompletion(&zshBuf); err != nil {
 		return changed, fmt.Errorf("generating zsh completion: %w", err)
 	}
-	zshScript := patchZshForAlias(zshBuf.Bytes(), "dot")
+	zshScript := patchZshForAlias(zshBuf.Bytes(), "dotfiles")
 	zshFile := filepath.Join(dir, "_dot")
 	written, err := fileutil.EnsureFile(runner, zshFile, zshScript, 0644)
 	if err != nil {
@@ -61,7 +61,7 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	if err := root.GenBashCompletionV2(&bashBuf, true); err != nil {
 		return changed, fmt.Errorf("generating bash completion: %w", err)
 	}
-	bashScript := patchBashForAlias(bashBuf.Bytes(), "dot")
+	bashScript := patchBashForAlias(bashBuf.Bytes(), "dotfiles")
 	bashFile := filepath.Join(dir, "dot.bash")
 	written, err = fileutil.EnsureFile(runner, bashFile, bashScript, 0644)
 	if err != nil {
@@ -84,23 +84,23 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	return changed, nil
 }
 
-// patchZshForAlias rewrites the `compdef _dotfiles dotfiles` directive
-// so the same handler also fires for the alias name. Cobra's standard
-// output binds only to root.Name(); without this, `dot <Tab>` does
-// nothing while `dotfiles <Tab>` works.
+// patchZshForAlias rewrites the `compdef _dot dot` directive so the
+// same handler also fires for the alias name. Cobra's standard output
+// binds only to root.Name(); without this, `dotfiles <Tab>` does
+// nothing while `dot <Tab>` works.
 func patchZshForAlias(script []byte, alias string) []byte {
-	old := []byte("\ncompdef _dotfiles dotfiles\n")
+	old := []byte("\ncompdef _dot dot\n")
 	if !bytes.Contains(script, old) {
 		// Cobra format changed; leave the script as-is rather than corrupt it.
 		return script
 	}
-	replacement := []byte("\ncompdef _dotfiles " + alias + " dotfiles\n")
+	replacement := []byte("\ncompdef _dot dot " + alias + "\n")
 	out := bytes.Replace(script, old, replacement, 1)
 
-	// Also fix the `#compdef dotfiles` header so both names are recognized
+	// Also fix the `#compdef dot` header so both names are recognized
 	// when the file is autoloaded standalone.
-	headerOld := []byte("#compdef dotfiles\n")
-	headerNew := []byte("#compdef " + alias + " dotfiles\n")
+	headerOld := []byte("#compdef dot\n")
+	headerNew := []byte("#compdef dot " + alias + "\n")
 	out = bytes.Replace(out, headerOld, headerNew, 1)
 	return out
 }
@@ -110,11 +110,11 @@ func patchZshForAlias(script []byte, alias string) []byte {
 // the registration block for the canonical name only.
 func patchBashForAlias(script []byte, alias string) []byte {
 	addition := []byte(fmt.Sprintf(`
-# Register handler for alias `+"`%s`"+` so it tab-completes the same as dotfiles.
+# Register handler for alias `+"`%s`"+` so it tab-completes the same as dot.
 if [[ $(type -t compopt) = "builtin" ]]; then
-    complete -o default -F __start_dotfiles %s
+    complete -o default -F __start_dot %s
 else
-    complete -o default -o nospace -F __start_dotfiles %s
+    complete -o default -o nospace -F __start_dot %s
 fi
 `, alias, alias, alias))
 

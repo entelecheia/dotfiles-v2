@@ -28,8 +28,8 @@ func newConfigExportCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "export [path]",
 		Short: "Export configuration to a portable YAML file",
-		Long: `Export the current dotfiles configuration to stdout or a file.
-The exported file can be used on another machine with 'dotfiles init --from <file>'.`,
+		Long: `Export the current dot configuration to stdout or a file.
+The exported file can be used on another machine with 'dot init --from <file>'.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runConfigExport,
 	}
@@ -50,7 +50,7 @@ func runConfigExport(cmd *cobra.Command, args []string) error {
 	}
 
 	if state.Name == "" {
-		return fmt.Errorf("no configuration found — run 'dotfiles init' first")
+		return fmt.Errorf("no configuration found — run 'dot init' first")
 	}
 
 	data, err := yaml.Marshal(state)
@@ -110,7 +110,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	config.ApplyEnvOverrides(cfg)
 
 	p := printerFrom(cmd)
-	p.Header("dotfiles Configuration")
+	p.Header("dot Configuration")
 	p.KV("Profile", profileName)
 	p.KV("Config", config.StatePath())
 

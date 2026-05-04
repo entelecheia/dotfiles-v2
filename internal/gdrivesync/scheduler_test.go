@@ -121,7 +121,7 @@ func TestPlistTemplate_RendersIntakeUnit(t *testing.T) {
 func TestSystemdTemplates_RenderPushUnit(t *testing.T) {
 	engine := template.NewEngine()
 	data := SchedulerTemplateData{
-		DotfilesPath: "/home/u/.local/bin/dotfiles",
+		DotfilesPath: "/home/u/.local/bin/dot",
 		LogFile:      "/home/u/.local/log/g.log",
 		Interval:     900,
 		Label:        SchedulerKindPush.LaunchdLabel(),
@@ -135,7 +135,7 @@ func TestSystemdTemplates_RenderPushUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render service: %v", err)
 	}
-	if !strings.Contains(string(svc), "ExecStart=/home/u/.local/bin/dotfiles gdrive-sync push --mode=clean") {
+	if !strings.Contains(string(svc), "ExecStart=/home/u/.local/bin/dot gdrive-sync push --mode=clean") {
 		t.Errorf("service ExecStart wrong:\n%s", svc)
 	}
 
@@ -157,7 +157,7 @@ func TestSystemdTemplates_RenderPushUnit(t *testing.T) {
 func TestSystemdTemplates_RenderIntakeUnit(t *testing.T) {
 	engine := template.NewEngine()
 	data := SchedulerTemplateData{
-		DotfilesPath: "/home/u/.local/bin/dotfiles",
+		DotfilesPath: "/home/u/.local/bin/dot",
 		LogFile:      "/home/u/.local/log/g.log",
 		Interval:     900,
 		Label:        SchedulerKindIntake.LaunchdLabel(),
@@ -171,7 +171,7 @@ func TestSystemdTemplates_RenderIntakeUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render intake service: %v", err)
 	}
-	if !strings.Contains(string(svc), "ExecStart=/home/u/.local/bin/dotfiles gdrive-sync pull --mode=force") {
+	if !strings.Contains(string(svc), "ExecStart=/home/u/.local/bin/dot gdrive-sync pull --mode=force") {
 		t.Errorf("pull service ExecStart wrong:\n%s", svc)
 	}
 

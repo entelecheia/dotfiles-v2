@@ -13,14 +13,14 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 # apps list always succeeds (static catalog)
-assert_exit_code 0 dotfiles apps list
+assert_exit_code 0 dot apps list
 
 # apps status --from points at a throwaway dir; expected to enumerate tracked apps
 tmpbk=$(mktemp -d)
-assert_exit_code 0 dotfiles apps status --from "$tmpbk"
+assert_exit_code 0 dot apps status --from "$tmpbk"
 
 # dry-run backup of a single known-safe app
-if dotfiles apps backup --dry-run moom --to "$tmpbk" >/dev/null 2>&1; then
+if dot apps backup --dry-run moom --to "$tmpbk" >/dev/null 2>&1; then
   PASS=$((PASS + 1))
   echo "  ✓ apps backup --dry-run moom exits cleanly"
 else
@@ -39,7 +39,7 @@ else
 fi
 
 # macapps module: apply dry-run with profile=full, module=macapps
-assert_exit_code 0 dotfiles apply --profile full --yes --dry-run --module macapps
+assert_exit_code 0 dot apply --profile full --yes --dry-run --module macapps
 
 rm -rf "$tmpbk"
 report

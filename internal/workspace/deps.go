@@ -57,7 +57,7 @@ func InstallRequired(ctx context.Context, runner *exec.Runner, brew *exec.Brew) 
 	}
 
 	if !brew.IsAvailable() {
-		return fmt.Errorf("required tools missing (%v) and brew is not available; run 'dotfiles apply' first", status.Required)
+		return fmt.Errorf("required tools missing (%v) and brew is not available; run 'dot apply' first", status.Required)
 	}
 
 	// Collect brew formulas for required tools

@@ -7,7 +7,7 @@ set -euo pipefail
 # Find binary: argument > PATH > common locations
 BIN="${1:-}"
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-  for candidate in ./dotfiles /usr/local/bin/dotfiles "$(command -v dotfiles 2>/dev/null)"; do
+  for candidate in ./dot /usr/local/bin/dot "$(command -v dot 2>/dev/null)" ./dotfiles /usr/local/bin/dotfiles "$(command -v dotfiles 2>/dev/null)"; do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then
       BIN="$candidate"
       break
@@ -15,7 +15,7 @@ if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
   done
 fi
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-  echo "FAIL: dotfiles binary not found"
+  echo "FAIL: dot binary not found"
   exit 1
 fi
 
@@ -136,7 +136,7 @@ echo "$HELP_OUT" | grep -q "Available Commands" && pass "help not routed to open
 # "version" should NOT route to open
 check "version not routed to open" $BIN version
 
-# ── 10. Existing dotfiles commands still work ─────────────────────────────────
+# ── 10. Existing commands still work ─────────────────────────────────
 echo "--- backward compatibility ---"
 check "apply --dry-run flag accepted" bash -c "$BIN apply --dry-run 2>&1; true"
 check "check command exists" bash -c "$BIN check --help 2>&1 | grep -q 'Check'"

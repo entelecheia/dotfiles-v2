@@ -61,7 +61,7 @@ func wsInitBootstrap(cmd *cobra.Command) (workspacePath string, repos []config.R
 
 	cfgPath := state.Modules.Workspace.Path
 	if cfgPath == "" {
-		return "", nil, nil, false, fmt.Errorf("workspace.path not configured; run 'dotfiles reconfigure'")
+		return "", nil, nil, false, fmt.Errorf("workspace.path not configured; run 'dot reconfigure'")
 	}
 
 	home, _ := os.UserHomeDir()
@@ -131,7 +131,7 @@ func wsBootstrap(cmd *cobra.Command) (ws.Roots, *exec.Runner, bool, error) {
 	}
 
 	if state.Modules.Workspace.Path == "" || state.Modules.Workspace.GdriveSymlink == "" {
-		return ws.Roots{}, nil, false, fmt.Errorf("dual workspace not configured (Path + GdriveSymlink required); run 'dotfiles reconfigure'")
+		return ws.Roots{}, nil, false, fmt.Errorf("dual workspace not configured (Path + GdriveSymlink required); run 'dot reconfigure'")
 	}
 
 	home, _ := os.UserHomeDir()
@@ -308,7 +308,7 @@ func runWsAudit(cmd *cobra.Command, args []string) error {
 		}
 	}
 	p.Blank()
-	p.Line("  %d mismatch(es). Run 'dotfiles ws reconcile' to resolve.", len(mismatches))
+	p.Line("  %d mismatch(es). Run 'dot ws reconcile' to resolve.", len(mismatches))
 	return nil
 }
 

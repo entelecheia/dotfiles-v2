@@ -23,7 +23,7 @@ func newAICmd() *cobra.Command {
 		Long: `Manage portable AI assistant configuration.
 
 The ai module writes shell/config helper files. It does not install Claude,
-Codex, or ChatGPT apps; use 'dotfiles apps install' for Homebrew casks.`,
+Codex, or ChatGPT apps; use 'dot apps install' for Homebrew casks.`,
 	}
 	cmd.AddCommand(newAIListCmd())
 	cmd.AddCommand(newAIStatusCmd())
@@ -52,7 +52,7 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 	p.Section("Module")
 	p.KV("Name", "ai")
 	p.KV("Writes", "~/.config/shell/30-ai.sh, ~/.config/claude/settings.json")
-	p.KV("Installs apps", "no — use `dotfiles apps install`")
+	p.KV("Installs apps", "no — use `dot apps install`")
 
 	p.Section("Detected CLI tools")
 	for _, name := range []string{"claude", "codex", "gh", "fabric"} {

@@ -1,7 +1,7 @@
 # ── Zsh Completion 설정 ──
 # Oh My Zsh compinit 이후 적용되는 zstyle 설정
 
-# dotfiles-managed completions (dot apply가 갱신; compinit 전에 fpath 등록)
+# dot-managed completions (dot apply가 갱신; compinit 전에 fpath 등록)
 # 파일이 ~/.zcompdump 보다 새로우면 cache를 무효화하여 재로드 강제.
 __dot_compl_dir="$HOME/.local/share/dotfiles/completions"
 if [[ -d "$__dot_compl_dir" ]]; then

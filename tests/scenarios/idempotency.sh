@@ -5,7 +5,7 @@ source "$(dirname "$0")/../assert.sh"
 
 echo "=== Scenario: idempotency ==="
 
-# Track dotfiles-managed directories only
+# Track dot-managed directories only
 MANAGED_DIRS="$HOME/.config $HOME/.ssh $HOME/.local $HOME/.oh-my-zsh $HOME/.tmux.conf $HOME/.zshrc $HOME/.bashrc $HOME/.gitconfig $HOME/.gnupg"
 
 snapshot_managed() {
@@ -18,8 +18,8 @@ snapshot_managed() {
 
 echo ""
 echo "--- first apply ---"
-dotfiles init --profile minimal --yes
-dotfiles apply --profile minimal --yes
+dot init --profile minimal --yes
+dot apply --profile minimal --yes
 
 echo ""
 echo "--- snapshot after first apply ---"
@@ -27,7 +27,7 @@ SNAP_AFTER_FIRST=$(snapshot_managed)
 
 echo ""
 echo "--- second apply ---"
-dotfiles apply --profile minimal --yes
+dot apply --profile minimal --yes
 
 SNAP_AFTER_SECOND=$(snapshot_managed)
 if [[ "$SNAP_AFTER_FIRST" == "$SNAP_AFTER_SECOND" ]]; then

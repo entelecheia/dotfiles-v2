@@ -50,7 +50,7 @@ func WriteKV(w io.Writer, key, value string) {
 func printSection(title string) { WriteSection(os.Stdout, title) }
 
 // printKV emits a KV row to os.Stdout. Ui-internal wrapper over WriteKV used
-// by PrintStateSummary (called from `dotfiles init`/`reconfigure`/`preflight`).
+// by PrintStateSummary (called from `dot init`/`reconfigure`/`preflight`).
 func printKV(key, value string) { WriteKV(os.Stdout, key, value) }
 
 // formatBool returns a styled enabled/disabled indicator. The leading glyph

@@ -11,14 +11,14 @@ import (
 // NewRootCmd creates the root command with all subcommands.
 func NewRootCmd(version, commit string) *cobra.Command {
 	root := &cobra.Command{
-		Use:   "dotfiles",
+		Use:   "dot",
 		Short: "User environment & workspace management tool",
 		Long: `dotfiles-v2: Declarative user environment configuration with modular profiles.
 
 Run without arguments to see a getting-started guide.
-Run 'dotfiles usecase' for detailed workflow examples.
-Also available as 'dot' for convenience.`,
-		Aliases:       []string{"dot"},
+Run 'dot usecase' for detailed workflow examples.
+Also available as 'dotfiles' for back-compat.`,
+		Aliases:       []string{"dotfiles"},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -38,7 +38,7 @@ Also available as 'dot' for convenience.`,
 	root.PersistentFlags().String("config", "", "Path to custom config YAML")
 	root.PersistentFlags().String("home", "", "Override home directory (for admin setup of other users)")
 
-	// Existing dotfiles commands
+	// Existing commands
 	root.AddCommand(newApplyCmd())
 	root.AddCommand(newCheckCmd())
 	root.AddCommand(newStatusCmd())
@@ -115,7 +115,7 @@ func Execute(version, commit string) error {
 	cmd := NewRootCmd(version, commit)
 
 	// If the first arg is not a known subcommand or flag, show an error
-	// guiding the user to `dotfiles open <project>` (explicit is safer than
+	// guiding the user to `dot open <project>` (explicit is safer than
 	// implicit routing which could mask typos as project launches).
 	if len(os.Args) > 1 {
 		first := os.Args[1]
@@ -130,9 +130,9 @@ func Execute(version, commit string) error {
 				fmt.Fprintf(os.Stderr, "Unknown command %q\n", first)
 				fmt.Fprintln(os.Stderr, "")
 				fmt.Fprintf(os.Stderr, "If you meant to launch a workspace, use:\n")
-				fmt.Fprintf(os.Stderr, "  dotfiles open %s\n", first)
+				fmt.Fprintf(os.Stderr, "  dot open %s\n", first)
 				fmt.Fprintln(os.Stderr, "")
-				fmt.Fprintln(os.Stderr, "See 'dotfiles help' for available commands, or 'dotfiles usecase' for examples.")
+				fmt.Fprintln(os.Stderr, "See 'dot help' for available commands, or 'dot usecase' for examples.")
 				os.Exit(1)
 			}
 		}

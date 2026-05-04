@@ -12,11 +12,11 @@ import (
 func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Interactive setup for dotfiles",
-		Long: `Collect user preferences and save them to the dotfiles state file.
+		Short: "Interactive setup for dot",
+		Long: `Collect user preferences and save them to the dot state file.
 
 Use --from to import settings from another machine's exported config:
-  dotfiles init --from ~/workspace/secrets/dotfiles-config.yaml`,
+  dot init --from ~/workspace/secrets/dotfiles-config.yaml`,
 		RunE: runInit,
 	}
 	cmd.Flags().String("from", "", "Import settings from an exported config file (identity & preferences as defaults)")
@@ -141,6 +141,6 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	p.Line("  State file: %s", statePath)
 	ui.PrintStateSummary(state)
 	p.Line("")
-	p.Line("Run 'dotfiles apply' to apply the configuration.")
+	p.Line("Run 'dot apply' to apply the configuration.")
 	return nil
 }

@@ -174,13 +174,12 @@ func (s *Scheduler) State(ctx context.Context) SchedulerState {
 	return s.StateKind(ctx, SchedulerKindPush)
 }
 
-// templateDataFor resolves the binary path (preferring `dotfiles` over
-// `dot` for clarity in plist/unit ProgramArguments) and bundles the
-// per-kind template inputs.
+// templateDataFor resolves the binary path (preferring `dot` over the
+// legacy `dotfiles` symlink) and bundles the per-kind template inputs.
 func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
-	dotfilesPath, _ := osexec.LookPath("dotfiles")
+	dotfilesPath, _ := osexec.LookPath("dot")
 	if dotfilesPath == "" {
-		dotfilesPath, _ = osexec.LookPath("dot")
+		dotfilesPath, _ = osexec.LookPath("dotfiles")
 	}
 	interval := s.Config.Interval
 	mode := s.Config.PushMode

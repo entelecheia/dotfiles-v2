@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ── Sanity checks ────────────────────────────────────────────────────────────
 
 if ! command -v tmux &>/dev/null; then
-  echo "Error: tmux is not installed. Run 'dotfiles apply' to install it."
+  echo "Error: tmux is not installed. Run 'dot apply' to install it."
   exit 1
 fi
 
@@ -96,7 +96,7 @@ if ! load_layout "$LAYOUT" "$SESSION" "$PROJECT" "$THEME"; then
   sleep 1
   if ! load_layout "$LAYOUT" "$SESSION" "$PROJECT" "$THEME"; then
     echo "Error: workspace creation failed."
-    echo "Try: tmux kill-server && dotfiles open $SESSION"
+    echo "Try: tmux kill-server && dot open $SESSION"
     exit 1
   fi
 fi

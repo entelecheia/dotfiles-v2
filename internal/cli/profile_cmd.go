@@ -16,12 +16,12 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
-// newProfileCmd returns `dotfiles profile` — version-aware snapshots of the
+// newProfileCmd returns `dot profile` — version-aware snapshots of the
 // user-level state (config, install/backup lists, optional secrets).
 func newProfileCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "profile",
-		Short: "Snapshot and restore dotfiles profile state (config, app lists, secrets)",
+		Short: "Snapshot and restore dot profile state (config, app lists, secrets)",
 		Long: `Manage per-host profile snapshots under <backup-root>/profiles/<hostname>/<version>/.
 
 Each snapshot captures:
@@ -213,7 +213,7 @@ func runProfileBackup(cmd *cobra.Command, _ []string) error {
 	includeSecrets, _ := cmd.Flags().GetBool("include-secrets")
 
 	if _, err := os.Stat(eng.StatePath); err != nil && os.IsNotExist(err) {
-		return fmt.Errorf("no state file at %s — run 'dotfiles init' first", eng.StatePath)
+		return fmt.Errorf("no state file at %s — run 'dot init' first", eng.StatePath)
 	}
 
 	snap, err := eng.Backup(profilesnap.BackupOptions{
@@ -329,7 +329,7 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 	p.KV("Root", eng.HostRoot())
 	if len(snaps) == 0 {
 		p.Blank()
-		p.Line("  %s", ui.StyleHint.Render("(no snapshots yet — run 'dotfiles profile backup')"))
+		p.Line("  %s", ui.StyleHint.Render("(no snapshots yet — run 'dot profile backup')"))
 		return nil
 	}
 	p.Section(fmt.Sprintf("Versions (%d)", len(snaps)))

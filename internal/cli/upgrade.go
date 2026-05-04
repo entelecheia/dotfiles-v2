@@ -26,8 +26,8 @@ func newUpgradeCmd(currentVersion string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "update",
 		Aliases: []string{"upgrade"},
-		Short:   "Update dotfiles binary to latest version",
-		Long:    "Download and install the latest dotfiles release from GitHub.",
+		Short:   "Update dot binary to latest version",
+		Long:    "Download and install the latest dot release from GitHub.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpgrade(cmd, currentVersion)
 		},
@@ -74,18 +74,18 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 
 	if checkOnly {
 		p.Line("\nUpdate available: %s → %s", currentClean, latestVersion)
-		p.Line("Run 'dotfiles update' to install.")
+		p.Line("Run 'dot update' to install.")
 		return nil
 	}
 
 	osName := runtime.GOOS
 	archName := runtime.GOARCH
-	assetName := fmt.Sprintf("dotfiles_%s_%s_%s.tar.gz", latestVersion, osName, archName)
+	assetName := fmt.Sprintf("dot_%s_%s_%s.tar.gz", latestVersion, osName, archName)
 	downloadURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest.TagName, assetName)
 
 	p.Line("\nDownloading %s...", assetName)
 
-	tmpDir, err := os.MkdirTemp("", "dotfiles-upgrade-*")
+	tmpDir, err := os.MkdirTemp("", "dot-upgrade-*")
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
 	}
@@ -106,14 +106,14 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		return fmt.Errorf("resolving executable path: %w", err)
 	}
 
-	newBinary := filepath.Join(tmpDir, "dotfiles")
+	newBinary := filepath.Join(tmpDir, "dot")
 	if _, err := os.Stat(newBinary); err != nil {
 		return fmt.Errorf("downloaded binary not found: %w", err)
 	}
 
 	// Sanity-check the downloaded binary before replacing the current one.
 	// Runs '<new_binary> --version' with a 5s timeout and verifies it produces
-	// some output containing "dotfiles". Catches wrong-arch/corrupted downloads.
+	// some output starting with "dot ". Catches wrong-arch/corrupted downloads.
 	if err := verifyBinary(ctx, newBinary); err != nil {
 		return fmt.Errorf("downloaded binary failed sanity check: %w", err)
 	}
@@ -128,7 +128,7 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	}
 
 	dir := filepath.Dir(execPath)
-	tmp, err := os.CreateTemp(dir, ".dotfiles.*.new")
+	tmp, err := os.CreateTemp(dir, ".dot.*.new")
 	if err != nil {
 		return fmt.Errorf("creating staging file in %s: %w", dir, err)
 	}
@@ -170,7 +170,7 @@ func verifyBinary(ctx context.Context, path string) error {
 		return fmt.Errorf("running %s --version: %w", path, err)
 	}
 	combined := res.Stdout + res.Stderr
-	if !strings.Contains(strings.ToLower(combined), "dotfiles") {
+	if !strings.Contains(strings.ToLower(combined), "dot version") {
 		return fmt.Errorf("unexpected version output: %s", strings.TrimSpace(combined))
 	}
 	return nil

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Scenario: dotfiles profile backup/list/restore round-trip in an isolated home.
+# Scenario: dot profile backup/list/restore round-trip in an isolated home.
 set -euo pipefail
 source "$(dirname "$0")/../assert.sh"
 
@@ -27,15 +27,15 @@ echo 'age1scenario'            > "$tmphome/.ssh/age_key.pub"
 chmod 600 "$tmphome/.ssh/age_key"
 
 # 1. backup (no secrets)
-dotfiles --home "$tmphome" profile backup --to "$backup_root" --tag "first" --yes
+dot --home "$tmphome" profile backup --to "$backup_root" --tag "first" --yes
 assert_dir_exists "$backup_root/profiles/$(hostname -s)" "host root created"
 assert_file_exists "$backup_root/profiles/$(hostname -s)/latest.txt" "latest pointer written"
 
 # 2. backup (with secrets)
-dotfiles --home "$tmphome" profile backup --to "$backup_root" --tag "second" --include-secrets --yes
+dot --home "$tmphome" profile backup --to "$backup_root" --tag "second" --include-secrets --yes
 
 # 3. list shows 2 snapshots
-count=$(dotfiles --home "$tmphome" profile list --from "$backup_root" | grep -c "2026\|20[0-9][0-9]-" || true)
+count=$(dot --home "$tmphome" profile list --from "$backup_root" | grep -c "2026\|20[0-9][0-9]-" || true)
 if [[ "$count" -ge 2 ]]; then
   PASS=$((PASS + 1)); echo "  ✓ profile list shows ≥2 snapshots"
 else
@@ -46,7 +46,7 @@ fi
 echo 'name: mutated' > "$tmphome/.config/dotfiles/config.yaml"
 echo 'MUTATED' > "$tmphome/.ssh/age_key"
 
-dotfiles --home "$tmphome" profile restore --from "$backup_root" --include-secrets --yes >/dev/null
+dot --home "$tmphome" profile restore --from "$backup_root" --include-secrets --yes >/dev/null
 if grep -q "Scenario Test" "$tmphome/.config/dotfiles/config.yaml"; then
   PASS=$((PASS + 1)); echo "  ✓ restore recovered state"
 else
@@ -59,7 +59,7 @@ else
 fi
 
 # 5. prune down to 1
-dotfiles --home "$tmphome" profile prune --from "$backup_root" --keep 1 --yes >/dev/null
+dot --home "$tmphome" profile prune --from "$backup_root" --keep 1 --yes >/dev/null
 remaining=$(ls "$backup_root/profiles/$(hostname -s)" | grep -v latest.txt | wc -l | tr -d ' ')
 if [[ "$remaining" -eq 1 ]]; then
   PASS=$((PASS + 1)); echo "  ✓ prune kept 1 snapshot"

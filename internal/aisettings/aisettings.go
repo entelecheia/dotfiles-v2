@@ -101,7 +101,7 @@ type Engine struct {
 // Entries returns the static AI config manifest.
 func Entries(includeAuth bool) []Entry {
 	entries := []Entry{
-		{Tool: "claude", Path: ".config/claude/settings.json", Description: "dotfiles-managed Claude settings"},
+		{Tool: "claude", Path: ".config/claude/settings.json", Description: "dot-managed Claude settings"},
 		{Tool: "claude", Path: ".claude/settings.json", Description: "Claude Code settings"},
 		{Tool: "claude", Path: ".claude/CLAUDE.md", Description: "Claude Code global instructions"},
 		{Tool: "claude", Path: ".claude/agents", Description: "Claude agents"},
@@ -114,6 +114,11 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "codex", Path: ".codex/prompts", Description: "Codex prompts"},
 		{Tool: "codex", Path: ".codex/rules", Description: "Codex rules"},
 		{Tool: "codex", Path: ".codex/skills", Description: "Codex user skills"},
+		{Tool: "agents", Path: AgentsSSOTRelPath, Description: "AI agents SSOT"},
+		{Tool: "cursor", Path: ".cursor/AGENTS.md", Description: "Cursor global instructions"},
+		{Tool: "gemini", Path: ".gemini/GEMINI.md", Description: "Gemini global instructions"},
+		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md", Description: "GitHub Copilot global instructions"},
+		{Tool: "aider", Path: ".aider.conf.md", Description: "Aider global instructions"},
 		{Tool: "agents", Path: ".agents/.skill-lock.json", Description: "shared skill lock"},
 		{Tool: "agents", Path: ".agents/skills", Description: "shared user skills"},
 	}
