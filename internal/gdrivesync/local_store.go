@@ -22,6 +22,7 @@ const (
 
 	localConfigName     = "config.yaml"
 	localStateName      = "state.yaml"
+	localIncludeName    = "include.txt"
 	localExcludeName    = "exclude.txt"
 	localIgnoreName     = "ignore.txt"
 	localSharedDynName  = "shared-excludes.dyn.conf"
@@ -105,6 +106,7 @@ func (p PropagationPolicy) String() string {
 // settings. Persists to <localStoreDir>/config.yaml.
 type LocalConfig struct {
 	MirrorPath     string            `yaml:"mirror_path,omitempty"`
+	FilterMode     FilterMode        `yaml:"filter_mode,omitempty"`
 	Propagation    PropagationPolicy `yaml:"propagation"`
 	MaxDelete      int               `yaml:"max_delete,omitempty"`
 	Interval       int               `yaml:"interval,omitempty"`      // push scheduler cadence (seconds)
@@ -132,6 +134,7 @@ type LocalPaths struct {
 	StoreDir        string
 	ConfigFile      string
 	StateFile       string
+	IncludeFile     string
 	ExcludeFile     string
 	IgnoreFile      string
 	SharedDynFile   string
@@ -155,6 +158,7 @@ func ResolveLocalPaths(localPath string) *LocalPaths {
 		StoreDir:        store,
 		ConfigFile:      filepath.Join(store, localConfigName),
 		StateFile:       filepath.Join(store, localStateName),
+		IncludeFile:     filepath.Join(store, localIncludeName),
 		ExcludeFile:     filepath.Join(store, localExcludeName),
 		IgnoreFile:      filepath.Join(store, localIgnoreName),
 		SharedDynFile:   filepath.Join(store, localSharedDynName),
@@ -170,7 +174,7 @@ func ResolveLocalPaths(localPath string) *LocalPaths {
 
 // EnsureLocalLayout creates the .dotfiles/gdrive-sync/ directory plus
 // all default files (empty manifests, header-only ignore.txt, embedded
-// excludes copy). Idempotent — existing files are left untouched.
+// include/exclude copies). Idempotent — existing files are left untouched.
 //
 // Does NOT load or write config.yaml — that's the migration path's job.
 func EnsureLocalLayout(paths *LocalPaths) error {
@@ -180,6 +184,9 @@ func EnsureLocalLayout(paths *LocalPaths) error {
 		}
 	}
 	if err := materializeExcludeIfMissing(paths.ExcludeFile); err != nil {
+		return err
+	}
+	if err := materializeIncludeIfMissing(paths.IncludeFile); err != nil {
 		return err
 	}
 	for _, ent := range []struct {
@@ -208,6 +215,23 @@ func materializeExcludeIfMissing(path string) error {
 	body, err := engine.ReadStatic(excludesTemplatePath)
 	if err != nil {
 		return fmt.Errorf("reading embedded excludes: %w", err)
+	}
+	if err := os.WriteFile(path, body, 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// materializeIncludeIfMissing copies the embedded includes baseline to
+// disk so the operator can edit it. Existing on-disk content wins.
+func materializeIncludeIfMissing(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	engine := template.NewEngine()
+	body, err := engine.ReadStatic(includesTemplatePath)
+	if err != nil {
+		return fmt.Errorf("reading embedded includes: %w", err)
 	}
 	if err := os.WriteFile(path, body, 0644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
@@ -284,6 +308,14 @@ func LoadLocalConfig(paths *LocalPaths) (*LocalConfig, bool, error) {
 		fmt.Fprintf(os.Stderr, "warning: %s has invalid propagation (%v); using defaults\n", paths.ConfigFile, err)
 		cfg.Propagation = DefaultPropagationPolicy()
 	}
+	if cfg.FilterMode == "" {
+		cfg.FilterMode = DefaultFilterMode()
+	} else if err := cfg.FilterMode.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %s has invalid filter_mode (%v); using %s\n", paths.ConfigFile, err, DefaultFilterMode())
+		cfg.FilterMode = DefaultFilterMode()
+	} else {
+		cfg.FilterMode = normalizeFilterMode(cfg.FilterMode)
+	}
 	schedule := ScheduleSettingsFromLocalConfig(&cfg).NormalizeLenient(func(field string, err error, fallback any) {
 		fmt.Fprintf(os.Stderr, "warning: %s has invalid %s (%v); using %v\n", paths.ConfigFile, field, err, fallback)
 	})
@@ -296,6 +328,13 @@ func SaveLocalConfig(paths *LocalPaths, cfg *LocalConfig) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid propagation policy: %w", err)
 	}
+	if cfg.FilterMode == "" {
+		cfg.FilterMode = DefaultFilterMode()
+	}
+	if err := cfg.FilterMode.Validate(); err != nil {
+		return fmt.Errorf("refusing to save invalid filter_mode: %w", err)
+	}
+	cfg.FilterMode = normalizeFilterMode(cfg.FilterMode)
 	schedule, err := ScheduleSettingsFromLocalConfig(cfg).Normalize()
 	if err != nil {
 		return fmt.Errorf("refusing to save invalid schedule config: %w", err)
@@ -356,6 +395,7 @@ func localConfigFromGlobal(globalState *config.UserState) *LocalConfig {
 	gs := globalState.Modules.GdriveSync
 	return &LocalConfig{
 		MirrorPath:     gs.MirrorPath,
+		FilterMode:     DefaultFilterMode(),
 		Propagation:    DefaultPropagationPolicy(),
 		MaxDelete:      gs.MaxDelete,
 		Interval:       0,

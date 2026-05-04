@@ -62,6 +62,7 @@ func TestResolveLocalPaths_LayoutShape(t *testing.T) {
 	}
 	for _, want := range []string{
 		filepath.Join(wantStore, "config.yaml"),
+		filepath.Join(wantStore, "include.txt"),
 		filepath.Join(wantStore, "exclude.txt"),
 		filepath.Join(wantStore, "ignore.txt"),
 		filepath.Join(wantStore, "shared-excludes.dyn.conf"),
@@ -72,7 +73,7 @@ func TestResolveLocalPaths_LayoutShape(t *testing.T) {
 	} {
 		seen := false
 		for _, got := range []string{
-			paths.ConfigFile, paths.ExcludeFile, paths.IgnoreFile,
+			paths.ConfigFile, paths.IncludeFile, paths.ExcludeFile, paths.IgnoreFile,
 			paths.SharedDynFile, paths.BaselineFile, paths.ImportsFile,
 			paths.TombstonesFile, paths.LogFile,
 		} {
@@ -98,7 +99,7 @@ func TestEnsureLocalLayout_CreatesAllDefaults(t *testing.T) {
 			t.Errorf("dir not created: %s (err %v)", p, err)
 		}
 	}
-	for _, p := range []string{paths.ExcludeFile, paths.IgnoreFile, paths.BaselineFile, paths.ImportsFile, paths.TombstonesFile} {
+	for _, p := range []string{paths.IncludeFile, paths.ExcludeFile, paths.IgnoreFile, paths.BaselineFile, paths.ImportsFile, paths.TombstonesFile} {
 		body, err := os.ReadFile(p)
 		if err != nil {
 			t.Errorf("missing file: %s (err %v)", p, err)
@@ -202,6 +203,7 @@ func TestLocalConfig_RoundTrip(t *testing.T) {
 
 	original := &LocalConfig{
 		MirrorPath:     "/x/mirror",
+		FilterMode:     FilterModeExclude,
 		Propagation:    PropagationPolicy{Create: true, Update: true, Delete: true},
 		MaxDelete:      500,
 		Interval:       600,
@@ -223,6 +225,7 @@ func TestLocalConfig_RoundTrip(t *testing.T) {
 		t.Fatal("LoadLocalConfig reported missing after save")
 	}
 	if got.MirrorPath != original.MirrorPath ||
+		got.FilterMode != original.FilterMode ||
 		got.Propagation != original.Propagation ||
 		got.MaxDelete != original.MaxDelete ||
 		got.Interval != original.Interval ||
@@ -271,6 +274,44 @@ pull_mode: bogus
 	}
 	if got.PushMode != ModeClean || got.PullMode != ModeClean {
 		t.Fatalf("invalid modes should fall back to clean; got push=%q pull=%q", got.PushMode, got.PullMode)
+	}
+}
+
+func TestLoadLocalConfig_InvalidFilterModeFallsBackToInclude(t *testing.T) {
+	tmp := t.TempDir()
+	paths := ResolveLocalPaths(tmp)
+	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`filter_mode: legacy
+propagation:
+    create: true
+    update: true
+    delete: false
+`)
+	if err := os.WriteFile(paths.ConfigFile, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatalf("LoadLocalConfig: %v", err)
+	}
+	if !ok {
+		t.Fatal("LoadLocalConfig reported missing")
+	}
+	if got.FilterMode != FilterModeInclude {
+		t.Fatalf("invalid filter_mode should fall back to include; got %q", got.FilterMode)
+	}
+}
+
+func TestSaveLocalConfig_RejectsInvalidFilterMode(t *testing.T) {
+	tmp := t.TempDir()
+	paths := ResolveLocalPaths(tmp)
+
+	cfg := &LocalConfig{FilterMode: FilterMode("bogus"), Propagation: DefaultPropagationPolicy()}
+	if err := SaveLocalConfig(paths, cfg); err == nil {
+		t.Fatal("SaveLocalConfig should reject invalid filter_mode")
 	}
 }
 
@@ -381,6 +422,9 @@ func TestMigrateFromGlobal_PopulatesLocalLayout(t *testing.T) {
 	if cfg.MirrorPath != "/legacy/mirror" || cfg.MaxDelete != 250 || cfg.Interval != 0 || !cfg.Paused {
 		t.Errorf("migrated fields wrong: %+v", cfg)
 	}
+	if cfg.FilterMode != FilterModeInclude {
+		t.Errorf("migrated FilterMode = %q, want include", cfg.FilterMode)
+	}
 	if cfg.PushMode != ModeClean || cfg.PullMode != ModeClean {
 		t.Errorf("migrated modes wrong: %+v", cfg)
 	}
@@ -393,7 +437,7 @@ func TestMigrateFromGlobal_PopulatesLocalLayout(t *testing.T) {
 		t.Errorf("Propagation default = %+v, want %+v", cfg.Propagation, want)
 	}
 	// On-disk artifacts present:
-	for _, p := range []string{paths.ConfigFile, paths.ExcludeFile, paths.IgnoreFile, paths.BaselineFile, paths.ImportsFile, paths.TombstonesFile} {
+	for _, p := range []string{paths.ConfigFile, paths.IncludeFile, paths.ExcludeFile, paths.IgnoreFile, paths.BaselineFile, paths.ImportsFile, paths.TombstonesFile} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("missing post-migration file %s: %v", p, err)
 		}

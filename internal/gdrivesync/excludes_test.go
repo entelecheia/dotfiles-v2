@@ -60,6 +60,18 @@ func TestLoadExcludePatterns_NoCommentsOrBlanks(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultIncludePatterns_ContainsBinaryPayloadRules(t *testing.T) {
+	patterns, err := LoadDefaultIncludePatterns()
+	if err != nil {
+		t.Fatalf("LoadDefaultIncludePatterns: %v", err)
+	}
+	for _, want := range []string{"*.tgz", "*.mp3", "*.mp4", "*.png", "*.jpg", "*.heic", "*.ai", "*.key", "*.pdf", "*.hwp*", "*.docx", "*.pptx", "*.xls*", "*.xlsx", "*.tsv", "*.html"} {
+		if !slices.Contains(patterns, want) {
+			t.Errorf("includes.txt missing required pattern %q\nGot patterns: %v", want, patterns)
+		}
+	}
+}
+
 func TestMaterializeExcludesFile_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 
@@ -117,12 +129,17 @@ func TestMaterializeExcludesFile_RewritesIfStale(t *testing.T) {
 }
 
 func TestCommonArgs_AlwaysOnRules(t *testing.T) {
-	args := commonArgs([]string{"/tmp/excludes.conf"}, false)
+	cfg := newTestConfig(t)
+	cfg.FilterMode = FilterModeExclude
+	cfg.ExcludesFile = "/tmp/excludes.conf"
+	args := commonArgs(cfg, "")
 
 	wantContains := []string{
 		"-a",
 		"--stats",
 		"--no-links",
+		"--exclude=/.dotfiles/",
+		"--exclude=/inbox/gdrive/",
 		"--exclude-from=/tmp/excludes.conf",
 	}
 	for _, w := range wantContains {
@@ -142,16 +159,50 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 	}
 
 	// With verbose=true: --progress should be present.
-	args = commonArgs([]string{"/tmp/x.conf"}, true)
+	cfg.Verbose = true
+	args = commonArgs(cfg, "")
 	if !slices.Contains(args, "--progress") {
 		t.Error("commonArgs(verbose=true) did not add --progress")
+	}
+}
+
+func TestCommonArgs_IncludeModeAddsCaseInsensitiveIncludes(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.FilterMode = FilterModeInclude
+	cfg.IncludePatterns = []string{"*.pdf", "*.hwp*"}
+
+	args := commonArgs(cfg, "")
+
+	for _, want := range []string{
+		"--include=*/",
+		"--include=*.[pP][dD][fF]",
+		"--include=*.[hH][wW][pP]*",
+		"--exclude=*",
+	} {
+		if !slices.Contains(args, want) {
+			t.Errorf("include-mode commonArgs missing %q\nargs: %v", want, args)
+		}
+	}
+}
+
+func TestCommonArgs_ExcludeModeDoesNotAddIncludeCatchall(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.FilterMode = FilterModeExclude
+
+	args := commonArgs(cfg, "")
+
+	for _, forbidden := range []string{"--include=*/", "--exclude=*"} {
+		if slices.Contains(args, forbidden) {
+			t.Errorf("exclude-mode commonArgs leaked %q\nargs: %v", forbidden, args)
+		}
 	}
 }
 
 func TestCommonArgs_NoDeleteFlags(t *testing.T) {
 	// commonArgs is shared between pull and push; the actual --delete-after / --update
 	// must be added by the caller. Guard: commonArgs must NOT inject either of those.
-	args := commonArgs([]string{"/tmp/x.conf"}, false)
+	cfg := newTestConfig(t)
+	args := commonArgs(cfg, "")
 	for _, forbidden := range []string{"--delete", "--delete-after", "--delete-excluded", "--update"} {
 		if slices.Contains(args, forbidden) {
 			t.Errorf("commonArgs leaked direction-specific flag %q (must be added by Pull/Push only)", forbidden)

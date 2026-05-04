@@ -45,6 +45,17 @@ func TestParseAutomaticModeFlag(t *testing.T) {
 	}
 }
 
+func TestParseFilterMode(t *testing.T) {
+	for _, raw := range []string{"include", "exclude", "INCLUDE"} {
+		if _, err := gdrivesync.ParseFilterMode(raw); err != nil {
+			t.Fatalf("ParseFilterMode(%q): %v", raw, err)
+		}
+	}
+	if _, err := gdrivesync.ParseFilterMode("legacy"); err == nil {
+		t.Fatal("ParseFilterMode(legacy) should fail")
+	}
+}
+
 func TestSetLocalSchedule_DryRunDoesNotPersist(t *testing.T) {
 	paths := gdrivesync.ResolveLocalPaths(t.TempDir())
 	cfg := &gdrivesync.Config{LocalPaths: paths}

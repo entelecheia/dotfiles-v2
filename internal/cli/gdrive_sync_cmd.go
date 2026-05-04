@@ -44,7 +44,7 @@ Drive-origin files still stage into inbox/gdrive for manual routing.
 	  dot gdrive-sync pull        Restore baseline-tracked payloads from mirror
 
 	Maintenance:
-	  dot gdrive-sync status      Show last pull/push/intake, conflicts, paused state, scheduler
+	  dot gdrive-sync status      Show filter mode, last pull/push/intake, conflicts, paused state, scheduler
 	  dot gdrive-sync conflicts   List timestamped backup directories
 	  dot gdrive-sync pause       Stop managed schedulers + set paused gate
 	  dot gdrive-sync resume      Clear paused gate and re-arm installed schedulers
@@ -57,6 +57,7 @@ Run without a subcommand to print this help.`,
 	}
 	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rsync progress output")
 	cmd.PersistentFlags().String("mode", gdrivesync.ModeManual.String(), "execution mode for push/pull: manual, clean, or force")
+	cmd.PersistentFlags().String("filter-mode", "", "override config filter mode for this run: include or exclude")
 	cmd.AddCommand(
 		newGdriveSyncSyncCmd(),
 		newGdriveSyncPullCmd(),
@@ -82,9 +83,10 @@ func newGdriveSyncInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Initialize <workspace>/.dotfiles/gdrive-sync/ from current state",
 		Long: `One-time onboarding for the per-workspace store. Creates
-<workspace>/.dotfiles/gdrive-sync/ with config.yaml, exclude.txt, ignore.txt,
-manifests, log dir; appends '/.dotfiles/' to <workspace>/.gitignore so the
-store is never committed; and creates <workspace>/inbox/gdrive/ if missing.
+<workspace>/.dotfiles/gdrive-sync/ with config.yaml, include.txt, exclude.txt,
+ignore.txt, manifests, log dir; appends '/.dotfiles/' to <workspace>/.gitignore
+so the store is never committed; and creates <workspace>/inbox/gdrive/ if
+missing.
 
 Idempotent — re-running on a populated store leaves operator edits intact and
 just heals any missing pieces.`,
@@ -121,9 +123,10 @@ func runGdriveSyncInit(cmd *cobra.Command, _ []string) error {
 	p.KV("Workspace", stripTrailingSlash(cfg.LocalPath))
 	p.KV("Mirror", stripTrailingSlash(cfg.MirrorPath))
 	p.KV("Propagation", cfg.Propagation.String())
+	p.KV("Filter mode", cfg.FilterMode.String())
 	p.KV("Inbox staging", inboxGdrive)
 	p.Blank()
-	p.Line("Edit %s to customize behavior; %s for additional ignore patterns.", paths.ConfigFile, paths.IgnoreFile)
+	p.Line("Edit %s to customize behavior; %s for include patterns; %s for additional ignore patterns.", paths.ConfigFile, paths.IncludeFile, paths.IgnoreFile)
 	p.Line("Run 'dot gdrive-sync setup' to verify rsync and keep automatic sync disabled unless intervals are passed.")
 	return nil
 }
@@ -138,6 +141,9 @@ func gdriveBootstrap(cmd *cobra.Command) (*config.UserState, *gdrivesync.Config,
 	}
 	cfg, err := gdrivesync.ResolveConfig(state)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := applyGdriveFilterModeOverride(cmd, cfg); err != nil {
 		return nil, nil, nil, err
 	}
 	verbose, _ := cmd.Flags().GetBool("verbose")
@@ -158,12 +164,28 @@ func gdriveBootstrapReadOnly(cmd *cobra.Command) (*config.UserState, *gdrivesync
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if err := applyGdriveFilterModeOverride(cmd, cfg); err != nil {
+		return nil, nil, nil, err
+	}
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	cfg.Verbose = verbose
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	runner := exec.NewRunner(dryRun, logger)
 	return state, cfg, runner, nil
+}
+
+func applyGdriveFilterModeOverride(cmd *cobra.Command, cfg *gdrivesync.Config) error {
+	if !cmd.Flags().Changed("filter-mode") {
+		return nil
+	}
+	raw, _ := cmd.Flags().GetString("filter-mode")
+	mode, err := gdrivesync.ParseFilterMode(raw)
+	if err != nil {
+		return fmt.Errorf("--filter-mode: %w", err)
+	}
+	cfg.FilterMode = mode
+	return nil
 }
 
 // gdriveScheduler builds a Scheduler bound to the same runner+cfg used
@@ -908,6 +930,16 @@ func runGdriveSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Paused", "no")
 	}
 	p.KV("Propagation", st.Propagation.String())
+	p.KV("Filter mode", st.FilterMode.String())
+	if st.IncludeFile != "" {
+		p.KV("Include file", st.IncludeFile)
+	}
+	if st.ExcludeFile != "" {
+		p.KV("Exclude file", st.ExcludeFile)
+	}
+	if st.IgnoreFile != "" {
+		p.KV("Ignore file", st.IgnoreFile)
+	}
 	if st.Interval > 0 {
 		p.KV("Push interval", formatInterval(st.Interval))
 		p.KV("Push mode", st.PushMode.String())

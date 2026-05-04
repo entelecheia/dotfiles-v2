@@ -44,6 +44,8 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 	cfg := &Config{
 		LocalPath:    local + "/",
 		MirrorPath:   mirror + "/",
+		FilterMode:   FilterModeExclude,
+		IncludeFile:  paths.IncludeFile,
 		ExcludesFile: paths.ExcludeFile,
 		IgnoreFile:   paths.IgnoreFile,
 		ConfigDir:    paths.StoreDir,
@@ -653,6 +655,79 @@ func TestIntake_AppliesExcludeIgnoreAndSharedFilters(t *testing.T) {
 	}
 	if len(res.Intaked) != 1 || res.Intaked[0] != "normal/file.md" {
 		t.Fatalf("Intaked = %v, want [normal/file.md]", res.Intaked)
+	}
+}
+
+func TestIntake_IncludeModeStagesOnlyIncludedPayloadsCaseInsensitive(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.FilterMode = FilterModeInclude
+	f.cfg.IncludePatterns = []string{"*.pdf", "*.hwp*", "*.mp3"}
+
+	f.writeMirror("docs/report.PDF", "keep")
+	f.writeMirror("docs/source.md", "skip")
+	f.writeMirror("audio/voice.MP3", "keep")
+	f.writeMirror("forms/application.HWPX", "keep")
+	f.writeMirror("node_modules/pkg/sound.mp3", "skip")
+
+	res, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"audio/voice.MP3", "docs/report.PDF", "forms/application.HWPX"}
+	if strings.Join(res.Intaked, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("Intaked = %v, want %v", res.Intaked, want)
+	}
+}
+
+func TestRefreshBaseline_IncludeModeSkipsTextAndHonorsCaseInsensitive(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.FilterMode = FilterModeInclude
+	f.cfg.IncludePatterns = []string{"*.pdf"}
+
+	f.writeMirror("docs/report.PDF", "keep")
+	f.writeLocal("docs/report.PDF", "keep")
+	f.writeMirror("docs/source.md", "skip")
+	f.writeLocal("docs/source.md", "skip")
+
+	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
+		t.Fatal(err)
+	}
+	base, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := base["docs/report.PDF"]; !ok {
+		t.Fatalf("included PDF missing from baseline: %v", base)
+	}
+	if _, ok := base["docs/source.md"]; ok {
+		t.Fatalf("text source should not be in include-mode baseline: %v", base)
+	}
+}
+
+func TestPlanPush_IncludeModeExcludesGitTrackedIncludedFiles(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.FilterMode = FilterModeInclude
+	f.cfg.IncludePatterns = []string{"*.pdf"}
+	if err := osexec.Command("git", "-C", f.local, "init").Run(); err != nil {
+		t.Skipf("git init unavailable: %v", err)
+	}
+	f.writeLocal("tracked.pdf", "git-owned")
+	f.writeLocal("asset.PDF", "drive-owned")
+	if err := osexec.Command("git", "-C", f.local, "add", "tracked.pdf").Run(); err != nil {
+		t.Skipf("git add unavailable: %v", err)
+	}
+
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Creates) != 1 || plan.Creates[0] != "asset.PDF" {
+		t.Fatalf("Creates = %v, want only asset.PDF", plan.Creates)
+	}
+	for _, rel := range append(append([]string{}, plan.Updates...), plan.Deletes...) {
+		if rel == "tracked.pdf" {
+			t.Fatalf("tracked included file leaked into push plan: %+v", plan)
+		}
 	}
 }
 

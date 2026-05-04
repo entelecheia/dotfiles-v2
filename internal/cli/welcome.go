@@ -194,7 +194,7 @@ func printUsecases(cmd *cobra.Command) {
 			{"dot gdrive-sync inbox clear",
 				"Empty imports.manifest and tombstones.log"},
 			{"dot gdrive-sync status",
-				"Paths, propagation policy, schedulers, last-pull/push/intake"},
+				"Paths, filter mode, propagation policy, schedulers, last-pull/push/intake"},
 			{"dot gdrive-sync pause",
 				"Stop managed schedulers + set the paused gate"},
 			{"dot gdrive-sync resume",

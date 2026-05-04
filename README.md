@@ -324,29 +324,42 @@ dot gdrive-sync                # alias for `push`
 dot gdrive-sync sync           # alias for `push`
 
 # Maintenance:
-dot gdrive-sync status         # paths, propagation, schedulers, last-pull/push/intake
+dot gdrive-sync status         # paths, filter mode, propagation, schedulers, last-pull/push/intake
 dot gdrive-sync conflicts      # list .sync-conflicts/<ts>/ entries with ages
 dot gdrive-sync pause          # stop managed schedulers (paused gate)
 dot gdrive-sync resume         # clear paused gate, re-arm installed schedulers
 dot gdrive-sync shared         # manage shared-folder exclusions (auto + manual)
 dot gdrive-sync migrate        # one-shot: convert legacy symlinks + bring mirror in (idempotent)
+
+# One-shot filter override:
+dot gdrive-sync push --filter-mode=exclude
 ```
 
 **Per-workspace store** at `<workspace>/.dotfiles/gdrive-sync/` is the authoritative config + state location:
 
 | File | Purpose |
 |------|---------|
-| `config.yaml` | machine-local propagation policy, opt-in intervals/modes, mirror_path, max_delete, shared_excludes |
+| `config.yaml` | machine-local filter_mode, propagation policy, opt-in intervals/modes, mirror_path, max_delete, shared_excludes |
 | `state.yaml` | machine-local last_pull / last_push / last_intake / last_intake_ts_dir |
+| `include.txt` | editable include list for binary/artifact payloads (default mode, case-insensitive) |
 | `exclude.txt` | editable static excludes (writable copy of embedded baseline) |
 | `ignore.txt` | user-supplied ignore patterns (additive layer) |
-| `shared-excludes.dyn.conf` | auto-generated per-run shared-folder list |
+| `shared-excludes.dyn.conf` | auto-generated per-run shared-folder + Git-tracked exclude list |
 | `baseline.manifest` | **Git-tracked** Drive payload index (relpath → strict fingerprint) |
 | `imports.manifest` | machine-local GDrive-origin files already intaked (relpath → fingerprint + imported-at) |
 | `tombstones.log` | machine-local mirror deletions detected (record-only, never propagated locally) |
 | `log/gdrive-sync.log` | rotated sync log |
 
 The legacy global `~/.config/dotfiles/config.yaml modules.gdrive_sync` block is consulted **once** to migrate values into this store on first invocation, then ignored. `init` appends a workspace `.gitignore` block that keeps machine-local state ignored while allowing `.dotfiles/gdrive-sync/baseline.manifest` to be committed.
+
+**Filter strategy** defaults to include-first binary sync:
+
+| Mode | Behavior |
+|------|----------|
+| `include` (default) | Sync only case-insensitive patterns in `include.txt`, then subtract `exclude.txt`, `ignore.txt`, shared-folder excludes, Git-tracked relpaths, symlinks, and always-on state paths. |
+| `exclude` | Back-compat mode: sync everything except `exclude.txt`, `ignore.txt`, shared-folder excludes, Git-tracked relpaths, symlinks, and always-on state paths. |
+
+Default include patterns: `*.tgz`, `*.gz`, `*.zst`, `*.ogg`, `*.mp3`, `*.mp4`, `*.wav`, `*.avi`, `*.mov`, `*.mkv`, `*.flac`, `*.srt`, `*.png`, `*.jpg`, `*.jpeg`, `*.heic`, `*.ai`, `*.key`, `*.pdf`, `*.hwp*`, `*.doc`, `*.docx`, `*.ppt`, `*.pptx`, `*.ppsx`, `*.pps`, `*.xls*`, `*.xlsx`, `*.xlsm`, `*.tsv`, `*.html`.
 
 **Propagation policy** maps to rsync flags:
 
@@ -378,12 +391,13 @@ Files in baseline that are missing from mirror become tombstones — recorded in
 
 **Key features:**
 - **Git-tracked baseline, Drive-backed payloads**: Git syncs the manifest across machines; Google Drive carries the large/binary payloads. Git-tracked files are excluded from baseline and handled by Git, not gdrive-sync.
+- **Include-first binary sync**: default `filter_mode: include` limits gdrive-sync to configured binary/artifact extensions. Use `filter_mode: exclude` or `--filter-mode=exclude` for the older broad-sync behavior.
 - **Preview-first push/pull**: `push` and `pull` show file lists and conflict status before applying. Direct commands default to `--mode=manual`; automation must opt into `clean` or `force`.
 - **Push-first for local artifacts**: `push` propagates workspace artifact state to mirror under the propagation policy. Default policy never deletes — operator opts into delete via `--propagate=...,delete` or by flipping `propagation.delete` in `config.yaml`.
-- **Always-on excludes**: `<workspace>/.dotfiles/` and `<workspace>/inbox/gdrive/` are anchored-excluded from push so the per-workspace store and intake staging area never round-trip to mirror — regardless of operator excludes.
+- **Always-on excludes**: `<workspace>/.dotfiles/` and `<workspace>/inbox/gdrive/` are anchored-excluded from rsync passes so the per-workspace store and intake staging area never round-trip to mirror — regardless of operator filters.
 - **Post-push baseline refresh**: a successful push rebuilds `baseline.manifest` from files present on both local and mirror, excluding Git-tracked files and using sha256 fingerprints for stable cross-machine diffs.
 - **Opt-in schedulers**: `setup` installs no automatic sync by default and removes managed gdrive-sync scheduler units. Pass `--push-interval=DUR --push-mode=clean|force` and/or `--pull-interval=DUR --pull-mode=clean|force` to enable automatic push or pull.
-- **Four-layer excludes**: (1) `.dotfiles/gdrive-sync/exclude.txt` (writable static baseline) + (2) `.dotfiles/gdrive-sync/ignore.txt` (user-supplied additive layer) + (3) per-run dynamic shared-folder list — Drive shortcuts auto-detected via `.shortcut-targets-by-id/` and `Shared drives/` symlink targets, plus an operator-curated manual list managed via `dot gdrive-sync shared add/remove` + (4) `--no-links` (skip all symlinks). `.gitignore` is intentionally not used as a sync filter because gitignored binaries are a primary gdrive-sync use case.
+- **Safety filters**: `exclude.txt`, `ignore.txt`, dynamic shared-folder excludes, Git-tracked relpaths, `--no-links`, `.dotfiles/`, and `inbox/gdrive/` are applied before include matching. `.gitignore` is intentionally not used as a sync filter because gitignored binaries are a primary gdrive-sync use case.
 - **Migration gate**: refuses to run while legacy symlinks (`.gdrive`, `inbox/downloads`, `inbox/incoming`) are still in place — point user to `migrate`.
 - **Pause gate**: `migrate` leaves `Paused=true` so the operator verifies first; `resume` clears it.
 - **Shared-drive refusal**: refuses to sync if `mirror_path` resolves under a Drive `Shared drives/` root — workspace-authoritative semantics would propagate deletions into a team drive.

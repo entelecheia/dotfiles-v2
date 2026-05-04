@@ -6,6 +6,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,23 +26,26 @@ const (
 
 // Config holds resolved gdrive-sync parameters. Populated by ResolveConfig.
 type Config struct {
-	LocalPath      string   // workspace tree, with trailing slash
-	MirrorPath     string   // gdrive tree, with trailing slash
-	ExcludesFile   string   // materialized static exclude list (under .dotfiles/gdrive-sync/)
-	IgnoreFile     string   // user-supplied ignore patterns (under .dotfiles/gdrive-sync/)
-	ConfigDir      string   // workspace-local store dir (.dotfiles/gdrive-sync/) — dynamic files land here
-	SharedExcludes []string // operator-curated shared paths (relative to MirrorPath)
-	LogFile        string
-	LockDir        string
-	RsyncPath      string // resolved rsync binary; empty if not installed
-	MaxDelete      int
-	Interval       int               // push scheduler cadence (seconds)
-	PullInterval   int               // pull scheduler cadence (0 = no unit)
-	PushMode       RunMode           // automatic push mode (clean|force)
-	PullMode       RunMode           // automatic pull mode (clean|force)
-	Propagation    PropagationPolicy // default {true,true,false}
-	Paused         bool              // mirrors LocalConfig.Paused; the auth source for sync gating
-	Verbose        bool
+	LocalPath       string // workspace tree, with trailing slash
+	MirrorPath      string // gdrive tree, with trailing slash
+	FilterMode      FilterMode
+	IncludeFile     string   // editable include list (under .dotfiles/gdrive-sync/)
+	IncludePatterns []string // parsed include list used by Go filters + rsync args
+	ExcludesFile    string   // materialized static exclude list (under .dotfiles/gdrive-sync/)
+	IgnoreFile      string   // user-supplied ignore patterns (under .dotfiles/gdrive-sync/)
+	ConfigDir       string   // workspace-local store dir (.dotfiles/gdrive-sync/) — dynamic files land here
+	SharedExcludes  []string // operator-curated shared paths (relative to MirrorPath)
+	LogFile         string
+	LockDir         string
+	RsyncPath       string // resolved rsync binary; empty if not installed
+	MaxDelete       int
+	Interval        int               // push scheduler cadence (seconds)
+	PullInterval    int               // pull scheduler cadence (0 = no unit)
+	PushMode        RunMode           // automatic push mode (clean|force)
+	PullMode        RunMode           // automatic pull mode (clean|force)
+	Propagation     PropagationPolicy // default {true,true,false}
+	Paused          bool              // mirrors LocalConfig.Paused; the auth source for sync gating
+	Verbose         bool
 
 	// LocalPaths exposes the resolved per-workspace layout for
 	// callers (status, init, manifest readers) that need granular
@@ -129,27 +133,35 @@ func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
 		// Defensive: heal a corrupt on-disk policy back to defaults.
 		policy = DefaultPropagationPolicy()
 	}
+	filterMode := normalizeFilterMode(localCfg.FilterMode)
+	includePatterns, err := loadPatternFileOrDefault(localPaths.IncludeFile, LoadDefaultIncludePatterns)
+	if err != nil {
+		return nil, fmt.Errorf("loading include patterns: %w", err)
+	}
 
 	rsyncPath, _ := osexec.LookPath("rsync")
 
 	return &Config{
-		LocalPath:      localPath,
-		MirrorPath:     mirrorPath,
-		ExcludesFile:   localPaths.ExcludeFile,
-		IgnoreFile:     localPaths.IgnoreFile,
-		ConfigDir:      localPaths.StoreDir,
-		SharedExcludes: append([]string(nil), localCfg.SharedExcludes...),
-		LogFile:        localPaths.LogFile,
-		LockDir:        systemPaths.LockDir,
-		RsyncPath:      rsyncPath,
-		MaxDelete:      maxDelete,
-		Interval:       schedule.Interval,
-		PullInterval:   schedule.PullInterval,
-		PushMode:       schedule.PushMode,
-		PullMode:       schedule.PullMode,
-		Propagation:    policy,
-		Paused:         localCfg.Paused,
-		LocalPaths:     localPaths,
+		LocalPath:       localPath,
+		MirrorPath:      mirrorPath,
+		FilterMode:      filterMode,
+		IncludeFile:     localPaths.IncludeFile,
+		IncludePatterns: includePatterns,
+		ExcludesFile:    localPaths.ExcludeFile,
+		IgnoreFile:      localPaths.IgnoreFile,
+		ConfigDir:       localPaths.StoreDir,
+		SharedExcludes:  append([]string(nil), localCfg.SharedExcludes...),
+		LogFile:         localPaths.LogFile,
+		LockDir:         systemPaths.LockDir,
+		RsyncPath:       rsyncPath,
+		MaxDelete:       maxDelete,
+		Interval:        schedule.Interval,
+		PullInterval:    schedule.PullInterval,
+		PushMode:        schedule.PushMode,
+		PullMode:        schedule.PullMode,
+		Propagation:     policy,
+		Paused:          localCfg.Paused,
+		LocalPaths:      localPaths,
 	}, nil
 }
 
@@ -165,9 +177,9 @@ func expandHome(path, home string) string {
 // pullArgs builds the rsync argv for the pull (mirror → local) pass.
 // Uses --update (workspace-authoritative) so workspace-only files are
 // never deleted. --backup snapshots overwrites into the conflict dir.
-// dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
+// dynExcludesFile is the per-run runtime exclude file; "" skips it.
 func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs(cfg, dynExcludesFile)
 	args = append(args,
 		"--update",
 		"--backup",
@@ -185,10 +197,9 @@ func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 // --ignore-existing for create/update toggles; --delete-after with
 // --max-delete cap for delete) and always excludes the workspace's
 // staging dirs so they never bounce back to mirror.
-// dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
+// dynExcludesFile is the per-run runtime exclude file; "" skips it.
 func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
-	args = append(args, pushAlwaysExcludes()...)
+	args := commonArgs(cfg, dynExcludesFile)
 	args = append(args, propagationFlags(cfg.Propagation, cfg.MaxDelete)...)
 	args = append(args,
 		"--backup",
@@ -201,16 +212,13 @@ func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 	return args
 }
 
-// pushAlwaysExcludes returns the workspace-anchored excludes that push
-// must enforce regardless of operator config: the per-workspace store
+// pushAlwaysExcludes returns the workspace-anchored excludes that all rsync
+// passes enforce regardless of operator config: the per-workspace store
 // (`.dotfiles/`) and the GDrive intake staging area (`inbox/gdrive/`).
 // Anchored with leading `/` so deeper subtrees with the same names are
-// untouched.
+// untouched. The name is kept for the push-arg tests that guard this behavior.
 func pushAlwaysExcludes() []string {
-	return []string{
-		"--exclude=/.dotfiles/",
-		"--exclude=/inbox/gdrive/",
-	}
+	return alwaysExcludeArgs()
 }
 
 // propagationFlags translates a PropagationPolicy into the rsync flags
@@ -239,9 +247,9 @@ func propagationFlags(p PropagationPolicy, maxDelete int) []string {
 
 // migrateArgs builds the rsync argv for the one-shot migration pull.
 // No --update, no --delete: pure additive bring-everything-in.
-// dynExcludesFile is the per-run shared/manual exclude file; "" skips it.
+// dynExcludesFile is the per-run runtime exclude file; "" skips it.
 func migrateArgs(cfg *Config, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs([]string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}, cfg.Verbose)
+	args := commonArgs(cfg, dynExcludesFile)
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
@@ -250,16 +258,26 @@ func migrateArgs(cfg *Config, dynExcludesFile string, dryRun bool) []string {
 }
 
 // prepareDynamicExcludes scans the mirror for Drive shortcuts, merges
-// the operator's manual list, and writes the union to a per-run file.
-// Returns the file path so callers can pass it to rsync as a second
-// --exclude-from. The file is always written (even empty) for
-// predictable layering — see MaterializeSharedExcludesFile.
+// the operator's manual list plus Git-tracked relpaths, and writes the
+// union to a per-run file. The file is always written (even empty) for
+// predictable layering.
 func prepareDynamicExcludes(cfg *Config) (string, error) {
 	entries, err := ScanShared(strings.TrimRight(cfg.MirrorPath, "/"), cfg.SharedExcludes)
 	if err != nil {
 		return "", fmt.Errorf("scanning shared entries: %w", err)
 	}
-	return MaterializeSharedExcludesFile(cfg.ConfigDir, entries)
+	tracked := sortedTrackedRelPaths(strings.TrimRight(cfg.LocalPath, "/"))
+	return MaterializeRuntimeExcludesFile(cfg.ConfigDir, entries, tracked)
+}
+
+func sortedTrackedRelPaths(root string) []string {
+	tracked := gitTrackedRelPaths(root)
+	paths := make([]string, 0, len(tracked))
+	for rel := range tracked {
+		paths = append(paths, rel)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // refuseSharedDriveMirror returns a non-nil error if cfg.MirrorPath

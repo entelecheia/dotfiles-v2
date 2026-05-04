@@ -8,7 +8,9 @@ import (
 )
 
 type syncFilter struct {
-	patterns []excludePattern
+	mode            FilterMode
+	excludePatterns []excludePattern
+	includePatterns []excludePattern
 }
 
 type excludePattern struct {
@@ -17,13 +19,30 @@ type excludePattern struct {
 }
 
 func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
-	f := &syncFilter{}
+	f := &syncFilter{mode: normalizeFilterMode(cfg.FilterMode)}
 	for _, path := range []string{cfg.ExcludesFile, cfg.IgnoreFile} {
 		patterns, err := loadExcludeFile(path, "")
 		if err != nil {
 			return nil, err
 		}
-		f.patterns = append(f.patterns, patterns...)
+		f.excludePatterns = append(f.excludePatterns, patterns...)
+	}
+	if f.mode == FilterModeInclude {
+		patterns := cfg.IncludePatterns
+		if len(patterns) == 0 {
+			var err error
+			patterns, err = loadPatternFileOrDefault(cfg.IncludeFile, LoadDefaultIncludePatterns)
+			if err != nil {
+				return nil, err
+			}
+		}
+		for _, p := range patterns {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			f.includePatterns = append(f.includePatterns, excludePattern{raw: strings.ToLower(p)})
+		}
 	}
 	shared, err := ScanShared(strings.TrimRight(cfg.MirrorPath, "/"), cfg.SharedExcludes)
 	if err != nil {
@@ -34,7 +53,7 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 		if rel == "" {
 			continue
 		}
-		f.patterns = append(f.patterns,
+		f.excludePatterns = append(f.excludePatterns,
 			excludePattern{raw: "/" + rel},
 			excludePattern{raw: "/" + rel + "/"},
 		)
@@ -75,12 +94,24 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 	if isAlwaysExcluded(rel) {
 		return true
 	}
-	for _, p := range f.patterns {
+	for _, p := range f.excludePatterns {
 		if p.matches(rel, isDir) {
 			return true
 		}
 	}
-	return false
+	if f.mode == FilterModeExclude {
+		return false
+	}
+	if isDir {
+		return false
+	}
+	lowerRel := strings.ToLower(rel)
+	for _, p := range f.includePatterns {
+		if p.matches(lowerRel, false) {
+			return false
+		}
+	}
+	return true
 }
 
 func (p excludePattern) matches(rel string, isDir bool) bool {

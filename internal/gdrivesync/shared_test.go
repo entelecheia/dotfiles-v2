@@ -257,3 +257,20 @@ func TestMaterializeSharedExcludesFile(t *testing.T) {
 		}
 	}
 }
+
+func TestMaterializeRuntimeExcludesFile_IncludesGitTrackedRelpaths(t *testing.T) {
+	tmp := t.TempDir()
+	path, err := MaterializeRuntimeExcludesFile(tmp, nil, []string{"tracked.pdf", "nested/source.go"})
+	if err != nil {
+		t.Fatalf("MaterializeRuntimeExcludesFile: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, want := range []string{"/tracked.pdf\n", "/nested/source.go\n"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("runtime excludes file missing %q\n--- got ---\n%s", want, body)
+		}
+	}
+}

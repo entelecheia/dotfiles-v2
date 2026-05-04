@@ -19,15 +19,26 @@ func newTestConfig(t *testing.T) *Config {
 	if err != nil {
 		t.Fatalf("MaterializeExcludesFile: %v", err)
 	}
+	includes, err := MaterializeIncludesFile(dir)
+	if err != nil {
+		t.Fatalf("MaterializeIncludesFile: %v", err)
+	}
+	includePatterns, err := LoadDefaultIncludePatterns()
+	if err != nil {
+		t.Fatalf("LoadDefaultIncludePatterns: %v", err)
+	}
 	return &Config{
-		LocalPath:    "/tmp/test-local/",
-		MirrorPath:   "/tmp/test-mirror/",
-		ConfigDir:    dir,
-		ExcludesFile: excludes,
-		LogFile:      "/tmp/test.log",
-		LockDir:      "/tmp/test.lock",
-		MaxDelete:    1000,
-		Propagation:  DefaultPropagationPolicy(),
+		LocalPath:       "/tmp/test-local/",
+		MirrorPath:      "/tmp/test-mirror/",
+		ConfigDir:       dir,
+		FilterMode:      DefaultFilterMode(),
+		IncludeFile:     includes,
+		IncludePatterns: includePatterns,
+		ExcludesFile:    excludes,
+		LogFile:         "/tmp/test.log",
+		LockDir:         "/tmp/test.lock",
+		MaxDelete:       1000,
+		Propagation:     DefaultPropagationPolicy(),
 	}
 }
 
@@ -305,6 +316,12 @@ func TestResolveConfig_Defaults(t *testing.T) {
 	want := DefaultPropagationPolicy()
 	if cfg.Propagation != want {
 		t.Errorf("Propagation = %+v, want %+v", cfg.Propagation, want)
+	}
+	if cfg.FilterMode != FilterModeInclude {
+		t.Errorf("FilterMode = %q, want include", cfg.FilterMode)
+	}
+	if cfg.IncludeFile == "" || len(cfg.IncludePatterns) == 0 {
+		t.Errorf("include defaults not resolved: file=%q patterns=%v", cfg.IncludeFile, cfg.IncludePatterns)
 	}
 	// LocalPaths is always populated so callers can drill into the .dotfiles store.
 	if cfg.LocalPaths == nil || cfg.LocalPaths.StoreDir == "" {

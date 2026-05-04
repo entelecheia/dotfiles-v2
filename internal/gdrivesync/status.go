@@ -18,6 +18,10 @@ type Status struct {
 	LocalExists          bool
 	MirrorExists         bool
 	Paused               bool
+	FilterMode           FilterMode
+	IncludeFile          string
+	ExcludeFile          string
+	IgnoreFile           string
 	Propagation          PropagationPolicy
 	LastPull             time.Time
 	LastPush             time.Time
@@ -58,6 +62,10 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		LocalExists:     runner.IsDir(cfg.LocalPath),
 		MirrorExists:    runner.IsDir(cfg.MirrorPath),
 		Paused:          cfg.Paused,
+		FilterMode:      cfg.FilterMode,
+		IncludeFile:     cfg.IncludeFile,
+		ExcludeFile:     cfg.ExcludesFile,
+		IgnoreFile:      cfg.IgnoreFile,
 		Propagation:     cfg.Propagation,
 		LastPull:        localState.LastPull,
 		LastPush:        localState.LastPush,
