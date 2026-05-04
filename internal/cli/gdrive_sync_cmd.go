@@ -40,14 +40,19 @@ Drive-origin files still stage into inbox/gdrive for manual routing.
 	  dot gdrive-sync setup       Check rsync and disable managed schedulers by default
 	  dot gdrive-sync migrate     One-time symlink → real-dir conversion + bring-down
 	  dot gdrive-sync resume      Clear the paused gate after migrate verified
-	  dot gdrive-sync             Default = push plan, then confirm
+	  dot gdrive-sync push        Push workspace → mirror (use --mode for clean/force)
+	  dot gdrive-sync pull        Restore baseline-tracked payloads from mirror
 
 	Maintenance:
 	  dot gdrive-sync status      Show last pull/push/intake, conflicts, paused state, scheduler
 	  dot gdrive-sync conflicts   List timestamped backup directories
 	  dot gdrive-sync pause       Stop managed schedulers + set paused gate
-	  dot gdrive-sync resume      Clear paused gate and re-arm installed schedulers`,
-		RunE:         runGdriveSync,
+	  dot gdrive-sync resume      Clear paused gate and re-arm installed schedulers
+
+Run without a subcommand to print this help.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
 		SilenceUsage: true,
 	}
 	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rsync progress output")
@@ -229,10 +234,10 @@ func newGdriveSyncSyncCmd() *cobra.Command {
 	}
 }
 
-// runGdriveSync is the handler for both the bare `dot gdrive-sync` and
-// the explicit `sync` subcommand. The historical Pull+Push semantics
-// were retired; this is now a thin alias for push that prints a one-line
-// deprecation hint so callers gradually migrate to the new name.
+// runGdriveSync handles the explicit `sync` subcommand. The historical
+// Pull+Push semantics were retired; this is now a thin alias for push that
+// prints a one-line deprecation hint so callers gradually migrate to
+// `push`. The bare `dot gdrive-sync` (no subcommand) prints help instead.
 func runGdriveSync(cmd *cobra.Command, args []string) error {
 	printerFrom(cmd).Line("(note: `sync` is now an alias for `push`; use `dot gdrive-sync pull` for baseline-tracked Drive payloads)")
 	return runGdriveSyncPush(cmd, args)
