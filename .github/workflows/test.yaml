@@ -37,9 +37,9 @@ jobs:
       - name: Unit tests with coverage
         run: go test ./... -race -count=1 -coverprofile=coverage.out
       - name: Build binary
-        run: go build -o bin/dotfiles ./cmd/dotfiles/
-      - run: ./bin/dotfiles --help
-      - run: ./bin/dotfiles version
+        run: go build -o bin/dot ./cmd/dot/
+      - run: ./bin/dot --help
+      - run: ./bin/dot version
       - name: Install shellcheck (macOS)
         if: runner.os == 'macOS'
         run: brew install shellcheck
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - run: go build -o dotfiles ./cmd/dotfiles/
+      - run: go build -o dot ./cmd/dot/
       - name: Build image + run profile
         env:
           TAG: dotfiles-test:${{ matrix.dockerfile }}
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - run: go build -o dotfiles ./cmd/dotfiles/
+      - run: go build -o dot ./cmd/dot/
       - run: docker build -t "$TAG" -f tests/Dockerfile.ubuntu-22.04 .
       - name: Modules
         run: |
@@ -134,7 +134,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - run: go build -o bin/dotfiles ./cmd/dotfiles/
+      - run: go build -o bin/dot ./cmd/dot/
       - name: Ensure jq is present
         run: command -v jq >/dev/null || brew install jq
       - name: Install defaults and verify /Applications

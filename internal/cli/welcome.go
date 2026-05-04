@@ -11,7 +11,7 @@ import (
 func printWelcome(cmd *cobra.Command, version, commit string) {
 	p := printerFrom(cmd)
 	v, c := ResolveVersion(version, commit)
-	p.Header("dotfiles " + v + " (" + c + ")")
+	p.Header("dot " + v + " (" + c + ")")
 	p.Line("  %s", ui.StyleValue.Render("Declarative user environment & workspace manager."))
 
 	// Detect status
@@ -20,9 +20,9 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 
 	if !initialized {
 		p.Section("Not configured yet")
-		p.Line("  %s  %s", ui.StyleKey.Render("1."), ui.StyleValue.Render("dotfiles init"))
+		p.Line("  %s  %s", ui.StyleKey.Render("1."), ui.StyleValue.Render("dot init"))
 		p.Line("     %s", ui.StyleHint.Render("Interactive setup — asks for name, email, profile, modules"))
-		p.Line("  %s  %s", ui.StyleKey.Render("2."), ui.StyleValue.Render("dotfiles apply"))
+		p.Line("  %s  %s", ui.StyleKey.Render("2."), ui.StyleValue.Render("dot apply"))
 		p.Line("     %s", ui.StyleHint.Render("Apply configuration to the system"))
 	} else {
 		p.Section("Current configuration")
@@ -30,24 +30,24 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	}
 
 	p.Section("Common commands")
-	printWelcomeCmd(p, "dotfiles status", "Full environment status at a glance")
-	printWelcomeCmd(p, "dotfiles apply", "Apply configuration")
-	printWelcomeCmd(p, "dotfiles check", "Show pending changes without applying")
-	printWelcomeCmd(p, "dotfiles config", "Display current config")
-	printWelcomeCmd(p, "dotfiles clean", "Remove junk directories (node_modules, caches)")
-	printWelcomeCmd(p, "dotfiles sync", "Sync binaries with remote server via rsync")
-	printWelcomeCmd(p, "dotfiles clone", "Sync workspace with Google Drive via rclone")
-	printWelcomeCmd(p, "dotfiles gdrive-sync", "Sync workspace artifacts with Drive mirror")
-	printWelcomeCmd(p, "dotfiles apps install", "Install macOS cask apps (interactive picker)")
-	printWelcomeCmd(p, "dotfiles apps backup", "Snapshot macOS app settings")
-	printWelcomeCmd(p, "dotfiles profile backup", "Version-snapshot config + app lists + secrets")
-	printWelcomeCmd(p, "dotfiles open <project>", "Launch/resume a tmux workspace")
-	printWelcomeCmd(p, "dotfiles list", "Show registered projects")
+	printWelcomeCmd(p, "dot status", "Full environment status at a glance")
+	printWelcomeCmd(p, "dot apply", "Apply configuration")
+	printWelcomeCmd(p, "dot check", "Show pending changes without applying")
+	printWelcomeCmd(p, "dot config", "Display current config")
+	printWelcomeCmd(p, "dot clean", "Remove junk directories (node_modules, caches)")
+	printWelcomeCmd(p, "dot sync", "Sync binaries with remote server via rsync")
+	printWelcomeCmd(p, "dot clone", "Sync workspace with Google Drive via rclone")
+	printWelcomeCmd(p, "dot gdrive-sync", "Sync workspace artifacts with Drive mirror")
+	printWelcomeCmd(p, "dot apps install", "Install macOS cask apps (interactive picker)")
+	printWelcomeCmd(p, "dot apps backup", "Snapshot macOS app settings")
+	printWelcomeCmd(p, "dot profile backup", "Version-snapshot config + app lists + secrets")
+	printWelcomeCmd(p, "dot open <project>", "Launch/resume a tmux workspace")
+	printWelcomeCmd(p, "dot list", "Show registered projects")
 
 	p.Blank()
-	p.Line("  %s", ui.StyleHint.Render("Tip: 'dot' is an alias for 'dotfiles' (e.g., 'dot apply')"))
-	p.Line("  %s", ui.StyleHint.Render("See 'dotfiles usecase' for detailed workflows"))
-	p.Line("  %s", ui.StyleHint.Render("See 'dotfiles help' for all commands"))
+	p.Line("  %s", ui.StyleHint.Render("Tip: 'dotfiles' remains a back-compat alias; use 'dot apply'"))
+	p.Line("  %s", ui.StyleHint.Render("See 'dot usecase' for detailed workflows"))
+	p.Line("  %s", ui.StyleHint.Render("See 'dot help' for all commands"))
 	p.Blank()
 }
 
@@ -72,237 +72,239 @@ func newUsecaseCmd() *cobra.Command {
 
 func printUsecases(cmd *cobra.Command) {
 	p := printerFrom(cmd)
-	p.Header("dotfiles Use Cases")
-	p.Line("  %s", ui.StyleHint.Render("Note: 'dot' is a shorthand alias for 'dotfiles'."))
-	p.Line("  %s", ui.StyleHint.Render("Examples below use 'dotfiles' — substitute 'dot' if you prefer."))
+	p.Header("dot Use Cases")
+	p.Line("  %s", ui.StyleHint.Render("Note: 'dot' is the canonical command; 'dotfiles' remains a back-compat alias."))
+	p.Line("  %s", ui.StyleHint.Render("Examples below use canonical 'dot'."))
 
 	section(p, "1. First-time setup on a new machine",
 		"Fresh install — get from zero to productive in minutes.",
 		[]usecase{
 			{"curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash",
 				"Download binary from GitHub Releases"},
-			{"dotfiles init",
+			{"dot init",
 				"Interactive setup (auto-detects git config, timezone, SSH keys)"},
-			{"dotfiles apply --dry-run",
+			{"dot apply --dry-run",
 				"Preview all changes before applying"},
-			{"dotfiles apply",
+			{"dot apply",
 				"Apply to system (installs packages, shell, git, etc.)"},
 		})
 
 	section(p, "2. Safe apply — preserve existing environment",
 		"Avoid overwriting your current config.",
 		[]usecase{
-			{"dotfiles preflight --check-only",
+			{"dot preflight --check-only",
 				"Scan environment, report conflicts"},
-			{"dotfiles preflight",
+			{"dot preflight",
 				"Generate config file from detected environment"},
-			{"dotfiles check",
+			{"dot check",
 				"Show which modules have pending changes"},
-			{"dotfiles diff --module shell",
+			{"dot diff --module shell",
 				"Preview changes for a specific module"},
-			{"dotfiles apply --module shell --module git",
+			{"dot apply --module shell --module git",
 				"Apply only selected modules"},
 		})
 
 	section(p, "3. Daily workspace — tmux + AI",
-		"Launch multi-panel dev workspaces. ('dot' is an alias for 'dotfiles')",
+		"Launch multi-panel dev workspaces with canonical 'dot'",
 		[]usecase{
-			{"dotfiles open myproject",
+			{"dot open myproject",
 				"Auto-register current dir and launch tmux workspace"},
-			{"dotfiles open myproject --layout claude",
+			{"dot open myproject --layout claude",
 				"Launch with specific layout override"},
-			{"dotfiles register myproject ~/dev/app --layout claude",
+			{"dot register myproject ~/dev/app --layout claude",
 				"Register project path with default layout"},
-			{"dotfiles list",
+			{"dot list",
 				"Show all registered projects and active sessions"},
-			{"dotfiles layouts",
+			{"dot layouts",
 				"Show available pane layouts (dev, claude, monitor)"},
-			{"dotfiles doctor",
+			{"dot doctor",
 				"Check which workspace tools are installed"},
-			{"dotfiles stop myproject",
+			{"dot stop myproject",
 				"Stop a running tmux session"},
 		})
 
 	section(p, "4. Workspace cleanup",
 		"Remove junk that wastes disk and breaks Drive sync. _sys/ is always protected.",
 		[]usecase{
-			{"dotfiles clean",
+			{"dot clean",
 				"Scan and preview (node_modules, __pycache__, .venv, .cache, .DS_Store)"},
-			{"dotfiles clean --yes",
+			{"dot clean --yes",
 				"Actually delete safe patterns"},
-			{"dotfiles clean --all --yes",
+			{"dot clean --all --yes",
 				"Include risky patterns (dist/, build/, out/, target/)"},
-			{"dotfiles status",
+			{"dot status",
 				"Full environment dashboard (system, modules, secrets, sync, workspace)"},
 		})
 
 	section(p, "5. Remote server sync (rsync)",
 		"Sync binary files with Ubuntu server over SSH. Text files use git only.",
 		[]usecase{
-			{"dotfiles sync setup",
+			{"dot sync setup",
 				"One-time setup: rsync, SSH key, remote host, binary extensions, scheduler"},
-			{"dotfiles sync",
+			{"dot sync",
 				"Pull-then-push (default): pull newer binaries, then push local"},
-			{"dotfiles sync pull",
+			{"dot sync pull",
 				"Pull only: remote → local (--update, safe)"},
-			{"dotfiles sync push",
+			{"dot sync push",
 				"Push only: local → remote (--delete-after, local is authority)"},
-			{"dotfiles sync status",
+			{"dot sync status",
 				"Show sync health, scheduler state, last result"},
 		})
 
 	section(p, "6. Google Drive sync (rclone)",
 		"Keep workspace synced across Macs via rclone.",
 		[]usecase{
-			{"dotfiles clone setup",
+			{"dot clone setup",
 				"One-time setup: install rclone, configure remote, deploy filter & scheduler"},
-			{"dotfiles clone",
+			{"dot clone",
 				"Pull from remote (safe, read-only on remote)"},
-			{"dotfiles clone push",
+			{"dot clone push",
 				"Push local changes to remote"},
-			{"dotfiles clone all",
+			{"dot clone all",
 				"Bidirectional sync (pull then push)"},
-			{"dotfiles clone status",
+			{"dot clone status",
 				"Show sync health, last run, scheduler state"},
 		})
 
 	section(p, "7. Local rsync mirror (gdrive-sync)",
-		"Git-shared baseline tracks Drive payloads; pull restores tracked binaries, intake stages new Drive files.",
+		"Git-shared baseline tracks Drive payloads; push/pull preview first, intake stages new Drive files.",
 		[]usecase{
-			{"dotfiles gdrive-sync init",
+			{"dot gdrive-sync init",
 				"One-time: create <workspace>/.dotfiles/gdrive-sync/ + migrate global state"},
-			{"dotfiles gdrive-sync setup",
-				"Install rsync (if missing) + push scheduler (launchd/systemd)"},
-			{"dotfiles gdrive-sync setup --pull-interval=15m",
-				"Also deploy a pull+intake scheduler at the given cadence (pass 0 to remove)"},
-			{"dotfiles gdrive-sync push",
-				"Workspace → mirror under propagation policy (default: create+update, no delete)"},
-			{"dotfiles gdrive-sync push --propagate=create,update,delete",
+			{"dot gdrive-sync setup",
+				"Check rsync and keep managed schedulers off by default"},
+			{"dot gdrive-sync setup --push-interval=15m --push-mode=clean",
+				"Opt into automatic push only when no Drive conflicts are detected"},
+			{"dot gdrive-sync setup --pull-interval=15m --pull-mode=force",
+				"Opt into automatic pull with overwrite backups"},
+			{"dot gdrive-sync push",
+				"Preview workspace → mirror changes, then confirm"},
+			{"dot gdrive-sync push --propagate=create,update,delete",
 				"Override policy for one run (refused if list is empty)"},
-			{"dotfiles gdrive-sync pull",
-				"Restore/update baseline-tracked Drive payloads into the workspace"},
-			{"dotfiles gdrive-sync intake",
-				"Pull tracked payloads, then stage new Drive-origin files into inbox/gdrive/<ts>/"},
-			{"dotfiles gdrive-sync intake --strict",
+			{"dot gdrive-sync pull",
+				"Preview baseline-tracked Drive payload changes, then confirm"},
+			{"dot gdrive-sync intake",
+				"Stage new Drive-origin files into inbox/gdrive/<ts>/"},
+			{"dot gdrive-sync intake --strict",
 				"Use sha256 fingerprints (catches mtime-preserved content edits)"},
-			{"dotfiles gdrive-sync inbox list",
+			{"dot gdrive-sync inbox list",
 				"Show staged run-dirs, imports manifest, tombstones"},
-			{"dotfiles gdrive-sync inbox forget <relpath>",
+			{"dot gdrive-sync inbox forget <relpath>",
 				"Drop one imports entry — next intake re-stages this path"},
-			{"dotfiles gdrive-sync inbox clear",
+			{"dot gdrive-sync inbox clear",
 				"Empty imports.manifest and tombstones.log"},
-			{"dotfiles gdrive-sync status",
+			{"dot gdrive-sync status",
 				"Paths, propagation policy, schedulers, last-pull/push/intake"},
-			{"dotfiles gdrive-sync pause",
-				"Stop both schedulers + set the paused gate"},
-			{"dotfiles gdrive-sync resume",
-				"Clear paused gate, re-arm both schedulers"},
-			{"dotfiles gdrive-sync shared",
+			{"dot gdrive-sync pause",
+				"Stop managed schedulers + set the paused gate"},
+			{"dot gdrive-sync resume",
+				"Clear paused gate, re-arm installed schedulers"},
+			{"dot gdrive-sync shared",
 				"Manage shared-folder exclusions (auto-detected shortcuts + manual list)"},
-			{"dotfiles gdrive-sync migrate",
+			{"dot gdrive-sync migrate",
 				"One-shot: convert legacy symlinks + additive bring-down (idempotent)"},
 		})
 
 	section(p, "8. Google Drive exclusions (macOS)",
 		"Exclude heavy directories (node_modules, build caches) from Drive sync.",
 		[]usecase{
-			{"dotfiles drive-exclude scan",
+			{"dot drive-exclude scan",
 				"Find excludable directories under ~/workspace"},
-			{"dotfiles drive-exclude apply --dry-run",
+			{"dot drive-exclude apply --dry-run",
 				"Preview exclusions"},
-			{"dotfiles drive-exclude apply --yes",
+			{"dot drive-exclude apply --yes",
 				"Apply xattr to all pending directories"},
-			{"dotfiles drive-exclude add ~/myproject/node_modules",
+			{"dot drive-exclude add ~/myproject/node_modules",
 				"Manually exclude a specific path"},
 		})
 
 	section(p, "9. Secrets management (age encryption)",
 		"Encrypt SSH keys and shell secrets with age.",
 		[]usecase{
-			{"dotfiles secrets init --scaffold",
+			{"dot secrets init --scaffold",
 				"Create empty shell secrets template (0600), then encrypt SSH key + any shell secrets"},
-			{"dotfiles secrets init",
+			{"dot secrets init",
 				"Encrypt existing SSH key + shell secrets"},
-			{"dotfiles secrets status",
+			{"dot secrets status",
 				"Show decrypted/encrypted file status"},
-			{"dotfiles secrets backup ~/backup",
+			{"dot secrets backup ~/backup",
 				"Copy encrypted files to backup location"},
-			{"dotfiles secrets restore ~/backup",
+			{"dot secrets restore ~/backup",
 				"Decrypt from backup on new machine"},
 		})
 
 	section(p, "10. macOS app management (cask install + settings backup)",
 		"Install apps from an embedded catalog; back up and restore per-app settings.",
 		[]usecase{
-			{"dotfiles apps list",
+			{"dot apps list",
 				"Browse the cask catalog (★ defaults, ✓ installed)"},
-			{"dotfiles apps install",
+			{"dot apps install",
 				"Interactive checkbox picker → save selection → install missing casks"},
-			{"dotfiles apps install raycast obsidian",
+			{"dot apps install raycast obsidian",
 				"Install specific casks by token"},
-			{"dotfiles apps install --defaults",
+			{"dot apps install --defaults",
 				"Install the catalog's 20-app default set"},
-			{"dotfiles apps status",
+			{"dot apps status",
 				"Show install + backup presence for each tracked app"},
-			{"dotfiles apps backup",
+			{"dot apps backup",
 				"Snapshot per-app settings (plists, Application Support) to backup root"},
-			{"dotfiles apps backup moom hazel --to ~/backup",
+			{"dot apps backup moom hazel --to ~/backup",
 				"Back up specific apps to a custom path"},
-			{"dotfiles apps restore",
+			{"dot apps restore",
 				"Restore all backed-up settings (confirms first, flushes cfprefsd)"},
 		})
 
 	section(p, "11. Profile snapshots (versioned config backup)",
 		"Snapshot config.yaml, cask lists, and optional secrets into timestamped versions.",
 		[]usecase{
-			{"dotfiles profile backup",
+			{"dot profile backup",
 				"Create a new version snapshot under <backup-root>/profiles/<host>/"},
-			{"dotfiles profile backup --tag pre-migration --include-secrets",
+			{"dot profile backup --tag pre-migration --include-secrets",
 				"Tag the snapshot and include ~/.ssh/age_key*"},
-			{"dotfiles profile list",
+			{"dot profile list",
 				"List all snapshots for this host (★ marks latest)"},
-			{"dotfiles profile restore",
+			{"dot profile restore",
 				"Restore the latest snapshot (config.yaml → ~/.config/dotfiles/)"},
-			{"dotfiles profile restore --version 20260416T083412Z --include-secrets",
+			{"dot profile restore --version 20260416T083412Z --include-secrets",
 				"Restore a specific version including age keys"},
-			{"dotfiles profile prune --keep 5",
+			{"dot profile prune --keep 5",
 				"Delete snapshots older than the 5 most recent"},
 		})
 
 	section(p, "12. Cross-machine migration",
 		"Move your full setup to a new Mac in minutes.",
 		[]usecase{
-			{"dotfiles profile backup --tag pre-migration --include-secrets",
+			{"dot profile backup --tag pre-migration --include-secrets",
 				"[old machine] Snapshot config + age keys to Drive"},
-			{"dotfiles apps backup",
+			{"dot apps backup",
 				"[old machine] Snapshot per-app settings to Drive"},
-			{"dotfiles profile restore --include-secrets",
+			{"dot profile restore --include-secrets",
 				"[new machine] Restore config.yaml + age keys from latest snapshot"},
-			{"dotfiles apply",
+			{"dot apply",
 				"[new machine] Apply: packages, shell, git, cask installs, workspace…"},
-			{"dotfiles apps restore",
+			{"dot apps restore",
 				"[new machine] Restore plists and app settings"},
 		})
 
 	section(p, "13. Prompt style",
 		"Switch between a minimal and a rich Starship prompt.",
 		[]usecase{
-			{"dotfiles reconfigure",
+			{"dot reconfigure",
 				"Re-run init (Prompt style: minimal / rich)"},
-			{"dotfiles apply --module terminal",
+			{"dot apply --module terminal",
 				"Deploy the selected starship.toml immediately"},
 		})
 
 	section(p, "14. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
-			{"dotfiles update --check",
+			{"dot update --check",
 				"Check for newer version"},
-			{"dotfiles update",
+			{"dot update",
 				"Download and install latest release"},
-			{"dotfiles reconfigure",
+			{"dot reconfigure",
 				"Re-run init prompts with current values as defaults"},
-			{"dotfiles version",
+			{"dot version",
 				"Show installed version and build info"},
 		})
 
@@ -311,26 +313,26 @@ func printUsecases(cmd *cobra.Command) {
 		[]usecase{
 			{"curl -fsSL .../install.sh | bash",
 				"Install binary"},
-			{"dotfiles init --yes",
+			{"dot init --yes",
 				"Auto-selects 'server' profile when GPU detected"},
-			{"dotfiles apply --yes",
+			{"dot apply --yes",
 				"Apply server profile (no workspace, fonts, gpg, secrets)"},
 		})
 
 	section(p, "16. Troubleshooting",
 		"Diagnose and recover from issues.",
 		[]usecase{
-			{"dotfiles doctor",
+			{"dot doctor",
 				"Check workspace tool installation"},
-			{"dotfiles status",
+			{"dot status",
 				"Full environment dashboard at a glance"},
-			{"dotfiles config",
+			{"dot config",
 				"Show loaded configuration and system info"},
-			{"dotfiles clone reconnect",
+			{"dot clone reconnect",
 				"Fix expired Google Drive authentication"},
-			{"dotfiles clone log 100",
+			{"dot clone log 100",
 				"View recent rclone sync log entries"},
-			{"dotfiles sync log 100",
+			{"dot sync log 100",
 				"View recent rsync sync log entries"},
 		})
 
@@ -343,7 +345,7 @@ func printUsecases(cmd *cobra.Command) {
 	printFlag(p, "--home", "Override home directory (admin setup)")
 
 	p.Blank()
-	p.Line("  %s", ui.StyleHint.Render("Run 'dotfiles <command> --help' for detailed options"))
+	p.Line("  %s", ui.StyleHint.Render("Run 'dot <command> --help' for detailed options"))
 	p.Blank()
 }
 

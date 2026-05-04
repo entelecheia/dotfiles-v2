@@ -107,7 +107,7 @@ ensure_path() {
   info "Adding \$target_dir to PATH in \$rc_file"
   {
     echo ""
-    echo "# Added by dotfiles installer"
+    echo "# Added by dot installer"
     echo "\$path_line"
   } >> "\$rc_file"
   export PATH="\$target_dir:\$PATH"
@@ -168,8 +168,8 @@ rm -f "$DETECT"
 echo ""
 echo "--- config export/import roundtrip ---"
 
-# Only test if dotfiles binary is available (CI builds it)
-if command -v dotfiles &>/dev/null; then
+# Only test if dot binary is available (CI builds it)
+if command -v dot &>/dev/null; then
   EXPORT_HOME=$(mktemp -d)
 
   # Set up minimal git config (Docker/CI may not have one)
@@ -177,17 +177,17 @@ if command -v dotfiles &>/dev/null; then
   git config --global user.email "test@example.com" 2>/dev/null || true
 
   # Init with defaults
-  dotfiles init --yes --home "$EXPORT_HOME"
+  dot init --yes --home "$EXPORT_HOME"
   assert_file_exists "$EXPORT_HOME/.config/dotfiles/config.yaml" "Init creates config"
 
   # Export
   EXPORT_FILE=$(mktemp)
-  dotfiles config export --home "$EXPORT_HOME" > "$EXPORT_FILE"
+  dot config export --home "$EXPORT_HOME" > "$EXPORT_FILE"
   assert_exit_code 0 test -s "$EXPORT_FILE"
 
   # Import into fresh home
   IMPORT_HOME=$(mktemp -d)
-  dotfiles init --from "$EXPORT_FILE" --yes --home "$IMPORT_HOME"
+  dot init --from "$EXPORT_FILE" --yes --home "$IMPORT_HOME"
   assert_file_exists "$IMPORT_HOME/.config/dotfiles/config.yaml" "Import creates config"
 
   # Verify name matches
@@ -205,7 +205,7 @@ if command -v dotfiles &>/dev/null; then
   # Test empty file rejection
   EMPTY_FILE=$(mktemp)
   : > "$EMPTY_FILE"
-  if dotfiles init --from "$EMPTY_FILE" --yes --home "$(mktemp -d)" 2>/dev/null; then
+  if dot init --from "$EMPTY_FILE" --yes --home "$(mktemp -d)" 2>/dev/null; then
     FAIL=$((FAIL + 1))
     ERRORS+=("FAIL: Should reject empty import file")
     echo "  ✗ Should reject empty import file"
@@ -217,7 +217,7 @@ if command -v dotfiles &>/dev/null; then
   rm -f "$EXPORT_FILE" "$EMPTY_FILE"
   rm -rf "$EXPORT_HOME" "$IMPORT_HOME"
 else
-  echo "  (dotfiles binary not available, skipping config roundtrip)"
+  echo "  (dot binary not available, skipping config roundtrip)"
 fi
 
 report

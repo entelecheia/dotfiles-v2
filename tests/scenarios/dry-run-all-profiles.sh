@@ -8,8 +8,8 @@ echo "=== Scenario: dry-run all profiles ==="
 for profile in minimal full server; do
   echo ""
   echo "--- dry-run: $profile ---"
-  dotfiles apply --profile "$profile" --yes --dry-run
-  assert_exit_code 0 dotfiles apply --profile "$profile" --yes --dry-run
+  dot apply --profile "$profile" --yes --dry-run
+  assert_exit_code 0 dot apply --profile "$profile" --yes --dry-run
 done
 
 # Verify no user-facing config files were written (internal state dirs are OK)

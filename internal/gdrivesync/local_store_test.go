@@ -206,6 +206,8 @@ func TestLocalConfig_RoundTrip(t *testing.T) {
 		MaxDelete:      500,
 		Interval:       600,
 		PullInterval:   900,
+		PushMode:       ModeClean,
+		PullMode:       ModeForce,
 		Paused:         true,
 		SharedExcludes: []string{"projects/foo", "projects/bar"},
 	}
@@ -225,6 +227,8 @@ func TestLocalConfig_RoundTrip(t *testing.T) {
 		got.MaxDelete != original.MaxDelete ||
 		got.Interval != original.Interval ||
 		got.PullInterval != original.PullInterval ||
+		got.PushMode != original.PushMode ||
+		got.PullMode != original.PullMode ||
 		got.Paused != original.Paused ||
 		len(got.SharedExcludes) != len(original.SharedExcludes) {
 		t.Errorf("round-trip mismatch:\n  got %+v\n  want %+v", got, original)
@@ -238,6 +242,110 @@ func TestLocalConfig_RefusesEmptyPropagationOnSave(t *testing.T) {
 	cfg := &LocalConfig{Propagation: PropagationPolicy{}} // all-false
 	if err := SaveLocalConfig(paths, cfg); err == nil {
 		t.Error("SaveLocalConfig should reject all-false propagation")
+	}
+}
+
+func TestLoadLocalConfig_InvalidScheduleModesFallBackToClean(t *testing.T) {
+	tmp := t.TempDir()
+	paths := ResolveLocalPaths(tmp)
+	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`propagation:
+    create: true
+    update: true
+    delete: false
+push_mode: manual
+pull_mode: bogus
+`)
+	if err := os.WriteFile(paths.ConfigFile, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatalf("LoadLocalConfig: %v", err)
+	}
+	if !ok {
+		t.Fatal("LoadLocalConfig reported missing")
+	}
+	if got.PushMode != ModeClean || got.PullMode != ModeClean {
+		t.Fatalf("invalid modes should fall back to clean; got push=%q pull=%q", got.PushMode, got.PullMode)
+	}
+}
+
+func TestLoadLocalConfig_InvalidScheduleIntervalsAreClamped(t *testing.T) {
+	tmp := t.TempDir()
+	paths := ResolveLocalPaths(tmp)
+	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`propagation:
+    create: true
+    update: true
+    delete: false
+interval: 30
+pull_interval: 999999
+`)
+	if err := os.WriteFile(paths.ConfigFile, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok, err := LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatalf("LoadLocalConfig: %v", err)
+	}
+	if !ok {
+		t.Fatal("LoadLocalConfig reported missing")
+	}
+	if got.Interval != ScheduleIntervalMin || got.PullInterval != ScheduleIntervalMax {
+		t.Fatalf("invalid intervals should clamp to supported range; got push=%d pull=%d", got.Interval, got.PullInterval)
+	}
+}
+
+func TestSaveLocalConfig_RejectsInvalidScheduleConfigWithoutWriting(t *testing.T) {
+	tmp := t.TempDir()
+
+	cases := []struct {
+		name string
+		cfg  *LocalConfig
+	}{
+		{
+			name: "manual push mode",
+			cfg: &LocalConfig{
+				Propagation: DefaultPropagationPolicy(),
+				PushMode:    ModeManual,
+				PullMode:    ModeClean,
+			},
+		},
+		{
+			name: "unknown pull mode",
+			cfg: &LocalConfig{
+				Propagation: DefaultPropagationPolicy(),
+				PushMode:    ModeClean,
+				PullMode:    RunMode("bogus"),
+			},
+		},
+		{
+			name: "invalid push interval",
+			cfg: &LocalConfig{
+				Propagation: DefaultPropagationPolicy(),
+				Interval:    30,
+				PushMode:    ModeClean,
+				PullMode:    ModeClean,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			casePaths := ResolveLocalPaths(filepath.Join(tmp, strings.ReplaceAll(tc.name, " ", "-")))
+			if err := SaveLocalConfig(casePaths, tc.cfg); err == nil {
+				t.Fatal("SaveLocalConfig should reject invalid schedule config")
+			}
+			if _, err := os.Stat(casePaths.ConfigFile); !os.IsNotExist(err) {
+				t.Fatalf("invalid config should not be written; stat err=%v", err)
+			}
+		})
 	}
 }
 
@@ -270,8 +378,11 @@ func TestMigrateFromGlobal_PopulatesLocalLayout(t *testing.T) {
 		t.Fatalf("MigrateFromGlobal: %v", err)
 	}
 	// Migrated fields:
-	if cfg.MirrorPath != "/legacy/mirror" || cfg.MaxDelete != 250 || cfg.Interval != 600 || !cfg.Paused {
+	if cfg.MirrorPath != "/legacy/mirror" || cfg.MaxDelete != 250 || cfg.Interval != 0 || !cfg.Paused {
 		t.Errorf("migrated fields wrong: %+v", cfg)
+	}
+	if cfg.PushMode != ModeClean || cfg.PullMode != ModeClean {
+		t.Errorf("migrated modes wrong: %+v", cfg)
 	}
 	if len(cfg.SharedExcludes) != 1 || cfg.SharedExcludes[0] != "projects/legacy" {
 		t.Errorf("SharedExcludes not migrated: %+v", cfg.SharedExcludes)

@@ -108,30 +108,30 @@ VERSION="${LATEST#v}"
 # Download helper — uses --no-netrc to prevent stale credential interference
 download_binary() {
   local url="$1" dest="$2"
-  if ! curl -fSL --no-netrc "$url" | tar xz -C "$dest" dotfiles; then
+  if ! curl -fSL --no-netrc "$url" | tar xz -C "$dest" dot; then
     err "Download failed: $url"
     exit 1
   fi
-  chmod +x "$dest/dotfiles"
+  chmod +x "$dest/dot"
 }
 
 # Skip download if already at latest version
-if [[ -x "$INSTALL_DIR/dotfiles" ]]; then
-  CURRENT=$("$INSTALL_DIR/dotfiles" --version 2>/dev/null || echo "")
+if [[ -x "$INSTALL_DIR/dot" ]]; then
+  CURRENT=$("$INSTALL_DIR/dot" --version 2>/dev/null || echo "")
   if [[ "$CURRENT" == *"$VERSION"* ]]; then
-    info "dotfiles v${VERSION} already installed, skipping download"
+    info "dot v${VERSION} already installed, skipping download"
   else
-    info "Upgrading dotfiles to v${VERSION}..."
-    download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
+    info "Upgrading dot to v${VERSION}..."
+    download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dot_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
   fi
 else
-  info "Installing dotfiles v${VERSION}..."
+  info "Installing dot v${VERSION}..."
   mkdir -p "$INSTALL_DIR"
-  download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
+  download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dot_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
 fi
 
-# Create 'dot' convenience symlink
-ln -sf "$INSTALL_DIR/dotfiles" "$INSTALL_DIR/dot"
+# Create 'dotfiles' back-compat symlink → dot
+ln -sf "$INSTALL_DIR/dot" "$INSTALL_DIR/dotfiles"
 
 # --- Step 4: Ensure PATH ---
 
@@ -162,7 +162,7 @@ ensure_path() {
   info "Adding $target_dir to PATH in $rc_file"
   {
     echo ""
-    echo "# Added by dotfiles installer"
+    echo "# Added by dot installer"
     echo "$path_line"
   } >> "$rc_file"
 

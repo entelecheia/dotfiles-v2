@@ -22,6 +22,7 @@ func newTestConfig(t *testing.T) *Config {
 	return &Config{
 		LocalPath:    "/tmp/test-local/",
 		MirrorPath:   "/tmp/test-mirror/",
+		ConfigDir:    dir,
 		ExcludesFile: excludes,
 		LogFile:      "/tmp/test.log",
 		LockDir:      "/tmp/test.lock",

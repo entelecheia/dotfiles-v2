@@ -231,7 +231,7 @@ func ConvertSymlinks(runner *exec.Runner, localBase string) error {
 // conversion → additive pull from mirror → local config save with Paused=true.
 //
 // The Paused gate is on purpose: the migration brings everything down
-// from gdrive but does NOT auto-enable push-first sync. The user
+// from gdrive but does NOT auto-enable sync. The user
 // inspects the result (du, sha256, git status) and runs `dot
 // gdrive-sync resume` to clear the gate when satisfied.
 //

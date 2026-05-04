@@ -1,4 +1,4 @@
-# macOS cask catalog consumed by `dotfiles apps install` and the init wizard.
+# macOS cask catalog consumed by `dot apps install` and the init wizard.
 # Groups keep the checkbox list navigable; tokens are Homebrew cask identifiers.
 # `defaults` is the minimal preselection; `recommended` is the curated full set.
 

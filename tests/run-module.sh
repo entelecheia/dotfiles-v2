@@ -18,17 +18,17 @@ case "$MODULE" in
 esac
 
 # Init with appropriate profile
-dotfiles init --profile "$PROFILE" --yes
+dot init --profile "$PROFILE" --yes
 
 # Apply single module
 echo ""
 echo "--- apply module: $MODULE (profile: $PROFILE) ---"
-dotfiles apply --profile "$PROFILE" --module "$MODULE" --yes
+dot apply --profile "$PROFILE" --module "$MODULE" --yes
 
 # Module-specific assertions
 case "$MODULE" in
   packages)
-    assert_command_exists dotfiles "dotfiles binary available"
+    assert_command_exists dot "dot binary available"
     ;;
   shell)
     assert_dir_exists "$HOME/.config/shell" "Shell config directory"

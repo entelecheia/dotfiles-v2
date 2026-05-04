@@ -82,7 +82,7 @@ func newListCmd() *cobra.Command {
 			p := printerFrom(cmd)
 			p.Header(fmt.Sprintf("Projects (%d)", len(cfg.Projects)))
 			if len(cfg.Projects) == 0 {
-				p.Line("  %s", ui.StyleHint.Render("(none — use 'dotfiles register <name>' to add one)"))
+				p.Line("  %s", ui.StyleHint.Render("(none — use 'dot register <name>' to add one)"))
 			}
 			for _, proj := range cfg.Projects {
 				layout := cfg.EffectiveLayout(&proj)
@@ -235,7 +235,7 @@ func newDoctorCmd() *cobra.Command {
 			}
 			for _, name := range status.Required {
 				p.Bullet(ui.StyleError.Render(ui.MarkFail),
-					fmt.Sprintf("%-12s %s", name, ui.StyleHint.Render("(required — run 'dotfiles apply' to install)")))
+					fmt.Sprintf("%-12s %s", name, ui.StyleHint.Render("(required — run 'dot apply' to install)")))
 			}
 			for _, name := range status.Missing {
 				p.Bullet(ui.StyleHint.Render(ui.MarkPartial),

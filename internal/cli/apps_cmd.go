@@ -20,7 +20,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
-// newAppsCmd returns the `dotfiles apps` command with subcommands for
+// newAppsCmd returns the `dot apps` command with subcommands for
 // macOS application install + settings backup/restore.
 func newAppsCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -126,7 +126,7 @@ App Store or downloaded directly) are skipped by default. Pass --force to
 reinstall them over the existing bundle.
 
 After an interactive run, the updated selection can be saved back to the user
-state file so subsequent 'dotfiles apply' runs honour it.`,
+state file so subsequent 'dot apply' runs honour it.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: runAppsInstall,
 	}
@@ -884,4 +884,3 @@ func recordLastBackup(cmd *cobra.Command, path string, files int) error {
 	}
 	return config.SaveState(state)
 }
-

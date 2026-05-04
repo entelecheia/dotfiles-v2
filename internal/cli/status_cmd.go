@@ -31,7 +31,7 @@ func newStatusCmd() *cobra.Command {
 
 func runStatus(cmd *cobra.Command, _ []string) error {
 	p := printerFrom(cmd)
-	p.Header("dotfiles Status")
+	p.Header("dot Status")
 
 	// ── load shared state ──────────────────────────────────────────────
 	state, err := config.LoadState()
@@ -156,7 +156,7 @@ func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState,
 	if pending := total - satisfied; pending > 0 {
 		p.Blank()
 		p.Line("  %s", ui.StyleHint.Render(
-			fmt.Sprintf("%d module(s) need attention — run 'dotfiles check' for details.", pending)))
+			fmt.Sprintf("%d module(s) need attention — run 'dot check' for details.", pending)))
 	}
 }
 
@@ -210,7 +210,7 @@ func statusPrintSync(p *Printer, state *config.UserState) {
 	p.Section("Sync")
 
 	if state.Modules.Rsync.RemoteHost == "" {
-		p.Line("  %s", ui.StyleHint.Render("(not configured — run 'dotfiles sync setup')"))
+		p.Line("  %s", ui.StyleHint.Render("(not configured — run 'dot sync setup')"))
 		return
 	}
 
@@ -263,7 +263,7 @@ func statusPrintWorkspace(p *Printer) {
 	p.Section(fmt.Sprintf("Workspace (%d projects)", len(cfg.Projects)))
 
 	if len(cfg.Projects) == 0 {
-		p.Line("  %s", ui.StyleHint.Render("(none — use 'dotfiles register <name>' to add one)"))
+		p.Line("  %s", ui.StyleHint.Render("(none — use 'dot register <name>' to add one)"))
 		return
 	}
 

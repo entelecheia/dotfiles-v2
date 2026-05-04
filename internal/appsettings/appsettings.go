@@ -5,8 +5,8 @@
 package appsettings
 
 import (
-	_ "embed"
 	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"os"
@@ -73,7 +73,7 @@ func (m *Manifest) App(token string) *AppEntry {
 //	<Root>/app-settings/<Hostname>/<app-token>/<Library-relative-path>
 //
 // The "app-settings" prefix keeps app-setting snapshots sibling to the
-// profile snapshots produced by `dotfiles profile backup`.
+// profile snapshots produced by `dot profile backup`.
 type Engine struct {
 	Runner   *exec.Runner
 	HomeDir  string // user home (Library lives here)

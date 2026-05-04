@@ -23,7 +23,7 @@ const (
 	AgentsSSOTName    = "AGENTS.md"
 
 	agentsStateName      = ".state.json"
-	agentsManagedHeader  = "<!-- managed by dotfiles ai agents - edit ~/.config/dotfiles/agents/AGENTS.md -->"
+	agentsManagedHeader  = "<!-- managed by dot ai agents - edit ~/.config/dotfiles/agents/AGENTS.md -->"
 	agentsOverlayPattern = "<!-- overlay:%s -->"
 )
 
@@ -446,7 +446,7 @@ func (m *AgentsManager) Author(opts AuthorOptions) (*AuthorResult, error) {
 		return m.authorSection(opts.Section, opts.Value)
 	}
 	if !stdinIsTerminal() {
-		return nil, fmt.Errorf("agents author requires a TTY; use `dotfiles ai agents init` plus `dotfiles ai agents edit`, or pass --non-interactive --section --value")
+		return nil, fmt.Errorf("agents author requires a TTY; use `dot ai agents init` plus `dot ai agents edit`, or pass --non-interactive --section --value")
 	}
 	if _, err := os.Stat(m.SSOTPath()); os.IsNotExist(err) {
 		if _, err := m.Init(InitOptions{}); err != nil {

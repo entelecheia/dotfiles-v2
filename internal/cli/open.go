@@ -84,7 +84,7 @@ func runOpen(cmd *cobra.Command, args []string) error {
 
 	// Verify project path still exists
 	if _, err := os.Stat(proj.Path); err != nil {
-		return fmt.Errorf("project path %q does not exist (re-register with 'dotfiles register %s <path>')", proj.Path, name)
+		return fmt.Errorf("project path %q does not exist (re-register with 'dot register %s <path>')", proj.Path, name)
 	}
 
 	// Determine layout and theme

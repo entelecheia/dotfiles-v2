@@ -15,7 +15,7 @@ func TestIsModuleEnabled(t *testing.T) {
 			Terminal:  TermConfig{Enabled: false},
 			Tmux:      ModuleToggle{Enabled: true},
 			Workspace: WorkConfig{Enabled: false},
-			AI:        ModuleToggle{Enabled: true},
+			AI:        AIConfig{Enabled: true},
 			Fonts:     FontsConfig{Enabled: false},
 			Conda:     ModuleToggle{Enabled: true},
 			GPG:       ModuleToggle{Enabled: false},
@@ -52,6 +52,22 @@ func TestIsModuleEnabled(t *testing.T) {
 				t.Errorf("IsModuleEnabled(%q) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestTemplateData_IncludesAgentsSSOTFlag(t *testing.T) {
+	cfg := &Config{
+		Modules: ModulesConfig{
+			AI: AIConfig{Enabled: true, AgentsSSOT: true},
+		},
+	}
+
+	data := cfg.TemplateData()
+	if data["EnableAI"] != true {
+		t.Fatalf("EnableAI = %v, want true", data["EnableAI"])
+	}
+	if data["EnableAgentsSSOT"] != true {
+		t.Fatalf("EnableAgentsSSOT = %v, want true", data["EnableAgentsSSOT"])
 	}
 }
 
@@ -137,7 +153,7 @@ func TestTemplateData_Keys(t *testing.T) {
 		},
 		Modules: ModulesConfig{
 			Workspace: WorkConfig{Enabled: true, Path: "/home/test", Gdrive: "gdrive"},
-			AI:        ModuleToggle{Enabled: true},
+			AI:        AIConfig{Enabled: true},
 			Terminal:  TermConfig{Warp: true},
 			SSH:       SSHModConfig{KeyName: "id_ed25519"},
 			Git:       GitConfig{Signing: true},

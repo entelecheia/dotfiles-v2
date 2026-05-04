@@ -31,7 +31,7 @@ const (
 	localLogDirRel      = "log"
 	localLogFileName    = "gdrive-sync.log"
 
-	gitignoreBlockHeader = "# dotfiles gdrive-sync: track shared baseline, ignore machine-local state"
+	gitignoreBlockHeader = "# dot gdrive-sync: track shared baseline, ignore machine-local state"
 )
 
 var gitignoreEntries = []string{
@@ -108,7 +108,9 @@ type LocalConfig struct {
 	Propagation    PropagationPolicy `yaml:"propagation"`
 	MaxDelete      int               `yaml:"max_delete,omitempty"`
 	Interval       int               `yaml:"interval,omitempty"`      // push scheduler cadence (seconds)
-	PullInterval   int               `yaml:"pull_interval,omitempty"` // pull+intake scheduler cadence (0 = off)
+	PullInterval   int               `yaml:"pull_interval,omitempty"` // pull scheduler cadence (0 = off)
+	PushMode       RunMode           `yaml:"push_mode,omitempty"`     // automatic push mode (clean|force)
+	PullMode       RunMode           `yaml:"pull_mode,omitempty"`     // automatic pull mode (clean|force)
 	Paused         bool              `yaml:"paused,omitempty"`
 	SharedExcludes []string          `yaml:"shared_excludes,omitempty"`
 }
@@ -282,6 +284,10 @@ func LoadLocalConfig(paths *LocalPaths) (*LocalConfig, bool, error) {
 		fmt.Fprintf(os.Stderr, "warning: %s has invalid propagation (%v); using defaults\n", paths.ConfigFile, err)
 		cfg.Propagation = DefaultPropagationPolicy()
 	}
+	schedule := ScheduleSettingsFromLocalConfig(&cfg).NormalizeLenient(func(field string, err error, fallback any) {
+		fmt.Fprintf(os.Stderr, "warning: %s has invalid %s (%v); using %v\n", paths.ConfigFile, field, err, fallback)
+	})
+	schedule.ApplyToLocalConfig(&cfg)
 	return &cfg, true, nil
 }
 
@@ -290,6 +296,11 @@ func SaveLocalConfig(paths *LocalPaths, cfg *LocalConfig) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid propagation policy: %w", err)
 	}
+	schedule, err := ScheduleSettingsFromLocalConfig(cfg).Normalize()
+	if err != nil {
+		return fmt.Errorf("refusing to save invalid schedule config: %w", err)
+	}
+	schedule.ApplyToLocalConfig(cfg)
 	if err := os.MkdirAll(paths.StoreDir, 0755); err != nil {
 		return fmt.Errorf("creating %s: %w", paths.StoreDir, err)
 	}
@@ -347,8 +358,10 @@ func localConfigFromGlobal(globalState *config.UserState) *LocalConfig {
 		MirrorPath:     gs.MirrorPath,
 		Propagation:    DefaultPropagationPolicy(),
 		MaxDelete:      gs.MaxDelete,
-		Interval:       gs.Interval,
+		Interval:       0,
 		PullInterval:   0,
+		PushMode:       ModeClean,
+		PullMode:       ModeClean,
 		Paused:         gs.Paused,
 		SharedExcludes: append([]string(nil), gs.SharedExcludes...),
 	}

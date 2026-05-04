@@ -7,8 +7,8 @@ echo "=== Scenario: server profile ==="
 
 echo ""
 echo "--- init + apply server ---"
-dotfiles init --profile server --yes
-dotfiles apply --profile server --yes --dry-run
+dot init --profile server --yes
+dot apply --profile server --yes --dry-run
 
 # Server profile should show these in dry-run output
 # (We verify the profile loads correctly and the right modules are selected)
@@ -16,7 +16,7 @@ dotfiles apply --profile server --yes --dry-run
 # Verify server profile selects correctly via check
 echo ""
 echo "--- check server ---"
-OUTPUT=$(dotfiles check --profile server 2>&1 || true)
+OUTPUT=$(dot check --profile server 2>&1 || true)
 
 # Server enables: packages, shell, git, ssh, terminal, tmux, ai, conda
 # Server disables: workspace, fonts, gpg, secrets

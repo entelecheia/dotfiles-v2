@@ -10,22 +10,22 @@ echo "=== Profile integration test: $PROFILE ==="
 # Dry-run should succeed
 echo ""
 echo "--- dry-run ---"
-dotfiles apply --profile "$PROFILE" --yes --dry-run
-assert_exit_code 0 dotfiles apply --profile "$PROFILE" --yes --dry-run
+dot apply --profile "$PROFILE" --yes --dry-run
+assert_exit_code 0 dot apply --profile "$PROFILE" --yes --dry-run
 
 # Init + Apply
 echo ""
 echo "--- init ---"
-dotfiles init --profile "$PROFILE" --yes
+dot init --profile "$PROFILE" --yes
 
 echo ""
 echo "--- apply ---"
-dotfiles apply --profile "$PROFILE" --yes
+dot apply --profile "$PROFILE" --yes
 
 # Check should pass after apply
 echo ""
 echo "--- check ---"
-dotfiles check --profile "$PROFILE"
+dot check --profile "$PROFILE"
 
 # Profile-specific assertions
 case "$PROFILE" in

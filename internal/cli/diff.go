@@ -19,7 +19,7 @@ func newDiffCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "diff",
 		Short: "Show pending changes without applying",
-		Long:  "Show what would change if 'dotfiles apply' were run (dry-run with verbose change details).",
+		Long:  "Show what would change if 'dot apply' were run (dry-run with verbose change details).",
 		RunE:  runDiff,
 	}
 }
@@ -121,7 +121,7 @@ func runDiff(cmd *cobra.Command, _ []string) error {
 	if pendingCount == 0 {
 		p.Success("Nothing to do — all modules satisfied.")
 	} else {
-		p.Line("%d module(s) have pending changes. Run 'dotfiles apply' to apply them.", pendingCount)
+		p.Line("%d module(s) have pending changes. Run 'dot apply' to apply them.", pendingCount)
 	}
 
 	return nil

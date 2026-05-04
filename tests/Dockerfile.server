@@ -10,8 +10,8 @@ RUN printf '#!/bin/bash\necho "NVIDIA A100-SXM4-80GB"\n' > /usr/local/bin/nvidia
     && chmod +x /usr/local/bin/nvidia-smi
 RUN useradd -m -s /bin/bash testuser \
     && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-COPY dotfiles /usr/local/bin/dotfiles
-RUN chmod +x /usr/local/bin/dotfiles
+COPY dot /usr/local/bin/dot
+RUN chmod +x /usr/local/bin/dot && ln -sf /usr/local/bin/dot /usr/local/bin/dotfiles
 COPY tests/ /tests/
 RUN chmod +x /tests/*.sh && find /tests/scenarios -name '*.sh' -exec chmod +x {} +
 USER testuser

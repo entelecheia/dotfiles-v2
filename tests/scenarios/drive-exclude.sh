@@ -6,7 +6,7 @@ set -euo pipefail
 # Find binary
 BIN="${1:-}"
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-  for candidate in ./dotfiles /usr/local/bin/dotfiles "$(command -v dotfiles 2>/dev/null)"; do
+  for candidate in ./dot /usr/local/bin/dot "$(command -v dot 2>/dev/null)" ./dotfiles /usr/local/bin/dotfiles "$(command -v dotfiles 2>/dev/null)"; do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then
       BIN="$candidate"
       break
@@ -14,7 +14,7 @@ if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
   done
 fi
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-  echo "FAIL: dotfiles binary not found"
+  echo "FAIL: dot binary not found"
   exit 1
 fi
 

@@ -55,10 +55,10 @@ func NewScheduler(runner *exec.Runner, paths *Paths, cfg *Config, engine *templa
 
 // templateData returns the data struct for template rendering.
 func (s *Scheduler) templateData() TemplateData {
-	dotfilesPath, _ := osexec.LookPath("dotfiles")
+	dotfilesPath, _ := osexec.LookPath("dot")
 	if dotfilesPath == "" {
-		// fallback: try "dot" symlink
-		dotfilesPath, _ = osexec.LookPath("dot")
+		// fallback: legacy `dotfiles` install
+		dotfilesPath, _ = osexec.LookPath("dotfiles")
 	}
 	return TemplateData{
 		DotfilesPath: dotfilesPath,

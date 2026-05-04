@@ -84,26 +84,26 @@ fi
 VERSION="${LATEST#v}"
 
 # Skip download if already at latest version
-if [[ -x "$INSTALL_DIR/dotfiles" ]]; then
-  CURRENT=$("$INSTALL_DIR/dotfiles" --version 2>/dev/null || echo "")
+if [[ -x "$INSTALL_DIR/dot" ]]; then
+  CURRENT=$("$INSTALL_DIR/dot" --version 2>/dev/null || echo "")
   if [[ "$CURRENT" == *"$VERSION"* ]]; then
-    info "dotfiles v${VERSION} already installed, skipping download"
+    info "dot v${VERSION} already installed, skipping download"
   else
-    info "Upgrading dotfiles to v${VERSION}..."
-    URL="https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz"
-    curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" dotfiles
-    chmod +x "$INSTALL_DIR/dotfiles"
+    info "Upgrading dot to v${VERSION}..."
+    URL="https://github.com/${REPO}/releases/download/${LATEST}/dot_${VERSION}_${OS}_${ARCH}.tar.gz"
+    curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" dot
+    chmod +x "$INSTALL_DIR/dot"
   fi
 else
-  info "Installing dotfiles v${VERSION}..."
-  URL="https://github.com/${REPO}/releases/download/${LATEST}/dotfiles_${VERSION}_${OS}_${ARCH}.tar.gz"
+  info "Installing dot v${VERSION}..."
+  URL="https://github.com/${REPO}/releases/download/${LATEST}/dot_${VERSION}_${OS}_${ARCH}.tar.gz"
   mkdir -p "$INSTALL_DIR"
-  curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" dotfiles
-  chmod +x "$INSTALL_DIR/dotfiles"
+  curl -fsSL "$URL" | tar xz -C "$INSTALL_DIR" dot
+  chmod +x "$INSTALL_DIR/dot"
 fi
 
-# Create 'dot' convenience symlink
-ln -sf "$INSTALL_DIR/dotfiles" "$INSTALL_DIR/dot"
+# Create 'dotfiles' back-compat symlink → dot
+ln -sf "$INSTALL_DIR/dot" "$INSTALL_DIR/dotfiles"
 
 # --- Step 4: Ensure PATH ---
 
@@ -134,7 +134,7 @@ ensure_path() {
   info "Adding $target_dir to PATH in $rc_file"
   {
     echo ""
-    echo "# Added by dotfiles installer"
+    echo "# Added by dot installer"
     echo "$path_line"
   } >> "$rc_file"
 

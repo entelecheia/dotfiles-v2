@@ -13,7 +13,7 @@ func newReconfigureCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reconfigure",
 		Short: "Re-run init prompts with current values as defaults",
-		Long:  "Edit existing dotfiles configuration interactively, then optionally apply.",
+		Long:  "Edit existing dot configuration interactively, then optionally apply.",
 		RunE:  runReconfigure,
 	}
 }
@@ -49,6 +49,6 @@ func runReconfigure(cmd *cobra.Command, _ []string) error {
 		return runApply(cmd, nil)
 	}
 
-	p.Line("Run 'dotfiles apply' when ready to apply.")
+	p.Line("Run 'dot apply' when ready to apply.")
 	return nil
 }

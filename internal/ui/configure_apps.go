@@ -23,7 +23,7 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 	}
 
 	if !yes {
-		fmt.Println(StyleHint.Render("  Enables shell aliases and assistant config files; app installation is managed by `dotfiles apps`."))
+		fmt.Println(StyleHint.Render("  Enables shell aliases and assistant config files; app installation is managed by `dot apps`."))
 		fmt.Println(StyleHint.Render("  Managed files: ~/.config/shell/30-ai.sh, ~/.config/claude/settings.json"))
 	}
 

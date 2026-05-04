@@ -14,6 +14,7 @@ import (
 // PullOptions controls one tracked pull run.
 type PullOptions struct {
 	DryRun bool
+	Force  bool
 }
 
 // PullConflict captures a baseline-tracked file that changed on both sides.
@@ -22,6 +23,7 @@ type PullConflict struct {
 	LocalPath  string
 	MirrorPath string
 	BackupPath string
+	Reason     string
 }
 
 // PullResult summarizes one tracked pull run.
@@ -130,12 +132,9 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			continue
 		}
 		if localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {
-			backup, err := backupPullConflict(local, mirrorAbs, rel, conflict, opts.DryRun)
-			if err != nil {
-				return nil, fmt.Errorf("backup conflict %s: %w", rel, err)
-			}
 			result.Conflicts = append(result.Conflicts, PullConflict{
-				RelPath: rel, LocalPath: localAbs, MirrorPath: mirrorAbs, BackupPath: backup,
+				RelPath: rel, LocalPath: localAbs, MirrorPath: mirrorAbs,
+				Reason: "local path is a directory or symlink; no backup was created",
 			})
 			continue
 		}
@@ -167,12 +166,22 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			baselineChanged = true
 			result.SkippedBase = append(result.SkippedBase, rel)
 		default:
-			backup, err := backupPullConflict(local, mirrorAbs, rel, conflict, opts.DryRun)
-			if err != nil {
-				return nil, fmt.Errorf("backup conflict %s: %w", rel, err)
+			backup := ""
+			if opts.Force {
+				backup = plannedPullLocalBackup(local, rel, conflict)
+				if err := backupLocalBeforePull(localAbs, backup, opts.DryRun); err != nil {
+					return nil, fmt.Errorf("backup local %s: %w", rel, err)
+				}
+				if err := pullCopy(mirrorAbs, localAbs, opts.DryRun); err != nil {
+					return nil, fmt.Errorf("force pull %s: %w", rel, err)
+				}
+				result.Pulled = append(result.Pulled, rel)
+				nextBaseline[rel] = mirrorFP
+				baselineChanged = true
 			}
 			result.Conflicts = append(result.Conflicts, PullConflict{
 				RelPath: rel, LocalPath: localAbs, MirrorPath: mirrorAbs, BackupPath: backup,
+				Reason: "local and mirror both changed after baseline",
 			})
 		}
 	}
@@ -227,15 +236,18 @@ func pullCopy(src, dst string, dryRun bool) error {
 	return copyFilePreservingMtime(src, dst)
 }
 
-func backupPullConflict(localRoot, mirrorAbs, rel string, conflict *ConflictDir, dryRun bool) (string, error) {
-	backup := filepath.Join(localRoot, conflict.PullBackupRel(), rel)
+func plannedPullLocalBackup(localRoot, rel string, conflict *ConflictDir) string {
+	return filepath.Join(localRoot, conflict.PullLocalBackupRel(), rel)
+}
+
+func backupLocalBeforePull(localAbs, backup string, dryRun bool) error {
 	if dryRun {
-		return backup, nil
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(backup), 0o755); err != nil {
-		return "", err
+		return err
 	}
-	return backup, copyFilePreservingMtime(mirrorAbs, backup)
+	return copyFilePreservingMtime(localAbs, backup)
 }
 
 func needsBaselineUpdate(base, current Fingerprint) bool {

@@ -4,11 +4,11 @@ import "testing"
 
 func TestParseSemver(t *testing.T) {
 	tests := []struct {
-		in              string
-		wantMajor       int
-		wantMinor       int
-		wantPatch       int
-		wantOK          bool
+		in        string
+		wantMajor int
+		wantMinor int
+		wantPatch int
+		wantOK    bool
 	}{
 		{"1.2.3", 1, 2, 3, true},
 		{"0.1.0", 0, 1, 0, true},
@@ -45,11 +45,11 @@ func TestCompareSemver(t *testing.T) {
 		{"1.0.0", "1.0.0", 0},
 		{"1.0.0", "1.0.1", -1},
 		{"1.0.1", "1.0.0", 1},
-		{"1.2.0", "1.10.0", -1},  // numeric compare, not string
-		{"1.10.0", "1.9.0", 1},   // critical: string compare would fail
+		{"1.2.0", "1.10.0", -1}, // numeric compare, not string
+		{"1.10.0", "1.9.0", 1},  // critical: string compare would fail
 		{"2.0.0", "1.99.99", 1},
 		{"0.14.0", "0.13.0", 1},
-		{"dev", "1.0.0", -1},     // dev is older than any release
+		{"dev", "1.0.0", -1}, // dev is older than any release
 		{"1.0.0", "dev", 1},
 		{"dev", "dev", 0},
 		{"1.0.0-beta", "1.0.0", 0}, // pre-release stripped, equal

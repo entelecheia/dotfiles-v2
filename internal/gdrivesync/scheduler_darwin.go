@@ -14,7 +14,7 @@ import (
 func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 	data := s.templateDataFor(kind)
 	if data.DotfilesPath == "" {
-		return fmt.Errorf("cannot find dotfiles binary in PATH; run `make install` first")
+		return fmt.Errorf("cannot find dot binary in PATH; run `make install` first")
 	}
 
 	content, err := s.Engine.Render("gdrivesync/com.dotfiles.gdrive-sync.plist.tmpl", data)

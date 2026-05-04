@@ -190,6 +190,30 @@ func TestLoadState_LegacyAIToolsMigratesToAI(t *testing.T) {
 	}
 }
 
+func TestLoadState_AIAgentsSSOTPersistsAndEnablesAI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("name: Test\nprofile: full\nmodules:\n  ai:\n    agents_ssot: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if !loaded.Modules.AI.AgentsSSOT {
+		t.Fatal("modules.ai.agents_ssot was not loaded")
+	}
+
+	cfg := &Config{}
+	ApplyStateToConfig(cfg, loaded)
+	if !cfg.Modules.AI.Enabled {
+		t.Fatal("agents_ssot should opt in the ai module")
+	}
+	if !cfg.Modules.AI.AgentsSSOT {
+		t.Fatal("agents_ssot was not applied to config")
+	}
+}
+
 func TestSave_AtomicNoTempLeak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

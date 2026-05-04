@@ -22,7 +22,7 @@ var errAborted = errors.New("aborted by user")
 func newApplyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "apply",
-		Short: "Apply dotfiles configuration",
+		Short: "Apply dot configuration",
 		Long:  "Apply the selected profile's configuration to the user environment.",
 		RunE:  runApply,
 	}

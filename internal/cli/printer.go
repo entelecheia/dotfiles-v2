@@ -56,7 +56,7 @@ func (p *Printer) Raw(format string, a ...any) {
 
 // Header renders a top-level report title. One blank line precedes the
 // rendered title; none follows. Typical usage at the top of a report
-// handler: `p.Header("dotfiles Status")` — the surrounding padding is
+// handler: `p.Header("dot Status")` — the surrounding padding is
 // applied by ui.StyleHeader.
 func (p *Printer) Header(title string) { ui.WriteHeader(p.Out, title) }
 

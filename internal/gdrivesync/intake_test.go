@@ -46,6 +46,7 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 		MirrorPath:   mirror + "/",
 		ExcludesFile: paths.ExcludeFile,
 		IgnoreFile:   paths.IgnoreFile,
+		ConfigDir:    paths.StoreDir,
 		LogFile:      filepath.Join(root, "gdrive-sync.log"),
 		LockDir:      filepath.Join(root, "lock"),
 		MaxDelete:    100,
@@ -177,7 +178,7 @@ func TestPullTracked_UpdatesLocalWhenOnlyDriveChanged(t *testing.T) {
 	}
 }
 
-func TestPullTracked_ConflictPreservesLocalAndBacksUpDrive(t *testing.T) {
+func TestPullTracked_ConflictPreservesLocalUntilForced(t *testing.T) {
 	f := newIntakeFixture(t)
 	v1Mtime := f.writeMirror("shared/deck.pptx", "v1")
 	f.writeLocal("shared/deck.pptx", "v1")
@@ -204,16 +205,42 @@ func TestPullTracked_ConflictPreservesLocalAndBacksUpDrive(t *testing.T) {
 	if string(localBody) != "v2-local" {
 		t.Errorf("local file overwritten during conflict: %q", localBody)
 	}
-	backupBody, err := os.ReadFile(res.Conflicts[0].BackupPath)
-	if err != nil {
-		t.Fatalf("missing conflict backup %s: %v", res.Conflicts[0].BackupPath, err)
-	}
-	if string(backupBody) != "v2-drive" {
-		t.Errorf("backup body = %q, want Drive version", backupBody)
+	if res.Conflicts[0].BackupPath != "" {
+		t.Fatalf("non-forced conflict advertised backup path unexpectedly: %s", res.Conflicts[0].BackupPath)
 	}
 }
 
-func TestPush_BlocksWhenTrackedPullHasConflict(t *testing.T) {
+func TestPullTracked_DirectoryConflictDoesNotAdvertiseMissingBackup(t *testing.T) {
+	f := newIntakeFixture(t)
+	rel := "shared/deck.pptx"
+	v1Mtime := f.writeMirror(rel, "v1")
+	f.seedBaseline(rel, "v1", v1Mtime)
+	if err := os.MkdirAll(filepath.Join(f.local, rel), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.mirror, rel), []byte("v2-drive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PullTracked(f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatalf("PullTracked: %v", err)
+	}
+	if len(res.Conflicts) != 1 || res.Conflicts[0].RelPath != rel {
+		t.Fatalf("Conflicts = %+v, want %s", res.Conflicts, rel)
+	}
+	if res.Conflicts[0].BackupPath != "" {
+		t.Fatalf("directory conflict advertised missing backup path: %s", res.Conflicts[0].BackupPath)
+	}
+	if !strings.Contains(res.Conflicts[0].Reason, "no backup was created") {
+		t.Fatalf("conflict reason should explain backup absence, got %q", res.Conflicts[0].Reason)
+	}
+	if fi, err := os.Stat(filepath.Join(f.local, rel)); err != nil || !fi.IsDir() {
+		t.Fatalf("local directory should remain untouched; stat=%v err=%v", fi, err)
+	}
+}
+
+func TestPullTracked_ForceOverwritesLocalAndBacksItUp(t *testing.T) {
 	f := newIntakeFixture(t)
 	v1Mtime := f.writeMirror("shared/deck.pptx", "v1")
 	f.writeLocal("shared/deck.pptx", "v1")
@@ -226,12 +253,68 @@ func TestPush_BlocksWhenTrackedPullHasConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Push(context.Background(), f.runner, f.cfg, true)
-	if err == nil {
-		t.Fatal("Push should refuse when tracked pull sees a conflict")
+	res, err := PullTracked(f.cfg, PullOptions{Force: true})
+	if err != nil {
+		t.Fatalf("PullTracked force: %v", err)
 	}
-	if !strings.Contains(err.Error(), "push refused") {
-		t.Fatalf("Push error = %v, want push refused", err)
+	if len(res.Conflicts) != 1 || res.Conflicts[0].RelPath != "shared/deck.pptx" {
+		t.Fatalf("Conflicts = %+v, want shared/deck.pptx", res.Conflicts)
+	}
+	localBody, err := os.ReadFile(filepath.Join(f.local, "shared/deck.pptx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(localBody) != "v2-drive" {
+		t.Errorf("local body = %q, want Drive version", localBody)
+	}
+	backupBody, err := os.ReadFile(res.Conflicts[0].BackupPath)
+	if err != nil {
+		t.Fatalf("missing conflict backup %s: %v", res.Conflicts[0].BackupPath, err)
+	}
+	if string(backupBody) != "v2-local" {
+		t.Errorf("backup body = %q, want local version", backupBody)
+	}
+}
+
+func TestPlanPush_DetectsDriveConflictWithoutAutoPull(t *testing.T) {
+	f := newIntakeFixture(t)
+	v1Mtime := f.writeMirror("shared/deck.pptx", "v1")
+	f.writeLocal("shared/deck.pptx", "v1")
+	f.seedBaseline("shared/deck.pptx", "v1", v1Mtime)
+
+	if err := os.WriteFile(filepath.Join(f.local, "shared/deck.pptx"), []byte("v2-local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.mirror, "shared/deck.pptx"), []byte("v2-drive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatalf("PlanPush: %v", err)
+	}
+	if len(plan.Conflicts) != 1 || plan.Conflicts[0].RelPath != "shared/deck.pptx" {
+		t.Fatalf("Conflicts = %+v, want shared/deck.pptx", plan.Conflicts)
+	}
+}
+
+func TestPush_DoesNotRestoreOldBaselinePathBeforePush(t *testing.T) {
+	f := newIntakeFixture(t)
+	mtime := f.writeMirror("docs/old.bin", "payload")
+	f.writeLocal("docs/old.bin", "payload")
+	f.seedBaseline("docs/old.bin", "payload", mtime)
+
+	if err := os.Rename(filepath.Join(f.local, "docs/old.bin"), filepath.Join(f.local, "docs/new.bin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.local, "docs/old.bin")); !os.IsNotExist(err) {
+		t.Fatalf("push restored old local path before upload: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "docs/new.bin")); err != nil {
+		t.Fatalf("push did not upload renamed path: %v", err)
 	}
 }
 
@@ -256,7 +339,7 @@ func TestIntake_StagesGdriveOriginNewFile(t *testing.T) {
 	}
 }
 
-func TestIntake_PullsTrackedGdriveModifiedFile(t *testing.T) {
+func TestIntake_SkipsTrackedGdriveModifiedFile(t *testing.T) {
 	f := newIntakeFixture(t)
 	// We pushed v1 (recorded in baseline); GDrive editor changed it to v2.
 	v1Mtime := f.writeMirror("doc.md", "v1-from-us")
@@ -278,15 +361,18 @@ func TestIntake_PullsTrackedGdriveModifiedFile(t *testing.T) {
 	if len(res.Intaked) != 0 {
 		t.Errorf("Intaked = %v, want 0 (tracked change should pull)", res.Intaked)
 	}
-	if res.Pull == nil || len(res.Pull.Pulled) != 1 || res.Pull.Pulled[0] != "doc.md" {
-		t.Fatalf("Pull = %+v, want tracked doc.md pulled", res.Pull)
+	if res.Pull != nil {
+		t.Fatalf("Pull = %+v, want nil; tracked pull is manual", res.Pull)
+	}
+	if len(res.SkippedTracked) != 1 || res.SkippedTracked[0] != "doc.md" {
+		t.Fatalf("SkippedTracked = %+v, want doc.md", res.SkippedTracked)
 	}
 	got, err := os.ReadFile(filepath.Join(f.local, "doc.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "v2-from-collaborator" {
-		t.Errorf("local doc = %q, want Drive version", got)
+	if string(got) != "v1-from-us" {
+		t.Errorf("local doc = %q, want original local version", got)
 	}
 }
 
@@ -360,7 +446,7 @@ func TestIntake_RestagesOnUpstreamChange(t *testing.T) {
 	}
 }
 
-func TestIntake_DetectsMirrorDeletion_Tombstone(t *testing.T) {
+func TestPullTracked_DetectsMirrorDeletion_Tombstone(t *testing.T) {
 	f := newIntakeFixture(t)
 	mtime := f.writeMirror("ephemeral.md", "ours")
 	f.seedBaseline("ephemeral.md", "ours", mtime)
@@ -369,7 +455,7 @@ func TestIntake_DetectsMirrorDeletion_Tombstone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{})
+	res, err := PullTracked(f.cfg, PullOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +518,7 @@ func TestIntake_DryRun_NoSideEffects(t *testing.T) {
 	}
 }
 
-func TestIntake_StrictMode_DetectsContentChangeWithSameSizeMtime(t *testing.T) {
+func TestIntake_StrictMode_SkipsTrackedContentChangeWithSameSizeMtime(t *testing.T) {
 	f := newIntakeFixture(t)
 	body := "exactly10b"
 	mtime := f.writeMirror("paranoid.md", body)
@@ -457,14 +543,13 @@ func TestIntake_StrictMode_DetectsContentChangeWithSameSizeMtime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Fast intake no longer stages tracked changes; PullTracked hashes against
-	// the strict baseline and updates the local file directly.
+	// Fast intake no longer stages or pulls tracked changes.
 	resFast, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{Strict: false})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resFast.Intaked) != 0 || resFast.Pull == nil || len(resFast.Pull.Pulled) != 1 {
-		t.Fatalf("tracked strict change should pull, not intake: intaked=%v pull=%+v", resFast.Intaked, resFast.Pull)
+	if len(resFast.Intaked) != 0 || resFast.Pull != nil || len(resFast.SkippedTracked) != 1 {
+		t.Fatalf("tracked strict change should be skipped: intaked=%v pull=%+v skipped=%v", resFast.Intaked, resFast.Pull, resFast.SkippedTracked)
 	}
 
 	// Reset local/baseline before strict re-run so we observe the same behavior.
@@ -490,8 +575,8 @@ func TestIntake_StrictMode_DetectsContentChangeWithSameSizeMtime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resStrict.Intaked) != 0 || resStrict.Pull == nil || len(resStrict.Pull.Pulled) != 1 {
-		t.Errorf("strict-mode Intake should pull tracked content change: intaked=%v pull=%+v", resStrict.Intaked, resStrict.Pull)
+	if len(resStrict.Intaked) != 0 || resStrict.Pull != nil || len(resStrict.SkippedTracked) != 1 {
+		t.Errorf("strict-mode Intake should skip tracked content change: intaked=%v pull=%+v skipped=%v", resStrict.Intaked, resStrict.Pull, resStrict.SkippedTracked)
 	}
 }
 

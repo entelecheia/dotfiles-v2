@@ -19,9 +19,6 @@ const (
 	defaultLocalRel    = "workspace/work"
 	defaultMirrorRel   = "gdrive-workspace/work"
 	defaultMaxDelete   = 1000
-	defaultInterval    = 300 // 5 min — matches existing rsync scheduler default
-	intervalMin        = 60
-	intervalMax        = 86400
 	logRotateMaxLines  = 2000
 	logRotateKeepLines = 1000
 )
@@ -39,7 +36,9 @@ type Config struct {
 	RsyncPath      string // resolved rsync binary; empty if not installed
 	MaxDelete      int
 	Interval       int               // push scheduler cadence (seconds)
-	PullInterval   int               // pull+intake scheduler cadence (0 = no unit)
+	PullInterval   int               // pull scheduler cadence (0 = no unit)
+	PushMode       RunMode           // automatic push mode (clean|force)
+	PullMode       RunMode           // automatic pull mode (clean|force)
 	Propagation    PropagationPolicy // default {true,true,false}
 	Paused         bool              // mirrors LocalConfig.Paused; the auth source for sync gating
 	Verbose        bool
@@ -123,25 +122,7 @@ func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
 		maxDelete = defaultMaxDelete
 	}
 
-	interval := localCfg.Interval
-	switch {
-	case interval <= 0:
-		interval = defaultInterval
-	case interval < intervalMin:
-		interval = intervalMin
-	case interval > intervalMax:
-		interval = intervalMax
-	}
-
-	pullInterval := localCfg.PullInterval
-	if pullInterval > 0 {
-		switch {
-		case pullInterval < intervalMin:
-			pullInterval = intervalMin
-		case pullInterval > intervalMax:
-			pullInterval = intervalMax
-		}
-	}
+	schedule := ScheduleSettingsFromLocalConfig(localCfg).NormalizeLenient(nil)
 
 	policy := localCfg.Propagation
 	if err := policy.Validate(); err != nil {
@@ -162,8 +143,10 @@ func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
 		LockDir:        systemPaths.LockDir,
 		RsyncPath:      rsyncPath,
 		MaxDelete:      maxDelete,
-		Interval:       interval,
-		PullInterval:   pullInterval,
+		Interval:       schedule.Interval,
+		PullInterval:   schedule.PullInterval,
+		PushMode:       schedule.PushMode,
+		PullMode:       schedule.PullMode,
 		Propagation:    policy,
 		Paused:         localCfg.Paused,
 		LocalPaths:     localPaths,
@@ -297,12 +280,11 @@ func refuseSharedDriveMirror(cfg *Config) error {
 
 // ── pull / push / sync ──────────────────────────────────────────────────
 
-// Push local → mirror under cfg.Propagation. It first runs a tracked pull guard
-// so Drive edits to baseline-managed payloads are not overwritten by stale local
-// content. The policy maps to rsync flags (see propagationFlags); an all-false
-// policy is refused before any rsync invocation. The workspace's per-workspace
-// store (`.dotfiles/`) and intake staging area (`inbox/gdrive/`) are always
-// excluded so they never bounce back to mirror, regardless of operator excludes.
+// Push local → mirror under cfg.Propagation. The policy maps to rsync flags
+// (see propagationFlags); an all-false policy is refused before any rsync
+// invocation. The workspace's per-workspace store (`.dotfiles/`) and intake
+// staging area (`inbox/gdrive/`) are always excluded so they never bounce back
+// to mirror, regardless of operator excludes.
 //
 // On a successful non-dry-run push, the baseline manifest is refreshed as the
 // Git-shared Drive payload index so other machines can restore accepted
@@ -316,14 +298,6 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	}
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return err
-	}
-	pre, err := PullTracked(cfg, PullOptions{DryRun: dryRun})
-	if err != nil {
-		return fmt.Errorf("tracked pull guard: %w", err)
-	}
-	if len(pre.Conflicts) > 0 {
-		return fmt.Errorf("push refused: %d tracked Drive conflict(s) need manual review under %s",
-			len(pre.Conflicts), filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), conflictsDirName))
 	}
 	dyn, err := prepareDynamicExcludes(cfg)
 	if err != nil {
@@ -349,9 +323,9 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 }
 
 // Sync is now a thin alias for Push — the historical bidirectional Pull
-// + Push behavior was retired in favor of push-first semantics with a
-// separate Intake step (see `dot gdrive-sync intake`). Kept as an entry
-// point so callers (and the existing scheduler unit) keep working.
+// + Push behavior was retired in favor of previewed push and a separate Intake
+// step (see `dot gdrive-sync intake`). Kept as an entry point so callers keep
+// working.
 func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
 	return Push(ctx, runner, cfg, dryRun)
 }

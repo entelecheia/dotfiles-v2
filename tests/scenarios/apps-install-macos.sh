@@ -3,7 +3,7 @@
 # actually landed in /Applications.
 #
 # Runs only on darwin. Expected to be invoked from GitHub Actions
-# (macos-latest) after the dotfiles binary has been built at ./bin/dotfiles.
+# (macos-latest) after the dot binary has been built at ./bin/dot.
 set -euo pipefail
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -44,9 +44,9 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-BIN="${BIN:-./bin/dotfiles}"
+BIN="${BIN:-./bin/dot}"
 if [[ ! -x "$BIN" ]]; then
-  echo "dotfiles binary not found at $BIN" >&2
+  echo "dot binary not found at $BIN" >&2
   exit 1
 fi
 
