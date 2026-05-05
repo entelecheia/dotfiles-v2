@@ -362,7 +362,7 @@ The legacy global `~/.config/dotfiles/config.yaml modules.gdrive_sync` block is 
 | `include` (default) | Sync only case-insensitive patterns in `include.txt`, then subtract `exclude.txt`, `ignore.txt`, shared-folder excludes, Git-tracked relpaths, symlinks, and always-on state paths. |
 | `exclude` | Back-compat mode: sync everything except `exclude.txt`, `ignore.txt`, shared-folder excludes, Git-tracked relpaths, symlinks, and always-on state paths. |
 
-Default include patterns: `*.tgz`, `*.gz`, `*.rar`, `*.zst`, `*.ogg`, `*.mp3`, `*.mp4`, `*.wav`, `*.avi`, `*.mov`, `*.mkv`, `*.flac`, `*.srt`, `*.png`, `*.jpg`, `*.jpeg`, `*.heic`, `*.ai`, `*.key`, `*.pdf`, `*.hwp*`, `*.doc`, `*.docx`, `*.ppt`, `*.pptx`, `*.ppsx`, `*.pps`, `*.xls*`, `*.xlsx`, `*.xlsm`, `*.tsv`, `*.html`.
+Default include patterns: `*.tgz`, `*.gz`, `*.rar`, `*.zst`, `*.ogg`, `*.mp3`, `*.mp4`, `*.wav`, `*.avi`, `*.mov`, `*.mkv`, `*.flac`, `*.srt`, `*.png`, `*.jpg`, `*.jpeg`, `*.heic`, `*.wmf`, `*.ai`, `*.key`, `*.pdf`, `*.hwp*`, `*.doc`, `*.docx`, `*.ppt`, `*.pptx`, `*.ppsx`, `*.pps`, `*.xls*`, `*.xlsx`, `*.xlsm`.
 
 **Propagation policy** maps to rsync flags:
 

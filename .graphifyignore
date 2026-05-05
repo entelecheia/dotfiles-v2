@@ -35,6 +35,7 @@ graphify-out/
 *.png
 *.jpg
 *.jpeg
+*.wmf
 *.gif
 *.svg
 *.mp4

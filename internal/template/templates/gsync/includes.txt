@@ -28,6 +28,7 @@
 *.jpg
 *.jpeg
 *.heic
+*.wmf
 *.ai
 
 # documents / decks / sheets
@@ -43,7 +44,3 @@
 *.xls*
 *.xlsx
 *.xlsm
-
-# tabular / exported pages
-*.tsv
-*.html
