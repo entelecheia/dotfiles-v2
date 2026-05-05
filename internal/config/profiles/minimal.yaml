@@ -3,6 +3,8 @@ modules:
     enabled: true
   shell:
     enabled: true
+  node:
+    enabled: true
   git:
     enabled: true
     signing: false
@@ -30,3 +32,4 @@ packages:
   - eza
   - starship
   - curl
+  - fnm

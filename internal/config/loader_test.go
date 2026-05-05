@@ -41,6 +41,21 @@ func TestLoad_MinimalProfile(t *testing.T) {
 	if !cfg.Modules.Terminal.Enabled {
 		t.Error("minimal profile: terminal should be enabled")
 	}
+	if !cfg.Modules.Node.Enabled {
+		t.Error("minimal profile: node should be enabled (so npm is usable post-apply)")
+	}
+
+	// fnm must be in the base package list so it's installed even on minimal.
+	hasFnm := false
+	for _, p := range cfg.Packages {
+		if p == "fnm" {
+			hasFnm = true
+			break
+		}
+	}
+	if !hasFnm {
+		t.Error("minimal profile: expected fnm in base packages")
+	}
 
 	// Modules disabled in minimal
 	if cfg.Modules.Workspace.Enabled {
@@ -111,6 +126,30 @@ func TestLoad_FullProfile(t *testing.T) {
 	// Extends field is cleared after resolution
 	if cfg.Extends != "" {
 		t.Errorf("full profile: Extends should be cleared after merge, got %q", cfg.Extends)
+	}
+}
+
+func TestLoad_AllProfilesEnableNode(t *testing.T) {
+	// npm must be usable after apply on every profile, which requires
+	// modules.node to be enabled and fnm to be in the package list.
+	for _, name := range []string{"minimal", "full", "server"} {
+		cfg, err := Load(name, "", nil)
+		if err != nil {
+			t.Fatalf("Load %s: %v", name, err)
+		}
+		if !cfg.Modules.Node.Enabled {
+			t.Errorf("%s profile: node module should be enabled", name)
+		}
+		hasFnm := false
+		for _, p := range cfg.AllPackages() {
+			if p == "fnm" {
+				hasFnm = true
+				break
+			}
+		}
+		if !hasFnm {
+			t.Errorf("%s profile: expected fnm in AllPackages", name)
+		}
 	}
 }
 
