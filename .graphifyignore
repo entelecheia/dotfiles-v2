@@ -25,6 +25,7 @@ graphify-out/
 *.whl
 *.tar.gz
 *.zip
+*.rar
 *.pdf
 *.hwp
 *.hwpx
