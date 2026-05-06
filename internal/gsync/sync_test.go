@@ -306,23 +306,6 @@ func TestPush_RefusesEmptyPropagation(t *testing.T) {
 	}
 }
 
-func TestMigrateArgs_NoDeleteNoUpdate(t *testing.T) {
-	cfg := newTestConfig(t)
-	args := migrateArgs(cfg, "", false)
-
-	for _, forbidden := range []string{"--delete", "--delete-after", "--update"} {
-		if slices.Contains(args, forbidden) {
-			t.Errorf("migrateArgs leaked %q — migrate must be additive only", forbidden)
-		}
-	}
-
-	// Source=mirror, dest=local (one-shot ingest).
-	if args[len(args)-2] != cfg.MirrorPath || args[len(args)-1] != cfg.LocalPath {
-		t.Errorf("migrateArgs source/dest wrong: ...%v %v (want mirror→local)",
-			args[len(args)-2], args[len(args)-1])
-	}
-}
-
 func TestResolveConfig_Defaults(t *testing.T) {
 	state := newIsolatedState(t)
 	cfg, err := ResolveConfig(state)

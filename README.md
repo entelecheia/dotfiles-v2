@@ -332,7 +332,6 @@ dot gsync conflicts      # list .sync-conflicts/<ts>/ entries with ages
 dot gsync pause          # stop managed schedulers (paused gate)
 dot gsync resume         # clear paused gate, re-arm installed schedulers
 dot gsync shared         # manage shared-folder exclusions (auto + manual)
-dot gsync migrate        # one-shot: convert legacy symlinks + bring mirror in (idempotent)
 
 # One-shot filter override:
 dot gsync push --filter-mode=exclude
@@ -401,8 +400,7 @@ Files in baseline that are missing from mirror become tombstones — recorded in
 - **Post-push baseline refresh**: a successful push rebuilds `baseline.manifest` from files present on both local and mirror, excluding Git-tracked files and using sha256 fingerprints for stable cross-machine diffs.
 - **Opt-in schedulers**: `setup` installs no automatic sync by default and removes managed gsync scheduler units. Pass `--push-interval=DUR --push-mode=clean|force` and/or `--pull-interval=DUR --pull-mode=clean|force` to enable automatic push or pull.
 - **Safety filters**: `exclude.txt`, `ignore.txt`, dynamic shared-folder excludes, Git-tracked relpaths, `--no-links`, `.dotfiles/`, and `inbox/gdrive/` are applied before include matching. `.gitignore` is intentionally not used as a sync filter because gitignored binaries are a primary gsync use case.
-- **Migration gate**: refuses to run while legacy symlinks (`.gdrive`, `inbox/downloads`, `inbox/incoming`) are still in place — point user to `migrate`.
-- **Pause gate**: `migrate` leaves `Paused=true` so the operator verifies first; `resume` clears it.
+- **Pause gate**: when `Paused=true`, sync operations refuse to run until `resume` clears it.
 - **Shared-drive refusal**: refuses to sync if `mirror_path` resolves under a Drive `Shared drives/` root — workspace-authoritative semantics would propagate deletions into a team drive.
 - **No empty mirror dirs**: push runs with rsync `--prune-empty-dirs`, so directories whose contents are entirely filtered out (or that are empty in the workspace) are not created on the mirror. Drop a `.gitkeep` if a placeholder dir must round-trip.
 - **Conflict capture**: force/manual-confirmed pull conflicts back up overwritten local files under `.sync-conflicts/<RFC3339-ts>/from-workspace/`; push-side overwrites are backed up under the mirror's `.sync-conflicts/<RFC3339-ts>/from-workspace/`.

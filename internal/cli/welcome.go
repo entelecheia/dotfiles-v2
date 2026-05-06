@@ -201,8 +201,6 @@ func printUsecases(cmd *cobra.Command) {
 				"Clear paused gate, re-arm installed schedulers"},
 			{"dot gsync shared",
 				"Manage shared-folder exclusions (auto-detected shortcuts + manual list)"},
-			{"dot gsync migrate",
-				"One-shot: convert legacy symlinks + additive bring-down (idempotent)"},
 		})
 
 	section(p, "8. Google Drive exclusions (macOS)",

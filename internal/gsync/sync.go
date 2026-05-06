@@ -248,18 +248,6 @@ func propagationFlags(p PropagationPolicy, maxDelete int) []string {
 	return flags
 }
 
-// migrateArgs builds the rsync argv for the one-shot migration pull.
-// No --update, no --delete: pure additive bring-everything-in.
-// dynExcludesFile is the per-run runtime exclude file; "" skips it.
-func migrateArgs(cfg *Config, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs(cfg, dynExcludesFile)
-	if dryRun {
-		args = append(args, "--dry-run")
-	}
-	args = append(args, cfg.MirrorPath, cfg.LocalPath)
-	return args
-}
-
 // prepareDynamicExcludes scans the mirror for Drive shortcuts, merges
 // the operator's manual list plus Git-tracked relpaths, and writes the
 // union to a per-run file. The file is always written (even empty) for
@@ -349,25 +337,6 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 // working.
 func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
 	return Push(ctx, runner, cfg, dryRun)
-}
-
-// MigratePull is the additive one-shot pull used by the `migrate`
-// subcommand to bring all existing mirror content into the workspace.
-// No --update, no --delete; safe to re-run.
-func MigratePull(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return err
-	}
-	if err := refuseSharedDriveMirror(cfg); err != nil {
-		return err
-	}
-	dyn, err := prepareDynamicExcludes(cfg)
-	if err != nil {
-		return err
-	}
-	args := migrateArgs(cfg, dyn, dryRun)
-	fmt.Printf("  Migrate pull: %s → %s\n", cfg.MirrorPath, cfg.LocalPath)
-	return runRsync(ctx, runner, cfg, args)
 }
 
 func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {

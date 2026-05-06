@@ -27,6 +27,7 @@ func newGsyncCmd() *cobra.Command {
 		Use:     "gsync",
 		Aliases: []string{"gdrive-sync"},
 		Short:   "Push workspace to gdrive-workspace mirror via local rsync",
+		Args:    cobra.NoArgs,
 		Long: `Local-only rsync mirror between ~/workspace/work and the cloud-sync
 client's mirror tree (default ~/gdrive-workspace/work). No SSH; the cloud
 client itself handles upload/download to/from Drive (or Dropbox, etc.).
@@ -39,8 +40,7 @@ Drive-origin files still stage into inbox/gdrive for manual routing.
 
 	Getting started:
 	  dot gsync setup       Check rsync and disable managed schedulers by default
-	  dot gsync migrate     One-time symlink → real-dir conversion + bring-down
-	  dot gsync resume      Clear the paused gate after migrate verified
+	  dot gsync resume      Clear the paused gate
 	  dot gsync push        Push workspace → mirror (use --mode for clean/force)
 	  dot gsync pull        Restore baseline-tracked payloads from mirror
 
@@ -66,7 +66,6 @@ Run without a subcommand to print this help. Legacy alias: 'dot gdrive-sync' con
 		newGsyncIntakeCmd(),
 		newGsyncInboxCmd(),
 		newGsyncStatusCmd(),
-		newGsyncMigrateCmd(),
 		newGsyncConflictsCmd(),
 		newGsyncSetupCmd(),
 		newGsyncResumeCmd(),
@@ -200,12 +199,8 @@ func gsyncScheduler(cfg *gsync.Config, runner *exec.Runner) (*gsync.Scheduler, *
 	return gsync.NewScheduler(runner, paths, cfg, template.NewEngine()), paths, nil
 }
 
-// gsyncPreflight validates that sync can proceed. The bypass flags let
-// admin-style commands operate when sync would normally refuse:
-//
-//	bypassPause    — true for `migrate` (paused state is fine; migrate is the activation step)
-//	bypassMigGate  — true for `migrate` (legacy symlinks are exactly what it converts)
-func gsyncPreflight(p *Printer, cfg *gsync.Config, runner *exec.Runner, state *config.UserState, bypassPause, bypassMigGate bool) bool {
+// gsyncPreflight validates that sync can proceed.
+func gsyncPreflight(p *Printer, cfg *gsync.Config, runner *exec.Runner) bool {
 	if !runner.CommandExists("rsync") {
 		p.Line("rsync not installed. Install via: brew install rsync")
 		return false
@@ -218,13 +213,8 @@ func gsyncPreflight(p *Printer, cfg *gsync.Config, runner *exec.Runner, state *c
 		p.Line("Mirror path missing: %s", cfg.MirrorPath)
 		return false
 	}
-	if !bypassPause && cfg.Paused {
+	if cfg.Paused {
 		p.Line("gsync is paused. Run `dot gsync resume` to activate.")
-		return false
-	}
-	if !bypassMigGate && gsync.HasPendingMigration(stripTrailingSlash(cfg.LocalPath)) {
-		p.Line("Legacy symlinks (.gdrive / inbox/downloads / inbox/incoming) still present.")
-		p.Line("Run `dot gsync migrate` first to convert them to real directories.")
 		return false
 	}
 	return true
@@ -295,7 +285,7 @@ func runGsyncPull(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p := printerFrom(cmd)
-	if !gsyncPreflight(p, cfg, runner, state, false, false) {
+	if !gsyncPreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -372,12 +362,12 @@ Mirror-side deletions against baseline are detected by pull, not intake.
 }
 
 func runGsyncIntake(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := gsyncBootstrap(cmd)
+	_, cfg, runner, err := gsyncBootstrap(cmd)
 	if err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
-	if !gsyncPreflight(p, cfg, runner, state, false, false) {
+	if !gsyncPreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -682,7 +672,7 @@ func runGsyncPush(cmd *cobra.Command, _ []string) error {
 		cfg.Propagation = policy
 	}
 
-	if !gsyncPreflight(p, cfg, runner, state, false, false) {
+	if !gsyncPreflight(p, cfg, runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -1002,50 +992,6 @@ func boolStr(b bool) string {
 		return "yes"
 	}
 	return "no"
-}
-
-// ── migrate ──────────────────────────────────────────────────────────────
-
-func newGsyncMigrateCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "migrate",
-		Short: "One-shot: convert legacy symlinks + pull mirror into workspace",
-		Long: `Idempotent migration step. Removes the dual-path symlinks (.gdrive,
-inbox/downloads, inbox/incoming), creates real directories where needed,
-and runs an additive (no --delete) rsync pull from the mirror to seed the
-workspace. Leaves Paused=true so the operator verifies before activating.`,
-		RunE:         runGsyncMigrate,
-		SilenceUsage: true,
-	}
-}
-
-func runGsyncMigrate(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := gsyncBootstrap(cmd)
-	if err != nil {
-		return err
-	}
-	p := printerFrom(cmd)
-	// Migrate legitimately operates against both a paused tree and one with pending symlinks
-	// — it's the activation step that fixes both.
-	if !gsyncPreflight(p, cfg, runner, state, true, true) {
-		return nil
-	}
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-
-	release, lockErr := gsync.AcquireLock(cfg.LockDir)
-	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
-	}
-	defer release()
-
-	if dryRun {
-		p.Line("(dry-run — no changes)")
-	}
-	if err := gsync.Migrate(cmd.Context(), runner, cfg, state, gsync.MigrateOptions{DryRun: dryRun}); err != nil {
-		return fmt.Errorf("migrate: %w", err)
-	}
-	return nil
 }
 
 // ── conflicts ────────────────────────────────────────────────────────────

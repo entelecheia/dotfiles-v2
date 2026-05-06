@@ -121,8 +121,8 @@ type UserSyncState struct {
 // via local rsync (no SSH). Workspace is authoritative: pull uses --update only,
 // push uses --delete-after. Last* timestamps are advisory (status display).
 //
-// Paused defaults to true on a fresh state so `migrate` can run a one-shot
-// pull and the user can verify before flipping to false via `resume`.
+// Paused defaults to true on a fresh state so the user explicitly opts in by
+// flipping it to false via `resume`.
 type UserGsyncState struct {
 	LocalPath      string    `yaml:"local_path,omitempty"`  // primary tree, default ~/workspace/work
 	MirrorPath     string    `yaml:"mirror_path,omitempty"` // mirror tree, default ~/gdrive-workspace/work
