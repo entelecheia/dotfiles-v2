@@ -78,6 +78,11 @@ func ResolvePaths() (*Paths, error) {
 	}, nil
 }
 
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // AcquireLock creates a POSIX-safe lock directory with a PID file inside.
 // Returns a release function that removes the lock dir.
 //
