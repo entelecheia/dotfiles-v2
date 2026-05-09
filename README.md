@@ -816,8 +816,8 @@ Config key: `modules.terminal.prompt_style` (state: `modules.prompt_style`).
 **full** adds (+11 unique):
 `btop`, `lazygit`, `rclone`, `yazi`, `glow`, `csvlens`, `chafa`, `uv`, `pipx`, `tmux`, `gnupg`
 
-**server** adds (+5):
-`btop`, `oven-sh/bun/bun`, `tmux`, `uv`, `pipx`
+**server** adds (+6):
+`btop`, `unzip`, `oven-sh/bun/bun`, `tmux`, `uv`, `pipx`
 
 ---
 
@@ -911,7 +911,7 @@ Profiles use YAML inheritance. `full` extends `minimal`.
 |---------|---------|----------|----------|
 | **minimal** | 5 | 17 | Lightweight dev setup |
 | **full** | 14 | 28 | Complete workstation (macapps enabled on darwin) |
-| **server** | 8 | 22 | GPU/DGX server |
+| **server** | 8 | 23 | GPU/DGX server |
 
 **server**: Extends `minimal` + tmux, ai, conda. Disables workspace, fonts, macapps, gpg, secrets. Auto-suggested when NVIDIA GPU or CUDA is detected.
 

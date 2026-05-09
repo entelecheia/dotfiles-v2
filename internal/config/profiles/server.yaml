@@ -22,6 +22,7 @@ modules:
 
 packages_extra:
   - btop
+  - unzip
   - oven-sh/bun/bun
   - tmux
   - uv

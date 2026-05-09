@@ -179,6 +179,34 @@ func TestLoad_ServerProfileInstallsBun(t *testing.T) {
 	}
 }
 
+func TestLoad_ServerProfileInstallsUnzipBeforeBun(t *testing.T) {
+	cfg, err := Load("server", "", nil)
+	if err != nil {
+		t.Fatalf("Load server: %v", err)
+	}
+
+	bunIndex := -1
+	unzipIndex := -1
+	for i, p := range cfg.AllPackages() {
+		switch p {
+		case "oven-sh/bun/bun":
+			bunIndex = i
+		case "unzip":
+			unzipIndex = i
+		}
+	}
+
+	if bunIndex == -1 {
+		t.Fatal("server profile: expected oven-sh/bun/bun in AllPackages")
+	}
+	if unzipIndex == -1 {
+		t.Fatal("server profile: expected unzip in AllPackages")
+	}
+	if unzipIndex > bunIndex {
+		t.Fatalf("server profile: unzip must be installed before bun, got unzip=%d bun=%d", unzipIndex, bunIndex)
+	}
+}
+
 func TestMergeConfigs(t *testing.T) {
 	base := &Config{
 		Packages: []string{"git", "curl"},

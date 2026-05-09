@@ -72,7 +72,7 @@ func (m *PackagesModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResul
 		// step warnings for gcc). Re-check which packages are actually missing.
 		stillMissing := rc.Brew.MissingFormulas(missing)
 		if len(stillMissing) > 0 {
-			return nil, fmt.Errorf("brew install: %d package(s) still missing after install: %v", len(stillMissing), stillMissing)
+			return nil, fmt.Errorf("brew install: %w; %d package(s) still missing after install: %v", err, len(stillMissing), stillMissing)
 		}
 		rc.Runner.Logger.Warn("brew install exited with error but all packages are present", "err", err)
 	}
