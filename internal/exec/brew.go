@@ -52,7 +52,10 @@ func (b *Brew) Install(ctx context.Context, formulas []string) error {
 	for _, group := range formulaInstallGroups(formulas) {
 		args := append([]string{"install"}, group...)
 		if _, err := b.Runner.Run(ctx, "brew", args...); err != nil {
-			return err
+			if stillMissing := b.MissingFormulas(group); len(stillMissing) > 0 {
+				return err
+			}
+			b.Runner.Logger.Warn("brew install exited with error but formulas are present", "formulas", group, "err", err)
 		}
 	}
 	return nil
