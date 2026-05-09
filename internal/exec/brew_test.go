@@ -70,3 +70,23 @@ func TestFormulaInstallGroupsSplitTapQualifiedFormula(t *testing.T) {
 		}
 	}
 }
+
+func TestGCCCompilerFromBrewVersions(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"current gcc", "gcc 15.2.0_1\n", "gcc-15"},
+		{"future major", "gcc 16.1.0\n", "gcc-16"},
+		{"missing version", "gcc\n", ""},
+		{"wrong formula", "llvm 22.0.0\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := gccCompilerFromBrewVersions(tc.out); got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}

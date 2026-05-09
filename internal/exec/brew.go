@@ -50,7 +50,7 @@ func (b *Brew) Install(ctx context.Context, formulas []string) error {
 		return nil
 	}
 	for _, group := range formulaInstallGroups(formulas) {
-		args := append([]string{"install"}, group...)
+		args := b.installArgs(group)
 		if _, err := b.Runner.Run(ctx, "brew", args...); err != nil {
 			if stillMissing := b.MissingFormulas(group); len(stillMissing) > 0 {
 				return err
@@ -224,6 +224,56 @@ func isFormulaInstalled(installed map[string]bool, formula string) bool {
 		return installed[formula[i+1:]]
 	}
 	return false
+}
+
+func (b *Brew) installArgs(formulas []string) []string {
+	args := []string{"install"}
+	if needsExplicitBrewCompiler(formulas) {
+		if cc := b.brewGCCCompiler(); cc != "" {
+			args = append(args, "--cc="+cc)
+		}
+	}
+	return append(args, formulas...)
+}
+
+func needsExplicitBrewCompiler(formulas []string) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	for _, formula := range formulas {
+		if formula == "oven-sh/bun/bun" {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Brew) brewGCCCompiler() string {
+	result, err := b.Runner.RunQuery(context.Background(), "brew", "list", "--versions", "gcc")
+	if err != nil || result.ExitCode != 0 {
+		return ""
+	}
+	return gccCompilerFromBrewVersions(result.Stdout)
+}
+
+func gccCompilerFromBrewVersions(output string) string {
+	fields := strings.Fields(output)
+	if len(fields) < 2 || fields[0] != "gcc" {
+		return ""
+	}
+	major := fields[1]
+	if i := strings.Index(major, "."); i >= 0 {
+		major = major[:i]
+	}
+	if major == "" {
+		return ""
+	}
+	for _, r := range major {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return "gcc-" + major
 }
 
 func formulaInstallGroups(formulas []string) [][]string {
