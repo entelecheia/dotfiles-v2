@@ -153,7 +153,7 @@ func TestLoad_AllProfilesEnableNode(t *testing.T) {
 	}
 }
 
-func TestLoad_ServerProfileInstallsBun(t *testing.T) {
+func TestLoad_ProfilesDoNotInstallBunByDefault(t *testing.T) {
 	const bunFormula = "oven-sh/bun/bun"
 
 	for _, name := range []string{"minimal", "full", "server"} {
@@ -169,46 +169,32 @@ func TestLoad_ServerProfileInstallsBun(t *testing.T) {
 				break
 			}
 		}
-
-		if name == "server" && !hasBun {
-			t.Errorf("server profile: expected %s in AllPackages", bunFormula)
-		}
-		if name != "server" && hasBun {
-			t.Errorf("%s profile: bun should be server-only", name)
+		if hasBun {
+			t.Errorf("%s profile: bun should not be installed by default", name)
 		}
 	}
 }
 
-func TestLoad_ServerProfileInstallsBunPrerequisitesFirst(t *testing.T) {
+func TestLoad_ServerProfileExtraPackages(t *testing.T) {
 	cfg, err := Load("server", "", nil)
 	if err != nil {
 		t.Fatalf("Load server: %v", err)
 	}
 
-	bunIndex := -1
-	prereqIndexes := map[string]int{
-		"unzip": -1,
-		"gcc":   -1,
+	want := map[string]bool{
+		"btop": false,
+		"tmux": false,
+		"uv":   false,
+		"pipx": false,
 	}
-	for i, p := range cfg.AllPackages() {
-		if p == "oven-sh/bun/bun" {
-			bunIndex = i
-			continue
-		}
-		if _, ok := prereqIndexes[p]; ok {
-			prereqIndexes[p] = i
+	for _, p := range cfg.AllPackages() {
+		if _, ok := want[p]; ok {
+			want[p] = true
 		}
 	}
-
-	if bunIndex == -1 {
-		t.Fatal("server profile: expected oven-sh/bun/bun in AllPackages")
-	}
-	for prereq, index := range prereqIndexes {
-		if index == -1 {
-			t.Fatalf("server profile: expected %s in AllPackages", prereq)
-		}
-		if index > bunIndex {
-			t.Fatalf("server profile: %s must be installed before bun, got %s=%d bun=%d", prereq, prereq, index, bunIndex)
+	for pkg, found := range want {
+		if !found {
+			t.Fatalf("server profile: expected %s in AllPackages", pkg)
 		}
 	}
 }
