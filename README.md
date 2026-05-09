@@ -817,7 +817,7 @@ Config key: `modules.terminal.prompt_style` (state: `modules.prompt_style`).
 `btop`, `lazygit`, `rclone`, `yazi`, `glow`, `csvlens`, `chafa`, `uv`, `pipx`, `tmux`, `gnupg`
 
 **server** adds (+5):
-`btop`, `bun`, `tmux`, `uv`, `pipx`
+`btop`, `oven-sh/bun/bun`, `tmux`, `uv`, `pipx`
 
 ---
 

@@ -154,6 +154,8 @@ func TestLoad_AllProfilesEnableNode(t *testing.T) {
 }
 
 func TestLoad_ServerProfileInstallsBun(t *testing.T) {
+	const bunFormula = "oven-sh/bun/bun"
+
 	for _, name := range []string{"minimal", "full", "server"} {
 		cfg, err := Load(name, "", nil)
 		if err != nil {
@@ -162,14 +164,14 @@ func TestLoad_ServerProfileInstallsBun(t *testing.T) {
 
 		hasBun := false
 		for _, p := range cfg.AllPackages() {
-			if p == "bun" {
+			if p == bunFormula {
 				hasBun = true
 				break
 			}
 		}
 
 		if name == "server" && !hasBun {
-			t.Errorf("server profile: expected bun in AllPackages")
+			t.Errorf("server profile: expected %s in AllPackages", bunFormula)
 		}
 		if name != "server" && hasBun {
 			t.Errorf("%s profile: bun should be server-only", name)

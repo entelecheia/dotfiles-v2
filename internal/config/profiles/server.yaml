@@ -22,7 +22,7 @@ modules:
 
 packages_extra:
   - btop
-  - bun
+  - oven-sh/bun/bun
   - tmux
   - uv
   - pipx

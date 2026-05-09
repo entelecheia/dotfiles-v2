@@ -36,12 +36,12 @@ var terminalToolOptions = []TerminalToolOption{
 	{Formula: "glow", Name: "markdown viewer"},
 	{Formula: "csvlens", Name: "CSV viewer"},
 	{Formula: "chafa", Name: "terminal image viewer"},
-	{Formula: "bun", Name: "JavaScript runtime/toolkit"},
+	{Formula: "oven-sh/bun/bun", Name: "Bun JavaScript runtime/toolkit"},
 }
 
 var defaultTerminalToolsByProfile = map[string][]string{
 	"minimal": []string{"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza"},
-	"server":  []string{"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza", "btop", "bun"},
+	"server":  []string{"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza", "btop", "oven-sh/bun/bun"},
 	"full": []string{
 		"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza",
 		"btop", "lazygit", "yazi", "glow", "csvlens", "chafa",

@@ -30,3 +30,13 @@ func TestExtractAppName(t *testing.T) {
 		})
 	}
 }
+
+func TestIsFormulaInstalledAcceptsTapQualifiedFormula(t *testing.T) {
+	installed := map[string]bool{"bun": true}
+	if !isFormulaInstalled(installed, "oven-sh/bun/bun") {
+		t.Fatal("expected tap-qualified formula to match installed short formula name")
+	}
+	if isFormulaInstalled(installed, "oven-sh/other/other") {
+		t.Fatal("unexpected match for unrelated tap-qualified formula")
+	}
+}

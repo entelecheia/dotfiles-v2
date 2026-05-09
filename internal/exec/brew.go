@@ -195,16 +195,28 @@ func (b *Brew) MissingFormulas(formulas []string) []string {
 
 	installed := make(map[string]bool)
 	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
-		installed[strings.TrimSpace(line)] = true
+		if formula := strings.TrimSpace(line); formula != "" {
+			installed[formula] = true
+		}
 	}
 
 	var missing []string
 	for _, f := range formulas {
-		if !installed[f] {
+		if !isFormulaInstalled(installed, f) {
 			missing = append(missing, f)
 		}
 	}
 	return missing
+}
+
+func isFormulaInstalled(installed map[string]bool, formula string) bool {
+	if installed[formula] {
+		return true
+	}
+	if i := strings.LastIndex(formula, "/"); i >= 0 && i+1 < len(formula) {
+		return installed[formula[i+1:]]
+	}
+	return false
 }
 
 // InstalledCasks returns the set of all currently installed casks.
