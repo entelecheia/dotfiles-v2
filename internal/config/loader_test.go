@@ -179,31 +179,37 @@ func TestLoad_ServerProfileInstallsBun(t *testing.T) {
 	}
 }
 
-func TestLoad_ServerProfileInstallsUnzipBeforeBun(t *testing.T) {
+func TestLoad_ServerProfileInstallsBunPrerequisitesFirst(t *testing.T) {
 	cfg, err := Load("server", "", nil)
 	if err != nil {
 		t.Fatalf("Load server: %v", err)
 	}
 
 	bunIndex := -1
-	unzipIndex := -1
+	prereqIndexes := map[string]int{
+		"unzip": -1,
+		"gcc":   -1,
+	}
 	for i, p := range cfg.AllPackages() {
-		switch p {
-		case "oven-sh/bun/bun":
+		if p == "oven-sh/bun/bun" {
 			bunIndex = i
-		case "unzip":
-			unzipIndex = i
+			continue
+		}
+		if _, ok := prereqIndexes[p]; ok {
+			prereqIndexes[p] = i
 		}
 	}
 
 	if bunIndex == -1 {
 		t.Fatal("server profile: expected oven-sh/bun/bun in AllPackages")
 	}
-	if unzipIndex == -1 {
-		t.Fatal("server profile: expected unzip in AllPackages")
-	}
-	if unzipIndex > bunIndex {
-		t.Fatalf("server profile: unzip must be installed before bun, got unzip=%d bun=%d", unzipIndex, bunIndex)
+	for prereq, index := range prereqIndexes {
+		if index == -1 {
+			t.Fatalf("server profile: expected %s in AllPackages", prereq)
+		}
+		if index > bunIndex {
+			t.Fatalf("server profile: %s must be installed before bun, got %s=%d bun=%d", prereq, prereq, index, bunIndex)
+		}
 	}
 }
 

@@ -49,9 +49,13 @@ func (b *Brew) Install(ctx context.Context, formulas []string) error {
 	if len(formulas) == 0 {
 		return nil
 	}
-	args := append([]string{"install"}, formulas...)
-	_, err := b.Runner.Run(ctx, "brew", args...)
-	return err
+	for _, group := range formulaInstallGroups(formulas) {
+		args := append([]string{"install"}, group...)
+		if _, err := b.Runner.Run(ctx, "brew", args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // InstallCask installs casks. When force is true, `--force` is passed to brew
@@ -217,6 +221,30 @@ func isFormulaInstalled(installed map[string]bool, formula string) bool {
 		return installed[formula[i+1:]]
 	}
 	return false
+}
+
+func formulaInstallGroups(formulas []string) [][]string {
+	var groups [][]string
+	var current []string
+	for _, formula := range formulas {
+		if isTapQualifiedFormula(formula) {
+			if len(current) > 0 {
+				groups = append(groups, current)
+				current = nil
+			}
+			groups = append(groups, []string{formula})
+			continue
+		}
+		current = append(current, formula)
+	}
+	if len(current) > 0 {
+		groups = append(groups, current)
+	}
+	return groups
+}
+
+func isTapQualifiedFormula(formula string) bool {
+	return strings.Count(formula, "/") >= 2
 }
 
 // InstalledCasks returns the set of all currently installed casks.

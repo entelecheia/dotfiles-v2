@@ -40,3 +40,33 @@ func TestIsFormulaInstalledAcceptsTapQualifiedFormula(t *testing.T) {
 		t.Fatal("unexpected match for unrelated tap-qualified formula")
 	}
 }
+
+func TestFormulaInstallGroupsSplitTapQualifiedFormula(t *testing.T) {
+	got := formulaInstallGroups([]string{
+		"git",
+		"unzip",
+		"gcc",
+		"oven-sh/bun/bun",
+		"tmux",
+		"uv",
+	})
+	want := [][]string{
+		{"git", "unzip", "gcc"},
+		{"oven-sh/bun/bun"},
+		{"tmux", "uv"},
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d groups, got %d: %#v", len(want), len(got), got)
+	}
+	for i := range want {
+		if len(got[i]) != len(want[i]) {
+			t.Fatalf("group %d: expected %#v, got %#v", i, want[i], got[i])
+		}
+		for j := range want[i] {
+			if got[i][j] != want[i][j] {
+				t.Fatalf("group %d item %d: expected %q, got %q", i, j, want[i][j], got[i][j])
+			}
+		}
+	}
+}
