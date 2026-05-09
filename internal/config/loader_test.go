@@ -153,6 +153,30 @@ func TestLoad_AllProfilesEnableNode(t *testing.T) {
 	}
 }
 
+func TestLoad_ServerProfileInstallsBun(t *testing.T) {
+	for _, name := range []string{"minimal", "full", "server"} {
+		cfg, err := Load(name, "", nil)
+		if err != nil {
+			t.Fatalf("Load %s: %v", name, err)
+		}
+
+		hasBun := false
+		for _, p := range cfg.AllPackages() {
+			if p == "bun" {
+				hasBun = true
+				break
+			}
+		}
+
+		if name == "server" && !hasBun {
+			t.Errorf("server profile: expected bun in AllPackages")
+		}
+		if name != "server" && hasBun {
+			t.Errorf("%s profile: bun should be server-only", name)
+		}
+	}
+}
+
 func TestMergeConfigs(t *testing.T) {
 	base := &Config{
 		Packages: []string{"git", "curl"},
