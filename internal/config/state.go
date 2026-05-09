@@ -26,6 +26,7 @@ type UserState struct {
 type UserModulesState struct {
 	Workspace   UserWorkspaceState `yaml:"workspace,omitempty"`
 	AI          UserAIState        `yaml:"ai,omitempty"`
+	Git         UserGitState       `yaml:"git,omitempty"`
 	Warp        bool               `yaml:"warp,omitempty"`
 	PromptStyle string             `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
 	Fonts       UserFontsState     `yaml:"fonts,omitempty"`
@@ -39,11 +40,17 @@ type UserModulesState struct {
 type UserAIState struct {
 	Enabled    bool `yaml:"enabled,omitempty"`
 	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
+	HUD        bool `yaml:"hud,omitempty"`
 }
 
 // IsZero lets yaml.v3 omit an unset AI block from user state.
 func (a UserAIState) IsZero() bool {
-	return !a.Enabled && !a.AgentsSSOT
+	return !a.Enabled && !a.AgentsSSOT && !a.HUD
+}
+
+// UserGitState holds user selections for git helper behavior.
+type UserGitState struct {
+	CoauthorGuard string `yaml:"coauthor_guard,omitempty"`
 }
 
 // UnmarshalYAML accepts either:
@@ -203,6 +210,13 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.Gsync.Interval != 0 && (s.Modules.Gsync.Interval < 60 || s.Modules.Gsync.Interval > 86400) {
 		return fmt.Errorf("gdrive_sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Gsync.Interval)
+	}
+	if s.Modules.Git.CoauthorGuard != "" {
+		switch s.Modules.Git.CoauthorGuard {
+		case "off", "warn", "block":
+		default:
+			return fmt.Errorf("modules.git.coauthor_guard must be off, warn, or block (got %q)", s.Modules.Git.CoauthorGuard)
+		}
 	}
 	for _, p := range s.Modules.Gsync.SharedExcludes {
 		// Paths must be relative to mirror_path. Absolute paths and parent
@@ -395,6 +409,14 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	if state.Modules.AI.AgentsSSOT {
 		cfg.Modules.AI.Enabled = true
 		cfg.Modules.AI.AgentsSSOT = true
+	}
+	if state.Modules.AI.HUD {
+		cfg.Modules.AI.Enabled = true
+		cfg.Modules.AI.HUD = true
+	}
+	if state.Modules.Git.CoauthorGuard != "" {
+		cfg.Modules.Git.Enabled = true
+		cfg.Modules.Git.CoauthorGuard = state.Modules.Git.CoauthorGuard
 	}
 	if state.Modules.Warp {
 		cfg.Modules.Terminal.Warp = true

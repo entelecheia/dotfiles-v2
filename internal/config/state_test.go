@@ -214,6 +214,40 @@ func TestLoadState_AIAgentsSSOTPersistsAndEnablesAI(t *testing.T) {
 	}
 }
 
+func TestLoadState_AIHUDPersistEnablesAI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("name: Test\nprofile: full\nmodules:\n  ai:\n    hud: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	cfg := &Config{}
+	ApplyStateToConfig(cfg, loaded)
+	if !cfg.Modules.AI.Enabled || !cfg.Modules.AI.HUD {
+		t.Fatalf("AI HUD should enable AI module, got enabled=%v hud=%v", cfg.Modules.AI.Enabled, cfg.Modules.AI.HUD)
+	}
+}
+
+func TestLoadState_CoauthoredGuardPersistsAndEnablesGit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("name: Test\nprofile: full\nmodules:\n  git:\n    coauthor_guard: warn\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	cfg := &Config{}
+	ApplyStateToConfig(cfg, loaded)
+	if !cfg.Modules.Git.Enabled || cfg.Modules.Git.CoauthorGuard != "warn" {
+		t.Fatalf("coauthor guard should enable git module, got enabled=%v mode=%q", cfg.Modules.Git.Enabled, cfg.Modules.Git.CoauthorGuard)
+	}
+}
+
 func TestSave_AtomicNoTempLeak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

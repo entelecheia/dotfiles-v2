@@ -537,6 +537,12 @@ dot ai restore --include-auth       # restore auth/local-secret files explicitly
 
 dot ai export ~/workspace/secrets/ai-config.tar.gz
 dot ai import ~/workspace/secrets/ai-config.tar.gz
+
+dot ai hud status                  # inspect Claude Code + Codex HUD setup
+dot ai hud apply --tool claude,codex --persist
+
+dot ai coauthor-guard status       # inspect AGENTS + Git commit-msg guard
+dot ai coauthor-guard apply --mode warn --persist
 ```
 
 The `ai` module writes shell/config helper files:
@@ -545,6 +551,24 @@ The `ai` module writes shell/config helper files:
 |------|---------|
 | `~/.config/shell/30-ai.sh` | Claude Code env, GitHub Models aliases, Fabric alias, GPU helper aliases |
 | `~/.config/claude/settings.json` | Minimal dot-managed Claude settings |
+
+`dot ai hud apply` installs dot-native status lines:
+
+- Codex: updates `~/.codex/config.toml` `[tui].status_line` with model,
+  branch, context, token, and usage-limit segments.
+- Claude Code: writes `~/.claude/statusline-dot.py` and merges a `statusLine`
+  command into `~/.claude/settings.json`.
+
+Pass `--persist` to record `modules.ai.hud: true` so future `dot apply` runs
+keep the HUD in sync.
+
+`dot ai coauthor-guard apply --mode warn` adds a marked AGENTS instruction and
+a global Git `commit-msg` hook that warns when a commit message contains
+`Co-authored by` or `Co-authored-by:` trailers. Use `--mode block` only when you
+want the hook to reject the commit. `--persist` records
+`modules.git.coauthor_guard: warn|block` for future `dot apply` runs. Add
+`--apply-agents` when you also want to render the updated agents SSOT to live
+Claude/Codex targets immediately.
 
 Portable backup includes Claude/Codex settings, MCP config, agents, hooks,
 prompts, rules, and user skills. It excludes auth tokens, local overrides,
@@ -760,7 +784,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
-| **ai** | full | AI CLI/config helpers, Claude/Codex settings backup |
+| **ai** | full | AI CLI/config helpers, Claude/Codex settings backup, optional HUD |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |
 | **conda** | full | Conda/Mamba shell initialization |

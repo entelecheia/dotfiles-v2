@@ -76,6 +76,7 @@ type ModuleToggle struct {
 type AIConfig struct {
 	Enabled    bool `yaml:"enabled"`
 	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
+	HUD        bool `yaml:"hud,omitempty"`
 }
 
 // ShellConfig configures the shell module.
@@ -85,8 +86,9 @@ type ShellConfig struct {
 
 // GitConfig configures the git module.
 type GitConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Signing bool `yaml:"signing"`
+	Enabled       bool   `yaml:"enabled"`
+	Signing       bool   `yaml:"signing"`
+	CoauthorGuard string `yaml:"coauthor_guard,omitempty"`
 }
 
 // SSHModConfig configures the ssh module.
@@ -251,6 +253,7 @@ func (c *Config) TemplateData() map[string]any {
 		"EnableWorkspace":  c.Modules.Workspace.Enabled,
 		"EnableAI":         c.Modules.AI.Enabled,
 		"EnableAgentsSSOT": c.Modules.AI.AgentsSSOT,
+		"EnableAIHUD":      c.Modules.AI.HUD,
 		"EnableWarp":       c.Modules.Terminal.Warp,
 		"PromptStyle":      c.Modules.Terminal.PromptStyle,
 		"WorkspacePath":    c.Modules.Workspace.Path,
@@ -259,6 +262,7 @@ func (c *Config) TemplateData() map[string]any {
 		"WorkRepos":        c.Modules.Workspace.Repos,
 		"SSHKeyName":       c.Modules.SSH.KeyName,
 		"GitSigning":       c.Modules.Git.Signing,
+		"CoauthorGuard":    c.Modules.Git.CoauthorGuard,
 		"FontFamily":       c.Modules.Fonts.Family,
 		// GPU/CUDA
 		"HasCUDA":      hasCUDA,

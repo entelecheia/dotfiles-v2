@@ -9,6 +9,9 @@
     autocrlf = input
     excludesFile = ~/.config/git/ignore
     pager = bat --style=plain --paging=always 2>/dev/null || less
+{{ if and .CoauthorGuard (ne .CoauthorGuard "off") }}
+    hooksPath = ~/.config/git/hooks
+{{ end }}
 
 [pull]
     rebase = true

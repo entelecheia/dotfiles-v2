@@ -72,6 +72,35 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			})
 		}
 	}
+	if rc.Config.Modules.AI.HUD {
+		manager := aisettings.NewHUDManager(rc.Runner, rc.HomeDir)
+		statuses, err := manager.Status(nil)
+		if err != nil {
+			return nil, fmt.Errorf("AI HUD status: %w", err)
+		}
+		for _, st := range statuses {
+			if st.Drift == "in-sync" {
+				continue
+			}
+			changes = append(changes, Change{
+				Description: fmt.Sprintf("apply AI HUD to %s (%s)", st.ToolID, st.Drift),
+				Command:     fmt.Sprintf("dot ai hud apply --tool %s", st.ToolID),
+			})
+		}
+	}
+	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
+		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
+		status, err := manager.Status(mode)
+		if err != nil {
+			return nil, fmt.Errorf("coauthor guard status: %w", err)
+		}
+		if status.AgentsDrift != "in-sync" {
+			changes = append(changes, Change{
+				Description: fmt.Sprintf("apply coauthor guard AGENTS instruction (%s)", status.AgentsDrift),
+				Command:     "dot ai coauthor-guard apply",
+			})
+		}
+	}
 
 	return &CheckResult{Satisfied: len(changes) == 0, Changes: changes}, nil
 }
@@ -113,6 +142,31 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 		}
 		for _, warning := range result.Warnings {
 			messages = append(messages, warning)
+		}
+	}
+	if rc.Config.Modules.AI.HUD {
+		manager := aisettings.NewHUDManager(rc.Runner, rc.HomeDir)
+		result, err := manager.Apply(aisettings.HUDOptions{DryRun: rc.DryRun})
+		if err != nil {
+			return nil, fmt.Errorf("applying AI HUD: %w", err)
+		}
+		for _, item := range result.Items {
+			if item.Changed {
+				messages = append(messages, fmt.Sprintf("applied AI HUD to %s", item.ToolID))
+			}
+		}
+	}
+	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
+		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
+		result, err := manager.Apply(aisettings.CoauthorGuardOptions{Mode: mode, DryRun: rc.DryRun, ApplyAgents: rc.Config.Modules.AI.AgentsSSOT})
+		if err != nil {
+			return nil, fmt.Errorf("applying coauthor guard AGENTS instruction: %w", err)
+		}
+		if result.AgentsChanged {
+			messages = append(messages, "applied coauthor guard AGENTS instruction")
+		}
+		if result.AgentsApplied {
+			messages = append(messages, "reapplied agents SSOT after coauthor guard update")
 		}
 	}
 
