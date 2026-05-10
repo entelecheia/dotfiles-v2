@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const maxAIEventLineBytes = 10 * 1024 * 1024
+
 // AIEventV1 is the append-only audit envelope for dot ai mutations.
 type AIEventV1 struct {
 	ID            string         `json:"id"`
@@ -51,11 +53,14 @@ func AppendAIEvent(homeDir, typ string, payload map[string]any) (AIEventV1, erro
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return AIEventV1{}, fmt.Errorf("create audit dir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return AIEventV1{}, fmt.Errorf("open audit log: %w", err)
 	}
 	defer f.Close()
+	if err := f.Chmod(0o600); err != nil {
+		return AIEventV1{}, fmt.Errorf("chmod audit log: %w", err)
+	}
 	line, err := json.Marshal(event)
 	if err != nil {
 		return AIEventV1{}, fmt.Errorf("marshal audit event: %w", err)
@@ -68,30 +73,12 @@ func AppendAIEvent(homeDir, typ string, payload map[string]any) (AIEventV1, erro
 
 // ReadAIEvents returns parseable audit events and a malformed-line count.
 func ReadAIEvents(homeDir string) ([]AIEventV1, int, error) {
-	path := AIEventsPath(homeDir)
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, 0, nil
-		}
-		return nil, 0, fmt.Errorf("open audit log: %w", err)
-	}
-	defer f.Close()
-
 	var events []AIEventV1
-	malformed := 0
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var event AIEventV1
-		if err := json.Unmarshal(line, &event); err != nil {
-			malformed++
-			continue
-		}
+	malformed, err := scanAIEvents(homeDir, func(event AIEventV1) {
 		events = append(events, event)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, malformed, fmt.Errorf("read audit log: %w", err)
+	})
+	if err != nil {
+		return nil, malformed, err
 	}
 	return events, malformed, nil
 }
@@ -101,35 +88,43 @@ func TailAIEvents(homeDir string, n int) ([]AIEventV1, int, error) {
 	if n <= 0 {
 		n = 20
 	}
-	events, malformed, err := ReadAIEvents(homeDir)
+	ring := make([]AIEventV1, n)
+	total := 0
+	malformed, err := scanAIEvents(homeDir, func(event AIEventV1) {
+		ring[total%n] = event
+		total++
+	})
 	if err != nil {
 		return nil, malformed, err
 	}
-	if len(events) <= n {
-		return events, malformed, nil
+	count := total
+	if count > n {
+		count = n
 	}
-	return events[len(events)-n:], malformed, nil
+	events := make([]AIEventV1, 0, count)
+	start := total - count
+	for i := 0; i < count; i++ {
+		events = append(events, ring[(start+i)%n])
+	}
+	return events, malformed, nil
 }
 
 // SummarizeAIEvents counts audit events by type.
 func SummarizeAIEvents(homeDir string) (*AIEventSummary, error) {
-	events, malformed, err := ReadAIEvents(homeDir)
+	sum := &AIEventSummary{
+		Path:   AIEventsPath(homeDir),
+		ByType: map[string]int{},
+	}
+	malformed, err := scanAIEvents(homeDir, func(event AIEventV1) {
+		sum.Total++
+		sum.ByType[event.Type]++
+		last := event
+		sum.LastEvent = &last
+	})
 	if err != nil {
 		return nil, err
 	}
-	sum := &AIEventSummary{
-		Path:      AIEventsPath(homeDir),
-		Total:     len(events),
-		ByType:    map[string]int{},
-		Malformed: malformed,
-	}
-	for i := range events {
-		sum.ByType[events[i].Type]++
-	}
-	if len(events) > 0 {
-		last := events[len(events)-1]
-		sum.LastEvent = &last
-	}
+	sum.Malformed = malformed
 	return sum, nil
 }
 
@@ -150,4 +145,33 @@ func newAIEventID() string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])
 	return fmt.Sprintf("%013d_%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
+}
+
+func scanAIEvents(homeDir string, visit func(AIEventV1)) (int, error) {
+	path := AIEventsPath(homeDir)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("open audit log: %w", err)
+	}
+	defer f.Close()
+
+	malformed := 0
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxAIEventLineBytes)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var event AIEventV1
+		if err := json.Unmarshal(line, &event); err != nil {
+			malformed++
+			continue
+		}
+		visit(event)
+	}
+	if err := scanner.Err(); err != nil {
+		return malformed, fmt.Errorf("read audit log: %w", err)
+	}
+	return malformed, nil
 }
