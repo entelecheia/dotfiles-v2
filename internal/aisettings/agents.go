@@ -62,6 +62,7 @@ type AgentStatus struct {
 type ApplyOptions struct {
 	Tools  []string
 	DryRun bool
+	Force  bool
 }
 
 // ApplyResult summarizes an agents apply operation.
@@ -73,12 +74,29 @@ type ApplyResult struct {
 
 // AgentApplyItem captures one tool target write.
 type AgentApplyItem struct {
-	ToolID     string
-	TargetPath string
-	Changed    bool
-	BackedUp   bool
-	BackupPath string
-	Diff       string
+	ToolID       string
+	TargetPath   string
+	Changed      bool
+	BackedUp     bool
+	BackupPath   string
+	Conflict     bool
+	ExpectedHash string
+	ActualHash   string
+	Diff         string
+}
+
+// ProtectedWriteConflictError reports a live target changed outside the last
+// dot-managed apply state, so overwriting it requires explicit force.
+type ProtectedWriteConflictError struct {
+	ToolID       string
+	TargetPath   string
+	ExpectedHash string
+	ActualHash   string
+}
+
+func (e *ProtectedWriteConflictError) Error() string {
+	return fmt.Sprintf("protected write conflict for %s target %s (expected last-applied hash %s, got %s); rerun `dot ai agents apply --tool %s --force` after reviewing the diff",
+		e.ToolID, e.TargetPath, shortHashForMessage(e.ExpectedHash), shortHashForMessage(e.ActualHash), e.ToolID)
 }
 
 // PullOptions controls copying a live tool target back into the SSOT.
@@ -310,8 +328,19 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 		}
 
 		if changed && targetExists && targetHash != "" && targetHash != state.LastApplied[id] {
+			item.Conflict = true
+			item.ExpectedHash = state.LastApplied[id]
+			item.ActualHash = targetHash
 			if result.DryRun {
-				result.Warnings = append(result.Warnings, fmt.Sprintf("%s target was changed outside agents SSOT; would back it up before overwrite", id))
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s target changed outside agents SSOT; apply would stop unless --force is used", id))
+			} else if !opts.Force {
+				result.Items = append(result.Items, item)
+				return result, &ProtectedWriteConflictError{
+					ToolID:       id,
+					TargetPath:   target,
+					ExpectedHash: state.LastApplied[id],
+					ActualHash:   targetHash,
+				}
 			} else {
 				backupPath, err := m.backupTarget(id, target)
 				if err != nil {
@@ -729,6 +758,16 @@ func (m *AgentsManager) expandHome(path string) string {
 func normalizedHash(data []byte) string {
 	sum := sha256.Sum256(stripManagedHeader(data))
 	return hex.EncodeToString(sum[:])
+}
+
+func shortHashForMessage(hash string) string {
+	if hash == "" {
+		return "<none>"
+	}
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
 }
 
 func stripManagedHeader(data []byte) []byte {
