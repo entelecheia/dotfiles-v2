@@ -62,6 +62,7 @@ type AgentStatus struct {
 type ApplyOptions struct {
 	Tools  []string
 	DryRun bool
+	Force  bool
 }
 
 // ApplyResult summarizes an agents apply operation.
@@ -73,12 +74,29 @@ type ApplyResult struct {
 
 // AgentApplyItem captures one tool target write.
 type AgentApplyItem struct {
-	ToolID     string
-	TargetPath string
-	Changed    bool
-	BackedUp   bool
-	BackupPath string
-	Diff       string
+	ToolID       string
+	TargetPath   string
+	Changed      bool
+	BackedUp     bool
+	BackupPath   string
+	Conflict     bool
+	ExpectedHash string
+	ActualHash   string
+	Diff         string
+}
+
+// ProtectedWriteConflictError reports a live target changed outside the last
+// dot-managed apply state, so overwriting it requires explicit force.
+type ProtectedWriteConflictError struct {
+	ToolID       string
+	TargetPath   string
+	ExpectedHash string
+	ActualHash   string
+}
+
+func (e *ProtectedWriteConflictError) Error() string {
+	return fmt.Sprintf("protected write conflict for %s target %s (expected last-applied hash %s, got %s); rerun `dot ai agents apply --tool %s --force` after reviewing the diff",
+		e.ToolID, e.TargetPath, shortHashForMessage(e.ExpectedHash), shortHashForMessage(e.ActualHash), e.ToolID)
 }
 
 // PullOptions controls copying a live tool target back into the SSOT.
@@ -136,6 +154,18 @@ type ShowOptions struct {
 
 type agentsState struct {
 	LastApplied map[string]string `json:"lastApplied"`
+}
+
+type agentApplyPlan struct {
+	id           string
+	target       string
+	rendered     string
+	renderedHash string
+	targetExists bool
+	targetHash   string
+	changed      bool
+	item         AgentApplyItem
+	conflict     bool
 }
 
 // NewAgentsManager returns an agents manager rooted at homeDir.
@@ -282,6 +312,8 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 	}
 	effectiveDryRun := opts.DryRun || m.runner().DryRun
 	result := &ApplyResult{DryRun: effectiveDryRun}
+	plans := make([]agentApplyPlan, 0, len(ids))
+	var firstConflict *ProtectedWriteConflictError
 	for _, id := range ids {
 		target, err := m.TargetPath(id)
 		if err != nil {
@@ -309,32 +341,72 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 			item.Diff = unifiedTextDiff("target/"+id, "rendered/"+id, string(targetBytes), rendered)
 		}
 
+		plan := agentApplyPlan{
+			id:           id,
+			target:       target,
+			rendered:     rendered,
+			renderedHash: renderedHash,
+			targetExists: targetExists,
+			targetHash:   targetHash,
+			changed:      changed,
+			item:         item,
+		}
 		if changed && targetExists && targetHash != "" && targetHash != state.LastApplied[id] {
+			item.Conflict = true
+			item.ExpectedHash = state.LastApplied[id]
+			item.ActualHash = targetHash
+			plan.item = item
+			plan.conflict = true
 			if result.DryRun {
-				result.Warnings = append(result.Warnings, fmt.Sprintf("%s target was changed outside agents SSOT; would back it up before overwrite", id))
-			} else {
-				backupPath, err := m.backupTarget(id, target)
-				if err != nil {
-					return nil, err
+				result.Warnings = append(result.Warnings, fmt.Sprintf("%s target changed outside agents SSOT; apply would stop unless --force is used", id))
+			} else if !opts.Force {
+				if firstConflict == nil {
+					firstConflict = &ProtectedWriteConflictError{
+						ToolID:       id,
+						TargetPath:   target,
+						ExpectedHash: state.LastApplied[id],
+						ActualHash:   targetHash,
+					}
 				}
-				item.BackedUp = true
-				item.BackupPath = backupPath
-				result.Warnings = append(result.Warnings, fmt.Sprintf("%s target was changed outside agents SSOT; backed up to %s", id, backupPath))
 			}
 		}
 
-		if changed && !result.DryRun {
-			if err := m.runner().MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		plans = append(plans, plan)
+		result.Items = append(result.Items, plan.item)
+	}
+	if firstConflict != nil {
+		return result, firstConflict
+	}
+
+	if opts.Force && !result.DryRun {
+		for i := range plans {
+			plan := plans[i]
+			if !plan.conflict {
+				continue
+			}
+			backupPath, err := m.backupTarget(plan.id, plan.target)
+			if err != nil {
+				return nil, err
+			}
+			result.Items[i].BackedUp = true
+			result.Items[i].BackupPath = backupPath
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s target was changed outside agents SSOT; backed up to %s", plan.id, backupPath))
+		}
+	}
+
+	for i := range plans {
+		plan := plans[i]
+		if plan.changed && !result.DryRun {
+			if err := m.runner().MkdirAll(filepath.Dir(plan.target), 0o755); err != nil {
 				return nil, fmt.Errorf("create target dir: %w", err)
 			}
-			if err := m.runner().WriteFile(target, []byte(rendered), 0o644); err != nil {
-				return nil, fmt.Errorf("write target %s: %w", target, err)
+			if err := m.runner().WriteFile(plan.target, []byte(plan.rendered), 0o644); err != nil {
+				return nil, fmt.Errorf("write target %s: %w", plan.target, err)
 			}
 		}
-		if !result.DryRun && (!changed || targetExists || renderedHash != "") {
-			state.LastApplied[id] = renderedHash
+		if !result.DryRun && (!plan.changed || plan.targetExists || plan.renderedHash != "") {
+			state.LastApplied[plan.id] = plan.renderedHash
 		}
-		result.Items = append(result.Items, item)
 	}
 	if !result.DryRun {
 		if err := m.writeState(state); err != nil {
@@ -729,6 +801,16 @@ func (m *AgentsManager) expandHome(path string) string {
 func normalizedHash(data []byte) string {
 	sum := sha256.Sum256(stripManagedHeader(data))
 	return hex.EncodeToString(sum[:])
+}
+
+func shortHashForMessage(hash string) string {
+	if hash == "" {
+		return "<none>"
+	}
+	if len(hash) <= 12 {
+		return hash
+	}
+	return hash[:12]
 }
 
 func stripManagedHeader(data []byte) []byte {

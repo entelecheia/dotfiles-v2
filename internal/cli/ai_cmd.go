@@ -35,6 +35,8 @@ Codex, or ChatGPT apps; use 'dot apps install' for Homebrew casks.`,
 	cmd.AddCommand(newAIHudCmd())
 	cmd.AddCommand(newAICoauthoredGuardCmd())
 	cmd.AddCommand(newAIAgentsCmd())
+	cmd.AddCommand(newAISkillsCmd())
+	cmd.AddCommand(newAIAuditCmd())
 	return cmd
 }
 
@@ -171,6 +173,9 @@ func runAIBackup(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if err := auditAIEvent(cmd, "ai.backup", aiSummaryPayload(sum)); err != nil {
+		return err
+	}
 	printAISummary(printerFrom(cmd), "AI Backup", sum)
 	return nil
 }
@@ -221,12 +226,18 @@ func runAIRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if err := auditAIEvent(cmd, "ai.restore", aiSummaryPayload(sum)); err != nil {
+		return err
+	}
 	printAISummary(p, "AI Restore", sum)
 	if reapplyAgents {
 		mgr := newAgentsManagerFromCmd(cmd)
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		result, err := mgr.Apply(aisettings.ApplyOptions{Tools: mgr.DefaultApplyTools(), DryRun: dryRun})
 		if err != nil {
+			return err
+		}
+		if err := auditAIEvent(cmd, "ai.agents.apply", agentsApplyPayload(result)); err != nil {
 			return err
 		}
 		p.Section("Agents SSOT Reapply")
@@ -256,6 +267,9 @@ func runAIExport(cmd *cobra.Command, args []string) error {
 	}
 	sum, err := eng.Export(args[0], aisettings.BackupOptions{Tag: tag, IncludeAuth: includeAuth})
 	if err != nil {
+		return err
+	}
+	if err := auditAIEvent(cmd, "ai.export", aiSummaryPayload(sum)); err != nil {
 		return err
 	}
 	printAISummary(printerFrom(cmd), "AI Export", sum)
@@ -294,6 +308,9 @@ func runAIImport(cmd *cobra.Command, args []string) error {
 	}
 	sum, err := eng.Import(args[0], aisettings.RestoreOptions{IncludeAuth: includeAuth})
 	if err != nil {
+		return err
+	}
+	if err := auditAIEvent(cmd, "ai.import", aiSummaryPayload(sum)); err != nil {
 		return err
 	}
 	printAISummary(p, "AI Import", sum)
@@ -350,6 +367,9 @@ func newAIHudApplyCmd() *cobra.Command {
 				if err := persistAIHUD(cmd); err != nil {
 					return err
 				}
+			}
+			if err := auditAIEvent(cmd, "ai.hud.apply", hudApplyPayload(result, persist)); err != nil {
+				return err
 			}
 			p := printerFrom(cmd)
 			p.Header("AI HUD Apply")
@@ -422,6 +442,9 @@ func newAICoauthoredGuardApplyCmd() *cobra.Command {
 				if err := persistCoauthorGuard(cmd, result.Status.Mode); err != nil {
 					return err
 				}
+			}
+			if err := auditAIEvent(cmd, "ai.coauthor_guard.apply", coauthorGuardPayload(result, persist)); err != nil {
+				return err
 			}
 			p := printerFrom(cmd)
 			p.Header("Coauthor Guard Apply")
@@ -526,6 +549,14 @@ func newAIAgentsInitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := auditAIEvent(cmd, "ai.agents.init", map[string]any{
+				"path":        res.Path,
+				"created":     res.Created,
+				"from_tool":   res.FromTool,
+				"backup_path": res.BackupPath,
+			}); err != nil {
+				return err
+			}
 			p := printerFrom(cmd)
 			p.Header("AI Agents Init")
 			p.KV("SSOT", res.Path)
@@ -568,6 +599,13 @@ func newAIAgentsAuthorCmd() *cobra.Command {
 				Yes:            yes,
 			})
 			if err != nil {
+				return err
+			}
+			if err := auditAIEvent(cmd, "ai.agents.author", map[string]any{
+				"path":     res.Path,
+				"changed":  res.Changed,
+				"sections": res.Sections,
+			}); err != nil {
 				return err
 			}
 			p := printerFrom(cmd)
@@ -624,7 +662,10 @@ func newAIAgentsEditCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			mgr := newAgentsManagerFromCmd(cmd)
 			editor := os.Getenv("EDITOR")
-			return mgr.Edit(context.Background(), editor)
+			if err := mgr.Edit(context.Background(), editor); err != nil {
+				return err
+			}
+			return auditAIEvent(cmd, "ai.agents.edit", map[string]any{"path": mgr.SSOTPath()})
 		},
 	}
 }
@@ -637,13 +678,17 @@ func newAIAgentsApplyCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			toolFlag, _ := cmd.Flags().GetString("tool")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			force, _ := cmd.Flags().GetBool("force")
 			mgr := newAgentsManagerFromCmd(cmd)
 			ids := parseAgentToolIDs(toolFlag)
 			if len(ids) == 0 {
 				ids = mgr.DefaultApplyTools()
 			}
-			result, err := mgr.Apply(aisettings.ApplyOptions{Tools: ids, DryRun: dryRun})
+			result, err := mgr.Apply(aisettings.ApplyOptions{Tools: ids, DryRun: dryRun, Force: force})
 			if err != nil {
+				return err
+			}
+			if err := auditAIEvent(cmd, "ai.agents.apply", agentsApplyPayload(result)); err != nil {
 				return err
 			}
 			p := printerFrom(cmd)
@@ -653,6 +698,7 @@ func newAIAgentsApplyCmd() *cobra.Command {
 		},
 	}
 	c.Flags().String("tool", "", "Comma-separated tool IDs to apply")
+	c.Flags().Bool("force", false, "Overwrite a target changed outside the last dot-managed apply after backing it up")
 	return c
 }
 
@@ -667,6 +713,15 @@ func newAIAgentsPullCmd() *cobra.Command {
 			mgr := newAgentsManagerFromCmd(cmd)
 			res, err := mgr.Pull(aisettings.PullOptions{FromTool: from, Yes: yes})
 			if err != nil {
+				return err
+			}
+			if err := auditAIEvent(cmd, "ai.agents.pull", map[string]any{
+				"from_tool":   res.FromTool,
+				"source_path": res.SourcePath,
+				"ssot_path":   res.SSOTPath,
+				"backup_path": res.BackupPath,
+				"changed":     res.Changed,
+			}); err != nil {
 				return err
 			}
 			p := printerFrom(cmd)

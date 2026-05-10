@@ -1,6 +1,7 @@
 package aisettings
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -71,15 +72,47 @@ func TestAgentsApplyAppliesOverlay(t *testing.T) {
 	}
 }
 
-func TestAgentsApplyBacksUpHandEditedTarget(t *testing.T) {
+func TestAgentsApplyBlocksHandEditedTargetByDefault(t *testing.T) {
 	mgr, home := testAgentsManager(t)
 	mustWrite(t, mgr.SSOTPath(), []byte("ssot\n"))
 	target, _ := mgr.TargetPath("codex")
 	mustWrite(t, target, []byte("hand edit\n"))
 
 	res, err := mgr.Apply(ApplyOptions{Tools: []string{"codex"}})
+	if err == nil {
+		t.Fatal("apply should fail on protected write conflict")
+	}
+	var conflict *ProtectedWriteConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("err = %T %v, want ProtectedWriteConflictError", err, err)
+	}
+	if conflict.ToolID != "codex" {
+		t.Fatalf("conflict tool = %q, want codex", conflict.ToolID)
+	}
+	if len(res.Items) != 1 || !res.Items[0].Conflict {
+		t.Fatalf("result should include conflict item, got %+v", res)
+	}
+	got, err := os.ReadFile(target)
 	if err != nil {
-		t.Fatalf("apply: %v", err)
+		t.Fatal(err)
+	}
+	if string(got) != "hand edit\n" {
+		t.Fatalf("target was overwritten despite conflict: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "share", "dotfiles", "backup", "agents")); !os.IsNotExist(err) {
+		t.Fatalf("conflict should not create agents backup dir, stat err=%v", err)
+	}
+}
+
+func TestAgentsApplyForceBacksUpHandEditedTarget(t *testing.T) {
+	mgr, home := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("ssot\n"))
+	target, _ := mgr.TargetPath("codex")
+	mustWrite(t, target, []byte("hand edit\n"))
+
+	res, err := mgr.Apply(ApplyOptions{Tools: []string{"codex"}, Force: true})
+	if err != nil {
+		t.Fatalf("apply force: %v", err)
 	}
 	if len(res.Warnings) != 1 {
 		t.Fatalf("warnings = %d, want 1", len(res.Warnings))
@@ -103,6 +136,62 @@ func TestAgentsApplyBacksUpHandEditedTarget(t *testing.T) {
 	}
 	if !strings.HasPrefix(res.Items[0].BackupPath, filepath.Join(home, ".local", "share", "dotfiles", "backup", "agents")) {
 		t.Fatalf("backup path outside agents backup root: %s", res.Items[0].BackupPath)
+	}
+}
+
+func TestAgentsApplyConflictPreflightPreventsPartialWrites(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("first\n"))
+	if _, err := mgr.Apply(ApplyOptions{Tools: []string{"claude", "codex"}}); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	claudeTarget, _ := mgr.TargetPath("claude")
+	codexTarget, _ := mgr.TargetPath("codex")
+	initialClaude, err := os.ReadFile(claudeTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mustWrite(t, mgr.SSOTPath(), []byte("second\n"))
+	mustWrite(t, codexTarget, []byte("hand edit\n"))
+
+	res, err := mgr.Apply(ApplyOptions{Tools: []string{"claude", "codex"}})
+	if err == nil {
+		t.Fatal("apply should fail on protected write conflict")
+	}
+	var conflict *ProtectedWriteConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("err = %T %v, want ProtectedWriteConflictError", err, err)
+	}
+	if conflict.ToolID != "codex" {
+		t.Fatalf("conflict tool = %q, want codex", conflict.ToolID)
+	}
+	if len(res.Items) != 2 {
+		t.Fatalf("items = %d, want 2 planned items", len(res.Items))
+	}
+	if !res.Items[0].Changed || res.Items[0].Conflict {
+		t.Fatalf("claude item = %+v, want changed non-conflict", res.Items[0])
+	}
+	if !res.Items[1].Conflict {
+		t.Fatalf("codex item = %+v, want conflict", res.Items[1])
+	}
+	gotClaude, err := os.ReadFile(claudeTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotClaude) != string(initialClaude) {
+		t.Fatalf("pre-conflict target was partially written:\n%s", gotClaude)
+	}
+	state, err := mgr.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := mgr.Render("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastApplied["claude"] == normalizedHash([]byte(rendered)) {
+		t.Fatal("last-applied state advanced despite conflict")
 	}
 }
 

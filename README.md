@@ -543,6 +543,12 @@ dot ai hud apply --tool claude,codex --persist
 
 dot ai coauthor-guard status       # inspect AGENTS + Git commit-msg guard
 dot ai coauthor-guard apply --mode warn --persist
+
+dot ai skills list                 # inventory ~/.codex, ~/.claude, ~/.agents skills
+dot ai skills validate --strict    # fail on invalid, duplicate, or legacy metadata
+
+dot ai audit summary               # summarize append-only dot ai mutation events
+dot ai audit tail 20               # print recent events as JSONL
 ```
 
 The `ai` module writes shell/config helper files:
@@ -575,6 +581,19 @@ prompts, rules, and user skills. It excludes auth tokens, local overrides,
 caches, logs, sessions, histories, telemetry, sqlite DBs, plugin caches, and
 generated/system skill bundles by default. Use `--include-auth` only when you
 explicitly want known auth/local-secret files included.
+
+`dot ai skills` scans Markdown `SKILL.md` packages without executing them.
+Default roots are `~/.codex/skills`, `~/.claude/skills`, and
+`~/.agents/skills`; use `--tool codex,claude,agents` to narrow them or repeated
+`--root <dir>` to scan explicit roots instead. `list` reports `valid`,
+`legacy`, and `invalid` entries and always exits 0 unless scanning itself fails.
+`validate` fails on invalid metadata or duplicate schema-valid names; add
+`--strict` when legacy skills without `schema_version: v1` should also fail.
+
+Mutating `dot ai` subcommands append redacted events to
+`~/.local/share/dotfiles/ai/events.jsonl`. Events record command type, target
+paths, hashes, counts, and backup paths, never prompt text, file content, auth
+tokens, or local-secret values. `--dry-run` does not write audit events.
 
 **AI agents SSOT**
 
@@ -612,7 +631,13 @@ dot ai agents diff --tool codex
 # deploy to Claude, Codex, Cursor, plus optional tools that already exist
 dot ai agents apply
 dot ai agents apply --tool claude,codex
+dot ai agents apply --tool codex --force  # overwrite externally edited target after backup
 ```
+
+Agents deployment uses protected writes. If a rendered target changed outside
+the last dot-managed apply, `dot ai agents apply` stops instead of overwriting
+it. Review `dot ai agents diff --tool <id>` first, then rerun with `--force`
+only when the backup-and-overwrite behavior is intended.
 
 `dot ai backup`, `restore`, `export`, and `import` include the SSOT directory
 and the rendered tool targets. `dot ai restore --reapply-agents` restores the
