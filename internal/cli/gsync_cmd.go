@@ -698,6 +698,14 @@ func runGsyncPush(cmd *cobra.Command, _ []string) error {
 	}
 	printPushPlan(p, plan)
 	if dryRun || (!plan.HasChanges() && !plan.HasConflicts()) {
+		recordSyncResult(state, cfg, "push", nil, dryRun)
+		if !dryRun && cfg.LocalPaths != nil {
+			if err := gsync.UpdateLocalState(cfg.LocalPaths, func(s *gsync.LocalState) {
+				s.LastPush = time.Now().UTC()
+			}); err != nil {
+				return fmt.Errorf("state update: %w", err)
+			}
+		}
 		return nil
 	}
 	if mode == gsync.ModeClean && plan.HasConflicts() {
