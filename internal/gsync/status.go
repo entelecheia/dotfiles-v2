@@ -70,7 +70,7 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		LastPush:        localState.LastPush,
 		LastIntake:      localState.LastIntake,
 		LastIntakeTSDir: localState.LastIntakeTSDir,
-		LockHeld:        pathExists(cfg.LockDir),
+		LockHeld:        pathExists(cfg.LockDir) && !lockIsStale(cfg.LockDir),
 		MaxDelete:       cfg.MaxDelete,
 		Interval:        cfg.Interval,
 		PullInterval:    cfg.PullInterval,
