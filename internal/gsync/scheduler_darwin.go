@@ -5,6 +5,7 @@ package gsync
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -79,9 +80,21 @@ func (s *Scheduler) StateKind(ctx context.Context, kind SchedulerKind) Scheduler
 	if !s.Runner.FileExists(plist) {
 		return SchedulerNotInstalled
 	}
-	result, err := s.Runner.Run(ctx, "launchctl", "list", kind.LaunchdLabel())
-	if err != nil || result.ExitCode != 0 {
-		return SchedulerStopped
+	target := launchdPrintTarget(os.Getuid(), kind.LaunchdLabel())
+	result, err := s.Runner.RunQuery(ctx, "launchctl", "print", target)
+	return launchdStateFromPrintStatus(true, err == nil && result != nil && result.ExitCode == 0)
+}
+
+func launchdPrintTarget(uid int, label string) string {
+	return fmt.Sprintf("gui/%d/%s", uid, label)
+}
+
+func launchdStateFromPrintStatus(plistExists bool, printOK bool) SchedulerState {
+	if !plistExists {
+		return SchedulerNotInstalled
 	}
-	return SchedulerRunning
+	if printOK {
+		return SchedulerRunning
+	}
+	return SchedulerStopped
 }
