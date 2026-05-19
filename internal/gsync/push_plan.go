@@ -64,11 +64,11 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading baseline: %w", err)
 	}
-	localInv, err := collectPlanInventory(local, filter, tracked)
+	localInv, err := collectPlanInventory(local, filter, tracked, FingerprintFast)
 	if err != nil {
 		return nil, fmt.Errorf("scanning local: %w", err)
 	}
-	mirrorInv, err := collectPlanInventory(mirror, filter, tracked)
+	mirrorInv, err := collectPlanInventory(mirror, filter, tracked, FingerprintFast)
 	if err != nil {
 		return nil, fmt.Errorf("scanning mirror: %w", err)
 	}
@@ -130,7 +130,21 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			plan.Deletes = append(plan.Deletes, rel)
 		case localOK && mirrorOK:
 			if fingerprintsSame(localFP, mirrorFP) {
-				continue
+				base, ok := baseline[rel]
+				if !ok || fingerprintsSameFast(base, localFP) {
+					continue
+				}
+				localFP, err = FingerprintFile(localAbs, FingerprintStrict)
+				if err != nil {
+					return nil, fmt.Errorf("fingerprinting local: %w", err)
+				}
+				mirrorFP, err = FingerprintFile(mirrorAbs, FingerprintStrict)
+				if err != nil {
+					return nil, fmt.Errorf("fingerprinting mirror: %w", err)
+				}
+				if fingerprintsSame(localFP, mirrorFP) {
+					continue
+				}
 			}
 			if !cfg.Propagation.Update {
 				plan.SkippedPolicy = append(plan.SkippedPolicy, rel)
@@ -165,7 +179,7 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	return plan, nil
 }
 
-func collectPlanInventory(root string, filter *syncFilter, tracked map[string]bool) (*planInventory, error) {
+func collectPlanInventory(root string, filter *syncFilter, tracked map[string]bool, mode FingerprintMode) (*planInventory, error) {
 	inv := &planInventory{
 		files:   map[string]Fingerprint{},
 		nonFile: map[string]string{},
@@ -214,7 +228,7 @@ func collectPlanInventory(root string, filter *syncFilter, tracked map[string]bo
 			inv.nonFile[rel] = info.Mode().String()
 			return nil
 		}
-		fp, err := FingerprintFile(absPath, FingerprintStrict)
+		fp, err := FingerprintFile(absPath, mode)
 		if err != nil {
 			return err
 		}

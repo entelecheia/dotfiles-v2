@@ -261,5 +261,9 @@ func fingerprintsSame(a, b Fingerprint) bool {
 	if a.Sha != "" && b.Sha != "" {
 		return a.Sha == b.Sha
 	}
+	return fingerprintsSameFast(a, b)
+}
+
+func fingerprintsSameFast(a, b Fingerprint) bool {
 	return a.Size == b.Size && sameMtime(a.Mtime, b.Mtime)
 }
