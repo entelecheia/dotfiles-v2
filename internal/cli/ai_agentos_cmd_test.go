@@ -42,6 +42,47 @@ description: Missing schema
 	}
 }
 
+func TestAISkillsListGeminiAliasScansAntigravity(t *testing.T) {
+	home := t.TempDir()
+	writeCLITestFile(t, filepath.Join(home, ".gemini", "antigravity", "skills", "valid", "SKILL.md"), `---
+name: antigravity-skill
+description: Valid
+schema_version: v1
+---
+# Valid
+`)
+
+	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "list", "--tool", "gemini", "--json")
+	if err != nil {
+		t.Fatalf("skills list: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, `"tool": "antigravity"`) || !strings.Contains(out, `"name": "antigravity-skill"`) {
+		t.Fatalf("gemini alias did not scan antigravity roots:\n%s", out)
+	}
+}
+
+func TestAIAgentsApplyAntigravityAndGeminiAlias(t *testing.T) {
+	home := t.TempDir()
+	ssot := filepath.Join(home, ".config", "dotfiles", "agents", "AGENTS.md")
+	target := filepath.Join(home, ".gemini", "GEMINI.md")
+	writeCLITestFile(t, ssot, "shared\n")
+
+	if _, errOut, err := runDotForTest("--home", home, "ai", "agents", "apply", "--tool", "antigravity"); err != nil {
+		t.Fatalf("agents apply antigravity: %v\nstderr=%s", err, errOut)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "shared\n") {
+		t.Fatalf("antigravity target missing shared instructions: %q", got)
+	}
+
+	if _, errOut, err := runDotForTest("--home", home, "ai", "agents", "apply", "--tool", "gemini"); err != nil {
+		t.Fatalf("agents apply gemini alias: %v\nstderr=%s", err, errOut)
+	}
+}
+
 func TestAIAuditTailAndSummary(t *testing.T) {
 	home := t.TempDir()
 	if _, _, err := runDotForTest("--home", home, "ai", "audit", "summary"); err != nil {

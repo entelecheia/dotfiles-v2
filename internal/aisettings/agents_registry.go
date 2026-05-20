@@ -7,6 +7,7 @@ type AgentTool struct {
 	DisplayName string
 	TargetPath  string
 	OverlayFile string
+	Aliases     []string
 	Optional    bool
 }
 
@@ -32,10 +33,11 @@ func RegisteredAgentTools() []AgentTool {
 			OverlayFile: "cursor.md",
 		},
 		{
-			ID:          "gemini",
-			DisplayName: "Gemini CLI",
+			ID:          "antigravity",
+			DisplayName: "Antigravity CLI",
 			TargetPath:  "~/.gemini/GEMINI.md",
-			OverlayFile: "gemini.md",
+			OverlayFile: "antigravity.md",
+			Aliases:     []string{"gemini"},
 			Optional:    true,
 		},
 		{

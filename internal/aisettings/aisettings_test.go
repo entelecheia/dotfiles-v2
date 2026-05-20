@@ -113,6 +113,27 @@ func TestIncludeAuthBackup(t *testing.T) {
 	}
 }
 
+func TestEntriesIncludeAntigravityAndKeepAuthOptional(t *testing.T) {
+	withoutAuth := Entries(false)
+	if !hasEntry(withoutAuth, "antigravity", ".gemini/antigravity-cli/settings.json") {
+		t.Fatalf("antigravity CLI settings entry missing: %+v", withoutAuth)
+	}
+	if !hasEntry(withoutAuth, "antigravity", ".gemini/GEMINI.md") {
+		t.Fatalf("antigravity global instructions entry missing: %+v", withoutAuth)
+	}
+	if hasEntry(withoutAuth, "antigravity", ".gemini/oauth_creds.json") {
+		t.Fatalf("antigravity OAuth credentials should be auth-only: %+v", withoutAuth)
+	}
+
+	withAuth := Entries(true)
+	if !hasEntry(withAuth, "antigravity", ".gemini/oauth_creds.json") {
+		t.Fatalf("antigravity OAuth credentials missing with IncludeAuth: %+v", withAuth)
+	}
+	if !hasEntry(withAuth, "antigravity", ".gemini/google_accounts.json") {
+		t.Fatalf("antigravity account cache missing with IncludeAuth: %+v", withAuth)
+	}
+}
+
 func TestExportImportRoundTrip(t *testing.T) {
 	eng, home, _ := testEngine(t)
 	mustWrite(t, filepath.Join(home, ".claude", "skills", "writer", "SKILL.md"), []byte("# writer"))
@@ -175,4 +196,13 @@ func mustWrite(t *testing.T, path string, data []byte) {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func hasEntry(entries []Entry, tool, path string) bool {
+	for _, entry := range entries {
+		if entry.Tool == tool && entry.Path == path {
+			return true
+		}
+	}
+	return false
 }

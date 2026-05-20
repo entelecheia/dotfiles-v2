@@ -116,7 +116,18 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "codex", Path: ".codex/skills", Description: "Codex user skills"},
 		{Tool: "agents", Path: AgentsSSOTRelPath, Description: "AI agents SSOT"},
 		{Tool: "cursor", Path: ".cursor/AGENTS.md", Description: "Cursor global instructions"},
-		{Tool: "gemini", Path: ".gemini/GEMINI.md", Description: "Gemini global instructions"},
+		{Tool: "antigravity", Path: ".gemini/GEMINI.md", Description: "Antigravity/Gemini global instructions"},
+		{Tool: "antigravity", Path: ".gemini/config/mcp_config.json", Description: "Antigravity shared MCP config"},
+		{Tool: "antigravity", Path: ".gemini/config/hooks.json", Description: "Antigravity global hooks"},
+		{Tool: "antigravity", Path: ".gemini/config/rules", Description: "Antigravity global rules"},
+		{Tool: "antigravity", Path: ".gemini/config/plugins", Description: "Antigravity global plugins"},
+		{Tool: "antigravity", Path: ".gemini/skills", Description: "Antigravity/Gemini global skills"},
+		{Tool: "antigravity", Path: ".gemini/antigravity/mcp_config.json", Description: "Antigravity app MCP config"},
+		{Tool: "antigravity", Path: ".gemini/antigravity/browserAllowlist.txt", Description: "Antigravity browser allowlist"},
+		{Tool: "antigravity", Path: ".gemini/antigravity/skills", Description: "Antigravity app skills"},
+		{Tool: "antigravity", Path: ".gemini/antigravity-cli/settings.json", Description: "Antigravity CLI settings"},
+		{Tool: "antigravity", Path: ".gemini/antigravity-cli/keybindings.json", Description: "Antigravity CLI keybindings"},
+		{Tool: "antigravity", Path: ".gemini/antigravity-cli/plugins", Description: "Antigravity CLI plugins"},
 		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md", Description: "GitHub Copilot global instructions"},
 		{Tool: "aider", Path: ".aider.conf.md", Description: "Aider global instructions"},
 		{Tool: "agents", Path: ".agents/.skill-lock.json", Description: "shared skill lock"},
@@ -126,6 +137,8 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "claude", Path: ".claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},
 		{Tool: "claude", Path: ".config/claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},
 		{Tool: "codex", Path: ".codex/auth.json", Description: "Codex auth credentials", Auth: true},
+		{Tool: "antigravity", Path: ".gemini/oauth_creds.json", Description: "Antigravity/Gemini OAuth credentials", Auth: true},
+		{Tool: "antigravity", Path: ".gemini/google_accounts.json", Description: "Antigravity/Gemini account cache", Auth: true},
 	}
 	if includeAuth {
 		entries = append(entries, authEntries...)

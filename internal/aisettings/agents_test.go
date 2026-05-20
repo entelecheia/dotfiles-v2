@@ -384,6 +384,96 @@ func TestAgentsRenderIncludesOverlayMarker(t *testing.T) {
 	}
 }
 
+func TestAgentsRenderAntigravityFallsBackToGeminiOverlay(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("shared\n"))
+	mustWrite(t, filepath.Join(mgr.SSOTDirPath(), "overlays", "gemini.md"), []byte("google cli only\n"))
+
+	rendered, err := mgr.Render("antigravity")
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(rendered, "<!-- overlay:gemini -->\ngoogle cli only\n") {
+		t.Fatalf("legacy gemini overlay missing: %q", rendered)
+	}
+}
+
+func TestAgentsGeminiAliasDeduplicatesApply(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("shared\n"))
+
+	res, err := mgr.Apply(ApplyOptions{Tools: []string{"antigravity", "gemini"}})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].ToolID != "antigravity" {
+		t.Fatalf("items = %+v, want one antigravity item", res.Items)
+	}
+	target, err := mgr.TargetPath("gemini")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "shared\n") {
+		t.Fatalf("target = %q", got)
+	}
+	state, err := mgr.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastApplied["antigravity"] == "" {
+		t.Fatalf("antigravity last-applied missing: %+v", state.LastApplied)
+	}
+	if state.LastApplied["gemini"] != "" {
+		t.Fatalf("gemini alias should not keep separate state: %+v", state.LastApplied)
+	}
+}
+
+func TestAgentsGeminiLastAppliedStateMigratesToAntigravity(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("first\n"))
+	rendered, err := mgr.Render("gemini")
+	if err != nil {
+		t.Fatalf("render gemini alias: %v", err)
+	}
+	target, err := mgr.TargetPath("antigravity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, target, []byte(rendered))
+	if err := mgr.writeState(&agentsState{LastApplied: map[string]string{
+		"gemini": normalizedHash([]byte(rendered)),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	mustWrite(t, mgr.SSOTPath(), []byte("second\n"))
+	res, err := mgr.Apply(ApplyOptions{Tools: []string{"gemini"}})
+	if err != nil {
+		t.Fatalf("apply with legacy gemini state: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Conflict {
+		t.Fatalf("unexpected apply result: %+v", res.Items)
+	}
+	state, err := mgr.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastApplied["antigravity"] == "" || state.LastApplied["gemini"] != "" {
+		t.Fatalf("state was not migrated to canonical id: %+v", state.LastApplied)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "second\n") {
+		t.Fatalf("target was not updated: %q", got)
+	}
+}
+
 func TestAgentsBackupRestoreRoundTrip(t *testing.T) {
 	eng, home, root := testEngine(t)
 	mgr := NewAgentsManager(eng.Runner, home)
@@ -434,16 +524,19 @@ func TestAgentsRegistryFiltersOptional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	foundGemini := false
+	foundAntigravity := false
 	for _, st := range statuses {
-		if st.Tool.ID == "gemini" {
-			foundGemini = true
+		if st.Tool.ID == "antigravity" {
+			foundAntigravity = true
 			if st.Drift != "target-missing" {
-				t.Fatalf("gemini drift = %q, want target-missing", st.Drift)
+				t.Fatalf("antigravity drift = %q, want target-missing", st.Drift)
 			}
 		}
 	}
-	if !foundGemini {
-		t.Fatal("optional gemini tool missing from status")
+	if !foundAntigravity {
+		t.Fatal("optional antigravity tool missing from status")
+	}
+	if target, err := mgr.TargetPath("gemini"); err != nil || !strings.HasSuffix(target, filepath.Join(".gemini", "GEMINI.md")) {
+		t.Fatalf("gemini alias target = %q, err=%v", target, err)
 	}
 }

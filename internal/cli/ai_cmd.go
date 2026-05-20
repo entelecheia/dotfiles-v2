@@ -24,7 +24,7 @@ func newAICmd() *cobra.Command {
 		Long: `Manage portable AI assistant configuration.
 
 The ai module writes shell/config helper files. It does not install Claude,
-Codex, or ChatGPT apps; use 'dot apps install' for Homebrew casks.`,
+Codex, Antigravity, or ChatGPT apps; use 'dot apps install' for Homebrew casks.`,
 	}
 	cmd.AddCommand(newAIListCmd())
 	cmd.AddCommand(newAIStatusCmd())
@@ -61,7 +61,7 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 	p.KV("Installs apps", "no — use `dot apps install`")
 
 	p.Section("Detected CLI tools")
-	for _, name := range []string{"claude", "codex", "gh", "fabric"} {
+	for _, name := range []string{"claude", "codex", "agy", "gemini", "gh", "fabric"} {
 		path, err := exec.LookPath(name)
 		marker := ui.StyleHint.Render(ui.MarkAbsent)
 		value := "(not found)"

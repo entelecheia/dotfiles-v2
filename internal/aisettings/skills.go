@@ -79,15 +79,20 @@ func DefaultSkillRoots(homeDir string, tools []string) ([]SkillRoot, error) {
 		{Tool: "codex", Path: filepath.Join(homeDir, ".codex", "skills")},
 		{Tool: "claude", Path: filepath.Join(homeDir, ".claude", "skills")},
 		{Tool: "agents", Path: filepath.Join(homeDir, ".agents", "skills")},
+		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity", "skills")},
+		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "skills")},
+		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "config", "plugins")},
+		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins")},
 	}
 	if len(selected) == 0 {
 		return all, nil
 	}
 	allow := map[string]bool{}
 	for _, tool := range selected {
-		switch tool {
-		case "codex", "claude", "agents":
-			allow[tool] = true
+		canonical := canonicalSkillTool(tool)
+		switch canonical {
+		case "codex", "claude", "agents", "antigravity":
+			allow[canonical] = true
 		default:
 			return nil, fmt.Errorf("unknown skill tool %q", tool)
 		}
@@ -126,6 +131,7 @@ func ScanSkills(opts SkillScanOptions) (*SkillScanReport, error) {
 		Counts: map[string]int{SkillStatusValid: 0, SkillStatusLegacy: 0, SkillStatusInvalid: 0},
 	}
 	byName := map[string][]string{}
+	seenPath := map[string]bool{}
 	for _, root := range roots {
 		items, err := scanSkillRoot(root)
 		if err != nil {
@@ -133,6 +139,11 @@ func ScanSkills(opts SkillScanOptions) (*SkillScanReport, error) {
 			continue
 		}
 		for _, item := range items {
+			key := canonicalSkillPath(item.Path)
+			if seenPath[key] {
+				continue
+			}
+			seenPath[key] = true
 			report.Items = append(report.Items, item)
 			report.Counts[item.Status]++
 			if item.Status == SkillStatusValid && item.Frontmatter.Name != "" {
@@ -200,6 +211,9 @@ func scanSkillRoot(root SkillRoot) ([]SkillInventoryItem, error) {
 		if err != nil {
 			return err
 		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return appendSymlinkSkill(root, path, &items)
+		}
 		if entry.IsDir() || entry.Name() != "SKILL.md" {
 			return nil
 		}
@@ -211,6 +225,31 @@ func scanSkillRoot(root SkillRoot) ([]SkillInventoryItem, error) {
 		return nil, fmt.Errorf("scan %s: %w", root.Path, err)
 	}
 	return items, nil
+}
+
+func appendSymlinkSkill(root SkillRoot, path string, items *[]SkillInventoryItem) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		skillPath := filepath.Join(path, "SKILL.md")
+		if _, err := os.Stat(skillPath); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		*items = append(*items, readSkillItem(root, skillPath))
+		return nil
+	}
+	if filepath.Base(path) == "SKILL.md" {
+		*items = append(*items, readSkillItem(root, path))
+	}
+	return nil
 }
 
 func readSkillItem(root SkillRoot, path string) SkillInventoryItem {
@@ -306,6 +345,25 @@ func normalizeSkillTools(tools []string) []string {
 		}
 	}
 	return out
+}
+
+func canonicalSkillTool(tool string) string {
+	if tool == "gemini" {
+		return "antigravity"
+	}
+	return tool
+}
+
+func canonicalSkillPath(path string) string {
+	realPath, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = realPath
+	}
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
 }
 
 func normalizeHomeDir(homeDir string) string {

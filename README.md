@@ -38,13 +38,13 @@ dot usecase    # detailed workflow examples
 # On the existing machine
 dot profile backup --tag "pre-migration" --include-secrets
 dot apps backup                       # also snapshot per-app settings
-dot ai backup                         # portable Claude/Codex/MCP/skills settings
+dot ai backup                         # portable Claude/Codex/Antigravity/MCP/skills settings
 
 # On the new machine (Drive already mounted)
 dot profile restore --include-secrets # restores ~/.config/dotfiles + ~/.ssh/age_key*
 dot apply                             # brew formulas + casks from install list
 dot apps restore                      # plists, Application Support, containers
-dot ai restore                        # Claude/Codex/MCP/skills settings
+dot ai restore                        # Claude/Codex/Antigravity/MCP/skills settings
 ```
 
 The shared backup root lives in a single Drive folder
@@ -522,6 +522,11 @@ Workspace tool status:
 Manage assistant helper files and portable user-level AI configuration. This is
 separate from app installation: Claude, Codex, ChatGPT, and similar GUI apps are
 installed through `dot apps install` from the macOS cask catalog.
+Antigravity CLI itself is installed with Google's installer:
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
 
 ```bash
 dot ai list                         # helper files, detected CLIs, AI casks
@@ -544,7 +549,7 @@ dot ai hud apply --tool claude,codex --persist
 dot ai coauthor-guard status       # inspect AGENTS + Git commit-msg guard
 dot ai coauthor-guard apply --mode warn --persist
 
-dot ai skills list                 # inventory ~/.codex, ~/.claude, ~/.agents skills
+dot ai skills list                 # inventory Codex/Claude/shared/Antigravity skills
 dot ai skills validate --strict    # fail on invalid, duplicate, or legacy metadata
 
 dot ai audit summary               # summarize append-only dot ai mutation events
@@ -574,21 +579,26 @@ a global Git `commit-msg` hook that warns when a commit message contains
 want the hook to reject the commit. `--persist` records
 `modules.git.coauthor_guard: warn|block` for future `dot apply` runs. Add
 `--apply-agents` when you also want to render the updated agents SSOT to live
-Claude/Codex targets immediately.
+agent targets immediately.
 
-Portable backup includes Claude/Codex settings, MCP config, agents, hooks,
-prompts, rules, and user skills. It excludes auth tokens, local overrides,
-caches, logs, sessions, histories, telemetry, sqlite DBs, plugin caches, and
-generated/system skill bundles by default. Use `--include-auth` only when you
-explicitly want known auth/local-secret files included.
+Portable backup includes Claude/Codex/Antigravity settings, MCP config, agents,
+hooks, prompts, rules, plugins, and user skills. It excludes auth tokens, local
+overrides, caches, logs, sessions, histories, telemetry, sqlite DBs, plugin
+caches, generated/system skill bundles, and Antigravity conversation/brain
+state by default. Use `--include-auth` only when you explicitly want known
+auth/local-secret files included.
 
 `dot ai skills` scans Markdown `SKILL.md` packages without executing them.
 Default roots are `~/.codex/skills`, `~/.claude/skills`, and
-`~/.agents/skills`; use `--tool codex,claude,agents` to narrow them or repeated
-`--root <dir>` to scan explicit roots instead. `list` reports `valid`,
-`legacy`, and `invalid` entries and always exits 0 unless scanning itself fails.
-`validate` fails on invalid metadata or duplicate schema-valid names; add
-`--strict` when legacy skills without `schema_version: v1` should also fail.
+`~/.agents/skills`, plus Antigravity roots under `~/.gemini/antigravity/skills`,
+`~/.gemini/skills`, `~/.gemini/config/plugins`, and
+`~/.gemini/antigravity-cli/plugins`. Use
+`--tool codex,claude,agents,antigravity` to narrow them (`gemini` is accepted as
+an Antigravity compatibility alias) or repeated `--root <dir>` to scan explicit
+roots instead. `list` reports `valid`, `legacy`, and `invalid` entries and
+always exits 0 unless scanning itself fails. `validate` fails on invalid
+metadata or duplicate schema-valid names; add `--strict` when legacy skills
+without `schema_version: v1` should also fail.
 
 Mutating `dot ai` subcommands append redacted events to
 `~/.local/share/dotfiles/ai/events.jsonl`. Events record command type, target
@@ -606,7 +616,7 @@ tool's expected global path:
 | Claude Code | `~/.claude/CLAUDE.md` |
 | Codex CLI | `~/.codex/AGENTS.md` |
 | Cursor | `~/.cursor/AGENTS.md` |
-| Gemini CLI | `~/.gemini/GEMINI.md` |
+| Antigravity CLI (`gemini` alias) | `~/.gemini/GEMINI.md` |
 | GitHub Copilot | `~/.config/github-copilot/AGENTS.md` |
 | Aider | `~/.aider.conf.md` |
 
@@ -626,11 +636,13 @@ dot ai agents author
 # review
 dot ai agents show
 dot ai agents show --rendered codex --with-line-numbers
+dot ai agents show --rendered antigravity
 dot ai agents diff --tool codex
 
 # deploy to Claude, Codex, Cursor, plus optional tools that already exist
 dot ai agents apply
 dot ai agents apply --tool claude,codex
+dot ai agents apply --tool antigravity  # gemini is accepted as an alias
 dot ai agents apply --tool codex --force  # overwrite externally edited target after backup
 ```
 
@@ -809,7 +821,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
-| **ai** | full | AI CLI/config helpers, Claude/Codex settings backup, optional HUD |
+| **ai** | full | AI CLI/config helpers, Claude/Codex/Antigravity settings backup, optional HUD |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |
 | **conda** | full | Conda/Mamba shell initialization |

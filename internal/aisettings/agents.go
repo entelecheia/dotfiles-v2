@@ -196,17 +196,24 @@ func (m *AgentsManager) StatePath() string {
 // file already exists.
 func (m *AgentsManager) DefaultApplyTools() []string {
 	var ids []string
+	seen := map[string]bool{}
 	for _, tool := range m.registry() {
 		target, err := m.TargetPath(tool.ID)
 		if err != nil {
 			continue
 		}
 		if !tool.Optional {
-			ids = append(ids, tool.ID)
+			if !seen[tool.ID] {
+				ids = append(ids, tool.ID)
+				seen[tool.ID] = true
+			}
 			continue
 		}
 		if _, err := os.Lstat(target); err == nil {
-			ids = append(ids, tool.ID)
+			if !seen[tool.ID] {
+				ids = append(ids, tool.ID)
+				seen[tool.ID] = true
+			}
 		}
 	}
 	return ids
@@ -218,6 +225,11 @@ func (m *AgentsManager) Tool(id string) (AgentTool, bool) {
 	for _, tool := range m.registry() {
 		if tool.ID == id {
 			return tool, true
+		}
+		for _, alias := range tool.Aliases {
+			if strings.ToLower(strings.TrimSpace(alias)) == id {
+				return tool, true
+			}
 		}
 	}
 	return AgentTool{}, false
@@ -351,9 +363,10 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 			changed:      changed,
 			item:         item,
 		}
-		if changed && targetExists && targetHash != "" && targetHash != state.LastApplied[id] {
+		expectedHash := m.lastAppliedHash(state, id)
+		if changed && targetExists && targetHash != "" && targetHash != expectedHash {
 			item.Conflict = true
-			item.ExpectedHash = state.LastApplied[id]
+			item.ExpectedHash = expectedHash
 			item.ActualHash = targetHash
 			plan.item = item
 			plan.conflict = true
@@ -364,7 +377,7 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 					firstConflict = &ProtectedWriteConflictError{
 						ToolID:       id,
 						TargetPath:   target,
-						ExpectedHash: state.LastApplied[id],
+						ExpectedHash: expectedHash,
 						ActualHash:   targetHash,
 					}
 				}
@@ -406,6 +419,9 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 		}
 		if !result.DryRun && (!plan.changed || plan.targetExists || plan.renderedHash != "") {
 			state.LastApplied[plan.id] = plan.renderedHash
+			for _, alias := range m.toolAliases(plan.id) {
+				delete(state.LastApplied, alias)
+			}
 		}
 	}
 	if !result.DryRun {
@@ -657,24 +673,28 @@ func (m *AgentsManager) authorInteractive() (*AuthorResult, error) {
 
 func (m *AgentsManager) renderTool(tool AgentTool, ssotBytes []byte) (string, bool, error) {
 	body := string(stripManagedHeader(ssotBytes))
-	overlayPath := filepath.Join(m.ssotDir(), "overlays", tool.OverlayFile)
-	overlay, err := os.ReadFile(overlayPath)
+	overlay, overlayName, err := m.readOverlay(tool)
 	overlayExists := false
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return "", false, fmt.Errorf("read overlay %s: %w", overlayPath, err)
+			return "", false, err
 		}
 	} else {
 		overlayExists = true
-		body = strings.TrimRight(body, "\n") + "\n\n" + fmt.Sprintf(agentsOverlayPattern, tool.ID) + "\n" + string(overlay)
+		body = strings.TrimRight(body, "\n") + "\n\n" + fmt.Sprintf(agentsOverlayPattern, overlayName) + "\n" + string(overlay)
 	}
 	return agentsManagedHeader + "\n\n" + strings.TrimLeft(body, "\n"), overlayExists, nil
 }
 
 func (m *AgentsManager) resolveToolIDs(ids []string) ([]string, error) {
 	if len(ids) == 0 {
+		seen := map[string]bool{}
 		for _, tool := range m.registry() {
+			if seen[tool.ID] {
+				continue
+			}
 			ids = append(ids, tool.ID)
+			seen[tool.ID] = true
 		}
 		return ids, nil
 	}
@@ -682,16 +702,74 @@ func (m *AgentsManager) resolveToolIDs(ids []string) ([]string, error) {
 	var out []string
 	for _, id := range ids {
 		id = strings.ToLower(strings.TrimSpace(id))
-		if id == "" || seen[id] {
+		if id == "" {
 			continue
 		}
-		if _, ok := m.Tool(id); !ok {
+		tool, ok := m.Tool(id)
+		if !ok {
 			return nil, fmt.Errorf("unknown agents tool %q", id)
 		}
-		seen[id] = true
-		out = append(out, id)
+		if seen[tool.ID] {
+			continue
+		}
+		seen[tool.ID] = true
+		out = append(out, tool.ID)
 	}
 	return out, nil
+}
+
+func (m *AgentsManager) readOverlay(tool AgentTool) ([]byte, string, error) {
+	for _, candidate := range m.overlayCandidates(tool) {
+		overlayPath := filepath.Join(m.ssotDir(), "overlays", candidate.file)
+		overlay, err := os.ReadFile(overlayPath)
+		if err == nil {
+			return overlay, candidate.id, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, "", fmt.Errorf("read overlay %s: %w", overlayPath, err)
+		}
+	}
+	return nil, "", os.ErrNotExist
+}
+
+func (m *AgentsManager) overlayCandidates(tool AgentTool) []struct {
+	id   string
+	file string
+} {
+	out := []struct {
+		id   string
+		file string
+	}{{id: tool.ID, file: tool.OverlayFile}}
+	for _, alias := range tool.Aliases {
+		out = append(out, struct {
+			id   string
+			file string
+		}{id: alias, file: alias + ".md"})
+	}
+	return out
+}
+
+func (m *AgentsManager) lastAppliedHash(st *agentsState, toolID string) string {
+	if st == nil {
+		return ""
+	}
+	if hash := st.LastApplied[toolID]; hash != "" {
+		return hash
+	}
+	for _, alias := range m.toolAliases(toolID) {
+		if hash := st.LastApplied[alias]; hash != "" {
+			return hash
+		}
+	}
+	return ""
+}
+
+func (m *AgentsManager) toolAliases(toolID string) []string {
+	tool, ok := m.Tool(toolID)
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), tool.Aliases...)
 }
 
 func (m *AgentsManager) readState() (*agentsState, error) {

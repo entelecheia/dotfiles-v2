@@ -1,6 +1,7 @@
 package aisettings
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,5 +98,62 @@ schema_version: v1
 	}
 	if report.Items[0].Frontmatter.Name != "greet" || report.Items[0].Tool != "custom" {
 		t.Fatalf("unexpected item: %+v", report.Items[0])
+	}
+}
+
+func TestDefaultSkillRootsAcceptsGeminiAliasForAntigravity(t *testing.T) {
+	home := t.TempDir()
+	roots, err := DefaultSkillRoots(home, []string{"gemini"})
+	if err != nil {
+		t.Fatalf("DefaultSkillRoots: %v", err)
+	}
+	if len(roots) != 4 {
+		t.Fatalf("roots = %d, want 4 antigravity roots: %+v", len(roots), roots)
+	}
+	for _, root := range roots {
+		if root.Tool != "antigravity" {
+			t.Fatalf("root tool = %q, want antigravity", root.Tool)
+		}
+	}
+}
+
+func TestScanSkillsFollowsAntigravitySymlinkAndDeduplicates(t *testing.T) {
+	home := t.TempDir()
+	shared := filepath.Join(home, ".agents", "skills", "shared")
+	mustWrite(t, filepath.Join(shared, "SKILL.md"), []byte(`---
+name: shared-skill
+description: Shared
+schema_version: v1
+---
+# Shared
+`))
+	link := filepath.Join(home, ".gemini", "antigravity", "skills", "shared")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, link); err != nil {
+		t.Skipf("symlink unsupported in this environment: %v", err)
+	}
+
+	antigravity, err := ScanSkills(SkillScanOptions{HomeDir: home, Tools: []string{"antigravity"}})
+	if err != nil {
+		t.Fatalf("ScanSkills antigravity: %v", err)
+	}
+	if len(antigravity.Items) != 1 || antigravity.Items[0].Tool != "antigravity" {
+		t.Fatalf("antigravity items = %+v, want one antigravity symlinked skill", antigravity.Items)
+	}
+
+	all, err := ScanSkills(SkillScanOptions{HomeDir: home})
+	if err != nil {
+		t.Fatalf("ScanSkills all: %v", err)
+	}
+	var count int
+	for _, item := range all.Items {
+		if item.Frontmatter.Name == "shared-skill" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("shared skill count = %d, want 1 after symlink dedupe: %+v", count, all.Items)
 	}
 }

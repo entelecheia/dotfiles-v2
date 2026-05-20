@@ -73,7 +73,7 @@ func newAISkillsValidateCmd() *cobra.Command {
 }
 
 func addSkillScanFlags(c *cobra.Command) {
-	c.Flags().String("tool", "", "Comma-separated default skill roots to scan (codex,claude,agents)")
+	c.Flags().String("tool", "", "Comma-separated default skill roots to scan (codex,claude,agents,antigravity)")
 	c.Flags().StringArray("root", nil, "Explicit skill root to scan; may be repeated and replaces default roots")
 	c.Flags().Bool("json", false, "Print JSON")
 	c.Flags().Bool("strict", false, "Treat legacy skills without schema_version/frontmatter as validation failures")
