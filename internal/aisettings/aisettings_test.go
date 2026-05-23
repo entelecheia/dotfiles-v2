@@ -29,7 +29,6 @@ func TestBackupRestoreSkipsAuthByDefault(t *testing.T) {
 	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("model = \"gpt\"\n"))
 	mustWrite(t, filepath.Join(home, ".codex", "auth.json"), []byte(`{"token":"secret"}`))
 	mustWrite(t, filepath.Join(home, ".codex", "skills", "mine", "SKILL.md"), []byte("# mine"))
-	mustWrite(t, filepath.Join(home, ".codex", "skills", ".system", "skip", "SKILL.md"), []byte("# skip"))
 
 	snap, err := eng.Backup(BackupOptions{})
 	if err != nil {
@@ -38,8 +37,8 @@ func TestBackupRestoreSkipsAuthByDefault(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(snap.Path, "home", ".codex", "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("auth should be excluded by default, stat err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(snap.Path, "home", ".codex", "skills", ".system")); !os.IsNotExist(err) {
-		t.Fatalf(".system skills should be excluded, stat err=%v", err)
+	if _, err := os.Stat(filepath.Join(snap.Path, "home", ".codex", "skills")); !os.IsNotExist(err) {
+		t.Fatalf("skill directories should be excluded, stat err=%v", err)
 	}
 
 	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("mutated\n"))
@@ -134,9 +133,26 @@ func TestEntriesIncludeAntigravityAndKeepAuthOptional(t *testing.T) {
 	}
 }
 
+func TestEntriesExcludeSkillRuntimeDirectories(t *testing.T) {
+	entries := Entries(true)
+	excluded := []string{
+		".claude/skills",
+		".codex/skills",
+		".agents/.skill-lock.json",
+		".agents/skills",
+		".gemini/skills",
+		".gemini/antigravity/skills",
+	}
+	for _, path := range excluded {
+		if hasEntryPath(entries, path) {
+			t.Fatalf("skill runtime path %s should not be archived: %+v", path, entries)
+		}
+	}
+}
+
 func TestExportImportRoundTrip(t *testing.T) {
 	eng, home, _ := testEngine(t)
-	mustWrite(t, filepath.Join(home, ".claude", "skills", "writer", "SKILL.md"), []byte("# writer"))
+	mustWrite(t, filepath.Join(home, ".claude", "commands", "writer.md"), []byte("# writer"))
 	archive := filepath.Join(t.TempDir(), "ai.tar.gz")
 	if _, err := eng.Export(archive, BackupOptions{}); err != nil {
 		t.Fatalf("export: %v", err)
@@ -150,7 +166,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if _, err := importer.Import(archive, RestoreOptions{}); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(newHome, ".claude", "skills", "writer", "SKILL.md"))
+	got, err := os.ReadFile(filepath.Join(newHome, ".claude", "commands", "writer.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +217,15 @@ func mustWrite(t *testing.T, path string, data []byte) {
 func hasEntry(entries []Entry, tool, path string) bool {
 	for _, entry := range entries {
 		if entry.Tool == tool && entry.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEntryPath(entries []Entry, path string) bool {
+	for _, entry := range entries {
+		if entry.Path == path {
 			return true
 		}
 	}

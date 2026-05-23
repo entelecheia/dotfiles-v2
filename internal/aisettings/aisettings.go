@@ -100,6 +100,9 @@ type Engine struct {
 
 // Entries returns the static AI config manifest.
 func Entries(includeAuth bool) []Entry {
+	// Skill directories are intentionally absent. Anchor owns skill federation,
+	// runtime links, and source reconciliation; dotfiles only archives
+	// environment and agent settings around that boundary.
 	entries := []Entry{
 		{Tool: "claude", Path: ".config/claude/settings.json", Description: "dot-managed Claude settings"},
 		{Tool: "claude", Path: ".claude/settings.json", Description: "Claude Code settings"},
@@ -108,12 +111,10 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "claude", Path: ".claude/commands", Description: "Claude commands"},
 		{Tool: "claude", Path: ".claude/hooks", Description: "Claude hooks"},
 		{Tool: "claude", Path: ".claude/mcp.json", Description: "Claude MCP config"},
-		{Tool: "claude", Path: ".claude/skills", Description: "Claude skills"},
 		{Tool: "codex", Path: ".codex/AGENTS.md", Description: "Codex global instructions"},
 		{Tool: "codex", Path: ".codex/config.toml", Description: "Codex config and MCP servers"},
 		{Tool: "codex", Path: ".codex/prompts", Description: "Codex prompts"},
 		{Tool: "codex", Path: ".codex/rules", Description: "Codex rules"},
-		{Tool: "codex", Path: ".codex/skills", Description: "Codex user skills"},
 		{Tool: "agents", Path: AgentsSSOTRelPath, Description: "AI agents SSOT"},
 		{Tool: "cursor", Path: ".cursor/AGENTS.md", Description: "Cursor global instructions"},
 		{Tool: "antigravity", Path: ".gemini/GEMINI.md", Description: "Antigravity/Gemini global instructions"},
@@ -121,17 +122,13 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "antigravity", Path: ".gemini/config/hooks.json", Description: "Antigravity global hooks"},
 		{Tool: "antigravity", Path: ".gemini/config/rules", Description: "Antigravity global rules"},
 		{Tool: "antigravity", Path: ".gemini/config/plugins", Description: "Antigravity global plugins"},
-		{Tool: "antigravity", Path: ".gemini/skills", Description: "Antigravity/Gemini global skills"},
 		{Tool: "antigravity", Path: ".gemini/antigravity/mcp_config.json", Description: "Antigravity app MCP config"},
 		{Tool: "antigravity", Path: ".gemini/antigravity/browserAllowlist.txt", Description: "Antigravity browser allowlist"},
-		{Tool: "antigravity", Path: ".gemini/antigravity/skills", Description: "Antigravity app skills"},
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/settings.json", Description: "Antigravity CLI settings"},
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/keybindings.json", Description: "Antigravity CLI keybindings"},
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/plugins", Description: "Antigravity CLI plugins"},
 		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md", Description: "GitHub Copilot global instructions"},
 		{Tool: "aider", Path: ".aider.conf.md", Description: "Aider global instructions"},
-		{Tool: "agents", Path: ".agents/.skill-lock.json", Description: "shared skill lock"},
-		{Tool: "agents", Path: ".agents/skills", Description: "shared user skills"},
 	}
 	authEntries := []Entry{
 		{Tool: "claude", Path: ".claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},

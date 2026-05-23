@@ -71,7 +71,8 @@ type SkillScanReport struct {
 	Errors     []string             `json:"errors,omitempty"`
 }
 
-// DefaultSkillRoots returns the built-in AI skill locations for selected tools.
+// DefaultSkillRoots returns read-only diagnostic scan roots for selected tools.
+// Skill creation, federation, and reconciliation belong to Anchor.
 func DefaultSkillRoots(homeDir string, tools []string) ([]SkillRoot, error) {
 	homeDir = normalizeHomeDir(homeDir)
 	selected := normalizeSkillTools(tools)
