@@ -29,7 +29,73 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 
 	var err error
 	state.Modules.AI.Enabled, err = ConfirmBool("Enable AI CLI/config helpers?", aiDefault, yes)
-	return err
+	if err != nil {
+		return err
+	}
+	if !state.Modules.AI.Enabled {
+		state.Modules.AI.Skills = config.AISkillsConfig{}
+		return nil
+	}
+	if yes {
+		return nil
+	}
+
+	modeDefault := "none"
+	if state.Modules.AI.Skills.Enabled {
+		switch state.Modules.AI.Skills.Provider {
+		case "anchor":
+			modeDefault = "anchor"
+		case "path":
+			modeDefault = "custom path"
+		}
+	}
+	fmt.Println(StyleHint.Render("  Skills can be symlinked from a configured SSOT into Claude, Codex, and other tool roots."))
+	mode, err := Select("Skills SSOT",
+		[]string{"none", "anchor", "custom path"}, modeDefault, false)
+	if err != nil {
+		return err
+	}
+	if mode == "none" {
+		state.Modules.AI.Skills = config.AISkillsConfig{}
+		return nil
+	}
+
+	skills := config.AISkillsConfig{Enabled: true}
+	switch mode {
+	case "anchor":
+		skills.Provider = "anchor"
+		skills.SSOTPath = ""
+	case "custom path":
+		skills.Provider = "path"
+		defaultPath := state.Modules.AI.Skills.SSOTPath
+		if defaultPath == "" {
+			defaultPath = "~/.anchor/skills"
+		}
+		skills.SSOTPath, err = Input("Skills SSOT path", defaultPath, false)
+		if err != nil {
+			return err
+		}
+	}
+	toolDefault := state.Modules.AI.Skills.Tools
+	if len(toolDefault) == 0 {
+		toolDefault = []string{"claude", "codex"}
+	}
+	skills.Tools, err = MultiSelectLabeled("Target tools for skills", skillToolSelectOptions(), toolDefault, false)
+	if err != nil {
+		return err
+	}
+	state.Modules.AI.Skills = skills
+	return nil
+}
+
+func skillToolSelectOptions() []SelectOption {
+	return []SelectOption{
+		{Label: "claude - Claude Code", Value: "claude"},
+		{Label: "codex - Codex CLI", Value: "codex"},
+		{Label: "agents - shared agents skill root", Value: "agents"},
+		{Label: "gemini - Gemini CLI", Value: "gemini"},
+		{Label: "antigravity - Antigravity", Value: "antigravity"},
+	}
 }
 
 // ConfigureTerminal prompts for prompt style and GUI terminal apps.

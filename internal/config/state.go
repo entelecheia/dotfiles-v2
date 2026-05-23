@@ -40,14 +40,15 @@ type UserModulesState struct {
 
 // UserAIState holds user selections for AI CLI/config helpers.
 type UserAIState struct {
-	Enabled    bool `yaml:"enabled,omitempty"`
-	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
-	HUD        bool `yaml:"hud,omitempty"`
+	Enabled    bool           `yaml:"enabled,omitempty"`
+	AgentsSSOT bool           `yaml:"agents_ssot,omitempty"`
+	HUD        bool           `yaml:"hud,omitempty"`
+	Skills     AISkillsConfig `yaml:"skills,omitempty"`
 }
 
 // IsZero lets yaml.v3 omit an unset AI block from user state.
 func (a UserAIState) IsZero() bool {
-	return !a.Enabled && !a.AgentsSSOT && !a.HUD
+	return !a.Enabled && !a.AgentsSSOT && !a.HUD && a.Skills.IsZero()
 }
 
 // UserGitState holds user selections for git helper behavior.
@@ -193,6 +194,14 @@ type UserSSHState struct {
 // validProfiles lists the allowed profile names.
 var validProfiles = []string{"minimal", "full", "server"}
 
+var validAISkillsTools = map[string]bool{
+	"claude":      true,
+	"codex":       true,
+	"agents":      true,
+	"gemini":      true,
+	"antigravity": true,
+}
+
 // Validate performs lightweight sanity checks on critical fields.
 // Returns an error with a clear message for invalid values.
 func (s *UserState) Validate() error {
@@ -240,6 +249,9 @@ func (s *UserState) Validate() error {
 			return fmt.Errorf("modules.git.coauthor_guard must be off, warn, or block (got %q)", s.Modules.Git.CoauthorGuard)
 		}
 	}
+	if err := validateAISkillsConfig(s.Modules.AI.Skills); err != nil {
+		return err
+	}
 	for _, cask := range s.Modules.TerminalApps.Casks {
 		if !IsTerminalAppToken(cask) {
 			return fmt.Errorf("terminal_apps.casks entry %q must be one of the curated terminal apps", cask)
@@ -271,6 +283,42 @@ func (s *UserState) Validate() error {
 			return fmt.Errorf("duplicate workspace repo name %q", repo.Name)
 		}
 		seen[repo.Name] = true
+	}
+	return nil
+}
+
+func validateAISkillsConfig(skills AISkillsConfig) error {
+	if skills.IsZero() {
+		return nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(skills.Provider))
+	if provider == "" {
+		return fmt.Errorf("modules.ai.skills.provider must be anchor or path")
+	}
+	switch provider {
+	case "anchor", "path":
+	default:
+		return fmt.Errorf("modules.ai.skills.provider must be anchor or path (got %q)", skills.Provider)
+	}
+	if provider == "path" && strings.TrimSpace(skills.SSOTPath) == "" {
+		return fmt.Errorf("modules.ai.skills.ssot_path is required when provider is path")
+	}
+	if skills.Enabled && len(skills.Tools) == 0 {
+		return fmt.Errorf("modules.ai.skills.tools must list explicit target tools when skills management is enabled")
+	}
+	seen := map[string]bool{}
+	for _, raw := range skills.Tools {
+		tool := strings.ToLower(strings.TrimSpace(raw))
+		if tool == "" {
+			return fmt.Errorf("modules.ai.skills.tools may not contain empty entries")
+		}
+		if !validAISkillsTools[tool] {
+			return fmt.Errorf("modules.ai.skills.tools entry %q must be one of: agents, antigravity, claude, codex, gemini", raw)
+		}
+		if seen[tool] {
+			return fmt.Errorf("modules.ai.skills.tools contains duplicate entry %q", raw)
+		}
+		seen[tool] = true
 	}
 	return nil
 }
@@ -440,6 +488,13 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	if state.Modules.AI.HUD {
 		cfg.Modules.AI.Enabled = true
 		cfg.Modules.AI.HUD = true
+	}
+	if !state.Modules.AI.Skills.IsZero() {
+		cfg.Modules.AI.Enabled = true
+		cfg.Modules.AI.Skills = state.Modules.AI.Skills
+		if cfg.Modules.AI.Skills.Enabled {
+			cfg.Modules.AI.Skills.Tools = append([]string(nil), state.Modules.AI.Skills.Tools...)
+		}
 	}
 	if state.Modules.Git.CoauthorGuard != "" {
 		cfg.Modules.Git.Enabled = true

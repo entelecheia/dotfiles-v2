@@ -290,6 +290,58 @@ func TestLoadState_AIHUDPersistEnablesAI(t *testing.T) {
 	}
 }
 
+func TestLoadState_AISkillsPersistsAndEnablesAI(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("name: Test\nprofile: full\nmodules:\n  ai:\n    skills:\n      enabled: true\n      provider: anchor\n      tools: [claude, codex]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	cfg := &Config{}
+	ApplyStateToConfig(cfg, loaded)
+	if !cfg.Modules.AI.Enabled || !cfg.Modules.AI.Skills.Enabled {
+		t.Fatalf("AI skills should enable AI module, got enabled=%v skills=%#v", cfg.Modules.AI.Enabled, cfg.Modules.AI.Skills)
+	}
+	if cfg.Modules.AI.Skills.Provider != "anchor" || strings.Join(cfg.Modules.AI.Skills.Tools, ",") != "claude,codex" {
+		t.Fatalf("skills config not applied: %#v", cfg.Modules.AI.Skills)
+	}
+}
+
+func TestValidate_AISkillsConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		skills AISkillsConfig
+		errSub string
+	}{
+		{name: "empty"},
+		{name: "anchor ok", skills: AISkillsConfig{Enabled: true, Provider: "anchor", Tools: []string{"claude"}}},
+		{name: "path ok", skills: AISkillsConfig{Enabled: true, Provider: "path", SSOTPath: "~/skills", Tools: []string{"antigravity"}}},
+		{name: "missing provider", skills: AISkillsConfig{Enabled: true, Tools: []string{"claude"}}, errSub: "provider"},
+		{name: "path missing ssot", skills: AISkillsConfig{Enabled: true, Provider: "path", Tools: []string{"claude"}}, errSub: "ssot_path"},
+		{name: "enabled needs tools", skills: AISkillsConfig{Enabled: true, Provider: "anchor"}, errSub: "tools"},
+		{name: "bad tool", skills: AISkillsConfig{Enabled: true, Provider: "anchor", Tools: []string{"cursor"}}, errSub: "tools entry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &UserState{}
+			state.Modules.AI.Skills = tt.skills
+			err := state.Validate()
+			if tt.errSub == "" {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.errSub) {
+				t.Fatalf("Validate err = %v, want substring %q", err, tt.errSub)
+			}
+		})
+	}
+}
+
 func TestLoadState_CoauthoredGuardPersistsAndEnablesGit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

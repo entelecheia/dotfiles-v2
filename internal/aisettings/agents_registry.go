@@ -13,8 +13,8 @@ type AgentTool struct {
 
 // RegisteredAgentTools returns the built-in AI agents registry.
 func RegisteredAgentTools() []AgentTool {
-	// Keep this registry to instruction/settings targets only. Anchor owns
-	// ~/.claude/skills and other skill federation directories.
+	// Keep this registry to instruction/settings targets only. Skill target
+	// symlinks are handled by SkillsManager when modules.ai.skills is enabled.
 	return []AgentTool{
 		{
 			ID:          "claude",

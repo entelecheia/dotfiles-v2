@@ -38,13 +38,13 @@ dot usecase    # detailed workflow examples
 # On the existing machine
 dot profile backup --tag "pre-migration" --include-secrets
 dot apps backup                       # also snapshot per-app settings
-dot ai backup                         # portable Claude/Codex/Antigravity/MCP/skills settings
+dot ai backup                         # portable Claude/Codex/Antigravity/MCP settings
 
 # On the new machine (Drive already mounted)
 dot profile restore --include-secrets # restores ~/.config/dotfiles + ~/.ssh/age_key*
 dot apply                             # brew formulas + casks from install list
 dot apps restore                      # plists, Application Support, containers
-dot ai restore                        # Claude/Codex/Antigravity/MCP/skills settings
+dot ai restore                        # Claude/Codex/Antigravity/MCP settings
 ```
 
 The shared backup root lives in a single Drive folder
@@ -552,6 +552,8 @@ dot ai coauthor-guard apply --mode warn --persist
 
 dot ai skills list                 # inventory Codex/Claude/shared/Antigravity skills
 dot ai skills validate --strict    # fail on invalid, duplicate, or legacy metadata
+dot ai skills status --provider anchor --tool claude,codex
+dot ai skills apply --provider anchor --tool claude,codex --persist
 
 dot ai audit summary               # summarize append-only dot ai mutation events
 dot ai audit tail 20               # print recent events as JSONL
@@ -583,10 +585,10 @@ want the hook to reject the commit. `--persist` records
 agent targets immediately.
 
 Portable backup includes Claude/Codex/Antigravity settings, MCP config, agents,
-hooks, prompts, rules, plugins, and user skills. It excludes auth tokens, local
-overrides, caches, logs, sessions, histories, telemetry, sqlite DBs, plugin
-caches, generated/system skill bundles, and Antigravity conversation/brain
-state by default. Use `--include-auth` only when you explicitly want known
+hooks, prompts, rules, and plugins. It excludes skill directories, auth tokens,
+local overrides, caches, logs, sessions, histories, telemetry, sqlite DBs,
+plugin caches, generated/system skill bundles, and Antigravity conversation and
+brain state by default. Use `--include-auth` only when you explicitly want known
 auth/local-secret files included.
 
 `dot ai skills` scans Markdown `SKILL.md` packages without executing them.
@@ -600,6 +602,26 @@ roots instead. `list` reports `valid`, `legacy`, and `invalid` entries and
 always exits 0 unless scanning itself fails. `validate` fails on invalid
 metadata or duplicate schema-valid names; add `--strict` when legacy skills
 without `schema_version: v1` should also fail.
+
+When `modules.ai.skills.enabled: true`, `dot apply` can also deploy skills from
+an explicit SSOT into selected tool roots. `provider: anchor` defaults to
+`~/.anchor/skills`; `provider: path` requires `ssot_path`. Target tools are
+always explicit, for example:
+
+```yaml
+modules:
+  ai:
+    enabled: true
+    skills:
+      enabled: true
+      provider: anchor
+      tools: [claude, codex, gemini, antigravity]
+```
+
+`dot ai skills apply` creates only per-tool symlinks such as
+`~/.codex/skills/<name> -> ~/.anchor/skills/<name>`. Existing non-matching
+entries are skipped with warnings; rerun with `--force` to back them up under
+`~/.local/share/dotfiles/backup/skills/` and replace them.
 
 Mutating `dot ai` subcommands append redacted events to
 `~/.local/share/dotfiles/ai/events.jsonl`. Events record command type, target

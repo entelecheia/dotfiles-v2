@@ -61,6 +61,43 @@ schema_version: v1
 	}
 }
 
+func TestAISkillsApplyPersistsConfiguredSSOT(t *testing.T) {
+	home := t.TempDir()
+	ssot := filepath.Join(home, "anchor-skills")
+	writeCLITestFile(t, filepath.Join(ssot, "vault-extract", "SKILL.md"), "# Vault Extract\n")
+
+	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "anchor", "--ssot", ssot, "--tool", "claude", "--persist", "--json")
+	if err != nil {
+		t.Fatalf("skills apply: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	target := filepath.Join(home, ".claude", "skills", "vault-extract")
+	got, err := os.Readlink(target)
+	if err != nil {
+		t.Fatalf("readlink %s: %v", target, err)
+	}
+	if got != filepath.Join(ssot, "vault-extract") {
+		t.Fatalf("target link = %s", got)
+	}
+	stateData, err := os.ReadFile(filepath.Join(home, ".config", "dotfiles", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := string(stateData)
+	for _, want := range []string{"skills:", "enabled: true", "provider: anchor", "ssot_path: " + ssot, "- claude"} {
+		if !strings.Contains(state, want) {
+			t.Fatalf("persisted state missing %q:\n%s", want, state)
+		}
+	}
+
+	status, errOut, err := runDotForTest("--home", home, "ai", "skills", "status", "--json")
+	if err != nil {
+		t.Fatalf("skills status from persisted config: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(status, `"status": "in-sync"`) {
+		t.Fatalf("status did not use persisted skills config:\n%s", status)
+	}
+}
+
 func TestAIAgentsApplyAntigravityAndGeminiAlias(t *testing.T) {
 	home := t.TempDir()
 	ssot := filepath.Join(home, ".config", "dotfiles", "agents", "AGENTS.md")

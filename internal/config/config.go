@@ -72,11 +72,25 @@ type ModuleToggle struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// AIConfig configures AI helper files and optional agents SSOT deployment.
+// AIConfig configures AI helper files plus optional agents and skills SSOT deployment.
 type AIConfig struct {
-	Enabled    bool `yaml:"enabled"`
-	AgentsSSOT bool `yaml:"agents_ssot,omitempty"`
-	HUD        bool `yaml:"hud,omitempty"`
+	Enabled    bool           `yaml:"enabled"`
+	AgentsSSOT bool           `yaml:"agents_ssot,omitempty"`
+	HUD        bool           `yaml:"hud,omitempty"`
+	Skills     AISkillsConfig `yaml:"skills,omitempty"`
+}
+
+// AISkillsConfig controls symlink deployment from an external skills SSOT.
+type AISkillsConfig struct {
+	Enabled  bool     `yaml:"enabled,omitempty"`
+	Provider string   `yaml:"provider,omitempty"`  // anchor or path
+	SSOTPath string   `yaml:"ssot_path,omitempty"` // optional for provider=anchor
+	Tools    []string `yaml:"tools,omitempty"`     // explicit tool targets only
+}
+
+// IsZero lets yaml.v3 omit an unset skills block from user state/config output.
+func (c AISkillsConfig) IsZero() bool {
+	return !c.Enabled && c.Provider == "" && c.SSOTPath == "" && len(c.Tools) == 0
 }
 
 // ShellConfig configures the shell module.
@@ -263,6 +277,10 @@ func (c *Config) TemplateData() map[string]any {
 		"EnableAI":         c.Modules.AI.Enabled,
 		"EnableAgentsSSOT": c.Modules.AI.AgentsSSOT,
 		"EnableAIHUD":      c.Modules.AI.HUD,
+		"EnableAISkills":   c.Modules.AI.Skills.Enabled,
+		"AISkillsProvider": c.Modules.AI.Skills.Provider,
+		"AISkillsSSOTPath": c.Modules.AI.Skills.SSOTPath,
+		"AISkillsTools":    c.Modules.AI.Skills.Tools,
 		"EnableWarp":       c.Modules.Terminal.Warp,
 		"PromptStyle":      c.Modules.Terminal.PromptStyle,
 		"WorkspacePath":    c.Modules.Workspace.Path,

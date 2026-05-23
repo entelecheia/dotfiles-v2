@@ -233,7 +233,7 @@ func warnNonSymlinkClaudeSkills(p *Printer, home string) {
 	}
 	sort.Strings(unmanaged)
 	p.Warn(
-		"warning: ~/.claude/skills contains non-symlink entries outside Anchor control: %s",
+		"warning: ~/.claude/skills contains non-symlink entries outside configured skills SSOT control: %s",
 		strings.Join(unmanaged, ", "),
 	)
 }

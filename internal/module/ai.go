@@ -88,6 +88,26 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			})
 		}
 	}
+	if rc.Config.Modules.AI.Skills.Enabled {
+		manager := aisettings.NewSkillsManager(rc.Runner, rc.HomeDir)
+		status, err := manager.Status(aisettings.SkillsOptions{
+			Provider: rc.Config.Modules.AI.Skills.Provider,
+			SSOTPath: rc.Config.Modules.AI.Skills.SSOTPath,
+			Tools:    rc.Config.Modules.AI.Skills.Tools,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("AI skills status: %w", err)
+		}
+		for _, item := range status.Items {
+			if item.Status == aisettings.SkillLinkStatusInSync || item.Status == aisettings.SkillLinkStatusSourceMissing {
+				continue
+			}
+			changes = append(changes, Change{
+				Description: fmt.Sprintf("apply skills SSOT to %s/%s (%s)", item.ToolID, item.SkillName, item.Status),
+				Command:     fmt.Sprintf("dot ai skills apply --tool %s", item.ToolID),
+			})
+		}
+	}
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
 		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
 		status, err := manager.Status(mode)
@@ -154,6 +174,26 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 			if item.Changed {
 				messages = append(messages, fmt.Sprintf("applied AI HUD to %s", item.ToolID))
 			}
+		}
+	}
+	if rc.Config.Modules.AI.Skills.Enabled {
+		manager := aisettings.NewSkillsManager(rc.Runner, rc.HomeDir)
+		result, err := manager.Apply(aisettings.SkillsOptions{
+			Provider: rc.Config.Modules.AI.Skills.Provider,
+			SSOTPath: rc.Config.Modules.AI.Skills.SSOTPath,
+			Tools:    rc.Config.Modules.AI.Skills.Tools,
+			DryRun:   rc.DryRun,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("applying AI skills: %w", err)
+		}
+		for _, item := range result.Items {
+			if item.Changed {
+				messages = append(messages, fmt.Sprintf("applied skills SSOT to %s", item.TargetPath))
+			}
+		}
+		for _, warning := range result.Warnings {
+			messages = append(messages, warning)
 		}
 	}
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {

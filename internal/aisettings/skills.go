@@ -71,8 +71,9 @@ type SkillScanReport struct {
 	Errors     []string             `json:"errors,omitempty"`
 }
 
-// DefaultSkillRoots returns read-only diagnostic scan roots for selected tools.
-// Skill creation, federation, and reconciliation belong to Anchor.
+// DefaultSkillRoots returns diagnostic scan roots for selected tools. Skill
+// source creation and reconciliation remain outside dotfiles; configured
+// symlink deployment lives in SkillsManager.
 func DefaultSkillRoots(homeDir string, tools []string) ([]SkillRoot, error) {
 	homeDir = normalizeHomeDir(homeDir)
 	selected := normalizeSkillTools(tools)

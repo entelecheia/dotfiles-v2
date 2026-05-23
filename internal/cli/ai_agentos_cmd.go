@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
+	"github.com/entelecheia/dotfiles-v2/internal/config"
+	execrun "github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
@@ -20,6 +23,9 @@ func newAISkillsCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newAISkillsListCmd())
 	cmd.AddCommand(newAISkillsValidateCmd())
+	cmd.AddCommand(newAISkillsStatusCmd())
+	cmd.AddCommand(newAISkillsApplyCmd())
+	cmd.AddCommand(newAISkillsPathCmd())
 	return cmd
 }
 
@@ -91,6 +97,251 @@ func scanSkillsFromCmd(cmd *cobra.Command) (*aisettings.SkillScanReport, bool, b
 		Roots:   roots,
 	})
 	return report, asJSON, strict, err
+}
+
+func newAISkillsStatusCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "status",
+		Short: "Show configured skills SSOT symlink status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			opts, err := skillsOptionsFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			report, err := newSkillsManagerFromCmd(cmd).Status(opts)
+			if err != nil {
+				return err
+			}
+			asJSON, _ := cmd.Flags().GetBool("json")
+			if asJSON {
+				return printJSON(cmd, report)
+			}
+			printSkillsStatus(printerFrom(cmd), report)
+			return nil
+		},
+	}
+	addSkillManageFlags(c)
+	c.Flags().Bool("json", false, "Print JSON")
+	return c
+}
+
+func newAISkillsApplyCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "apply",
+		Short: "Apply configured skills SSOT symlinks to selected tools",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			opts, err := skillsOptionsFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			force, _ := cmd.Flags().GetBool("force")
+			persist, _ := cmd.Flags().GetBool("persist")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			opts.Force = force
+			opts.DryRun = dryRun
+			result, err := newSkillsManagerFromCmd(cmd).Apply(opts)
+			if err != nil {
+				return err
+			}
+			if persist && !dryRun {
+				if err := persistAISkills(cmd, result.Status); err != nil {
+					return err
+				}
+			}
+			if err := auditAIEvent(cmd, "ai.skills.apply", skillsApplyPayload(result, persist)); err != nil {
+				return err
+			}
+			asJSON, _ := cmd.Flags().GetBool("json")
+			if asJSON {
+				return printJSON(cmd, result)
+			}
+			p := printerFrom(cmd)
+			p.Header("AI Skills Apply")
+			printSkillsStatusSummary(p, result.Status)
+			printSkillsApplyResult(p, result)
+			if persist {
+				p.KV("Persist", fmt.Sprintf("%v", !dryRun))
+			}
+			return nil
+		},
+	}
+	addSkillManageFlags(c)
+	c.Flags().Bool("force", false, "Back up and replace conflicting target skill entries")
+	c.Flags().Bool("persist", false, "Persist modules.ai.skills for future dot apply runs")
+	c.Flags().Bool("json", false, "Print JSON")
+	return c
+}
+
+func newAISkillsPathCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "path",
+		Short: "Show skills SSOT and target skill roots",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			opts, err := skillsOptionsFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			mgr := newSkillsManagerFromCmd(cmd)
+			report, err := mgr.Status(opts)
+			if err != nil {
+				return err
+			}
+			p := printerFrom(cmd)
+			p.Header("AI Skills Paths")
+			printSkillsStatusSummary(p, report)
+			p.Section("Target Roots")
+			for _, tool := range report.Tools {
+				root, err := mgr.TargetRoot(tool)
+				if err != nil {
+					return err
+				}
+				p.Bullet(ui.StyleHint.Render(ui.MarkPartial), fmt.Sprintf("%-12s %s", ui.StyleValue.Render(tool), root))
+			}
+			return nil
+		},
+	}
+	addSkillManageFlags(c)
+	return c
+}
+
+func addSkillManageFlags(c *cobra.Command) {
+	c.Flags().String("provider", "", "Skills SSOT provider: anchor or path")
+	c.Flags().String("ssot", "", "Skills SSOT root path (defaults to ~/.anchor/skills for provider=anchor)")
+	c.Flags().String("tool", "", "Comma-separated explicit target tools (claude,codex,agents,gemini,antigravity)")
+}
+
+func skillsOptionsFromCmd(cmd *cobra.Command) (aisettings.SkillsOptions, error) {
+	provider, _ := cmd.Flags().GetString("provider")
+	ssot, _ := cmd.Flags().GetString("ssot")
+	toolFlag, _ := cmd.Flags().GetString("tool")
+
+	state, err := loadStateForCmd(cmd)
+	if err == nil {
+		cfg := state.Modules.AI.Skills
+		if provider == "" {
+			provider = cfg.Provider
+		}
+		if ssot == "" {
+			ssot = cfg.SSOTPath
+		}
+		if toolFlag == "" && len(cfg.Tools) > 0 {
+			return aisettings.SkillsOptions{Provider: provider, SSOTPath: ssot, Tools: append([]string(nil), cfg.Tools...)}, nil
+		}
+	}
+	return aisettings.SkillsOptions{Provider: provider, SSOTPath: ssot, Tools: parseAgentToolIDs(toolFlag)}, nil
+}
+
+func newSkillsManagerFromCmd(cmd *cobra.Command) *aisettings.SkillsManager {
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	return aisettings.NewSkillsManager(execrun.NewRunner(dryRun, slog.Default()), homeFromCmd(cmd))
+}
+
+func persistAISkills(cmd *cobra.Command, report *aisettings.SkillsStatusReport) error {
+	if report == nil {
+		return fmt.Errorf("skills status report is nil")
+	}
+	state, err := loadStateForCmd(cmd)
+	if err != nil {
+		return err
+	}
+	state.Modules.AI.Enabled = true
+	state.Modules.AI.Skills = config.AISkillsConfig{
+		Enabled:  true,
+		Provider: report.Provider,
+		SSOTPath: report.SSOTPath,
+		Tools:    append([]string(nil), report.Tools...),
+	}
+	return saveStateForCmd(cmd, state)
+}
+
+func printSkillsStatus(p *Printer, report *aisettings.SkillsStatusReport) {
+	p.Header("AI Skills Status")
+	printSkillsStatusSummary(p, report)
+	if len(report.Items) > 0 {
+		p.Section("Targets")
+		for _, item := range report.Items {
+			marker, style := skillLinkStatusMarker(item.Status)
+			if item.ToolID == "" {
+				p.Bullet(style.Render(marker), item.Message)
+				continue
+			}
+			line := fmt.Sprintf("%-12s %-24s %-12s %s", ui.StyleValue.Render(item.ToolID), item.SkillName, item.Status, item.TargetPath)
+			p.Bullet(style.Render(marker), line)
+			if item.Message != "" {
+				p.Line("      %s", item.Message)
+			}
+		}
+	}
+	for _, warning := range report.Warnings {
+		p.Warn(warning)
+	}
+}
+
+func printSkillsStatusSummary(p *Printer, report *aisettings.SkillsStatusReport) {
+	if report == nil {
+		return
+	}
+	p.KV("Provider", report.Provider)
+	p.KV("SSOT", report.SSOTPath)
+	p.KV("Tools", strings.Join(report.Tools, ","))
+	p.KV("Sources", fmt.Sprintf("%d", len(report.Sources)))
+}
+
+func printSkillsApplyResult(p *Printer, result *aisettings.SkillsApplyResult) {
+	if result == nil {
+		return
+	}
+	p.Section("Changes")
+	changed := 0
+	for _, item := range result.Items {
+		if item.Changed {
+			changed++
+		}
+		marker := ui.StyleHint.Render(ui.MarkPartial)
+		if item.Changed {
+			marker = ui.StyleSuccess.Render(ui.MarkPresent)
+		}
+		if item.Conflict && !item.Changed {
+			marker = ui.StyleWarning.Render(ui.MarkWarn)
+		}
+		p.Bullet(marker, fmt.Sprintf("%-12s %-24s %s", ui.StyleValue.Render(item.ToolID), item.SkillName, item.Message))
+		if item.BackupPath != "" {
+			p.Line("      backup: %s", item.BackupPath)
+		}
+	}
+	p.KV("Changed", fmt.Sprintf("%d", changed))
+	for _, warning := range result.Warnings {
+		p.Warn(warning)
+	}
+}
+
+func skillsApplyPayload(result *aisettings.SkillsApplyResult, persist bool) map[string]any {
+	payload := map[string]any{"persist": persist}
+	if result == nil || result.Status == nil {
+		return payload
+	}
+	payload["provider"] = result.Status.Provider
+	payload["ssot_path"] = result.Status.SSOTPath
+	payload["tools"] = result.Status.Tools
+	payload["items"] = len(result.Items)
+	payload["dry_run"] = result.DryRun
+	return payload
+}
+
+func skillLinkStatusMarker(status string) (string, interface{ Render(...string) string }) {
+	switch status {
+	case aisettings.SkillLinkStatusInSync:
+		return ui.MarkPresent, ui.StyleSuccess
+	case aisettings.SkillLinkStatusConflict:
+		return ui.MarkWarn, ui.StyleWarning
+	case aisettings.SkillLinkStatusMissing, aisettings.SkillLinkStatusSourceMissing:
+		return ui.MarkAbsent, ui.StyleHint
+	default:
+		return ui.MarkPartial, ui.StyleHint
+	}
 }
 
 func printSkillReport(p *Printer, report *aisettings.SkillScanReport, strict bool) {
