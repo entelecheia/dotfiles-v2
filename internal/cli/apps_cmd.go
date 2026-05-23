@@ -192,10 +192,12 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 	default:
 		// --yes without args: use saved state, fall back to recommended.
 		want = append([]string(nil), state.Modules.MacApps.Casks...)
-		want = append(want, state.Modules.MacApps.CasksExtra...)
 		if len(want) == 0 {
 			want = cat.Recommended
 		}
+		want = append(want, state.Modules.TerminalApps.Casks...)
+		want = append(want, state.Modules.MacApps.CasksExtra...)
+		want = sliceutil.Dedupe(want)
 	}
 
 	if interactive {
@@ -205,6 +207,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		if len(preselect) == 0 {
 			preselect = cat.Recommended
 		}
+		preselect = sliceutil.Dedupe(append(preselect, state.Modules.TerminalApps.Casks...))
 		p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
 			"  Catalog: %d apps across %d groups  (★ defaults, ✓ installed)", len(tokens), len(cat.Groups))))
 		selected, err := ui.MultiSelect("Pick apps to install", tokens, preselect, false)
@@ -274,12 +277,22 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		}
 		return nil
 	}
+	missingTaps := brew.MissingTaps(cat.TapsForTokens(missing))
 	if dryRun {
+		if len(missingTaps) > 0 {
+			p.Line("dry-run: would tap %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", "))
+		}
 		p.Line("dry-run: would install %d cask(s): %s", len(missing), strings.Join(missing, ", "))
 		if saveAfter {
 			return persistUserState(cmd, state)
 		}
 		return nil
+	}
+	if len(missingTaps) > 0 {
+		p.Line("Tapping %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", "))
+		if err := brew.Tap(ctx, missingTaps); err != nil {
+			return fmt.Errorf("tap homebrew repositories: %w", err)
+		}
 	}
 	p.Line("Installing %d cask(s): %s", len(missing), strings.Join(missing, ", "))
 	if err := brew.InstallCask(ctx, missing, force); err != nil {

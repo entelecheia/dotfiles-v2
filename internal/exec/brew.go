@@ -76,6 +76,46 @@ func (b *Brew) InstallCask(ctx context.Context, casks []string, force bool) erro
 	return err
 }
 
+// Tap ensures Homebrew taps are configured.
+func (b *Brew) Tap(ctx context.Context, taps []string) error {
+	for _, tap := range dedupeOrdered(taps) {
+		if _, err := b.Runner.Run(ctx, "brew", "tap", tap); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InstalledTaps returns the set of configured Homebrew taps. The bool is false
+// when the brew query failed, so callers can distinguish "missing" from
+// "unknown".
+func (b *Brew) InstalledTaps() (map[string]bool, bool) {
+	installed := make(map[string]bool)
+	result, err := b.Runner.RunQuery(context.Background(), "brew", "tap")
+	if err != nil || result.ExitCode != 0 {
+		return installed, false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			installed[s] = true
+		}
+	}
+	return installed, true
+}
+
+// MissingTaps returns taps from the list that are not configured.
+func (b *Brew) MissingTaps(taps []string) []string {
+	taps = dedupeOrdered(taps)
+	if len(taps) == 0 {
+		return nil
+	}
+	installed, ok := b.InstalledTaps()
+	if !ok {
+		return taps
+	}
+	return missingFromInstalled(installed, taps)
+}
+
 // ExistingCaskTargets returns the subset of casks whose .app artifact already
 // exists under /Applications. Used to skip casks that would otherwise trip
 // brew's "It seems there is already an App at ..." error when the app was
@@ -298,6 +338,34 @@ func formulaInstallGroups(formulas []string) [][]string {
 
 func isTapQualifiedFormula(formula string) bool {
 	return strings.Count(formula, "/") >= 2
+}
+
+func missingFromInstalled(installed map[string]bool, values []string) []string {
+	var missing []string
+	seen := make(map[string]bool, len(values))
+	for _, v := range values {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		if !installed[v] {
+			missing = append(missing, v)
+		}
+	}
+	return missing
+}
+
+func dedupeOrdered(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	var out []string
+	for _, v := range values {
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
 }
 
 // InstalledCasks returns the set of all currently installed casks.

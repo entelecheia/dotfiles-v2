@@ -16,6 +16,7 @@ var macOSAppsYAML []byte
 type MacApp struct {
 	Token string `yaml:"token"`
 	Name  string `yaml:"name"`
+	Tap   string `yaml:"tap,omitempty"`
 }
 
 // MacAppGroup groups related casks under a human-readable label.
@@ -68,4 +69,29 @@ func (c *MacApps) DisplayName(token string) string {
 		}
 	}
 	return token
+}
+
+// TapsForTokens returns the de-duplicated Homebrew taps required by the given
+// cask tokens, preserving the input token order.
+func (c *MacApps) TapsForTokens(tokens []string) []string {
+	byToken := make(map[string]string)
+	for _, g := range c.Groups {
+		for _, a := range g.Apps {
+			if a.Tap != "" {
+				byToken[a.Token] = a.Tap
+			}
+		}
+	}
+
+	seen := make(map[string]bool)
+	var out []string
+	for _, token := range tokens {
+		tap := byToken[token]
+		if tap == "" || seen[tap] {
+			continue
+		}
+		seen[tap] = true
+		out = append(out, tap)
+	}
+	return out
 }

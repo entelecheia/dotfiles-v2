@@ -16,6 +16,7 @@ type TerminalToolOption struct {
 
 var terminalAppOptions = []TerminalAppOption{
 	{Token: "warp", Name: "Warp"},
+	{Token: "wave", Name: "Wave"},
 	{Token: "cmux", Name: "cmux"},
 	{Token: "iterm2", Name: "iTerm2"},
 }

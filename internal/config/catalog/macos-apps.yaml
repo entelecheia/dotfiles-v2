@@ -48,12 +48,13 @@ groups:
 
   - name: "Terminal & Editor"
     apps:
-      - {token: cmux,              name: "cmux"}
+      - {token: cmux,              name: "cmux", tap: "manaflow-ai/cmux"}
       - {token: cursor,            name: "Cursor"}
       - {token: ghostty,           name: "Ghostty"}
       - {token: sublime-text,      name: "Sublime Text"}
       - {token: visual-studio-code, name: "Visual Studio Code"}
       - {token: warp,              name: "Warp"}
+      - {token: wave,              name: "Wave"}
 
   - name: "AI"
     apps:

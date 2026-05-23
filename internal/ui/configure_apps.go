@@ -32,8 +32,8 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 	return err
 }
 
-// ConfigureTerminal prompts for prompt style and Warp toggle.
-// Prompt style applies on all platforms; Warp is macOS-only.
+// ConfigureTerminal prompts for prompt style and GUI terminal apps.
+// Prompt style applies on all platforms; GUI apps are macOS-only.
 func ConfigureTerminal(state *config.UserState, profile string, yes bool) error {
 	printSection("Terminal")
 
@@ -53,16 +53,43 @@ func ConfigureTerminal(state *config.UserState, profile string, yes bool) error 
 		return err
 	}
 
-	// Warp — macOS non-server only.
 	if profile == "server" {
 		state.Modules.Warp = false
+		state.Modules.TerminalApps = config.UserTerminalAppsState{}
 		return nil
 	}
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	state.Modules.Warp, err = ConfirmBool("Enable Warp terminal?", state.Modules.Warp, yes)
-	return err
+
+	appDefault := state.Modules.TerminalApps.Casks
+	if !state.Modules.TerminalApps.Enabled && len(appDefault) == 0 {
+		if state.Modules.Warp {
+			appDefault = []string{"warp"}
+		} else {
+			appDefault = config.DefaultTerminalApps(profile)
+		}
+	}
+	selectedApps, err := MultiSelectLabeled("Terminal apps to install", terminalAppSelectOptions(), appDefault, yes)
+	if err != nil {
+		return err
+	}
+	state.Modules.TerminalApps.Enabled = true
+	state.Modules.TerminalApps.Casks = selectedApps
+	state.Modules.Warp = sliceutil.Contains(selectedApps, "warp")
+	return nil
+}
+
+func terminalAppSelectOptions() []SelectOption {
+	apps := config.TerminalAppOptions()
+	options := make([]SelectOption, len(apps))
+	for i, app := range apps {
+		options[i] = SelectOption{
+			Label: app.Token + " - " + app.Name,
+			Value: app.Token,
+		}
+	}
+	return options
 }
 
 // ConfigureFonts prompts for font family. Skipped for server/minimal profile.

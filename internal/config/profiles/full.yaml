@@ -22,6 +22,8 @@ modules:
     enabled: true
     warp: true
     prompt_style: rich
+    apps:
+      - warp
   macapps:
     enabled: true
     # Cask list is pulled from the embedded catalog (internal/config/catalog/macos-apps.yaml).

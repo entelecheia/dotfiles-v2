@@ -144,6 +144,34 @@ func MultiSelect(message string, options, defaultVals []string, unattended bool)
 	return selected, nil
 }
 
+// SelectOption lets callers show a human label while persisting a compact value.
+type SelectOption struct {
+	Label string
+	Value string
+}
+
+// MultiSelectLabeled is MultiSelect for options whose displayed labels differ
+// from the stored values.
+func MultiSelectLabeled(message string, options []SelectOption, defaultVals []string, unattended bool) ([]string, error) {
+	if unattended {
+		return defaultVals, nil
+	}
+	selected := append([]string(nil), defaultVals...)
+	opts := make([]huh.Option[string], len(options))
+	for i, o := range options {
+		opts[i] = huh.NewOption(o.Label, o.Value).Selected(sliceutil.Contains(defaultVals, o.Value))
+	}
+	err := huh.NewMultiSelect[string]().
+		Title(message).
+		Options(opts...).
+		Value(&selected).
+		Run()
+	if err != nil {
+		return defaultVals, err
+	}
+	return selected, nil
+}
+
 // ConfirmBool asks for a bool. Returns defaultVal if unattended.
 func ConfirmBool(message string, defaultVal, unattended bool) (bool, error) {
 	if unattended {

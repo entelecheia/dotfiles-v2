@@ -44,6 +44,28 @@ func TestMacAppsResolveCasks_ConfiguredCasksWin(t *testing.T) {
 	}
 }
 
+func TestMacAppsResolveCasks_IncludesTerminalApps(t *testing.T) {
+	m := &MacAppsModule{}
+	rc := &RunContext{
+		Config: &config.Config{
+			Modules: config.ModulesConfig{
+				Terminal: config.TermConfig{
+					Enabled: true,
+					Apps:    []string{"wave", "cmux"},
+				},
+			},
+		},
+	}
+
+	got := m.resolveCasks(rc)
+	if !contains(got, "arc") {
+		t.Fatalf("default casks were not preserved: %v", got)
+	}
+	if !contains(got, "wave") || !contains(got, "cmux") {
+		t.Fatalf("terminal app casks missing: %v", got)
+	}
+}
+
 func contains(values []string, want string) bool {
 	for _, v := range values {
 		if v == want {

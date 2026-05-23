@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,16 +25,17 @@ type UserState struct {
 
 // UserModulesState holds module opt-in/config from user state.
 type UserModulesState struct {
-	Workspace   UserWorkspaceState `yaml:"workspace,omitempty"`
-	AI          UserAIState        `yaml:"ai,omitempty"`
-	Git         UserGitState       `yaml:"git,omitempty"`
-	Warp        bool               `yaml:"warp,omitempty"`
-	PromptStyle string             `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
-	Fonts       UserFontsState     `yaml:"fonts,omitempty"`
-	Sync        UserSyncState      `yaml:"sync,omitempty"`
-	Rsync       UserRsyncState     `yaml:"rsync,omitempty"`
-	Gsync       UserGsyncState     `yaml:"gdrive_sync,omitempty"`
-	MacApps     UserMacAppsState   `yaml:"macapps,omitempty"`
+	Workspace    UserWorkspaceState    `yaml:"workspace,omitempty"`
+	AI           UserAIState           `yaml:"ai,omitempty"`
+	Git          UserGitState          `yaml:"git,omitempty"`
+	Warp         bool                  `yaml:"-"`
+	PromptStyle  string                `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	TerminalApps UserTerminalAppsState `yaml:"terminal_apps,omitempty"`
+	Fonts        UserFontsState        `yaml:"fonts,omitempty"`
+	Sync         UserSyncState         `yaml:"sync,omitempty"`
+	Rsync        UserRsyncState        `yaml:"rsync,omitempty"`
+	Gsync        UserGsyncState        `yaml:"gdrive_sync,omitempty"`
+	MacApps      UserMacAppsState      `yaml:"macapps,omitempty"`
 }
 
 // UserAIState holds user selections for AI CLI/config helpers.
@@ -73,13 +75,15 @@ func (a *UserAIState) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*raw)(a))
 }
 
-// UnmarshalYAML accepts the legacy modules.ai_tools key as read-only input and
-// normalizes it into modules.ai.enabled.
+// UnmarshalYAML accepts legacy read-only input:
+//   - modules.ai_tools -> modules.ai.enabled
+//   - modules.warp -> modules.terminal_apps.casks: [warp]
 func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
 	type raw UserModulesState
 	aux := struct {
-		*raw     `yaml:",inline"`
-		LegacyAI bool `yaml:"ai_tools"`
+		*raw       `yaml:",inline"`
+		LegacyAI   bool `yaml:"ai_tools"`
+		LegacyWarp bool `yaml:"warp"`
 	}{
 		raw: (*raw)(s),
 	}
@@ -89,7 +93,25 @@ func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
 	if !s.AI.Enabled && aux.LegacyAI {
 		s.AI.Enabled = true
 	}
+	if aux.LegacyWarp {
+		s.Warp = true
+		if !s.TerminalApps.Enabled && len(s.TerminalApps.Casks) == 0 {
+			s.TerminalApps.Enabled = true
+			s.TerminalApps.Casks = []string{"warp"}
+		}
+	}
 	return nil
+}
+
+// UserTerminalAppsState holds GUI terminal cask selections.
+type UserTerminalAppsState struct {
+	Enabled bool     `yaml:"enabled,omitempty"`
+	Casks   []string `yaml:"casks,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset terminal_apps block from user state.
+func (s UserTerminalAppsState) IsZero() bool {
+	return !s.Enabled && len(s.Casks) == 0
 }
 
 // UserMacAppsState holds user selections for the macapps module.
@@ -216,6 +238,11 @@ func (s *UserState) Validate() error {
 		case "off", "warn", "block":
 		default:
 			return fmt.Errorf("modules.git.coauthor_guard must be off, warn, or block (got %q)", s.Modules.Git.CoauthorGuard)
+		}
+	}
+	for _, cask := range s.Modules.TerminalApps.Casks {
+		if !IsTerminalAppToken(cask) {
+			return fmt.Errorf("terminal_apps.casks entry %q must be one of the curated terminal apps", cask)
 		}
 	}
 	for _, p := range s.Modules.Gsync.SharedExcludes {
@@ -418,7 +445,12 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 		cfg.Modules.Git.Enabled = true
 		cfg.Modules.Git.CoauthorGuard = state.Modules.Git.CoauthorGuard
 	}
-	if state.Modules.Warp {
+	terminalAppsSet := state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0
+	if terminalAppsSet {
+		cfg.Modules.Terminal.Apps = append([]string(nil), state.Modules.TerminalApps.Casks...)
+		cfg.Modules.Terminal.Warp = sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp")
+	} else if state.Modules.Warp && !sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp") {
+		cfg.Modules.Terminal.Apps = append(cfg.Modules.Terminal.Apps, "warp")
 		cfg.Modules.Terminal.Warp = true
 	}
 	if state.Modules.PromptStyle != "" {

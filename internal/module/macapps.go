@@ -27,20 +27,9 @@ func (m *MacAppsModule) resolveCasks(rc *RunContext) []string {
 		rc.Runner.Logger.Warn("macapps catalog load", "err", err)
 		return nil
 	}
-	return mergeCasks(cat.Defaults, rc.Config.CasksExtra)
-}
-
-func mergeCasks(base, extra []string) []string {
-	seen := make(map[string]bool, len(base)+len(extra))
-	result := make([]string, 0, len(base)+len(extra))
-	for _, c := range append(base, extra...) {
-		if seen[c] {
-			continue
-		}
-		seen[c] = true
-		result = append(result, c)
-	}
-	return result
+	cfg := *rc.Config
+	cfg.Casks = cat.Defaults
+	return cfg.AllCasks()
 }
 
 func (m *MacAppsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
@@ -63,14 +52,25 @@ func (m *MacAppsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult
 	}
 
 	missing := rc.Brew.MissingCasks(casks)
-	if len(missing) == 0 {
+	missing, _ = m.splitExistingCaskTargets(rc, missing)
+	missingTaps := m.missingTaps(rc, missing)
+	if len(missing) == 0 && len(missingTaps) == 0 {
 		return &CheckResult{Satisfied: true}, nil
 	}
 
-	changes := []Change{{
-		Description: fmt.Sprintf("install %d cask(s): %s", len(missing), strings.Join(missing, ", ")),
-		Command:     "brew install --cask " + strings.Join(missing, " "),
-	}}
+	var changes []Change
+	for _, tap := range missingTaps {
+		changes = append(changes, Change{
+			Description: fmt.Sprintf("tap Homebrew repository %q", tap),
+			Command:     "brew tap " + tap,
+		})
+	}
+	if len(missing) > 0 {
+		changes = append(changes, Change{
+			Description: fmt.Sprintf("install %d cask(s): %s", len(missing), strings.Join(missing, ", ")),
+			Command:     "brew install --cask " + strings.Join(missing, " "),
+		})
+	}
 	return &CheckResult{Satisfied: false, Changes: changes}, nil
 }
 
@@ -93,17 +93,8 @@ func (m *MacAppsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult
 
 	// Skip casks whose .app already exists under /Applications. apply is
 	// idempotent and should not fail when an app was installed outside brew.
-	var skipped []string
-	if existing := rc.Brew.ExistingCaskTargets(missing); len(existing) > 0 {
-		var toInstall []string
-		for _, c := range missing {
-			if existing[c] {
-				skipped = append(skipped, c)
-			} else {
-				toInstall = append(toInstall, c)
-			}
-		}
-		missing = toInstall
+	missing, skipped := m.splitExistingCaskTargets(rc, missing)
+	if len(skipped) > 0 {
 		rc.Runner.Logger.Info("macapps: skipping externally-installed casks", "tokens", skipped)
 	}
 
@@ -115,12 +106,54 @@ func (m *MacAppsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult
 		return &ApplyResult{Messages: msgs}, nil
 	}
 
+	var msgs []string
+	if missingTaps := m.missingTaps(rc, missing); len(missingTaps) > 0 {
+		if err := rc.Brew.Tap(ctx, missingTaps); err != nil {
+			return nil, fmt.Errorf("tap homebrew repositories: %w", err)
+		}
+		msgs = append(msgs, fmt.Sprintf("tapped %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", ")))
+	}
 	if err := rc.Brew.InstallCask(ctx, missing, false); err != nil {
 		return nil, fmt.Errorf("install casks: %w", err)
 	}
-	msgs := []string{fmt.Sprintf("installed %d cask(s): %s", len(missing), strings.Join(missing, ", "))}
+	msgs = append(msgs, fmt.Sprintf("installed %d cask(s): %s", len(missing), strings.Join(missing, ", ")))
 	if len(skipped) > 0 {
 		msgs = append(msgs, fmt.Sprintf("skipped %d already-present: %s", len(skipped), strings.Join(skipped, ", ")))
 	}
 	return &ApplyResult{Changed: true, Messages: msgs}, nil
+}
+
+func (m *MacAppsModule) splitExistingCaskTargets(rc *RunContext, casks []string) ([]string, []string) {
+	if len(casks) == 0 || rc.Brew == nil {
+		return casks, nil
+	}
+	existing := rc.Brew.ExistingCaskTargets(casks)
+	if len(existing) == 0 {
+		return casks, nil
+	}
+	var toInstall, skipped []string
+	for _, c := range casks {
+		if existing[c] {
+			skipped = append(skipped, c)
+		} else {
+			toInstall = append(toInstall, c)
+		}
+	}
+	return toInstall, skipped
+}
+
+func (m *MacAppsModule) missingTaps(rc *RunContext, casks []string) []string {
+	if len(casks) == 0 || rc.Brew == nil {
+		return nil
+	}
+	cat, err := catalog.LoadMacApps()
+	if err != nil {
+		rc.Runner.Logger.Warn("macapps catalog load", "err", err)
+		return nil
+	}
+	taps := cat.TapsForTokens(casks)
+	if len(taps) == 0 {
+		return nil
+	}
+	return rc.Brew.MissingTaps(taps)
 }

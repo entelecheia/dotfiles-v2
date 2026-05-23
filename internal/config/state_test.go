@@ -190,6 +190,65 @@ func TestLoadState_LegacyAIToolsMigratesToAI(t *testing.T) {
 	}
 }
 
+func TestLoadState_LegacyWarpMigratesToTerminalApps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("name: Test\nprofile: full\nmodules:\n  warp: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if !loaded.Modules.TerminalApps.Enabled || len(loaded.Modules.TerminalApps.Casks) != 1 || loaded.Modules.TerminalApps.Casks[0] != "warp" {
+		t.Fatalf("legacy warp did not migrate to terminal_apps: %#v", loaded.Modules.TerminalApps)
+	}
+	cfg := &Config{Modules: ModulesConfig{Terminal: TermConfig{Enabled: true}}}
+	ApplyStateToConfig(cfg, loaded)
+	if !cfg.Modules.Terminal.Warp {
+		t.Fatal("legacy warp should keep the Warp terminal flag enabled")
+	}
+	if len(cfg.Modules.Terminal.Apps) != 1 || cfg.Modules.Terminal.Apps[0] != "warp" {
+		t.Fatalf("legacy warp should apply terminal app selection, got %v", cfg.Modules.Terminal.Apps)
+	}
+	if err := saveStateAt(path, loaded); err != nil {
+		t.Fatalf("saveStateAt: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "warp:") {
+		t.Fatalf("legacy warp key was persisted: %s", data)
+	}
+	if !strings.Contains(string(data), "terminal_apps:") {
+		t.Fatalf("terminal_apps key missing after migration: %s", data)
+	}
+}
+
+func TestTerminalAppsStateAppliesAndValidates(t *testing.T) {
+	state := &UserState{}
+	state.Modules.TerminalApps.Enabled = true
+	state.Modules.TerminalApps.Casks = []string{"wave", "cmux"}
+	cfg := &Config{Modules: ModulesConfig{Terminal: TermConfig{Enabled: true, Warp: true, Apps: []string{"warp"}}}}
+
+	if err := state.Validate(); err != nil {
+		t.Fatalf("Validate terminal apps: %v", err)
+	}
+	ApplyStateToConfig(cfg, state)
+	if cfg.Modules.Terminal.Warp {
+		t.Fatal("explicit terminal app selection without warp should disable Warp theme")
+	}
+	if got := strings.Join(cfg.Modules.Terminal.Apps, ","); got != "wave,cmux" {
+		t.Fatalf("Terminal.Apps = %q, want wave,cmux", got)
+	}
+
+	state.Modules.TerminalApps.Casks = []string{"not-a-terminal"}
+	if err := state.Validate(); err == nil {
+		t.Fatal("expected invalid terminal app token to fail validation")
+	}
+}
+
 func TestLoadState_AIAgentsSSOTPersistsAndEnablesAI(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

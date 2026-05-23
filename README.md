@@ -118,7 +118,8 @@ Prompts for:
 - Profile (`minimal` / `full` / `server`)
 - GPU/CUDA auto-detection (suggests `server` when NVIDIA GPU detected)
 - Prompt style (`minimal` / `rich`) — see below
-- Module opt-ins: workspace, AI CLI/config helpers, Warp, fonts
+- Terminal app choices (`warp`, `wave`, `cmux`, `iterm2`) on macOS
+- Module opt-ins: workspace, AI CLI/config helpers, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
 - GitHub authentication via `gh auth login` with broad scopes (optional, for private repos)
@@ -700,6 +701,8 @@ dot apps restore --from <root> moom
 **Two independent lists** on the user state:
 
 - **Install list** (`modules.macapps.casks` + `casks_extra`) — drives `dot apps install`.
+  Terminal app choices from `modules.terminal_apps.casks` are merged into this
+  list during `dot apply` and saved-state `dot apps install` runs.
 - **Backup list** (`modules.macapps.backup_apps`) — scopes `apps backup/restore`. Empty
   means "manifest ∩ installed casks".
 
@@ -715,10 +718,12 @@ Before overwriting live files on restore, originals are snapshotted to
 `~/.local/share/dotfiles/backup/`. `killall cfprefsd` runs after restore so
 re-launched apps read the new plists.
 
-The embedded cask catalog (`internal/config/catalog/macos-apps.yaml`) groups ~60
+The embedded cask catalog (`internal/config/catalog/macos-apps.yaml`) groups 60+
 apps across Security, Knowledge, Browsers, Terminal & Editor, AI, Communication,
 Productivity utilities, Capture & Dictation, Files, Media, Dev, System, Writing.
-The `defaults:` section defines the preselected 20-app bootstrap set.
+The `defaults:` section defines the preselected bootstrap set. Catalog entries
+can declare required Homebrew taps; `cmux` runs `brew tap manaflow-ai/cmux`
+before `brew install --cask cmux`.
 
 ### `dot profile` — Versioned Profile Snapshots
 
@@ -844,6 +849,13 @@ dot reconfigure                 # switch between minimal ↔ rich
 ```
 
 Config key: `modules.terminal.prompt_style` (state: `modules.prompt_style`).
+
+### Terminal Apps
+
+`dot init` and `dot reconfigure` include a macOS non-server multi-select for
+terminal apps: `warp`, `wave`, `cmux`, and `iterm2`. The selection is stored in
+`modules.terminal_apps.casks` and merged into the macOS cask install list.
+Selecting `warp` also enables the managed Warp theme file.
 
 ### Packages
 
@@ -976,8 +988,13 @@ modules:
         remote: "git@github.com:user/vault.git"
   ai:
     enabled: true
-  warp: false
   prompt_style: rich    # "minimal" or "rich"
+  terminal_apps:
+    enabled: true
+    casks:
+      - warp
+      - wave
+      - cmux
   fonts:
     family: "FiraCode"
   macapps:

@@ -266,7 +266,9 @@ func terminalDetail(cfg *config.Config) string {
 	if cfg.Modules.Terminal.PromptStyle != "" {
 		parts = append(parts, "prompt="+cfg.Modules.Terminal.PromptStyle)
 	}
-	if cfg.Modules.Terminal.Warp {
+	if len(cfg.Modules.Terminal.Apps) > 0 {
+		parts = append(parts, "apps="+strings.Join(cfg.Modules.Terminal.Apps, ","))
+	} else if cfg.Modules.Terminal.Warp {
 		parts = append(parts, "warp")
 	}
 	return strings.Join(parts, ", ")

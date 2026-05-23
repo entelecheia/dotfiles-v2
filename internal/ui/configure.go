@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
@@ -19,7 +20,9 @@ func PrintStateSummary(state *config.UserState) {
 	printKV("Timezone", state.Timezone)
 	printKV("SSH key", state.SSH.KeyName)
 	printKV("AI", formatBool(state.Modules.AI.Enabled))
-	if state.Modules.Warp {
+	if state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0 {
+		printKV("Terminal apps", strings.Join(state.Modules.TerminalApps.Casks, ", "))
+	} else if state.Modules.Warp {
 		printKV("Warp", formatBool(state.Modules.Warp))
 	}
 	if state.Modules.Workspace.Path != "" {

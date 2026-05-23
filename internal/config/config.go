@@ -99,9 +99,10 @@ type SSHModConfig struct {
 
 // TermConfig configures the terminal module.
 type TermConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	Warp        bool   `yaml:"warp"`
-	PromptStyle string `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Enabled     bool     `yaml:"enabled"`
+	Warp        bool     `yaml:"warp"`
+	PromptStyle string   `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Apps        []string `yaml:"apps,omitempty"`         // GUI terminal casks: warp, wave, cmux, iterm2
 }
 
 // WorkConfig configures the workspace module.
@@ -191,12 +192,20 @@ func (c *Config) AllPackages() []string {
 
 // AllCasks returns the merged cask list (base + extra), de-duplicated.
 func (c *Config) AllCasks() []string {
-	seen := make(map[string]bool, len(c.Casks)+len(c.CasksExtra))
+	seen := make(map[string]bool, len(c.Casks)+len(c.Modules.Terminal.Apps)+len(c.CasksExtra))
 	var result []string
 	for _, p := range c.Casks {
 		if !seen[p] {
 			seen[p] = true
 			result = append(result, p)
+		}
+	}
+	if c.Modules.Terminal.Enabled {
+		for _, p := range c.Modules.Terminal.Apps {
+			if !seen[p] {
+				seen[p] = true
+				result = append(result, p)
+			}
 		}
 	}
 	for _, p := range c.CasksExtra {

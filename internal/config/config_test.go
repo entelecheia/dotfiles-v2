@@ -140,6 +140,37 @@ func TestAllCasks_DeduplicatesAndPreservesOrder(t *testing.T) {
 	}
 }
 
+func TestAllCasks_IncludesTerminalAppsWhenEnabled(t *testing.T) {
+	cfg := &Config{
+		Casks:      []string{"raycast", "warp"},
+		CasksExtra: []string{"cmux", "raycast"},
+		Modules: ModulesConfig{
+			Terminal: TermConfig{
+				Enabled: true,
+				Apps:    []string{"warp", "wave", "cmux"},
+			},
+		},
+	}
+	all := cfg.AllCasks()
+	expected := []string{"raycast", "warp", "wave", "cmux"}
+	if len(all) != len(expected) {
+		t.Fatalf("AllCasks: expected %d, got %d: %v", len(expected), len(all), all)
+	}
+	for i, v := range expected {
+		if all[i] != v {
+			t.Errorf("AllCasks[%d] = %q, want %q", i, all[i], v)
+		}
+	}
+}
+
+func TestTerminalCatalogIncludesRequestedOptions(t *testing.T) {
+	for _, token := range []string{"warp", "wave", "cmux", "iterm2"} {
+		if !IsTerminalAppToken(token) {
+			t.Fatalf("terminal app catalog missing %q", token)
+		}
+	}
+}
+
 func TestTemplateData_Keys(t *testing.T) {
 	cfg := &Config{
 		Name:       "Test User",

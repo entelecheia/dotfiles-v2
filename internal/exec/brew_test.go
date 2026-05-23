@@ -71,6 +71,25 @@ func TestFormulaInstallGroupsSplitTapQualifiedFormula(t *testing.T) {
 	}
 }
 
+func TestMissingFromInstalledDedupesInOrder(t *testing.T) {
+	installed := map[string]bool{"homebrew/core": true}
+	got := missingFromInstalled(installed, []string{
+		"homebrew/core",
+		"manaflow-ai/cmux",
+		"manaflow-ai/cmux",
+		"other/tap",
+	})
+	want := []string{"manaflow-ai/cmux", "other/tap"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d missing taps, got %d: %#v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("missing tap %d: expected %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
 func TestGCCCompilerFromBrewVersions(t *testing.T) {
 	cases := []struct {
 		name string
