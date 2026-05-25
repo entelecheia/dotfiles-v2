@@ -60,6 +60,26 @@ func TestTapsForFormulasIncludesAnchorCLI(t *testing.T) {
 	}
 }
 
+func TestInstallableFormulasForGOOSSkipsDarwinOnlyFormulasOnLinux(t *testing.T) {
+	formulas := []string{"git", "anchor-cli", "staixbwlb/cask/anchor-cli", "tmux"}
+
+	linux := installableFormulasForGOOS(formulas, "linux")
+	wantLinux := []string{"git", "tmux"}
+	if len(linux) != len(wantLinux) {
+		t.Fatalf("linux formulas = %#v, want %#v", linux, wantLinux)
+	}
+	for i := range wantLinux {
+		if linux[i] != wantLinux[i] {
+			t.Fatalf("linux formula %d: expected %q, got %q", i, wantLinux[i], linux[i])
+		}
+	}
+
+	darwin := installableFormulasForGOOS(formulas, "darwin")
+	if len(darwin) != len(formulas) {
+		t.Fatalf("darwin formulas = %#v, want %#v", darwin, formulas)
+	}
+}
+
 func TestFormulaInstallGroupsSplitTapQualifiedFormula(t *testing.T) {
 	got := formulaInstallGroups([]string{
 		"git",

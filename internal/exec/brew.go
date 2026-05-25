@@ -20,6 +20,10 @@ var formulaTaps = map[string]string{
 	"anchor-cli": "staixbwlb/cask",
 }
 
+var darwinOnlyFormulas = map[string]bool{
+	"anchor-cli": true,
+}
+
 // NewBrew creates a new Brew wrapper.
 func NewBrew(runner *Runner) *Brew {
 	return &Brew{Runner: runner}
@@ -134,6 +138,11 @@ func TapsForFormulas(formulas []string) []string {
 // MissingFormulaTaps returns required formula taps that are not configured.
 func (b *Brew) MissingFormulaTaps(formulas []string) []string {
 	return b.MissingTaps(TapsForFormulas(formulas))
+}
+
+// InstallableFormulas returns formulas supported on the current OS.
+func (b *Brew) InstallableFormulas(formulas []string) []string {
+	return installableFormulasForGOOS(formulas, runtime.GOOS)
 }
 
 // ExistingCaskTargets returns the subset of casks whose .app artifact already
@@ -288,6 +297,17 @@ func formulaName(formula string) string {
 		return formula[i+1:]
 	}
 	return formula
+}
+
+func installableFormulasForGOOS(formulas []string, goos string) []string {
+	out := make([]string, 0, len(formulas))
+	for _, formula := range formulas {
+		if darwinOnlyFormulas[formulaName(formula)] && goos != "darwin" {
+			continue
+		}
+		out = append(out, formula)
+	}
+	return out
 }
 
 func (b *Brew) installArgs(formulas []string) []string {

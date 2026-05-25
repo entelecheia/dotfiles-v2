@@ -13,6 +13,7 @@ func (m *PackagesModule) Name() string { return "packages" }
 
 func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
 	var changes []Change
+	packages := rc.Brew.InstallableFormulas(rc.Config.AllPackages())
 
 	// Ensure Homebrew PATH is set (may not be in PATH for fresh processes)
 	rc.Brew.RefreshPath()
@@ -22,14 +23,14 @@ func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResul
 			Description: "install Homebrew",
 			Command:     "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash",
 		})
-		for _, tap := range rc.Brew.MissingFormulaTaps(rc.Config.AllPackages()) {
+		for _, tap := range rc.Brew.MissingFormulaTaps(packages) {
 			changes = append(changes, Change{
 				Description: fmt.Sprintf("tap Homebrew repository %q", tap),
 				Command:     "brew tap " + tap,
 			})
 		}
 		// Without brew, all packages are considered missing
-		for _, pkg := range rc.Config.AllPackages() {
+		for _, pkg := range packages {
 			changes = append(changes, Change{
 				Description: fmt.Sprintf("install package %q", pkg),
 				Command:     fmt.Sprintf("brew install %s", pkg),
@@ -38,7 +39,7 @@ func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResul
 		return &CheckResult{Satisfied: false, Changes: changes}, nil
 	}
 
-	missing := rc.Brew.MissingFormulas(rc.Config.AllPackages())
+	missing := rc.Brew.MissingFormulas(packages)
 	missingTaps := rc.Brew.MissingFormulaTaps(missing)
 	if len(missing) == 0 && len(missingTaps) == 0 {
 		return &CheckResult{Satisfied: true}, nil
@@ -61,6 +62,7 @@ func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResul
 
 func (m *PackagesModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	var messages []string
+	packages := rc.Brew.InstallableFormulas(rc.Config.AllPackages())
 
 	// Ensure Homebrew PATH is set (may not be in PATH for fresh processes)
 	rc.Brew.RefreshPath()
@@ -76,7 +78,7 @@ func (m *PackagesModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResul
 		}
 	}
 
-	missing := rc.Brew.MissingFormulas(rc.Config.AllPackages())
+	missing := rc.Brew.MissingFormulas(packages)
 	if len(missing) == 0 {
 		return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
 	}
