@@ -1,44 +1,27 @@
 package cli
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestWarnNonSymlinkClaudeSkills(t *testing.T) {
+func TestApplyDoesNotWarnForUnmanagedClaudeSkills(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, ".claude", "skills")
-	if err := os.MkdirAll(filepath.Join(root, "regular-dir"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "legacy-skill"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "empty-dir"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "regular-dir", "SKILL.md"), []byte("# skill"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "loose.md"), []byte("# loose"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(home, ".anchor", "skills", "linked")
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "legacy-skill", "SKILL.md"), []byte("# skill"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	var out, errb bytes.Buffer
-	warnNonSymlinkClaudeSkills(&Printer{Out: &out, Err: &errb}, home)
-	got := errb.String()
-
-	if !strings.Contains(got, "regular-dir/") || !strings.Contains(got, "loose.md") {
-		t.Fatalf("warning missing unmanaged entries: %q", got)
+	out, errOut, err := runDotForTest("--home", home, "apply", "--yes", "--dry-run", "--profile", "minimal")
+	if err != nil {
+		t.Fatalf("apply: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
-	if strings.Contains(got, "empty-dir") || strings.Contains(got, "linked") {
-		t.Fatalf("warning included allowed entries: %q", got)
+	if strings.Contains(errOut, "~/.claude/skills") || strings.Contains(out, "~/.claude/skills") {
+		t.Fatalf("apply warned about unmanaged Claude skills\nstdout:\n%s\nstderr:\n%s", out, errOut)
 	}
 }

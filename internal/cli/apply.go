@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -203,44 +201,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	} else if changed && !dryRun {
 		p.Line("✓ shell completions refreshed in %s", completionDir(home))
 	}
-	warnNonSymlinkClaudeSkills(p, home)
 	return nil
-}
-
-func warnNonSymlinkClaudeSkills(p *Printer, home string) {
-	root := filepath.Join(home, ".claude", "skills")
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return
-	}
-	var unmanaged []string
-	for _, entry := range entries {
-		path := filepath.Join(root, entry.Name())
-		info, err := os.Lstat(path)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-		if info.Mode().IsRegular() {
-			unmanaged = append(unmanaged, entry.Name())
-			continue
-		}
-		if info.IsDir() && dirHasEntries(path) {
-			unmanaged = append(unmanaged, entry.Name()+"/")
-		}
-	}
-	if len(unmanaged) == 0 {
-		return
-	}
-	sort.Strings(unmanaged)
-	p.Warn(
-		"warning: ~/.claude/skills contains non-symlink entries outside configured skills SSOT control: %s",
-		strings.Join(unmanaged, ", "),
-	)
-}
-
-func dirHasEntries(path string) bool {
-	entries, err := os.ReadDir(path)
-	return err == nil && len(entries) > 0
 }
 
 // configureInteractive walks through each configuration section interactively.

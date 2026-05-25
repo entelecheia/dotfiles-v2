@@ -41,6 +41,25 @@ func TestIsFormulaInstalledAcceptsTapQualifiedFormula(t *testing.T) {
 	}
 }
 
+func TestTapsForFormulasIncludesAnchorCLI(t *testing.T) {
+	got := TapsForFormulas([]string{
+		"git",
+		"anchor-cli",
+		"staixbwlb/cask/anchor-cli",
+		"anchor-cli",
+	})
+	want := []string{"staixbwlb/cask"}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d taps, got %d: %#v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tap %d: expected %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
 func TestFormulaInstallGroupsSplitTapQualifiedFormula(t *testing.T) {
 	got := formulaInstallGroups([]string{
 		"git",

@@ -46,9 +46,18 @@ func TestLoadMacApps(t *testing.T) {
 			t.Errorf("default %q missing from recommended (defaults must be a subset)", d)
 		}
 	}
-	taps := c.TapsForTokens([]string{"cmux", "wave", "cmux"})
-	if len(taps) != 1 || taps[0] != "manaflow-ai/cmux" {
-		t.Errorf("cmux tap metadata = %v, want [manaflow-ai/cmux]", taps)
+	if !recommended["anchor"] {
+		t.Error("anchor should be a recommended app")
+	}
+	taps := c.TapsForTokens([]string{"cmux", "anchor", "wave", "cmux", "anchor"})
+	wantTaps := []string{"manaflow-ai/cmux", "staixbwlb/cask"}
+	if len(taps) != len(wantTaps) {
+		t.Fatalf("tap metadata = %v, want %v", taps, wantTaps)
+	}
+	for i := range wantTaps {
+		if taps[i] != wantTaps[i] {
+			t.Errorf("tap %d = %q, want %q", i, taps[i], wantTaps[i])
+		}
 	}
 	// AllTokens must be unique
 	tokens := c.AllTokens()

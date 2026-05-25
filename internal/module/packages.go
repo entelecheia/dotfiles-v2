@@ -3,6 +3,7 @@ package module
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // PackagesModule installs Homebrew packages.
@@ -21,6 +22,12 @@ func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResul
 			Description: "install Homebrew",
 			Command:     "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash",
 		})
+		for _, tap := range rc.Brew.MissingFormulaTaps(rc.Config.AllPackages()) {
+			changes = append(changes, Change{
+				Description: fmt.Sprintf("tap Homebrew repository %q", tap),
+				Command:     "brew tap " + tap,
+			})
+		}
 		// Without brew, all packages are considered missing
 		for _, pkg := range rc.Config.AllPackages() {
 			changes = append(changes, Change{
@@ -32,10 +39,17 @@ func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResul
 	}
 
 	missing := rc.Brew.MissingFormulas(rc.Config.AllPackages())
-	if len(missing) == 0 {
+	missingTaps := rc.Brew.MissingFormulaTaps(missing)
+	if len(missing) == 0 && len(missingTaps) == 0 {
 		return &CheckResult{Satisfied: true}, nil
 	}
 
+	for _, tap := range missingTaps {
+		changes = append(changes, Change{
+			Description: fmt.Sprintf("tap Homebrew repository %q", tap),
+			Command:     "brew tap " + tap,
+		})
+	}
 	for _, pkg := range missing {
 		changes = append(changes, Change{
 			Description: fmt.Sprintf("install package %q", pkg),
@@ -65,6 +79,13 @@ func (m *PackagesModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResul
 	missing := rc.Brew.MissingFormulas(rc.Config.AllPackages())
 	if len(missing) == 0 {
 		return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
+	}
+
+	if missingTaps := rc.Brew.MissingFormulaTaps(missing); len(missingTaps) > 0 {
+		if err := rc.Brew.Tap(ctx, missingTaps); err != nil {
+			return nil, fmt.Errorf("tap homebrew repositories: %w", err)
+		}
+		messages = append(messages, fmt.Sprintf("tapped %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", ")))
 	}
 
 	if err := rc.Brew.Install(ctx, missing); err != nil {

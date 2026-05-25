@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
@@ -195,6 +196,9 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 		for _, warning := range result.Warnings {
 			messages = append(messages, warning)
 		}
+		if warning := m.anchorDoctorWarning(ctx, rc); warning != "" {
+			messages = append(messages, warning)
+		}
 	}
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
 		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
@@ -211,4 +215,33 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 	}
 
 	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
+}
+
+func (m *AIModule) anchorDoctorWarning(ctx context.Context, rc *RunContext) string {
+	skills := rc.Config.Modules.AI.Skills
+	if !skills.Enabled || strings.ToLower(strings.TrimSpace(skills.Provider)) != aisettings.SkillsProviderAnchor {
+		return ""
+	}
+	if rc.Runner == nil || !rc.Runner.CommandExists("anchor") {
+		return ""
+	}
+	if _, err := rc.Runner.RunQuery(ctx, "anchor", "doctor", "--help"); err != nil {
+		return ""
+	}
+	result, err := rc.Runner.RunQuery(ctx, "anchor", "doctor", "--quiet")
+	if err == nil {
+		return ""
+	}
+	detail := strings.TrimSpace(result.Stderr)
+	if detail == "" {
+		detail = strings.TrimSpace(result.Stdout)
+	}
+	if detail == "" {
+		detail = "anchor doctor --quiet exited non-zero"
+	}
+	return "warning: anchor doctor reported critical skill issue(s): " + oneLine(detail)
+}
+
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

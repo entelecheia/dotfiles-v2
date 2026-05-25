@@ -16,6 +16,10 @@ type Brew struct {
 	Runner *Runner
 }
 
+var formulaTaps = map[string]string{
+	"anchor-cli": "staixbwlb/cask",
+}
+
 // NewBrew creates a new Brew wrapper.
 func NewBrew(runner *Runner) *Brew {
 	return &Brew{Runner: runner}
@@ -114,6 +118,22 @@ func (b *Brew) MissingTaps(taps []string) []string {
 		return taps
 	}
 	return missingFromInstalled(installed, taps)
+}
+
+// TapsForFormulas returns Homebrew taps required by unqualified formula names.
+func TapsForFormulas(formulas []string) []string {
+	var taps []string
+	for _, formula := range formulas {
+		if tap := formulaTaps[formulaName(formula)]; tap != "" {
+			taps = append(taps, tap)
+		}
+	}
+	return dedupeOrdered(taps)
+}
+
+// MissingFormulaTaps returns required formula taps that are not configured.
+func (b *Brew) MissingFormulaTaps(formulas []string) []string {
+	return b.MissingTaps(TapsForFormulas(formulas))
 }
 
 // ExistingCaskTargets returns the subset of casks whose .app artifact already
@@ -260,10 +280,14 @@ func isFormulaInstalled(installed map[string]bool, formula string) bool {
 	if installed[formula] {
 		return true
 	}
+	return installed[formulaName(formula)]
+}
+
+func formulaName(formula string) string {
 	if i := strings.LastIndex(formula, "/"); i >= 0 && i+1 < len(formula) {
-		return installed[formula[i+1:]]
+		return formula[i+1:]
 	}
-	return false
+	return formula
 }
 
 func (b *Brew) installArgs(formulas []string) []string {

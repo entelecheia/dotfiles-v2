@@ -622,6 +622,9 @@ modules:
 `~/.codex/skills/<name> -> ~/.anchor/skills/<name>`. Existing non-matching
 entries are skipped with warnings; rerun with `--force` to back them up under
 `~/.local/share/dotfiles/backup/skills/` and replace them.
+Anchor remains the skills registry/source control plane; when the `anchor`
+CLI exposes `doctor --quiet`, `dot apply` reports critical Anchor skill issues
+as a best-effort warning after Anchor-backed skills sync.
 
 Mutating `dot ai` subcommands append redacted events to
 `~/.local/share/dotfiles/ai/events.jsonl`. Events record command type, target
@@ -745,7 +748,8 @@ apps across Security, Knowledge, Browsers, Terminal & Editor, AI, Communication,
 Productivity utilities, Capture & Dictation, Files, Media, Dev, System, Writing.
 The `defaults:` section defines the preselected bootstrap set. Catalog entries
 can declare required Homebrew taps; `cmux` runs `brew tap manaflow-ai/cmux`
-before `brew install --cask cmux`.
+before `brew install --cask cmux`, and `anchor` runs
+`brew tap staixbwlb/cask` before `brew install --cask anchor`.
 
 ### `dot profile` — Versioned Profile Snapshots
 
@@ -981,7 +985,7 @@ Profiles use YAML inheritance. `full` extends `minimal`.
 | Profile | Modules | Packages | Use Case |
 |---------|---------|----------|----------|
 | **minimal** | 5 | 17 | Lightweight dev setup |
-| **full** | 14 | 28 | Complete workstation (macapps enabled on darwin) |
+| **full** | 14 | 29 | Complete workstation (macapps enabled on darwin) |
 | **server** | 8 | 21 | GPU/DGX server |
 
 **server**: Extends `minimal` + tmux, ai, conda. Disables workspace, fonts, macapps, gpg, secrets. Auto-suggested when NVIDIA GPU or CUDA is detected.
