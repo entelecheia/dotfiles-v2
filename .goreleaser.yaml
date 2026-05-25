@@ -37,3 +37,24 @@ release:
     name: dotfiles-v2
   extra_files:
     - glob: scripts/install.sh
+
+brews:
+  - name: dotfiles
+    repository:
+      owner: entelecheia
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/entelecheia/dotfiles-v2"
+    description: "Declarative dotfiles manager and AI tmux workspace orchestrator"
+    license: MIT
+    install: |
+      bin.install "dot"
+      bin.install_symlink "dot" => "dotfiles"
+    test: |
+      system "#{bin}/dot", "version"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "chore(formula): bump dotfiles to {{ .Tag }}"

@@ -10,13 +10,22 @@ A single Go binary. macOS + Linux + GPU servers. Modular, profile-based, AI-read
 
 ## Quick Start
 
-### Install
+### Install via Homebrew (recommended on macOS / Linuxbrew)
+
+```bash
+brew tap entelecheia/tap
+brew install dotfiles
+```
+
+Provides the `dot` binary and the `dotfiles` back-compat symlink.
+
+### Install via curl (fallback)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/entelecheia/dotfiles-v2/main/scripts/install.sh | bash
 ```
 
-The installer handles prerequisites automatically:
+Use this when Homebrew isn't available or you want the bootstrap to install it for you. The installer handles prerequisites automatically:
 - **macOS**: Installs Homebrew (which includes Xcode Command Line Tools)
 - **Linux**: Installs Linuxbrew for consistent package management
 - Downloads the `dot` binary and configures PATH
