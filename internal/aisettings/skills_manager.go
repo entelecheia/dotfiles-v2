@@ -145,6 +145,37 @@ func (m *SkillsManager) DefaultAnchorSSOTPath() string {
 	return expandHome(DefaultAnchorSkillsRoot, m.homeDir())
 }
 
+// DefaultTools returns registered tools whose tool-home directory (the parent
+// of the skills root, e.g. ~/.claude for ~/.claude/skills) exists on disk. Used
+// by the read-only path/status commands so they never hard-fail on a missing
+// tool selection. Falls back to every registered tool ID when none is detected
+// so informational output is never empty. It never mutates anything; apply
+// still requires explicit tools.
+func (m *SkillsManager) DefaultTools() []string {
+	var ids []string
+	seen := map[string]bool{}
+	for _, tool := range m.registry() {
+		if seen[tool.ID] {
+			continue
+		}
+		toolHome := filepath.Dir(expandHome(tool.RootPath, m.homeDir()))
+		if info, err := os.Stat(toolHome); err == nil && info.IsDir() {
+			ids = append(ids, tool.ID)
+			seen[tool.ID] = true
+		}
+	}
+	if len(ids) == 0 {
+		for _, tool := range m.registry() {
+			if seen[tool.ID] {
+				continue
+			}
+			ids = append(ids, tool.ID)
+			seen[tool.ID] = true
+		}
+	}
+	return ids
+}
+
 // Tool returns a registered skill target tool by ID or alias.
 func (m *SkillsManager) Tool(id string) (SkillTool, bool) {
 	id = strings.ToLower(strings.TrimSpace(id))
@@ -327,7 +358,7 @@ func (m *SkillsManager) resolveOptions(opts SkillsOptions) (SkillsOptions, error
 		}
 	case SkillsProviderPath:
 		if ssot == "" {
-			return SkillsOptions{}, fmt.Errorf("skills ssot path is required for provider path")
+			return SkillsOptions{}, fmt.Errorf("skills provider %q requires --ssot <dir>; or use --provider anchor (defaults to %s)", SkillsProviderPath, DefaultAnchorSkillsRoot)
 		}
 	default:
 		return SkillsOptions{}, fmt.Errorf("unknown skills provider %q", opts.Provider)
@@ -347,7 +378,7 @@ func (m *SkillsManager) resolveOptions(opts SkillsOptions) (SkillsOptions, error
 
 func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("skills tools must be explicit")
+		return nil, fmt.Errorf("skills apply needs target tools: pass --tool claude,codex (valid: %s), or set modules.ai.skills.tools and rerun apply with --persist", m.toolIDList())
 	}
 	seen := map[string]bool{}
 	var out []string
@@ -359,7 +390,7 @@ func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
 			}
 			tool, ok := m.Tool(part)
 			if !ok {
-				return nil, fmt.Errorf("unknown skills tool %q", part)
+				return nil, fmt.Errorf("unknown skills tool %q (valid: %s)", part, m.toolIDList())
 			}
 			if seen[tool.ID] {
 				continue
@@ -369,7 +400,7 @@ func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("skills tools must be explicit")
+		return nil, fmt.Errorf("skills apply needs target tools: pass --tool claude,codex (valid: %s), or set modules.ai.skills.tools and rerun apply with --persist", m.toolIDList())
 	}
 	return out, nil
 }
@@ -468,6 +499,15 @@ func (m *SkillsManager) registry() []SkillTool {
 		return m.Tools
 	}
 	return RegisteredSkillTools()
+}
+
+// toolIDList returns the comma-joined canonical tool IDs for error hints.
+func (m *SkillsManager) toolIDList() string {
+	ids := make([]string, 0, len(m.registry()))
+	for _, tool := range m.registry() {
+		ids = append(ids, tool.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 func (m *SkillsManager) runner() *dotexec.Runner {

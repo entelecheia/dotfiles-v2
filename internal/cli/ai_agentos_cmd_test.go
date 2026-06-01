@@ -169,6 +169,75 @@ func TestAIAgentsApplyForceWritesAndAudits(t *testing.T) {
 	}
 }
 
+func TestAISkillsPathDefaultsWithNoFlags(t *testing.T) {
+	home := t.TempDir()
+	writeCLITestFile(t, filepath.Join(home, ".claude", "skills", ".keep"), "")
+	writeCLITestFile(t, filepath.Join(home, ".anchor", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+
+	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "path")
+	if err != nil {
+		t.Fatalf("skills path with no flags should succeed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "anchor") {
+		t.Fatalf("path output missing provider anchor:\n%s", out)
+	}
+	if !strings.Contains(out, filepath.Join(home, ".anchor", "skills")) {
+		t.Fatalf("path output missing anchor SSOT root:\n%s", out)
+	}
+	if !strings.Contains(out, "Target Roots") || !strings.Contains(out, filepath.Join(home, ".claude", "skills")) {
+		t.Fatalf("path output missing detected target root:\n%s", out)
+	}
+}
+
+func TestAISkillsStatusDefaultsWithNoFlags(t *testing.T) {
+	home := t.TempDir()
+	writeCLITestFile(t, filepath.Join(home, ".claude", "skills", ".keep"), "")
+	writeCLITestFile(t, filepath.Join(home, ".anchor", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+
+	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "status", "--json")
+	if err != nil {
+		t.Fatalf("skills status with no flags should succeed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, `"provider": "anchor"`) {
+		t.Fatalf("status json missing provider anchor:\n%s", out)
+	}
+	if !strings.Contains(out, `"claude"`) {
+		t.Fatalf("status json missing detected tool:\n%s", out)
+	}
+}
+
+func TestAISkillsPathFallsBackToAllToolsWhenNoneDetected(t *testing.T) {
+	home := t.TempDir() // no ~/.claude, ~/.codex, ~/.gemini etc.
+	writeCLITestFile(t, filepath.Join(home, ".anchor", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+
+	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "path")
+	if err != nil {
+		t.Fatalf("skills path fallback should succeed: %v\nstderr=%s", err, errOut)
+	}
+	for _, id := range []string{"claude", "codex", "agents", "gemini", "antigravity"} {
+		if !strings.Contains(out, id) {
+			t.Fatalf("fallback path output missing tool %q:\n%s", id, out)
+		}
+	}
+}
+
+func TestAISkillsApplyNoToolsReturnsActionableError(t *testing.T) {
+	home := t.TempDir()
+	ssot := filepath.Join(home, "anchor-skills")
+	writeCLITestFile(t, filepath.Join(ssot, "vault-extract", "SKILL.md"), "# Vault Extract\n")
+
+	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "anchor", "--ssot", ssot)
+	if err == nil {
+		t.Fatal("apply with no tools and no config should error")
+	}
+	msg := err.Error() + errOut
+	for _, want := range []string{"--tool", "claude", "modules.ai.skills.tools"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("apply error not actionable, missing %q: %v\nstderr=%s", want, err, errOut)
+		}
+	}
+}
+
 func runDotForTest(args ...string) (string, string, error) {
 	root := NewRootCmd("dev", "test")
 	var out, errb bytes.Buffer

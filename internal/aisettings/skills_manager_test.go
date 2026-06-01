@@ -107,6 +107,44 @@ func TestSkillsManagerGeminiAndAntigravityRootsAreSeparate(t *testing.T) {
 	}
 }
 
+func TestSkillsManagerDefaultToolsDetectsPresentToolHomes(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
+
+	got := mgr.DefaultTools()
+	if !defaultToolsHas(got, "claude") || !defaultToolsHas(got, "antigravity") {
+		t.Fatalf("DefaultTools = %v, want claude + antigravity", got)
+	}
+	if defaultToolsHas(got, "codex") {
+		t.Fatalf("DefaultTools detected codex without ~/.codex: %v", got)
+	}
+}
+
+func TestSkillsManagerDefaultToolsFallsBackToAll(t *testing.T) {
+	home := t.TempDir() // no tool homes present
+	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
+
+	got := mgr.DefaultTools()
+	if len(got) != len(RegisteredSkillTools()) {
+		t.Fatalf("fallback DefaultTools = %v, want all %d registered tools", got, len(RegisteredSkillTools()))
+	}
+}
+
+func defaultToolsHas(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
 func writeSkillTestFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
