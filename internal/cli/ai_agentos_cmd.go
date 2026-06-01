@@ -105,7 +105,7 @@ func newAISkillsStatusCmd() *cobra.Command {
 		Short: "Show configured skills SSOT symlink status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts, err := skillsOptionsFromCmd(cmd)
+			opts, err := skillsOptionsFromCmd(cmd, true)
 			if err != nil {
 				return err
 			}
@@ -132,7 +132,7 @@ func newAISkillsApplyCmd() *cobra.Command {
 		Short: "Apply configured skills SSOT symlinks to selected tools",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts, err := skillsOptionsFromCmd(cmd)
+			opts, err := skillsOptionsFromCmd(cmd, false)
 			if err != nil {
 				return err
 			}
@@ -180,7 +180,7 @@ func newAISkillsPathCmd() *cobra.Command {
 		Short: "Show skills SSOT and target skill roots",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts, err := skillsOptionsFromCmd(cmd)
+			opts, err := skillsOptionsFromCmd(cmd, true)
 			if err != nil {
 				return err
 			}
@@ -208,18 +208,18 @@ func newAISkillsPathCmd() *cobra.Command {
 }
 
 func addSkillManageFlags(c *cobra.Command) {
-	c.Flags().String("provider", "", "Skills SSOT provider: anchor or path")
+	c.Flags().String("provider", "", "Skills SSOT provider: anchor or path (defaults to anchor)")
 	c.Flags().String("ssot", "", "Skills SSOT root path (defaults to ~/.anchor/skills for provider=anchor)")
-	c.Flags().String("tool", "", "Comma-separated explicit target tools (claude,codex,agents,gemini,antigravity)")
+	c.Flags().String("tool", "", "Comma-separated target tools (claude,codex,agents,gemini,antigravity); required for apply, auto-detected for path/status")
 }
 
-func skillsOptionsFromCmd(cmd *cobra.Command) (aisettings.SkillsOptions, error) {
+func skillsOptionsFromCmd(cmd *cobra.Command, allowToolDefault bool) (aisettings.SkillsOptions, error) {
 	provider, _ := cmd.Flags().GetString("provider")
 	ssot, _ := cmd.Flags().GetString("ssot")
 	toolFlag, _ := cmd.Flags().GetString("tool")
 
-	state, err := loadStateForCmd(cmd)
-	if err == nil {
+	tools := parseAgentToolIDs(toolFlag)
+	if state, err := loadStateForCmd(cmd); err == nil {
 		cfg := state.Modules.AI.Skills
 		if provider == "" {
 			provider = cfg.Provider
@@ -227,11 +227,46 @@ func skillsOptionsFromCmd(cmd *cobra.Command) (aisettings.SkillsOptions, error) 
 		if ssot == "" {
 			ssot = cfg.SSOTPath
 		}
-		if toolFlag == "" && len(cfg.Tools) > 0 {
-			return aisettings.SkillsOptions{Provider: provider, SSOTPath: ssot, Tools: append([]string(nil), cfg.Tools...)}, nil
+		if len(tools) == 0 && len(cfg.Tools) > 0 {
+			tools = append([]string(nil), cfg.Tools...)
 		}
 	}
-	return aisettings.SkillsOptions{Provider: provider, SSOTPath: ssot, Tools: parseAgentToolIDs(toolFlag)}, nil
+
+	// Provider defaults to anchor when neither a provider nor an ssot is given;
+	// anchor auto-defaults ssot to ~/.anchor/skills. Gated on both empty so a
+	// lone --ssot still infers provider=path in resolveOptions.
+	if provider == "" && ssot == "" {
+		provider = aisettings.SkillsProviderAnchor
+	}
+
+	// CLI-friendly remediation. The library (internal/aisettings) keeps its
+	// validation errors caller-neutral; flag/config guidance is added here,
+	// where --provider/--ssot/--tool actually exist.
+	if provider == aisettings.SkillsProviderPath && ssot == "" {
+		return aisettings.SkillsOptions{}, fmt.Errorf("skills provider %q requires --ssot <dir>; or use --provider anchor (defaults to %s)", aisettings.SkillsProviderPath, aisettings.DefaultAnchorSkillsRoot)
+	}
+
+	// Read-only path/status default the tool set to detected tools (fallback to
+	// all registered) so they never hard-fail. apply keeps tools explicit.
+	if allowToolDefault && len(tools) == 0 {
+		tools = newSkillsManagerFromCmd(cmd).DefaultTools()
+	}
+	if !allowToolDefault && len(tools) == 0 {
+		return aisettings.SkillsOptions{}, fmt.Errorf("skills apply needs target tools: pass --tool claude,codex (valid: %s), or set modules.ai.skills.tools and rerun apply with --persist", skillToolIDList())
+	}
+
+	return aisettings.SkillsOptions{Provider: provider, SSOTPath: ssot, Tools: tools}, nil
+}
+
+// skillToolIDList returns the comma-joined registered skill tool IDs for
+// CLI error hints (the canonical set advertised by the --tool flag).
+func skillToolIDList() string {
+	tools := aisettings.RegisteredSkillTools()
+	ids := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		ids = append(ids, tool.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 func newSkillsManagerFromCmd(cmd *cobra.Command) *aisettings.SkillsManager {

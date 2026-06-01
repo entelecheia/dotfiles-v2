@@ -561,7 +561,8 @@ dot ai coauthor-guard apply --mode warn --persist
 
 dot ai skills list                 # inventory Codex/Claude/shared/Antigravity skills
 dot ai skills validate --strict    # fail on invalid, duplicate, or legacy metadata
-dot ai skills status --provider anchor --tool claude,codex
+dot ai skills path                 # show SSOT + detected target roots (no flags needed)
+dot ai skills status               # anchor SSOT + detected tools by default
 dot ai skills apply --provider anchor --tool claude,codex --persist
 
 dot ai audit summary               # summarize append-only dot ai mutation events
@@ -614,8 +615,12 @@ without `schema_version: v1` should also fail.
 
 When `modules.ai.skills.enabled: true`, `dot apply` can also deploy skills from
 an explicit SSOT into selected tool roots. `provider: anchor` defaults to
-`~/.anchor/skills`; `provider: path` requires `ssot_path`. Target tools are
-always explicit, for example:
+`~/.anchor/skills`; `provider: path` requires `ssot_path`. The read-only
+`dot ai skills path` and `dot ai skills status` commands default the provider to
+`anchor` and auto-detect target tools (any tool whose home dir such as
+`~/.claude` exists, falling back to all registered tools), so they run with no
+flags. Deployment — `dot ai skills apply` and config-driven `dot apply` — keeps
+target tools explicit, for example:
 
 ```yaml
 modules:
