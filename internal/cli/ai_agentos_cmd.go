@@ -239,13 +239,34 @@ func skillsOptionsFromCmd(cmd *cobra.Command, allowToolDefault bool) (aisettings
 		provider = aisettings.SkillsProviderAnchor
 	}
 
+	// CLI-friendly remediation. The library (internal/aisettings) keeps its
+	// validation errors caller-neutral; flag/config guidance is added here,
+	// where --provider/--ssot/--tool actually exist.
+	if provider == aisettings.SkillsProviderPath && ssot == "" {
+		return aisettings.SkillsOptions{}, fmt.Errorf("skills provider %q requires --ssot <dir>; or use --provider anchor (defaults to %s)", aisettings.SkillsProviderPath, aisettings.DefaultAnchorSkillsRoot)
+	}
+
 	// Read-only path/status default the tool set to detected tools (fallback to
 	// all registered) so they never hard-fail. apply keeps tools explicit.
 	if allowToolDefault && len(tools) == 0 {
 		tools = newSkillsManagerFromCmd(cmd).DefaultTools()
 	}
+	if !allowToolDefault && len(tools) == 0 {
+		return aisettings.SkillsOptions{}, fmt.Errorf("skills apply needs target tools: pass --tool claude,codex (valid: %s), or set modules.ai.skills.tools and rerun apply with --persist", skillToolIDList())
+	}
 
 	return aisettings.SkillsOptions{Provider: provider, SSOTPath: ssot, Tools: tools}, nil
+}
+
+// skillToolIDList returns the comma-joined registered skill tool IDs for
+// CLI error hints (the canonical set advertised by the --tool flag).
+func skillToolIDList() string {
+	tools := aisettings.RegisteredSkillTools()
+	ids := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		ids = append(ids, tool.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 func newSkillsManagerFromCmd(cmd *cobra.Command) *aisettings.SkillsManager {

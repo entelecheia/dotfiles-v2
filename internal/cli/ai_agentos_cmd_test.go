@@ -238,6 +238,34 @@ func TestAISkillsApplyNoToolsReturnsActionableError(t *testing.T) {
 	}
 }
 
+func TestAISkillsApplyProviderPathRequiresSSOT(t *testing.T) {
+	home := t.TempDir()
+
+	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "path", "--tool", "claude")
+	if err == nil {
+		t.Fatal("apply with provider=path and no --ssot should error")
+	}
+	msg := err.Error() + errOut
+	if !strings.Contains(msg, "--ssot") || !strings.Contains(msg, "anchor") {
+		t.Fatalf("provider=path error not actionable: %v\nstderr=%s", err, errOut)
+	}
+}
+
+func TestAISkillsApplyUnknownToolListsValid(t *testing.T) {
+	home := t.TempDir()
+	ssot := filepath.Join(home, "anchor-skills")
+	writeCLITestFile(t, filepath.Join(ssot, "demo", "SKILL.md"), "# Demo\n")
+
+	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "anchor", "--ssot", ssot, "--tool", "bogus")
+	if err == nil {
+		t.Fatal("apply with an unknown tool should error")
+	}
+	msg := err.Error() + errOut
+	if !strings.Contains(msg, "bogus") || !strings.Contains(msg, "valid:") {
+		t.Fatalf("unknown-tool error missing valid list: %v\nstderr=%s", err, errOut)
+	}
+}
+
 func runDotForTest(args ...string) (string, string, error) {
 	root := NewRootCmd("dev", "test")
 	var out, errb bytes.Buffer

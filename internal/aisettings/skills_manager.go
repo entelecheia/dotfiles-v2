@@ -145,12 +145,14 @@ func (m *SkillsManager) DefaultAnchorSSOTPath() string {
 	return expandHome(DefaultAnchorSkillsRoot, m.homeDir())
 }
 
-// DefaultTools returns registered tools whose tool-home directory (the parent
-// of the skills root, e.g. ~/.claude for ~/.claude/skills) exists on disk. Used
-// by the read-only path/status commands so they never hard-fail on a missing
-// tool selection. Falls back to every registered tool ID when none is detected
-// so informational output is never empty. It never mutates anything; apply
-// still requires explicit tools.
+// DefaultTools returns registered tools whose own skills root directory (e.g.
+// ~/.claude/skills) exists on disk. Used by the read-only path/status commands
+// so they never hard-fail on a missing tool selection. Detecting the skills
+// root itself — rather than its parent — keeps tools that share a parent
+// directory independent (e.g. gemini at ~/.gemini/skills versus antigravity at
+// ~/.gemini/antigravity/skills). Falls back to every registered tool ID when
+// none is detected so informational output is never empty. It never mutates
+// anything; apply still requires explicit tools.
 func (m *SkillsManager) DefaultTools() []string {
 	var ids []string
 	seen := map[string]bool{}
@@ -158,8 +160,8 @@ func (m *SkillsManager) DefaultTools() []string {
 		if seen[tool.ID] {
 			continue
 		}
-		toolHome := filepath.Dir(expandHome(tool.RootPath, m.homeDir()))
-		if info, err := os.Stat(toolHome); err == nil && info.IsDir() {
+		root := expandHome(tool.RootPath, m.homeDir())
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
 			ids = append(ids, tool.ID)
 			seen[tool.ID] = true
 		}
@@ -358,7 +360,7 @@ func (m *SkillsManager) resolveOptions(opts SkillsOptions) (SkillsOptions, error
 		}
 	case SkillsProviderPath:
 		if ssot == "" {
-			return SkillsOptions{}, fmt.Errorf("skills provider %q requires --ssot <dir>; or use --provider anchor (defaults to %s)", SkillsProviderPath, DefaultAnchorSkillsRoot)
+			return SkillsOptions{}, fmt.Errorf("skills ssot path is required when provider is %q", SkillsProviderPath)
 		}
 	default:
 		return SkillsOptions{}, fmt.Errorf("unknown skills provider %q", opts.Provider)
@@ -377,9 +379,6 @@ func (m *SkillsManager) resolveOptions(opts SkillsOptions) (SkillsOptions, error
 }
 
 func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
-	if len(ids) == 0 {
-		return nil, fmt.Errorf("skills apply needs target tools: pass --tool claude,codex (valid: %s), or set modules.ai.skills.tools and rerun apply with --persist", m.toolIDList())
-	}
 	seen := map[string]bool{}
 	var out []string
 	for _, id := range ids {
@@ -400,7 +399,7 @@ func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("skills apply needs target tools: pass --tool claude,codex (valid: %s), or set modules.ai.skills.tools and rerun apply with --persist", m.toolIDList())
+		return nil, fmt.Errorf("at least one target tool is required (valid: %s)", m.toolIDList())
 	}
 	return out, nil
 }
@@ -502,9 +501,16 @@ func (m *SkillsManager) registry() []SkillTool {
 }
 
 // toolIDList returns the comma-joined canonical tool IDs for error hints.
+// IDs are de-duplicated (registry order preserved) so a custom-injected
+// registry cannot produce an unstable or repetitive hint string.
 func (m *SkillsManager) toolIDList() string {
+	seen := map[string]bool{}
 	ids := make([]string, 0, len(m.registry()))
 	for _, tool := range m.registry() {
+		if seen[tool.ID] {
+			continue
+		}
+		seen[tool.ID] = true
 		ids = append(ids, tool.ID)
 	}
 	return strings.Join(ids, ", ")

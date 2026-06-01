@@ -107,12 +107,13 @@ func TestSkillsManagerGeminiAndAntigravityRootsAreSeparate(t *testing.T) {
 	}
 }
 
-func TestSkillsManagerDefaultToolsDetectsPresentToolHomes(t *testing.T) {
+func TestSkillsManagerDefaultToolsDetectsPresentSkillRoots(t *testing.T) {
 	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+	// Create the skills roots themselves (not just the tool homes).
+	if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
@@ -121,18 +122,36 @@ func TestSkillsManagerDefaultToolsDetectsPresentToolHomes(t *testing.T) {
 	if !defaultToolsHas(got, "claude") || !defaultToolsHas(got, "antigravity") {
 		t.Fatalf("DefaultTools = %v, want claude + antigravity", got)
 	}
+	// ~/.gemini exists (it is the parent of antigravity's root) but gemini's own
+	// skills root ~/.gemini/skills does not, so gemini must NOT be detected.
+	if defaultToolsHas(got, "gemini") {
+		t.Fatalf("DefaultTools falsely detected gemini from the shared ~/.gemini parent: %v", got)
+	}
 	if defaultToolsHas(got, "codex") {
-		t.Fatalf("DefaultTools detected codex without ~/.codex: %v", got)
+		t.Fatalf("DefaultTools detected codex without ~/.codex/skills: %v", got)
 	}
 }
 
 func TestSkillsManagerDefaultToolsFallsBackToAll(t *testing.T) {
-	home := t.TempDir() // no tool homes present
+	home := t.TempDir() // no skills roots present
 	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
 
+	want := map[string]bool{}
+	for _, tool := range RegisteredSkillTools() {
+		want[tool.ID] = true
+	}
 	got := mgr.DefaultTools()
-	if len(got) != len(RegisteredSkillTools()) {
-		t.Fatalf("fallback DefaultTools = %v, want all %d registered tools", got, len(RegisteredSkillTools()))
+	if len(got) != len(want) {
+		t.Fatalf("fallback DefaultTools = %v, want all %d registered tools", got, len(want))
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Fatalf("fallback returned unexpected tool %q (got %v)", id, got)
+		}
+		delete(want, id)
+	}
+	if len(want) != 0 {
+		t.Fatalf("fallback omitted registered tools: %v", want)
 	}
 }
 
