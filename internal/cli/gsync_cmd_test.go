@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/gsync"
 )
@@ -117,5 +118,58 @@ func TestSetLocalSchedule_DryRunDoesNotPersist(t *testing.T) {
 	}
 	if _, err := os.Stat(paths.ConfigFile); !os.IsNotExist(err) {
 		t.Fatalf("dry-run should not write local config; stat err=%v", err)
+	}
+}
+
+func TestResolvePruneCutoff(t *testing.T) {
+	cases := []struct {
+		name         string
+		olderDays    int
+		all          bool
+		olderChanged bool
+		wantErr      bool
+		wantAgeDays  int // expected approximate distance from now
+	}{
+		{name: "default 30 days", olderDays: 30, wantAgeDays: 30},
+		{name: "explicit 7 days", olderDays: 7, olderChanged: true, wantAgeDays: 7},
+		{name: "all prunes everything", all: true, olderDays: 30, wantAgeDays: 0},
+		{name: "all with explicit older-than rejected", all: true, olderDays: 7, olderChanged: true, wantErr: true},
+		{name: "negative rejected", olderDays: -1, olderChanged: true, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cutoff, err := resolvePruneCutoff(tc.olderDays, tc.all, tc.olderChanged)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			got := time.Since(cutoff).Round(time.Minute)
+			want := time.Duration(tc.wantAgeDays) * 24 * time.Hour
+			if got != want {
+				t.Errorf("cutoff age = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestGsyncConflictsRegistersListAndPrune(t *testing.T) {
+	cmd := newGsyncConflictsCmd()
+	names := map[string]bool{}
+	for _, sub := range cmd.Commands() {
+		names[sub.Name()] = true
+	}
+	for _, want := range []string{"list", "prune"} {
+		if !names[want] {
+			t.Errorf("conflicts is missing %q subcommand", want)
+		}
+	}
+	prune, _, err := cmd.Find([]string{"prune"})
+	if err != nil {
+		t.Fatalf("Find(prune): %v", err)
+	}
+	if prune.Flags().Lookup("older-than") == nil || prune.Flags().Lookup("all") == nil {
+		t.Error("prune is missing --older-than/--all flags")
 	}
 }

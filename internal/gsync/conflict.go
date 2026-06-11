@@ -58,6 +58,79 @@ type ConflictEntry struct {
 	ModTime   time.Time
 }
 
+// PrunedEntry is one conflict directory selected for removal, with its
+// on-disk size captured before deletion so dry-run and real runs report
+// identical numbers.
+type PrunedEntry struct {
+	ConflictEntry
+	Size int64
+}
+
+// PruneResult summarizes one PruneConflicts pass over a single tree.
+type PruneResult struct {
+	Root      string        // <treeRoot>/.sync-conflicts
+	Pruned    []PrunedEntry // removed (or would be, in dry-run), oldest-first
+	Kept      int           // entries at/after the cutoff
+	Reclaimed int64         // bytes across Pruned
+	DryRun    bool
+}
+
+// PruneConflicts deletes timestamped backup directories under
+// <treeRoot>/.sync-conflicts/ whose ModTime is before olderThan. dryRun
+// computes the identical plan (entries + sizes) without removing anything.
+// A missing conflicts root yields an empty result, not an error. When the
+// pass empties the conflicts root entirely, the root itself is removed.
+func PruneConflicts(treeRoot string, olderThan time.Time, dryRun bool) (*PruneResult, error) {
+	root := filepath.Join(treeRoot, conflictsDirName)
+	res := &PruneResult{Root: root, DryRun: dryRun}
+
+	entries, err := ListConflicts(treeRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if !entry.ModTime.Before(olderThan) {
+			res.Kept++
+			continue
+		}
+		size := conflictDirSize(entry.Path)
+		res.Reclaimed += size
+		res.Pruned = append(res.Pruned, PrunedEntry{ConflictEntry: entry, Size: size})
+		if dryRun {
+			continue
+		}
+		if err := os.RemoveAll(entry.Path); err != nil {
+			return nil, fmt.Errorf("pruning %s: %w", entry.Path, err)
+		}
+	}
+
+	// Best-effort: drop the now-empty root. Fails silently when stray
+	// files remain beside the timestamped dirs, which is correct.
+	if !dryRun && len(res.Pruned) > 0 && res.Kept == 0 {
+		_ = os.Remove(root)
+	}
+	return res, nil
+}
+
+// conflictDirSize sums regular-file sizes under dir, best-effort: entries
+// vanishing mid-walk are skipped rather than failing the prune plan.
+func conflictDirSize(dir string) int64 {
+	var total int64
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // best-effort sizing
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 // ListConflicts enumerates timestamped backup directories under
 // <treeRoot>/.sync-conflicts/, sorted oldest-first. Returns an empty
 // slice (not error) if the conflicts root doesn't exist.

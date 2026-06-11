@@ -20,6 +20,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/rsync"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
+	"github.com/entelecheia/dotfiles-v2/internal/ws"
 )
 
 func newGsyncCmd() *cobra.Command {
@@ -46,7 +47,7 @@ Drive-origin files still stage into inbox/gdrive for manual routing.
 
 	Maintenance:
 	  dot gsync status      Show filter mode, last pull/push/intake, conflicts, paused state, scheduler
-	  dot gsync conflicts   List timestamped backup directories
+	  dot gsync conflicts   List or prune timestamped backup directories
 	  dot gsync pause       Stop managed schedulers + set paused gate
 	  dot gsync resume      Clear paused gate and re-arm installed schedulers
 
@@ -1005,39 +1006,182 @@ func boolStr(b bool) string {
 
 // ── conflicts ────────────────────────────────────────────────────────────
 
-func newGsyncConflictsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "conflicts",
-		Short: "List .sync-conflicts/ backup directories",
-		RunE:  runGsyncConflicts,
+// conflictTrees returns the (label, root) pairs that accumulate
+// .sync-conflicts/ backups: pull backups land in the workspace tree,
+// push backups land in the mirror tree.
+func conflictTrees(cfg *gsync.Config) [][2]string {
+	return [][2]string{
+		{"workspace", stripTrailingSlash(cfg.LocalPath)},
+		{"mirror", stripTrailingSlash(cfg.MirrorPath)},
 	}
 }
 
-func runGsyncConflicts(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := gsyncBootstrap(cmd)
-	if err != nil {
-		return err
+func newGsyncConflictsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "conflicts",
+		Short: "List or prune .sync-conflicts/ backup directories",
+		Long: `Conflict backups accumulate in both trees: pull backups under the
+workspace, push backups under the mirror.
+
+  dot gsync conflicts                       # alias for list
+  dot gsync conflicts list
+  dot gsync conflicts prune                 # remove backups older than 30 days
+  dot gsync conflicts prune --older-than 7
+  dot gsync conflicts prune --all           # remove every backup`,
+		RunE: runGsyncConflictsList,
 	}
-	confs, err := gsync.ListConflicts(stripTrailingSlash(cfg.LocalPath))
+	prune := &cobra.Command{
+		Use:          "prune",
+		Short:        "Remove old conflict backups from both trees",
+		RunE:         runGsyncConflictsPrune,
+		SilenceUsage: true,
+	}
+	prune.Flags().Int("older-than", 30, "prune backups older than this many days")
+	prune.Flags().Bool("all", false, "prune every backup regardless of age")
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List .sync-conflicts/ backup directories in both trees",
+			RunE:  runGsyncConflictsList,
+		},
+		prune,
+	)
+	return cmd
+}
+
+func runGsyncConflictsList(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, err := gsyncBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
-	if len(confs) == 0 {
-		p.Line("No conflict backups under %s/.sync-conflicts/", stripTrailingSlash(cfg.LocalPath))
+	now := time.Now()
+	for _, tree := range conflictTrees(cfg) {
+		label, root := tree[0], tree[1]
+		confs, err := gsync.ListConflicts(root)
+		if err != nil {
+			return err
+		}
+		if len(confs) == 0 {
+			p.Line("No conflict backups under %s/.sync-conflicts/ (%s)", root, label)
+			continue
+		}
+		p.Header(fmt.Sprintf("Conflict backups under %s/.sync-conflicts/ (%s)", root, label))
+		for _, c := range confs {
+			age := now.Sub(c.ModTime).Truncate(time.Hour)
+			marker := "•"
+			if age > 30*24*time.Hour {
+				marker = "▲" // older than 30 days — candidate for cleanup
+			}
+			p.Bullet(marker, fmt.Sprintf("%s (%s ago) — %s", c.Timestamp, age, c.Path))
+		}
+		p.Blank()
+	}
+	p.Line("Prune candidates (▲) with: dot gsync conflicts prune")
+	return nil
+}
+
+// resolvePruneCutoff turns the prune flags into a cutoff time. olderChanged
+// reports whether --older-than was set explicitly, so it can be rejected in
+// combination with --all.
+func resolvePruneCutoff(olderDays int, all, olderChanged bool) (time.Time, error) {
+	if all && olderChanged {
+		return time.Time{}, fmt.Errorf("--all and --older-than are mutually exclusive")
+	}
+	if olderDays < 0 {
+		return time.Time{}, fmt.Errorf("--older-than must be >= 0 (got %d)", olderDays)
+	}
+	if all {
+		return time.Now(), nil
+	}
+	return time.Now().Add(-time.Duration(olderDays) * 24 * time.Hour), nil
+}
+
+func runGsyncConflictsPrune(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, err := gsyncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	p := printerFrom(cmd)
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	yes, _ := cmd.Flags().GetBool("yes")
+	olderDays, _ := cmd.Flags().GetInt("older-than")
+	all, _ := cmd.Flags().GetBool("all")
+
+	cutoff, err := resolvePruneCutoff(olderDays, all, cmd.Flags().Changed("older-than"))
+	if err != nil {
+		return err
+	}
+
+	// Hold the sync lock so RemoveAll never interleaves with an rsync
+	// pass that is actively writing new backups.
+	release, lockErr := gsync.AcquireLock(cfg.LockDir)
+	if lockErr != nil {
+		p.Line("  %s", lockErr)
 		return nil
 	}
-	p.Header(fmt.Sprintf("Conflict backups under %s/.sync-conflicts/", stripTrailingSlash(cfg.LocalPath)))
-	now := time.Now()
-	for _, c := range confs {
-		age := now.Sub(c.ModTime).Truncate(time.Hour)
-		marker := "•"
-		if age > 30*24*time.Hour {
-			marker = "▲" // older than 30 days — candidate for cleanup
+	defer release()
+
+	trees := conflictTrees(cfg)
+	plans := make([]*gsync.PruneResult, len(trees))
+	var candidates int
+	var reclaim int64
+	for i, tree := range trees {
+		plan, err := gsync.PruneConflicts(tree[1], cutoff, true)
+		if err != nil {
+			return err
 		}
-		p.Bullet(marker, fmt.Sprintf("%s (%s ago) — %s", c.Timestamp, age, c.Path))
+		plans[i] = plan
+		candidates += len(plan.Pruned)
+		reclaim += plan.Reclaimed
 	}
-	p.Blank()
+
+	now := time.Now()
+	for i, tree := range trees {
+		label := tree[0]
+		plan := plans[i]
+		if len(plan.Pruned) == 0 {
+			continue
+		}
+		p.Section(fmt.Sprintf("%s — %s", label, plan.Root))
+		for _, c := range plan.Pruned {
+			age := now.Sub(c.ModTime).Truncate(time.Hour)
+			p.Bullet("▲", fmt.Sprintf("%s (%s ago, %s)", c.Timestamp, age, ws.FormatSize(c.Size)))
+		}
+	}
+	if candidates == 0 {
+		p.Line("Nothing to prune.")
+		return nil
+	}
+	p.Line("Would reclaim %s across %d backup dir(s).", ws.FormatSize(reclaim), candidates)
+	if dryRun {
+		p.Line("  (dry-run — no changes)")
+		return nil
+	}
+
+	confirmed, err := ui.Confirm(fmt.Sprintf("Remove %d backup dir(s), reclaiming %s?", candidates, ws.FormatSize(reclaim)), yes)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		p.Line("Aborted.")
+		return nil
+	}
+
+	for _, tree := range trees {
+		label, root := tree[0], tree[1]
+		res, err := gsync.PruneConflicts(root, cutoff, false)
+		if err != nil {
+			return err
+		}
+		if len(res.Pruned) == 0 {
+			continue
+		}
+		p.Success("pruned %d backup dir(s) (freed %s) under %s/.sync-conflicts/", len(res.Pruned), ws.FormatSize(res.Reclaimed), root)
+		if label == "mirror" {
+			p.Line("  The Drive sync client will propagate these deletions and reclaim cloud quota.")
+		}
+	}
 	return nil
 }
 
