@@ -161,9 +161,7 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 				messages = append(messages, fmt.Sprintf("applied agents SSOT to %s", item.TargetPath))
 			}
 		}
-		for _, warning := range result.Warnings {
-			messages = append(messages, warning)
-		}
+		messages = append(messages, result.Warnings...)
 	}
 	if rc.Config.Modules.AI.HUD {
 		manager := aisettings.NewHUDManager(rc.Runner, rc.HomeDir)
@@ -193,9 +191,7 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 				messages = append(messages, fmt.Sprintf("applied skills SSOT to %s", item.TargetPath))
 			}
 		}
-		for _, warning := range result.Warnings {
-			messages = append(messages, warning)
-		}
+		messages = append(messages, result.Warnings...)
 		if warning := m.anchorDoctorWarning(ctx, rc); warning != "" {
 			messages = append(messages, warning)
 		}

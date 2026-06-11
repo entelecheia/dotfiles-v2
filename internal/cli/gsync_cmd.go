@@ -1308,10 +1308,6 @@ func parseIntervalFlag(raw string) (int, error) {
 	return seconds, nil
 }
 
-func parsePullIntervalFlag(raw string) (int, error) {
-	return parseIntervalFlag(raw)
-}
-
 func parseAutomaticModeFlag(raw string) (gsync.RunMode, error) {
 	mode, err := gsync.ParseRunMode(raw)
 	if err != nil {

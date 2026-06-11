@@ -1,4 +1,4 @@
-// Package profilesnap snapshots user-level dotfiles profile artefacts
+// Package profilesnap snapshots user-level dotfiles profile artifacts
 // (`~/.config/dotfiles/` state, optional secret identities, extracted cask
 // install/backup lists) into a host-scoped, version-directory layout under a
 // shared backup root.
@@ -96,7 +96,7 @@ func (e *Engine) uniqueVersion(t time.Time) string {
 	return candidate
 }
 
-// BackupOptions tune Backup behaviour.
+// BackupOptions tune Backup behavior.
 type BackupOptions struct {
 	Tag            string
 	IncludeSecrets bool
@@ -166,7 +166,7 @@ func (e *Engine) Backup(opts BackupOptions) (*Snapshot, error) {
 	}, nil
 }
 
-// RestoreOptions selects which snapshot and which artefacts are restored.
+// RestoreOptions selects which snapshot and which artifacts are restored.
 type RestoreOptions struct {
 	Version        string // "" means use latest.txt
 	IncludeSecrets bool   // copy back secrets/* when present

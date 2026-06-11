@@ -782,7 +782,7 @@ func extractTarGz(path, dest string) error {
 			if err := os.Symlink(header.Linkname, target); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}

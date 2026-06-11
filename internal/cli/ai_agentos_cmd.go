@@ -449,7 +449,7 @@ func newAIAuditTailCmd() *cobra.Command {
 			if len(args) == 1 {
 				parsed, err := strconv.Atoi(args[0])
 				if err != nil || parsed < 1 {
-					return fmt.Errorf("N must be a positive integer")
+					return fmt.Errorf("argument must be a positive integer")
 				}
 				n = parsed
 			}

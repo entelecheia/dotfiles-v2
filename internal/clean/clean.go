@@ -85,9 +85,9 @@ var DefaultPatterns = []Pattern{
 
 // Scanner walks a root directory finding cleanup targets.
 type Scanner struct {
-	Root             string
-	Patterns         []Pattern
-	IncludeRisky     bool
+	Root              string
+	Patterns          []Pattern
+	IncludeRisky      bool
 	ProtectedPrefixes []string
 }
 

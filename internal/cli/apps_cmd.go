@@ -126,7 +126,7 @@ App Store or downloaded directly) are skipped by default. Pass --force to
 reinstall them over the existing bundle.
 
 After an interactive run, the updated selection can be saved back to the user
-state file so subsequent 'dot apply' runs honour it.`,
+state file so subsequent 'dot apply' runs honor it.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: runAppsInstall,
 	}
@@ -327,7 +327,7 @@ func splitCommaList(s string) []string {
 	return sliceutil.Dedupe(out)
 }
 
-// persistUserState writes user state honouring the --home override.
+// persistUserState writes user state honoring the --home override.
 func persistUserState(cmd *cobra.Command, state *config.UserState) error {
 	homeOverride, _ := cmd.Flags().GetString("home")
 	if homeOverride != "" {
@@ -391,11 +391,12 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 		}
 		live := fmt.Sprintf("%d/%d", s.PresentLive, s.TotalLive)
 		bak := fmt.Sprintf("%d/%d", s.PresentBak, s.TotalBak)
-		if s.PresentBak == 0 {
+		switch s.PresentBak {
+		case 0:
 			bak = ui.StyleHint.Render(bak)
-		} else if s.PresentBak == s.TotalBak {
+		case s.TotalBak:
 			bak = ui.StyleSuccess.Render(bak)
-		} else {
+		default:
 			bak = ui.StyleWarning.Render(bak)
 		}
 		p.Bullet(marker, fmt.Sprintf("%-22s  live:%-6s  backup:%-8s",
@@ -645,7 +646,7 @@ func pickBackupTokens(p *Printer, eng *appsettings.Engine, state *config.UserSta
 			continue
 		}
 		// Not in the embedded manifest — try to discover the app on disk by
-		// name (e.g. "Moom Classic") and synthesise a runtime entry. Accept
+		// name (e.g. "Moom Classic") and synthesize a runtime entry. Accept
 		// it only if we can read its bundle identifier and find at least one
 		// standard Library location.
 		discovered := appsettings.DiscoverApp(eng.HomeDir, entry)
@@ -794,7 +795,7 @@ func newAppsEngine(cmd *cobra.Command) (*appsettings.Engine, error) {
 	}, nil
 }
 
-// resolveBackupRoot centralises the flag → state → detect → default chain.
+// resolveBackupRoot centralizes the flag → state → detect → default chain.
 func resolveBackupRoot(cmd *cobra.Command, state *config.UserState, home string) string {
 	if v, err := cmd.Flags().GetString("to"); err == nil && v != "" {
 		return appsettings.ExpandHome(v, home)

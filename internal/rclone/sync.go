@@ -11,8 +11,8 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
-	stdsync "sync"
 	"strings"
+	stdsync "sync"
 	"syscall"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"

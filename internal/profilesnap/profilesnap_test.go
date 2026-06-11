@@ -55,7 +55,7 @@ func TestBackupAndRestoreRoundtrip(t *testing.T) {
 		t.Errorf("WithSecret flag not preserved")
 	}
 
-	// artefacts present?
+	// artifacts present?
 	for _, rel := range []string{"config.yaml", "meta.yaml", "apps/install.yaml", "apps/backup.yaml", "secrets/age_key"} {
 		if _, err := os.Stat(filepath.Join(snap.Path, rel)); err != nil {
 			t.Errorf("missing %s: %v", rel, err)

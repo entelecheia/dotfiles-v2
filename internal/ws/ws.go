@@ -167,9 +167,9 @@ func Move(ctx context.Context, runner *exec.Runner, roots Roots, srcRel, dstRel 
 
 	var msgs []string
 	for _, pair := range []struct {
-		side      Side
-		srcAbs    string
-		dstAbs    string
+		side   Side
+		srcAbs string
+		dstAbs string
 	}{{SideWork, workSrcAbs, workDstAbs}, {SideGdrive, gdriveSrcAbs, gdriveDstAbs}} {
 		if srcPresence&pair.side == 0 {
 			continue

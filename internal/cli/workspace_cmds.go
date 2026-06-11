@@ -29,7 +29,7 @@ func newStopCmd() *cobra.Command {
 			if !force {
 				p.Raw("Stop session %q? [y/N] ", name)
 				var answer string
-				fmt.Scanln(&answer)
+				_, _ = fmt.Scanln(&answer)
 				if strings.ToLower(strings.TrimSpace(answer)) != "y" {
 					p.Line("Aborted.")
 					return nil

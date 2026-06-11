@@ -9,7 +9,7 @@ import (
 
 // Styles for consistent output across the CLI.
 //
-// Semantic contract for the colour layer (glyphs live in markers.go):
+// Semantic contract for the color layer (glyphs live in markers.go):
 //   - StyleHeader   page/report titles — blue, bold, padded
 //   - StyleSection  section dividers   — purple, bold
 //   - StyleKey      left-side labels in key/value rows

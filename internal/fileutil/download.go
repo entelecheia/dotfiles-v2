@@ -163,7 +163,9 @@ func DownloadAndExtractZip(ctx context.Context, runner *exec.Runner, url, destDi
 		target := filepath.Join(destDir, f.Name)
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(target, 0755)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
 			continue
 		}
 
