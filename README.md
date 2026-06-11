@@ -187,10 +187,13 @@ dot diff --module git
 
 ### `dot update`
 
-Self-updating binary. Downloads the latest release from GitHub. (`upgrade` is an alias.)
+Self-updating binary. Downloads the latest release from GitHub, verifies its
+sha256 against the release's `checksums.txt` (refusing to install when the
+checksum file is missing or the hash mismatches), sanity-checks the new
+binary, then replaces the current one atomically. (`upgrade` is an alias.)
 
 ```bash
-dot update          # download & install
+dot update          # download, verify & install
 dot update --check  # check only
 ```
 
@@ -226,6 +229,12 @@ dot secrets restore <dir>     # decrypt from backup
 dot secrets status            # check decrypted + encrypted files
 dot secrets list              # list encrypted files
 ```
+
+Restore is clobber-safe: each file is decrypted to a 0600 temp file and
+renamed into place atomically, so a failed decrypt never corrupts an existing
+key. When a target exists with different content, restore prompts (auto-accepts
+under `--yes`) and saves the old version to `<dest>.bak-<timestamp>` first;
+identical content is reported as unchanged.
 
 Encryption flow:
 ```
@@ -324,6 +333,7 @@ dot gsync push --propagate=update         # in-place updates only
 dot gsync pull                            # preview baseline-tracked Drive payloads, then confirm
 dot gsync pull --mode=clean               # auto-pull only if no local conflicts
 dot gsync pull --mode=force               # auto-pull, backing up overwritten local files
+dot gsync pull --strict                   # hash every baseline entry (catches size+mtime-preserving edits)
 dot gsync intake                          # stage new Drive files only
 dot gsync intake --strict                 # use sha256 fingerprints
 
@@ -338,7 +348,10 @@ dot gdrive-sync ...      # legacy top-level alias for `dot gsync ...`
 
 # Maintenance:
 dot gsync status         # paths, filter mode, propagation, schedulers, last-pull/push/intake
-dot gsync conflicts      # list .sync-conflicts/<ts>/ entries with ages
+dot gsync conflicts      # list .sync-conflicts/<ts>/ entries in both trees, with ages
+dot gsync conflicts prune                 # remove backups older than 30 days (asks first)
+dot gsync conflicts prune --older-than 7  # custom cutoff in days
+dot gsync conflicts prune --all           # remove every backup
 dot gsync pause          # stop managed schedulers (paused gate)
 dot gsync resume         # clear paused gate, re-arm installed schedulers
 dot gsync shared         # manage shared-folder exclusions (auto + manual)
