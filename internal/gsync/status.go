@@ -92,8 +92,14 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		}
 	}
 
+	// Conflicts accumulate in both trees (pull backups in the workspace,
+	// push backups in the mirror) — keep the snapshot consistent with
+	// `conflicts list`/`prune`.
 	if confs, err := ListConflicts(s.LocalPath); err == nil {
 		s.Conflicts = confs
+	}
+	if confs, err := ListConflicts(s.MirrorPath); err == nil {
+		s.Conflicts = append(s.Conflicts, confs...)
 	}
 
 	// Populate shared entries from a property-detected scan plus the
