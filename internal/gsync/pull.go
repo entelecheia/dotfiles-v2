@@ -15,6 +15,10 @@ import (
 type PullOptions struct {
 	DryRun bool
 	Force  bool
+	// Strict forces sha256 fingerprints for every baseline entry instead
+	// of the tiered fast-scan/strict-fallback comparison, catching content
+	// changes that preserve size+mtime.
+	Strict bool
 }
 
 // PullConflict captures a baseline-tracked file that changed on both sides.
@@ -108,11 +112,10 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			continue
 		}
 
-		mirrorFP, err := FingerprintFile(mirrorAbs, FingerprintStrict)
+		mirrorMatchesBase, mirrorFP, err := baselineMatchTiered(base, mirrorAbs, mirrorInfo, opts.Strict)
 		if err != nil {
 			return nil, fmt.Errorf("fingerprint mirror %s: %w", rel, err)
 		}
-		mirrorMatchesBase := FingerprintsCompatible(base, mirrorFP, mirrorAbs)
 
 		localInfo, err := os.Lstat(localAbs)
 		localMissing := errors.Is(err, fs.ErrNotExist)
@@ -125,6 +128,9 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			}
 			result.Restored = append(result.Restored, rel)
 			result.Pulled = append(result.Pulled, rel)
+			if mirrorFP, err = ensureStrictFingerprint(mirrorFP, mirrorAbs); err != nil {
+				return nil, fmt.Errorf("fingerprint mirror %s: %w", rel, err)
+			}
 			if needsBaselineUpdate(base, mirrorFP) {
 				nextBaseline[rel] = mirrorFP
 				baselineChanged = true
@@ -139,11 +145,10 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			continue
 		}
 
-		localFP, err := FingerprintFile(localAbs, FingerprintStrict)
+		localMatchesBase, localFP, err := baselineMatchTiered(base, localAbs, localInfo, opts.Strict)
 		if err != nil {
 			return nil, fmt.Errorf("fingerprint local %s: %w", rel, err)
 		}
-		localMatchesBase := FingerprintsCompatible(base, localFP, localAbs)
 
 		switch {
 		case mirrorMatchesBase && localMatchesBase:
@@ -159,13 +164,27 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 				return nil, fmt.Errorf("pull %s: %w", rel, err)
 			}
 			result.Pulled = append(result.Pulled, rel)
+			if mirrorFP, err = ensureStrictFingerprint(mirrorFP, mirrorAbs); err != nil {
+				return nil, fmt.Errorf("fingerprint mirror %s: %w", rel, err)
+			}
 			nextBaseline[rel] = mirrorFP
 			baselineChanged = true
-		case fingerprintsSame(localFP, mirrorFP):
-			nextBaseline[rel] = mirrorFP
-			baselineChanged = true
-			result.SkippedBase = append(result.SkippedBase, rel)
 		default:
+			// Neither side matches baseline. Escalate both fingerprints to
+			// strict before deciding adopt-vs-conflict — sha-equal files
+			// with drifted mtimes must not be misread as a conflict.
+			if localFP, err = ensureStrictFingerprint(localFP, localAbs); err != nil {
+				return nil, fmt.Errorf("fingerprint local %s: %w", rel, err)
+			}
+			if mirrorFP, err = ensureStrictFingerprint(mirrorFP, mirrorAbs); err != nil {
+				return nil, fmt.Errorf("fingerprint mirror %s: %w", rel, err)
+			}
+			if fingerprintsSame(localFP, mirrorFP) {
+				nextBaseline[rel] = mirrorFP
+				baselineChanged = true
+				result.SkippedBase = append(result.SkippedBase, rel)
+				continue
+			}
 			backup := ""
 			if opts.Force {
 				backup = plannedPullLocalBackup(local, rel, conflict)
@@ -250,11 +269,56 @@ func backupLocalBeforePull(localAbs, backup string, dryRun bool) error {
 	return copyFilePreservingMtime(localAbs, backup)
 }
 
+// baselineMatchTiered reports whether the file at abs still matches base,
+// hashing only when the fast (size+mtime) comparison disagrees with a
+// sha-bearing baseline entry. The returned fingerprint is the freshest one
+// computed (strict iff hashing happened). strict forces hashing.
+//
+// Tradeoff (same as push planning): a content change that preserves both
+// size and mtime is invisible to the fast tier; --strict catches it.
+func baselineMatchTiered(base Fingerprint, abs string, info os.FileInfo, strict bool) (bool, Fingerprint, error) {
+	if strict {
+		fp, err := FingerprintFile(abs, FingerprintStrict)
+		if err != nil {
+			return false, fp, err
+		}
+		return FingerprintsCompatible(base, fp, abs), fp, nil
+	}
+	fp := Fingerprint{Size: info.Size(), Mtime: info.ModTime().UTC()}
+	if fingerprintsSameFast(base, fp) {
+		return true, fp, nil
+	}
+	if base.Sha == "" {
+		// No stronger signal exists; fast comparison is the verdict.
+		return false, fp, nil
+	}
+	strictFP, err := FingerprintFile(abs, FingerprintStrict)
+	if err != nil {
+		return false, fp, err
+	}
+	return base.Sha == strictFP.Sha, strictFP, nil
+}
+
+// ensureStrictFingerprint upgrades fp with a sha when missing. Called
+// immediately before a fingerprint is recorded into baseline.manifest so
+// the Git-shared index stays content-addressed.
+func ensureStrictFingerprint(fp Fingerprint, abs string) (Fingerprint, error) {
+	if fp.Sha != "" {
+		return fp, nil
+	}
+	return FingerprintFile(abs, FingerprintStrict)
+}
+
 func needsBaselineUpdate(base, current Fingerprint) bool {
 	if !fingerprintsSame(base, current) {
 		return true
 	}
-	return base.Sha == "" && current.Sha != ""
+	if base.Sha == "" && current.Sha != "" {
+		return true
+	}
+	// Sha proved equal but size/mtime drifted — refresh the baseline so
+	// future fast comparisons succeed without re-hashing every pull.
+	return current.Sha != "" && base.Sha == current.Sha && !fingerprintsSameFast(base, current)
 }
 
 func fingerprintsSame(a, b Fingerprint) bool {

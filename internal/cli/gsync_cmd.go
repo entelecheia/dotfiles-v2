@@ -275,7 +275,7 @@ backing up the local version into .sync-conflicts/<ts>/from-workspace/.`,
 		RunE:         runGsyncPull,
 		SilenceUsage: true,
 	}
-	cmd.Flags().Bool("strict", false, "accepted for compatibility; pull uses sha256 baseline fingerprints")
+	cmd.Flags().Bool("strict", false, "force sha256 fingerprints for every baseline entry (slower; catches content changes that preserve size+mtime)")
 	return cmd
 }
 
@@ -289,6 +289,7 @@ func runGsyncPull(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	strict, _ := cmd.Flags().GetBool("strict")
 	mode, err := gdriveSyncModeFrom(cmd)
 	if err != nil {
 		return err
@@ -305,7 +306,7 @@ func runGsyncPull(cmd *cobra.Command, _ []string) error {
 	if dryRun {
 		p.Line("  (dry-run — no changes)")
 	}
-	plan, err := gsync.PullTracked(cfg, gsync.PullOptions{DryRun: true})
+	plan, err := gsync.PullTracked(cfg, gsync.PullOptions{DryRun: true, Strict: strict})
 	if err != nil {
 		return fmt.Errorf("planning pull: %w", err)
 	}
@@ -329,7 +330,7 @@ func runGsyncPull(cmd *cobra.Command, _ []string) error {
 		}
 		force = len(plan.Conflicts) > 0
 	}
-	res, err := gsync.PullTracked(cfg, gsync.PullOptions{Force: force})
+	res, err := gsync.PullTracked(cfg, gsync.PullOptions{Force: force, Strict: strict})
 	recordSyncResult(state, cfg, "pull", err, false)
 	if err != nil {
 		return fmt.Errorf("pull failed: %w", err)
