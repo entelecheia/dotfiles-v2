@@ -241,17 +241,52 @@ func TestRestoreSecretFile_UnchangedSkipsBackup(t *testing.T) {
 	}
 }
 
-func TestRestoreSecretFile_EmptyDecryptOutput(t *testing.T) {
+func TestRestoreSecretFile_EmptyPlaintextRestores(t *testing.T) {
+	// A genuinely empty secret (e.g. an empty 90-secrets.sh that was
+	// backed up) must restore faithfully — real decrypt failures exit
+	// non-zero and are caught before this point.
 	stubAge(t, false)
 	f := newRestoreFixture(t, "") // stub copies the empty source → empty output
 
-	_, _, err := restoreSecretFile(context.Background(), f.runner,
+	status, _, err := restoreSecretFile(context.Background(), f.runner,
 		f.identity, f.srcAge, f.dest, 0700, confirmFatal(t))
-	if err == nil || !strings.Contains(err.Error(), "no output") {
-		t.Fatalf("err = %v, want empty-output rejection", err)
+	if err != nil {
+		t.Fatalf("restoreSecretFile: %v", err)
 	}
-	if _, statErr := os.Stat(f.dest); !os.IsNotExist(statErr) {
-		t.Error("dest must not be created from empty decrypt output")
+	if status != restoreWritten {
+		t.Errorf("status = %d, want restoreWritten", status)
+	}
+	info, err := os.Stat(f.dest)
+	if err != nil {
+		t.Fatalf("empty secret should be restored: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Errorf("size = %d, want 0", info.Size())
+	}
+}
+
+func TestRestoreSecretFile_UnchangedHealsPermissions(t *testing.T) {
+	stubAge(t, false)
+	f := newRestoreFixture(t, "same-content")
+	if err := os.MkdirAll(filepath.Dir(f.dest), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Identical content, but permissions drifted to group/world-readable.
+	if err := os.WriteFile(f.dest, []byte("same-content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	status, _, err := restoreSecretFile(context.Background(), f.runner,
+		f.identity, f.srcAge, f.dest, 0700, confirmFatal(t))
+	if err != nil {
+		t.Fatalf("restoreSecretFile: %v", err)
+	}
+	if status != restoreUnchanged {
+		t.Errorf("status = %d, want restoreUnchanged", status)
+	}
+	info, _ := os.Stat(f.dest)
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("mode = %v, want drifted permissions healed to 0600", info.Mode().Perm())
 	}
 }
 

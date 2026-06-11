@@ -304,12 +304,14 @@ func restoreSecretFile(
 	if err != nil {
 		return 0, "", fmt.Errorf("reading decrypted output: %w", err)
 	}
-	if len(newData) == 0 {
-		return 0, "", fmt.Errorf("decrypting %s produced no output (existing %s untouched)", srcAge, destPath)
-	}
 
 	if oldData, err := os.ReadFile(destPath); err == nil {
 		if bytes.Equal(oldData, newData) {
+			// Still heal drifted permissions — ssh refuses
+			// group/world-readable keys.
+			if err := os.Chmod(destPath, 0600); err != nil {
+				return 0, "", fmt.Errorf("restoring permissions on %s: %w", destPath, err)
+			}
 			return restoreUnchanged, "", nil
 		}
 		ok, err := confirm(destPath)
