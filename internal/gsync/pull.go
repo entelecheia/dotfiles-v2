@@ -150,6 +150,19 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			return nil, fmt.Errorf("fingerprint local %s: %w", rel, err)
 		}
 
+		// When the mirror changed and the local file is about to be
+		// overwritten, a fast-tier local match is not enough proof it is
+		// pristine — a local edit that preserves size+mtime would be
+		// silently destroyed. Re-verify with a hash (one extra hash only
+		// on files about to be pulled over); on mismatch the case falls
+		// into the conflict branch below, same as strict mode.
+		if !mirrorMatchesBase && localMatchesBase && base.Sha != "" && localFP.Sha == "" {
+			if localFP, err = ensureStrictFingerprint(localFP, localAbs); err != nil {
+				return nil, fmt.Errorf("fingerprint local %s: %w", rel, err)
+			}
+			localMatchesBase = base.Sha == localFP.Sha
+		}
+
 		switch {
 		case mirrorMatchesBase && localMatchesBase:
 			if needsBaselineUpdate(base, mirrorFP) {

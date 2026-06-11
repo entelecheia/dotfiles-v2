@@ -271,3 +271,60 @@ func TestNeedsBaselineUpdate_RefreshesStaleMtime(t *testing.T) {
 		})
 	}
 }
+
+func TestPullTracked_DetectsLocalEditPreservingSizeMtime(t *testing.T) {
+	f := newIntakeFixture(t)
+	rel := "assets/data.bin"
+	f.writeMirror(rel, "v1-bytes")
+	base := seedBaselineStrict(f, rel)
+
+	// Local edit that preserves size AND mtime — invisible to the fast
+	// tier. The mirror also changed, so the local file is about to be
+	// overwritten; the pre-overwrite hash must surface this as a conflict
+	// instead of silently destroying the local edit.
+	f.writeLocal(rel, "v1-EDITS") // same length as v1-bytes
+	chtimes(t, filepath.Join(f.local, rel), base.Mtime)
+	if err := os.WriteFile(filepath.Join(f.mirror, rel), []byte("v2-from-drive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PullTracked(f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatalf("PullTracked: %v", err)
+	}
+	if len(res.Pulled) != 0 {
+		t.Fatalf("local edit silently overwritten: Pulled = %v", res.Pulled)
+	}
+	if len(res.Conflicts) != 1 || res.Conflicts[0].RelPath != rel {
+		t.Fatalf("Conflicts = %+v, want %s", res.Conflicts, rel)
+	}
+	got, err := os.ReadFile(filepath.Join(f.local, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "v1-EDITS" {
+		t.Errorf("local content = %q, want preserved edit", got)
+	}
+}
+
+func TestPullTracked_RestoreUpgradesShaLessBaseline(t *testing.T) {
+	f := newIntakeFixture(t)
+	rel := "assets/image.bin"
+	mtime := f.writeMirror(rel, "binary-payload")
+	f.seedBaseline(rel, "binary-payload", mtime) // legacy sha-less entry
+
+	res, err := PullTracked(f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatalf("PullTracked: %v", err)
+	}
+	if len(res.Restored) != 1 || res.Restored[0] != rel {
+		t.Fatalf("Restored = %v, want %s", res.Restored, rel)
+	}
+	baseline, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline[rel].Sha == "" {
+		t.Error("restore must upgrade a sha-less baseline entry to strict")
+	}
+}
