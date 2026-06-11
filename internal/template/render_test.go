@@ -82,10 +82,10 @@ func TestRenderString_WithFuncMap(t *testing.T) {
 
 	// Test the custom func map functions registered in NewEngine
 	cases := []struct {
-		name    string
-		tmpl    string
-		data    map[string]any
-		want    string
+		name string
+		tmpl string
+		data map[string]any
+		want string
 	}{
 		{
 			name: "toLower",

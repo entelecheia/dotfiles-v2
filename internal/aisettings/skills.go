@@ -175,9 +175,7 @@ func (r *SkillScanReport) ValidationErrors(strict bool) []string {
 		return []string{"skill scan report is nil"}
 	}
 	var errs []string
-	for _, err := range r.Errors {
-		errs = append(errs, err)
-	}
+	errs = append(errs, r.Errors...)
 	for _, item := range r.Items {
 		if item.Status == SkillStatusInvalid || (strict && item.Status == SkillStatusLegacy) {
 			if len(item.Errors) == 0 {

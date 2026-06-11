@@ -54,7 +54,7 @@ func printSection(title string) { WriteSection(os.Stdout, title) }
 func printKV(key, value string) { WriteKV(os.Stdout, key, value) }
 
 // formatBool returns a styled enabled/disabled indicator. The leading glyph
-// comes from the marker alphabet (MarkPresent / MarkAbsent) so colour and
+// comes from the marker alphabet (MarkPresent / MarkAbsent) so color and
 // glyph stay semantically paired.
 func formatBool(v bool) string {
 	if v {

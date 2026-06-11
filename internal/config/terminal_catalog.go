@@ -41,9 +41,9 @@ var terminalToolOptions = []TerminalToolOption{
 }
 
 var defaultTerminalToolsByProfile = map[string][]string{
-	"minimal": []string{"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza"},
-	"server":  []string{"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza", "btop"},
-	"full": []string{
+	"minimal": {"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza"},
+	"server":  {"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza", "btop"},
+	"full": {
 		"fzf", "ripgrep", "fd", "bat", "jq", "yq", "direnv", "zoxide", "eza",
 		"btop", "lazygit", "yazi", "glow", "csvlens", "chafa",
 	},

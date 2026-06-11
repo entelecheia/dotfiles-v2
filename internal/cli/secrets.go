@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 const secretsDir = ".local/share/dotfiles-secrets"
@@ -242,6 +244,97 @@ func newSecretsBackupCmd() *cobra.Command {
 }
 
 // newSecretsRestoreCmd decrypts secrets from a source directory.
+// restoreStatus reports what restoreSecretFile did.
+type restoreStatus int
+
+const (
+	restoreWritten   restoreStatus = iota // dest created or replaced
+	restoreUnchanged                      // decrypted content == existing dest
+	restoreSkipped                        // user declined overwrite
+)
+
+// backupTimestamp returns a filesystem-safe RFC3339 timestamp (UTC, ':'→'-').
+func backupTimestamp() string {
+	return strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339), ":", "-")
+}
+
+// restoreSecretFile decrypts srcAge to destPath without ever truncating an
+// existing destPath on failure: it decrypts into a 0600 temp file in the
+// destination directory and atomically renames it over destPath. When an
+// existing, different destPath would be replaced, confirm is consulted once;
+// on acceptance the old content is saved to destPath+".bak-<timestamp>".
+func restoreSecretFile(
+	ctx context.Context,
+	runner *exec.Runner,
+	identity, srcAge, destPath string,
+	dirPerm os.FileMode,
+	confirm func(dest string) (bool, error),
+) (status restoreStatus, backupPath string, err error) {
+	if runner.DryRun {
+		runner.Logger.Info("dry-run: would restore", "src", srcAge, "dest", destPath)
+		return restoreWritten, "", nil
+	}
+
+	if !runner.FileExists(identity) {
+		return 0, "", fmt.Errorf("age identity not found: %s", identity)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), dirPerm); err != nil {
+		return 0, "", fmt.Errorf("creating %s: %w", filepath.Dir(destPath), err)
+	}
+
+	// CreateTemp creates the file 0600, so the plaintext secret is never
+	// world-readable, even transiently. age reopens it by path with
+	// O_TRUNC, which preserves those permissions.
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), "."+filepath.Base(destPath)+".restore-*")
+	if err != nil {
+		return 0, "", fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		return 0, "", fmt.Errorf("closing temp file: %w", err)
+	}
+	defer os.Remove(tmpPath) // no-op after a successful rename
+
+	if _, err := runner.Run(ctx, "age", "-d", "-i", identity, "-o", tmpPath, srcAge); err != nil {
+		return 0, "", fmt.Errorf("decrypting %s: %w (existing %s untouched)", srcAge, err, destPath)
+	}
+
+	newData, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return 0, "", fmt.Errorf("reading decrypted output: %w", err)
+	}
+
+	if oldData, err := os.ReadFile(destPath); err == nil {
+		if bytes.Equal(oldData, newData) {
+			// Still heal drifted permissions — ssh refuses
+			// group/world-readable keys.
+			if err := os.Chmod(destPath, 0600); err != nil {
+				return 0, "", fmt.Errorf("restoring permissions on %s: %w", destPath, err)
+			}
+			return restoreUnchanged, "", nil
+		}
+		ok, err := confirm(destPath)
+		if err != nil {
+			return 0, "", err
+		}
+		if !ok {
+			return restoreSkipped, "", nil
+		}
+		backupPath = destPath + ".bak-" + backupTimestamp()
+		if err := os.WriteFile(backupPath, oldData, 0600); err != nil {
+			return 0, "", fmt.Errorf("backing up %s: %w", destPath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return 0, "", fmt.Errorf("reading existing %s: %w", destPath, err)
+	}
+
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return 0, backupPath, fmt.Errorf("replacing %s: %w", destPath, err)
+	}
+	return restoreWritten, backupPath, nil
+}
+
 func newSecretsRestoreCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "restore <source>",
@@ -285,20 +378,33 @@ func newSecretsRestoreCmd() *cobra.Command {
 				keyName = "id_ed25519"
 			}
 
+			yes, _ := cmd.Flags().GetBool("yes")
+			confirm := func(dest string) (bool, error) {
+				return ui.Confirm(fmt.Sprintf("%s exists and differs — overwrite? (a timestamped .bak copy will be saved)", dest), yes)
+			}
+			report := func(dest string, status restoreStatus, backup string) {
+				switch status {
+				case restoreWritten:
+					p.Line("  Restored: %s", dest)
+					if backup != "" {
+						p.Line("  Backup:   %s", backup)
+					}
+				case restoreUnchanged:
+					p.Line("  Unchanged: %s", dest)
+				case restoreSkipped:
+					p.Warn("  Skipped (declined overwrite): %s", dest)
+				}
+			}
+
 			// Restore SSH private key.
 			sshAgeSrc := filepath.Join(src, keyName+".age")
 			if runner.FileExists(sshAgeSrc) {
 				sshDest := filepath.Join(home, ".ssh", keyName)
-				if err := os.MkdirAll(filepath.Dir(sshDest), 0700); err != nil {
-					return fmt.Errorf("creating .ssh dir: %w", err)
+				status, backup, err := restoreSecretFile(ctx, runner, identity, sshAgeSrc, sshDest, 0700, confirm)
+				if err != nil {
+					return fmt.Errorf("restoring SSH key: %w", err)
 				}
-				if _, err := runner.Run(ctx, "age", "-d", "-i", identity, "-o", sshDest, sshAgeSrc); err != nil {
-					return fmt.Errorf("decrypting SSH key: %w", err)
-				}
-				if err := os.Chmod(sshDest, 0600); err != nil {
-					return fmt.Errorf("setting SSH key permissions: %w", err)
-				}
-				p.Line("  Restored: %s", sshDest)
+				report(sshDest, status, backup)
 			} else {
 				p.Line("  SSH key archive not found, skipping: %s", sshAgeSrc)
 			}
@@ -307,16 +413,11 @@ func newSecretsRestoreCmd() *cobra.Command {
 			shellAgeSrc := filepath.Join(src, "90-secrets.sh.age")
 			if runner.FileExists(shellAgeSrc) {
 				shellDest := filepath.Join(home, ".config", "shell", "90-secrets.sh")
-				if err := os.MkdirAll(filepath.Dir(shellDest), 0755); err != nil {
-					return fmt.Errorf("creating shell config dir: %w", err)
+				status, backup, err := restoreSecretFile(ctx, runner, identity, shellAgeSrc, shellDest, 0755, confirm)
+				if err != nil {
+					return fmt.Errorf("restoring shell secrets: %w", err)
 				}
-				if _, err := runner.Run(ctx, "age", "-d", "-i", identity, "-o", shellDest, shellAgeSrc); err != nil {
-					return fmt.Errorf("decrypting shell secrets: %w", err)
-				}
-				if err := os.Chmod(shellDest, 0600); err != nil {
-					return fmt.Errorf("setting shell secrets permissions: %w", err)
-				}
-				p.Line("  Restored: %s", shellDest)
+				report(shellDest, status, backup)
 			} else {
 				p.Line("  Shell secrets archive not found, skipping: %s", shellAgeSrc)
 			}

@@ -215,15 +215,6 @@ func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 	return args
 }
 
-// pushAlwaysExcludes returns the workspace-anchored excludes that all rsync
-// passes enforce regardless of operator config: the per-workspace store
-// (`.dotfiles/`) and the GDrive intake staging area (`inbox/gdrive/`).
-// Anchored with leading `/` so deeper subtrees with the same names are
-// untouched. The name is kept for the push-arg tests that guard this behavior.
-func pushAlwaysExcludes() []string {
-	return alwaysExcludeArgs()
-}
-
 // propagationFlags translates a PropagationPolicy into the rsync flags
 // that enforce it. Default policy `{true, true, false}` returns nil
 // (rsync's natural behavior copies new + modified, no delete).
@@ -280,7 +271,7 @@ func refuseSharedDriveMirror(cfg *Config) error {
 		return fmt.Errorf(
 			"refusing to sync: mirror %q resolves under a Drive 'Shared drives' root.\n"+
 				"Workspace-authoritative semantics would propagate deletions into a team drive.\n"+
-				"Point gsync.mirror_path at a folder under My Drive instead.",
+				"Point gsync.mirror_path at a folder under My Drive instead",
 			cfg.MirrorPath,
 		)
 	}

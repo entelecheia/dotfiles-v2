@@ -13,6 +13,7 @@ on:
       - "tests/**"
       - ".github/workflows/**"
       - ".goreleaser.yaml"
+      - ".golangci.yml"
   pull_request:
     branches: [main]
     paths:
@@ -22,8 +23,22 @@ on:
       - "go.sum"
       - "scripts/**"
       - "tests/**"
+      - ".golangci.yml"
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12
+
   unit:
     strategy:
       matrix:

@@ -45,7 +45,7 @@ func (m *CondaModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, 
 	if fileutil.NeedsUpdate(rc.Runner, condarcPath, []byte(condarcContent)) {
 		changes = append(changes, Change{
 			Description: fmt.Sprintf("write %s", condarcPath),
-			Command:     fmt.Sprintf("write default .condarc"),
+			Command:     "write default .condarc",
 		})
 	}
 

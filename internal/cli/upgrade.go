@@ -82,6 +82,7 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	archName := runtime.GOARCH
 	assetName := fmt.Sprintf("dot_%s_%s_%s.tar.gz", latestVersion, osName, archName)
 	downloadURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest.TagName, assetName)
+	checksumsURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/checksums.txt", githubRepo, latest.TagName)
 
 	p.Line("\nDownloading %s...", assetName)
 
@@ -93,8 +94,9 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	runner := exec.NewRunner(false, logger)
-	if err := fileutil.DownloadAndExtractTarGz(ctx, runner, downloadURL, tmpDir, 0); err != nil {
-		return fmt.Errorf("downloading release: %w", err)
+	p.Line("Verifying checksum...")
+	if err := downloadVerifiedArchive(ctx, runner, downloadURL, checksumsURL, assetName, tmpDir); err != nil {
+		return err
 	}
 
 	execPath, err := os.Executable()
@@ -157,6 +159,76 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	p.Line("Upgraded: %s → %s", currentClean, latestVersion)
 	p.Line("Binary: %s", execPath)
 	return nil
+}
+
+// downloadVerifiedArchive downloads the release archive and the release's
+// checksums.txt, verifies the archive's sha256, then extracts into destDir.
+// Any failure leaves destDir without an extracted binary — a missing or
+// unfetchable checksums.txt is a hard failure, never a silent skip.
+func downloadVerifiedArchive(ctx context.Context, runner *exec.Runner, downloadURL, checksumsURL, assetName, destDir string) error {
+	if runner.DryRun {
+		runner.Logger.Info("dry-run: download+verify+extract", "url", downloadURL, "dest", destDir)
+		return nil
+	}
+
+	archivePath := filepath.Join(destDir, assetName)
+	gotSum, err := fileutil.DownloadFile(ctx, runner, downloadURL, archivePath)
+	if err != nil {
+		return fmt.Errorf("downloading release: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumsURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating checksums request: %w", err)
+	}
+	resp, err := httpDoWithRetry(req, 3)
+	if err != nil {
+		return fmt.Errorf("fetching checksums.txt: %w — refusing to install unverified binary", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetching checksums.txt (HTTP %d): refusing to install unverified binary", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading checksums.txt: %w", err)
+	}
+
+	wantSum, err := parseChecksums(body, assetName)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(gotSum, wantSum) {
+		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s — aborting upgrade", assetName, wantSum, gotSum)
+	}
+
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("opening verified archive: %w", err)
+	}
+	defer f.Close()
+	return fileutil.ExtractTarGz(f, destDir, 0)
+}
+
+// parseChecksums finds assetName in a GoReleaser checksums.txt body
+// ("<64-hex-sha256>  <asset>" per line, optional '*' binary-mode prefix)
+// and returns its hex sha256.
+func parseChecksums(data []byte, assetName string) (string, error) {
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		sum := fields[0]
+		if len(sum) != 64 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[len(fields)-1], "*")
+		if name == assetName {
+			return sum, nil
+		}
+	}
+	return "", fmt.Errorf("asset %s not listed in checksums.txt", assetName)
 }
 
 // verifyBinary runs the binary with --version and checks for expected output.

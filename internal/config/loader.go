@@ -168,9 +168,7 @@ func ApplyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("DOTFILES_EMAIL"); v != "" {
 		cfg.Email = v
 	}
-	if v := os.Getenv("DOTFILES_PROFILE"); v != "" {
-		// Profile is handled at CLI level, not here
-	}
+	// DOTFILES_PROFILE is handled at CLI level, not here.
 	if v := os.Getenv("DOTFILES_WORKSPACE_PATH"); v != "" {
 		cfg.Modules.Workspace.Path = v
 	}

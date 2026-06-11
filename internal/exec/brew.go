@@ -258,7 +258,7 @@ func (b *Brew) RefreshPath() {
 		}
 	}
 	// Clear cached lookups so IsAvailable() picks up the new PATH
-	osexec.LookPath("brew") // warm cache
+	_, _ = osexec.LookPath("brew") // warm cache
 }
 
 // MissingFormulas returns formulas from the list that are not installed.

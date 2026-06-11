@@ -97,3 +97,128 @@ func TestListConflicts_OldestFirst(t *testing.T) {
 		}
 	}
 }
+
+// seedConflictDir creates <treeRoot>/.sync-conflicts/<stamp>/ with nested
+// files totaling the given bodies, then pins the dir mtime.
+func seedConflictDir(t *testing.T, treeRoot, stamp string, mtime time.Time, bodies map[string]string) {
+	t.Helper()
+	dir := filepath.Join(treeRoot, conflictsDirName, stamp)
+	for rel, body := range bodies {
+		abs := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Chtimes after writing files inside, or the writes refresh the mtime.
+	if err := os.Chtimes(dir, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPruneConflicts_RemovesOnlyOlderThanCutoff(t *testing.T) {
+	tree := t.TempDir()
+	now := time.Now()
+	seedConflictDir(t, tree, "10d", now.Add(-10*24*time.Hour), map[string]string{"from-gdrive/a.txt": "aa"})
+	seedConflictDir(t, tree, "20d", now.Add(-20*24*time.Hour), map[string]string{"from-gdrive/b.txt": "bbb"})
+	seedConflictDir(t, tree, "40d", now.Add(-40*24*time.Hour), map[string]string{
+		"from-gdrive/c/d.txt": "cccc",
+		"from-workspace/e":    "ee",
+	})
+
+	res, err := PruneConflicts(tree, now.Add(-30*24*time.Hour), false)
+	if err != nil {
+		t.Fatalf("PruneConflicts: %v", err)
+	}
+	if len(res.Pruned) != 1 || res.Pruned[0].Timestamp != "40d" {
+		t.Fatalf("Pruned = %+v, want only 40d", res.Pruned)
+	}
+	if res.Kept != 2 {
+		t.Errorf("Kept = %d, want 2", res.Kept)
+	}
+	if want := int64(len("cccc") + len("ee")); res.Reclaimed != want {
+		t.Errorf("Reclaimed = %d, want %d", res.Reclaimed, want)
+	}
+	if _, err := os.Stat(filepath.Join(tree, conflictsDirName, "40d")); !os.IsNotExist(err) {
+		t.Error("40d should be removed from disk")
+	}
+	for _, keep := range []string{"10d", "20d"} {
+		if _, err := os.Stat(filepath.Join(tree, conflictsDirName, keep)); err != nil {
+			t.Errorf("%s should survive: %v", keep, err)
+		}
+	}
+}
+
+func TestPruneConflicts_DryRunRemovesNothing(t *testing.T) {
+	tree := t.TempDir()
+	now := time.Now()
+	seedConflictDir(t, tree, "40d", now.Add(-40*24*time.Hour), map[string]string{"from-gdrive/a.txt": "aaaa"})
+
+	res, err := PruneConflicts(tree, now.Add(-30*24*time.Hour), true)
+	if err != nil {
+		t.Fatalf("PruneConflicts: %v", err)
+	}
+	if !res.DryRun || len(res.Pruned) != 1 || res.Reclaimed != 4 {
+		t.Fatalf("dry-run plan = %+v, want 1 entry / 4 bytes", res)
+	}
+	if _, err := os.Stat(filepath.Join(tree, conflictsDirName, "40d")); err != nil {
+		t.Errorf("dry-run must not remove anything: %v", err)
+	}
+}
+
+func TestPruneConflicts_NowCutoffPrunesEverythingAndRemovesRoot(t *testing.T) {
+	tree := t.TempDir()
+	now := time.Now()
+	seedConflictDir(t, tree, "old", now.Add(-48*time.Hour), map[string]string{"from-gdrive/a": "x"})
+	seedConflictDir(t, tree, "older", now.Add(-72*time.Hour), map[string]string{"from-workspace/b": "y"})
+
+	res, err := PruneConflicts(tree, time.Now(), false)
+	if err != nil {
+		t.Fatalf("PruneConflicts: %v", err)
+	}
+	if len(res.Pruned) != 2 || res.Kept != 0 {
+		t.Fatalf("Pruned = %+v Kept = %d, want all pruned", res.Pruned, res.Kept)
+	}
+	if _, err := os.Stat(filepath.Join(tree, conflictsDirName)); !os.IsNotExist(err) {
+		t.Error("emptied .sync-conflicts root should be removed")
+	}
+}
+
+func TestPruneConflicts_MissingRootIsNoop(t *testing.T) {
+	res, err := PruneConflicts(t.TempDir(), time.Now(), false)
+	if err != nil {
+		t.Fatalf("PruneConflicts: %v", err)
+	}
+	if len(res.Pruned) != 0 || res.Kept != 0 || res.Reclaimed != 0 {
+		t.Errorf("missing root should be a no-op: %+v", res)
+	}
+}
+
+func TestPruneConflicts_StrayFileSurvivesAndBlocksRootRemoval(t *testing.T) {
+	tree := t.TempDir()
+	now := time.Now()
+	seedConflictDir(t, tree, "old", now.Add(-48*time.Hour), map[string]string{"from-gdrive/a": "x"})
+	stray := filepath.Join(tree, conflictsDirName, "stray.txt")
+	if err := os.WriteFile(stray, []byte("keep me"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PruneConflicts(tree, time.Now(), false)
+	if err != nil {
+		t.Fatalf("PruneConflicts: %v", err)
+	}
+	if len(res.Pruned) != 1 {
+		t.Fatalf("Pruned = %+v, want the timestamped dir", res.Pruned)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("stray file must survive: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tree, conflictsDirName)); err != nil {
+		t.Errorf("root with strays must survive: %v", err)
+	}
+}

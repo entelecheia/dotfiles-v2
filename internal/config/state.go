@@ -225,7 +225,8 @@ func (s *UserState) Validate() error {
 			return fmt.Errorf("invalid github_user %q (max 39 characters)", s.GithubUser)
 		}
 		for _, r := range s.GithubUser {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-') {
+			valid := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-'
+			if !valid {
 				return fmt.Errorf("invalid github_user %q (alphanumeric + hyphens only)", s.GithubUser)
 			}
 		}

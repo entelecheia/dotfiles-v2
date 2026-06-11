@@ -88,11 +88,11 @@ func TestEngineBackupAndRestoreRoundtrip(t *testing.T) {
 
 	runner := exec.NewRunner(false, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	eng := &Engine{
-		Runner:    runner,
-		HomeDir:   home,
-		Root: backup,
-		Hostname:  "testhost",
-		Manifest:  mf,
+		Runner:   runner,
+		HomeDir:  home,
+		Root:     backup,
+		Hostname: "testhost",
+		Manifest: mf,
 	}
 
 	sum, err := eng.Backup(context.Background(), []string{"testmoom"})

@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,7 +63,48 @@ func DownloadAndExtractTarGz(ctx context.Context, runner *exec.Runner, url, dest
 		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	return ExtractTarGz(resp.Body, destDir, stripComponents)
+}
+
+// DownloadFile downloads url to destPath (0644) and returns the hex-encoded
+// SHA-256 of the response body, so callers can verify the artifact before
+// using it. Respects dry-run (logs and returns "", nil).
+func DownloadFile(ctx context.Context, runner *exec.Runner, url, destPath string) (string, error) {
+	if runner.DryRun {
+		runner.Logger.Info("dry-run: download", "url", url, "dest", destPath)
+		return "", nil
+	}
+
+	resp, err := httpGetWithRetry(ctx, url, 3)
+	if err != nil {
+		return "", fmt.Errorf("downloading %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+
+	f, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return "", fmt.Errorf("creating %s: %w", destPath, err)
+	}
+
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
+		f.Close()
+		return "", fmt.Errorf("saving download: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("closing %s: %w", destPath, err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ExtractTarGz extracts a gzipped tar stream into destDir, stripping
+// stripComponents leading path elements.
+func ExtractTarGz(r io.Reader, destDir string, stripComponents int) error {
+	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
 	}
@@ -163,7 +206,9 @@ func DownloadAndExtractZip(ctx context.Context, runner *exec.Runner, url, destDi
 		target := filepath.Join(destDir, f.Name)
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(target, 0755)
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
 			continue
 		}
 
