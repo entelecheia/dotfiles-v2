@@ -38,6 +38,8 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	printWelcomeCmd(p, "dot sync", "Sync binaries with remote server via rsync")
 	printWelcomeCmd(p, "dot clone", "Sync workspace with Google Drive via rclone")
 	printWelcomeCmd(p, "dot gsync", "Sync workspace artifacts with Drive mirror")
+	printWelcomeCmd(p, "dot backup", "One-stop backup wizard (profile, apps, AI, secrets)")
+	printWelcomeCmd(p, "dot restore", "One-stop restore wizard (cross-host migration)")
 	printWelcomeCmd(p, "dot apps install", "Install macOS cask apps (interactive picker)")
 	printWelcomeCmd(p, "dot apps backup", "Snapshot macOS app settings")
 	printWelcomeCmd(p, "dot profile backup", "Version-snapshot config + app lists + secrets")
@@ -270,18 +272,20 @@ func printUsecases(cmd *cobra.Command) {
 		})
 
 	section(p, "12. Cross-machine migration",
-		"Move your full setup to a new Mac in minutes.",
+		"Move your full setup to a new Mac in minutes — one wizard per side.",
 		[]usecase{
+			{"dot backup",
+				"[old machine] One-stop wizard: profile + apps + AI/Anchor + secrets"},
+			{"dot restore",
+				"[new machine] Pick source host, restore in safe order, optional dot apply"},
+			{"dot backup --yes --scope profile,ai,secrets",
+				"Unattended backup of selected domains"},
+			{"dot restore --yes --host <src>",
+				"Unattended cross-host restore"},
 			{"dot profile backup --tag pre-migration --include-secrets",
-				"[old machine] Snapshot config + age keys to Drive"},
-			{"dot apps backup",
-				"[old machine] Snapshot per-app settings to Drive"},
-			{"dot profile restore --include-secrets",
-				"[new machine] Restore config.yaml + age keys from latest snapshot"},
-			{"dot apply",
-				"[new machine] Apply: packages, shell, git, cask installs, workspace…"},
-			{"dot apps restore",
-				"[new machine] Restore plists and app settings"},
+				"Individual commands remain available for fine-grained control"},
+			{"dot profile restore --include-secrets && dot apply && dot apps restore && dot ai restore",
+				"[new machine] Manual sequence equivalent to the wizard"},
 		})
 
 	section(p, "13. Prompt style",

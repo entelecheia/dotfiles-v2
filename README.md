@@ -41,7 +41,26 @@ dot usecase    # detailed workflow examples
 
 ### Migrate from another machine
 
-**Option A — profile snapshot (recommended on macOS):**
+**Option A — one-stop wizard (recommended):**
+
+```bash
+# On the existing machine — one interactive run backs up everything:
+# profile state, macOS app settings, AI/Anchor settings, encrypted secrets
+dot backup
+
+# On the new machine (Drive already mounted)
+dot restore                           # pick the source host, restore in safe order
+```
+
+`dot backup` confirms the backup root, lets you pick domains
+(profile/apps/ai/secrets), asks about age keys and AI auth tokens, and
+stamps profile + AI snapshots with one shared tag. `dot restore` supports
+cross-host restore (any machine that backed up into the same root),
+optionally runs `dot apply` after the profile restore, and preserves every
+overwritten local file in per-step pre-restore backups. Unattended:
+`dot backup --yes --scope profile,ai,secrets` / `dot restore --yes --host <src>`.
+
+**Option B — individual commands:**
 
 ```bash
 # On the existing machine
@@ -61,7 +80,7 @@ The shared backup root lives in a single Drive folder
 user has taken across machines. `profile list` shows every version, and
 `profile restore --version <id>` rolls back to any specific one.
 
-**Option B — plain YAML export:**
+**Option C — plain YAML export:**
 
 ```bash
 # On the existing machine — export config
