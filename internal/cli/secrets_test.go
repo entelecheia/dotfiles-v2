@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
@@ -323,5 +324,230 @@ func TestRestoreSecretFile_MissingIdentity(t *testing.T) {
 func TestBackupTimestamp_FilesystemSafe(t *testing.T) {
 	if ts := backupTimestamp(); strings.ContainsRune(ts, ':') {
 		t.Errorf("timestamp %q contains ':'", ts)
+	}
+}
+
+// stubAgeEncryptOnly installs an age stub where encrypt copies the source
+// but decrypt always fails — the shape of a typo'd recipient: archives are
+// produced fine and only the round-trip check can catch them.
+func stubAgeEncryptOnly(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = \"-e\" ]; then cat \"$6\" > \"$5\"; exit 0; fi\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "age"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestEncryptSecretFile_FailureLeavesDestUntouched(t *testing.T) {
+	stubAge(t, true) // every age call fails
+	dir := t.TempDir()
+	src := filepath.Join(dir, "plain")
+	dest := filepath.Join(dir, "store", "plain.age")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte("previous-good-archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	runner := exec.NewRunner(false, logger)
+
+	err := encryptSecretFile(context.Background(), runner, []string{"-r", "age1x"}, src, dest, nil)
+	if err == nil {
+		t.Fatal("expected encryption failure")
+	}
+	got, _ := os.ReadFile(dest)
+	if string(got) != "previous-good-archive" {
+		t.Errorf("previous archive corrupted: %q", got)
+	}
+	litter, _ := filepath.Glob(filepath.Join(filepath.Dir(dest), ".*enc-*"))
+	if len(litter) != 0 {
+		t.Errorf("temp litter left behind: %v", litter)
+	}
+}
+
+func TestEncryptSecretFile_DryRunTouchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "plain")
+	dest := filepath.Join(dir, "store", "plain.age")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte("previous-good-archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	dryRunner := exec.NewRunner(true, logger)
+
+	if err := encryptSecretFile(context.Background(), dryRunner, []string{"-r", "age1x"}, src, dest, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(dest)
+	if string(got) != "previous-good-archive" {
+		t.Errorf("dry-run replaced the archive: %q", got)
+	}
+}
+
+func TestCopySecretArchive_TightensPermissions(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.age")
+	dst := filepath.Join(dir, "out", "a.age")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	if err := copySecretArchive(exec.NewRunner(false, logger), src, dst); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("backup copy mode = %v, want 0600", info.Mode().Perm())
+	}
+	got, _ := os.ReadFile(dst)
+	if string(got) != "payload" {
+		t.Errorf("content = %q", got)
+	}
+}
+
+func TestSecretsRestoreFiles_ReportsUnmatchedArchives(t *testing.T) {
+	stubAge(t, false)
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "id_ed25519"), []byte("identity"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	for _, name := range []string{"id_ed25519.age", "90-secrets.sh.age", "id_rsa.age"} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte("payload-"+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	runner := exec.NewRunner(false, logger)
+	p := &Printer{Out: os.Stderr, Err: os.Stderr}
+
+	result, err := secretsRestoreFiles(context.Background(), runner, p, &config.UserState{}, home, src, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// id_ed25519.age restores onto the identical identity file content?
+	// No — stub writes "payload-id_ed25519.age", differing → overwrite (unattended=true).
+	if result.Restored != 2 {
+		t.Errorf("Restored = %d, want 2", result.Restored)
+	}
+	if len(result.Unmatched) != 1 || result.Unmatched[0] != "id_rsa.age" {
+		t.Errorf("Unmatched = %v, want [id_rsa.age]", result.Unmatched)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "shell", "90-secrets.sh")); err != nil {
+		t.Errorf("shell secrets not restored: %v", err)
+	}
+}
+
+func TestSSHKeyNameRejectsPathSeparators(t *testing.T) {
+	for _, bad := range []string{"../evil", "a/b", "..", "."} {
+		state := &config.UserState{}
+		state.SSH.KeyName = bad
+		if _, err := sshKeyName(state); err == nil {
+			t.Errorf("sshKeyName(%q) should fail", bad)
+		}
+	}
+	state := &config.UserState{}
+	state.SSH.KeyName = "id_rsa"
+	if name, err := sshKeyName(state); err != nil || name != "id_rsa" {
+		t.Errorf("sshKeyName(id_rsa) = %q, %v", name, err)
+	}
+}
+
+func TestSecretsBackupCLI_DryRunCreatesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	store := filepath.Join(home, ".local", "share", "dotfiles-secrets")
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "x.age"), []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, "backup-dest")
+
+	out, errOut, err := runDotForTest("secrets", "backup", dest, "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run backup: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Errorf("dry-run created the destination dir: %v", err)
+	}
+}
+
+func TestSecretsInitCLI_VerificationFailureLeavesStoreClean(t *testing.T) {
+	stubAgeEncryptOnly(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	// State with a (typo'd) recipient; identity is a native age key so the
+	// round-trip check runs without ssh-keygen passphrase probing.
+	writeCLITestFile(t, filepath.Join(home, ".config", "dotfiles", "config.yaml"),
+		"secrets:\n  age_recipients: [\"age1typo\"]\n  age_identity: ~/.ssh/age_key\n")
+	writeCLITestFile(t, filepath.Join(home, ".ssh", "age_key"), "AGE-SECRET-KEY-1TEST")
+	writeCLITestFile(t, filepath.Join(home, ".ssh", "id_ed25519"), "ssh-key-material")
+
+	out, errOut, err := runDotForTest("secrets", "init")
+	if err == nil {
+		t.Fatalf("expected round-trip verification failure\nstdout=%s\nstderr=%s", out, errOut)
+	}
+	if !strings.Contains(err.Error(), "verification") {
+		t.Errorf("error should mention verification: %v", err)
+	}
+	store := filepath.Join(home, ".local", "share", "dotfiles-secrets")
+	entries, _ := os.ReadDir(store)
+	for _, e := range entries {
+		t.Errorf("store should be clean after failed verification, found %s", e.Name())
+	}
+}
+
+func TestSecretsInitCLI_RoundtripVerifiedSuccess(t *testing.T) {
+	stubAge(t, false) // encrypt and decrypt both "work"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	writeCLITestFile(t, filepath.Join(home, ".config", "dotfiles", "config.yaml"),
+		"secrets:\n  age_recipients: [\"age1good\"]\n  age_identity: ~/.ssh/age_key\n")
+	writeCLITestFile(t, filepath.Join(home, ".ssh", "age_key"), "AGE-SECRET-KEY-1TEST")
+	writeCLITestFile(t, filepath.Join(home, ".ssh", "id_ed25519"), "ssh-key-material")
+
+	out, errOut, err := runDotForTest("secrets", "init")
+	if err != nil {
+		t.Fatalf("init: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	archive := filepath.Join(home, ".local", "share", "dotfiles-secrets", "id_ed25519.age")
+	got, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatalf("archive missing: %v", err)
+	}
+	if string(got) != "ssh-key-material" {
+		t.Errorf("stub-encrypted archive content = %q", got)
+	}
+	litter, _ := filepath.Glob(filepath.Join(home, ".local", "share", "dotfiles-secrets", ".*"))
+	if len(litter) != 0 {
+		t.Errorf("temp litter in store: %v", litter)
 	}
 }

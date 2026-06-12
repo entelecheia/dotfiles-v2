@@ -64,6 +64,145 @@ func secretsStorePath() (string, error) {
 	return filepath.Join(home, secretsDir), nil
 }
 
+// sshKeyName returns the configured SSH key name, rejecting values that
+// would escape ~/.ssh or the secrets store when interpolated into paths.
+func sshKeyName(state *config.UserState) (string, error) {
+	keyName := state.SSH.KeyName
+	if keyName == "" {
+		return "id_ed25519", nil
+	}
+	if strings.ContainsAny(keyName, "/\\") || keyName == "." || keyName == ".." {
+		return "", fmt.Errorf("invalid ssh.key_name %q: must be a bare file name", keyName)
+	}
+	return keyName, nil
+}
+
+// resolveAgeIdentity returns the age identity path (default
+// ~/.ssh/id_ed25519) with a leading ~ expanded.
+func resolveAgeIdentity(state *config.UserState, home string) string {
+	identity := state.Secrets.AgeIdentity
+	if identity == "" {
+		return filepath.Join(home, ".ssh", "id_ed25519")
+	}
+	if strings.HasPrefix(identity, "~/") {
+		return filepath.Join(home, identity[2:])
+	}
+	if identity == "~" {
+		return home
+	}
+	return identity
+}
+
+// secretEntry maps one encrypted archive name to its plaintext location.
+type secretEntry struct {
+	Label   string      // human-readable name for reports
+	AgeName string      // file name inside the store / backup dir
+	Plain   string      // plaintext path (encrypt source, restore dest)
+	DirPerm os.FileMode // permission for the plaintext parent dir
+}
+
+// secretEntries is the single source of truth for which files `dot
+// secrets` manages — init, restore, and status all derive from it.
+func secretEntries(state *config.UserState, home string) ([]secretEntry, error) {
+	keyName, err := sshKeyName(state)
+	if err != nil {
+		return nil, err
+	}
+	return []secretEntry{
+		{
+			Label:   "SSH key",
+			AgeName: keyName + ".age",
+			Plain:   filepath.Join(home, ".ssh", keyName),
+			DirPerm: 0o700,
+		},
+		{
+			Label:   "Shell secrets",
+			AgeName: "90-secrets.sh.age",
+			Plain:   filepath.Join(home, ".config", "shell", "90-secrets.sh"),
+			DirPerm: 0o755,
+		},
+	}, nil
+}
+
+// encryptSecretFile encrypts src to dest without ever truncating an
+// existing dest on failure: age writes into a 0600 temp file in the store
+// directory, the result is optionally round-trip verified with verify, and
+// only then renamed over dest. The dry-run guard comes first — otherwise
+// the temp/rename dance would clobber a good archive with an empty file
+// while runner.Run no-ops.
+func encryptSecretFile(
+	ctx context.Context,
+	runner *exec.Runner,
+	recipientArgs []string,
+	src, dest string,
+	verify func(agePath string) error,
+) error {
+	if runner.DryRun {
+		runner.Logger.Info("dry-run: would encrypt", "src", src, "dest", dest)
+		return nil
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dest), "."+filepath.Base(dest)+".enc-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+	defer os.Remove(tmpPath) // no-op after a successful rename
+
+	args := append([]string{"-e"}, recipientArgs...)
+	args = append(args, "-o", tmpPath, src)
+	if _, err := runner.Run(ctx, "age", args...); err != nil {
+		return fmt.Errorf("encrypting %s: %w (existing %s untouched)", src, err, dest)
+	}
+	if verify != nil {
+		if err := verify(tmpPath); err != nil {
+			return fmt.Errorf("round-trip verification of %s failed: %w (existing %s untouched)", src, err, dest)
+		}
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		return fmt.Errorf("replacing %s: %w", dest, err)
+	}
+	return nil
+}
+
+// secretsVerifier builds the round-trip check used at encrypt time: it
+// proves the configured identity can decrypt what the configured
+// recipients produced, so undecryptable archives are caught while the
+// plaintext still exists — not at restore time. Returns (nil, reason) when
+// verification must be skipped (missing or passphrase-protected identity,
+// which age would prompt for on /dev/tty and appear to hang).
+func secretsVerifier(ctx context.Context, runner *exec.Runner, identity string) (func(string) error, string) {
+	if runner.DryRun {
+		return nil, ""
+	}
+	if !runner.FileExists(identity) {
+		return nil, fmt.Sprintf("age identity %s not found", identity)
+	}
+	if head, err := os.ReadFile(identity); err == nil && !bytes.Contains(head, []byte("AGE-SECRET-KEY-")) {
+		// SSH identity: detect passphrase protection without prompting.
+		if runner.CommandExists("ssh-keygen") {
+			if _, err := runner.RunQuery(ctx, "ssh-keygen", "-y", "-P", "", "-f", identity); err != nil {
+				return nil, fmt.Sprintf("identity %s appears passphrase-protected", identity)
+			}
+		}
+	}
+	return func(agePath string) error {
+		out, err := os.CreateTemp(filepath.Dir(agePath), ".verify-*")
+		if err != nil {
+			return err
+		}
+		outPath := out.Name()
+		if err := out.Close(); err != nil {
+			return err
+		}
+		defer os.Remove(outPath)
+		_, err = runner.Run(ctx, "age", "-d", "-i", identity, "-o", outPath, agePath)
+		return err
+	}, ""
+}
+
 // newSecretsInitCmd encrypts local secrets files with age.
 func newSecretsInitCmd() *cobra.Command {
 	var scaffold bool
@@ -87,16 +226,18 @@ func newSecretsInitCmd() *cobra.Command {
 				return err
 			}
 
+			runner := secretsRunner(cmd)
+			p := printerFrom(cmd)
+
 			storeDir, err := secretsStorePath()
 			if err != nil {
 				return err
 			}
-			if err := os.MkdirAll(storeDir, 0700); err != nil {
+			if runner.DryRun {
+				runner.Logger.Info("dry-run: would create secrets dir", "path", storeDir)
+			} else if err := os.MkdirAll(storeDir, 0700); err != nil {
 				return fmt.Errorf("creating secrets dir: %w", err)
 			}
-
-			runner := secretsRunner(cmd)
-			p := printerFrom(cmd)
 
 			if !runner.CommandExists("age") {
 				return fmt.Errorf("age is not installed — run 'dot apply' to install it")
@@ -108,29 +249,24 @@ func newSecretsInitCmd() *cobra.Command {
 				recipientArgs = append(recipientArgs, "-r", r)
 			}
 
-			// Encrypt SSH private key.
-			keyName := state.SSH.KeyName
-			if keyName == "" {
-				keyName = "id_ed25519"
-			}
-			sshKeyPath := filepath.Join(home, ".ssh", keyName)
-			if runner.FileExists(sshKeyPath) {
-				dest := filepath.Join(storeDir, keyName+".age")
-				args := append([]string{"-e"}, recipientArgs...)
-				args = append(args, "-o", dest, sshKeyPath)
-				if _, err := runner.Run(ctx, "age", args...); err != nil {
-					return fmt.Errorf("encrypting SSH key: %w", err)
-				}
-				p.Line("  Encrypted: %s -> %s", sshKeyPath, dest)
-			} else {
-				p.Line("  SSH key not found, skipping: %s", sshKeyPath)
+			// Round-trip verification: a typo'd recipient produces archives
+			// that encrypt fine and fail only at restore time, when the
+			// plaintext may already be gone.
+			verify, skipReason := secretsVerifier(ctx, runner, resolveAgeIdentity(state, home))
+			if skipReason != "" {
+				p.Warn("  decrypt verification skipped: %s — restore from this archive is unverified", skipReason)
 			}
 
-			// Encrypt shell secrets if they exist.
+			entries, err := secretEntries(state, home)
+			if err != nil {
+				return err
+			}
+
+			// Optionally scaffold the shell secrets template first so the
+			// entry loop below picks it up.
 			shellSecrets := filepath.Join(home, ".config", "shell", "90-secrets.sh")
 			if scaffold && !runner.FileExists(shellSecrets) {
-				dryRun, _ := cmd.Flags().GetBool("dry-run")
-				if dryRun {
+				if runner.DryRun {
 					p.Line("  [dry-run] Would scaffold: %s (0600)", shellSecrets)
 				} else {
 					if err := os.MkdirAll(filepath.Dir(shellSecrets), 0755); err != nil {
@@ -142,16 +278,17 @@ func newSecretsInitCmd() *cobra.Command {
 					p.Line("  Scaffolded: %s (0600)", shellSecrets)
 				}
 			}
-			if runner.FileExists(shellSecrets) {
-				dest := filepath.Join(storeDir, "90-secrets.sh.age")
-				args := append([]string{"-e"}, recipientArgs...)
-				args = append(args, "-o", dest, shellSecrets)
-				if _, err := runner.Run(ctx, "age", args...); err != nil {
-					return fmt.Errorf("encrypting shell secrets: %w", err)
+
+			for _, entry := range entries {
+				if !runner.FileExists(entry.Plain) {
+					p.Line("  %s not found, skipping: %s", entry.Label, entry.Plain)
+					continue
 				}
-				p.Line("  Encrypted: %s -> %s", shellSecrets, dest)
-			} else {
-				p.Line("  Shell secrets not found, skipping: %s", shellSecrets)
+				dest := filepath.Join(storeDir, entry.AgeName)
+				if err := encryptSecretFile(ctx, runner, recipientArgs, entry.Plain, dest, verify); err != nil {
+					return fmt.Errorf("encrypting %s: %w", entry.Label, err)
+				}
+				p.Line("  Encrypted: %s -> %s", entry.Plain, dest)
 			}
 
 			p.Line("Done. Run 'dot secrets list' to verify.")
@@ -162,6 +299,73 @@ func newSecretsInitCmd() *cobra.Command {
 	return cmd
 }
 
+// copySecretArchive copies one .age file atomically: read + 0600 temp +
+// rename, so an interrupted copy can never truncate the previous (and
+// possibly only) backup copy, and backup copies never inherit a loose
+// mode from the store.
+func copySecretArchive(runner *exec.Runner, src, dst string) error {
+	if runner.DryRun {
+		runner.Logger.Info("dry-run: would copy", "src", src, "dst", dst)
+		return nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".copy-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// secretsBackupFiles copies every *.age in the store to dest. Returns the
+// number of files copied; (0, nil) when the store doesn't exist yet.
+func secretsBackupFiles(runner *exec.Runner, p *Printer, storeDir, dest string) (int, error) {
+	entries, err := os.ReadDir(storeDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reading secrets dir: %w", err)
+	}
+
+	if runner.DryRun {
+		runner.Logger.Info("dry-run: would create destination", "path", dest)
+	} else if err := os.MkdirAll(dest, 0700); err != nil {
+		return 0, fmt.Errorf("creating destination: %w", err)
+	}
+
+	copied := 0
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".age" {
+			continue
+		}
+		src := filepath.Join(storeDir, e.Name())
+		dst := filepath.Join(dest, e.Name())
+		if err := copySecretArchive(runner, src, dst); err != nil {
+			return copied, fmt.Errorf("copying %s: %w", e.Name(), err)
+		}
+		p.Line("  Copied: %s", e.Name())
+		copied++
+	}
+	return copied, nil
+}
+
 // newSecretsBackupCmd copies *.age files to a destination directory.
 func newSecretsBackupCmd() *cobra.Command {
 	return &cobra.Command{
@@ -169,13 +373,7 @@ func newSecretsBackupCmd() *cobra.Command {
 		Short: "Copy encrypted secrets to a destination directory",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-
 			dest := args[0]
-			if err := os.MkdirAll(dest, 0700); err != nil {
-				return fmt.Errorf("creating destination: %w", err)
-			}
-
 			storeDir, err := secretsStorePath()
 			if err != nil {
 				return err
@@ -184,41 +382,23 @@ func newSecretsBackupCmd() *cobra.Command {
 			runner := secretsRunner(cmd)
 			p := printerFrom(cmd)
 
-			entries, err := os.ReadDir(storeDir)
+			if _, err := os.Stat(storeDir); os.IsNotExist(err) {
+				p.Line("No secrets store found. Run 'dot secrets init' first.")
+				return nil
+			}
+
+			copied, err := secretsBackupFiles(runner, p, storeDir, dest)
 			if err != nil {
-				if os.IsNotExist(err) {
-					p.Line("No secrets store found. Run 'dot secrets init' first.")
-					return nil
-				}
-				return fmt.Errorf("reading secrets dir: %w", err)
+				return err
 			}
-
-			copied := 0
-			for _, e := range entries {
-				if e.IsDir() {
-					continue
-				}
-				if filepath.Ext(e.Name()) != ".age" {
-					continue
-				}
-				src := filepath.Join(storeDir, e.Name())
-				dst := filepath.Join(dest, e.Name())
-				if _, err := runner.Run(ctx, "cp", src, dst); err != nil {
-					return fmt.Errorf("copying %s: %w", e.Name(), err)
-				}
-				p.Line("  Copied: %s", e.Name())
-				copied++
-			}
-
 			if copied == 0 {
 				p.Line("No .age files found to backup.")
 				return nil
 			}
 			p.Line("Backup complete: %d file(s) -> %s", copied, dest)
 
-			// Record last-backup location (skip in dry-run — runner.Run didn't copy).
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			if dryRun {
+			// Record last-backup location (skip in dry-run — nothing was copied).
+			if runner.DryRun {
 				return nil
 			}
 			absDest, err := filepath.Abs(dest)
@@ -270,13 +450,15 @@ func restoreSecretFile(
 	dirPerm os.FileMode,
 	confirm func(dest string) (bool, error),
 ) (status restoreStatus, backupPath string, err error) {
+	// Identity check before the dry-run short-circuit, so a dry-run preview
+	// fails the same way the real restore would.
+	if !runner.FileExists(identity) {
+		return 0, "", fmt.Errorf("age identity not found: %s", identity)
+	}
+
 	if runner.DryRun {
 		runner.Logger.Info("dry-run: would restore", "src", srcAge, "dest", destPath)
 		return restoreWritten, "", nil
-	}
-
-	if !runner.FileExists(identity) {
-		return 0, "", fmt.Errorf("age identity not found: %s", identity)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(destPath), dirPerm); err != nil {
@@ -335,6 +517,86 @@ func restoreSecretFile(
 	return restoreWritten, backupPath, nil
 }
 
+// secretsRestoreResult summarizes a secretsRestoreFiles run.
+type secretsRestoreResult struct {
+	Restored  int
+	Unchanged int
+	Skipped   int      // user declined overwrite
+	Unmatched []string // *.age files in src that map to no known entry
+}
+
+// secretsRestoreFiles decrypts every known archive in src back to its
+// plaintext location, then reports archives that matched no entry — those
+// were backed up (backup copies all *.age) but cannot be restored without
+// a matching entry, e.g. an SSH key from a host with a different
+// ssh.key_name.
+func secretsRestoreFiles(
+	ctx context.Context,
+	runner *exec.Runner,
+	p *Printer,
+	state *config.UserState,
+	home, src string,
+	unattended bool,
+) (*secretsRestoreResult, error) {
+	if !runner.CommandExists("age") {
+		return nil, fmt.Errorf("age is not installed — run 'dot apply' to install it")
+	}
+	entries, err := secretEntries(state, home)
+	if err != nil {
+		return nil, err
+	}
+	identity := resolveAgeIdentity(state, home)
+
+	confirm := func(dest string) (bool, error) {
+		return ui.Confirm(fmt.Sprintf("%s exists and differs — overwrite? (a timestamped .bak copy will be saved)", dest), unattended)
+	}
+
+	result := &secretsRestoreResult{}
+	known := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		known[entry.AgeName] = true
+		ageSrc := filepath.Join(src, entry.AgeName)
+		if !runner.FileExists(ageSrc) {
+			p.Line("  %s archive not found, skipping: %s", entry.Label, ageSrc)
+			continue
+		}
+		status, backup, err := restoreSecretFile(ctx, runner, identity, ageSrc, entry.Plain, entry.DirPerm, confirm)
+		if err != nil {
+			return result, fmt.Errorf("restoring %s: %w", entry.Label, err)
+		}
+		switch status {
+		case restoreWritten:
+			result.Restored++
+			p.Line("  Restored: %s", entry.Plain)
+			if backup != "" {
+				p.Line("  Backup:   %s", backup)
+			}
+		case restoreUnchanged:
+			result.Unchanged++
+			p.Line("  Unchanged: %s", entry.Plain)
+		case restoreSkipped:
+			result.Skipped++
+			p.Warn("  Skipped (declined overwrite): %s", entry.Plain)
+		}
+	}
+
+	if dirEntries, err := os.ReadDir(src); err == nil {
+		for _, e := range dirEntries {
+			name := e.Name()
+			if e.IsDir() || filepath.Ext(name) != ".age" || known[name] {
+				continue
+			}
+			result.Unmatched = append(result.Unmatched, name)
+		}
+	}
+	if len(result.Unmatched) > 0 {
+		p.Warn("  %d archive(s) in %s matched no known secret and were NOT restored: %s",
+			len(result.Unmatched), src, strings.Join(result.Unmatched, ", "))
+		p.Warn("  (an SSH key from another host? set ssh.key_name accordingly and re-run restore)")
+	}
+	return result, nil
+}
+
 func newSecretsRestoreCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "restore <source>",
@@ -343,85 +605,22 @@ func newSecretsRestoreCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 
-			src := args[0]
-
 			state, err := config.LoadState()
 			if err != nil {
 				return fmt.Errorf("loading state: %w", err)
 			}
-
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return err
 			}
 
-			identity := state.Secrets.AgeIdentity
-			if identity == "" {
-				identity = filepath.Join(home, ".ssh", "id_ed25519")
-			}
-			// Expand tilde in identity path.
-			if strings.HasPrefix(identity, "~/") {
-				identity = filepath.Join(home, identity[2:])
-			} else if identity == "~" {
-				identity = home
-			}
-
 			runner := secretsRunner(cmd)
 			p := printerFrom(cmd)
-
-			if !runner.CommandExists("age") {
-				return fmt.Errorf("age is not installed — run 'dot apply' to install it")
-			}
-
-			keyName := state.SSH.KeyName
-			if keyName == "" {
-				keyName = "id_ed25519"
-			}
-
 			yes, _ := cmd.Flags().GetBool("yes")
-			confirm := func(dest string) (bool, error) {
-				return ui.Confirm(fmt.Sprintf("%s exists and differs — overwrite? (a timestamped .bak copy will be saved)", dest), yes)
-			}
-			report := func(dest string, status restoreStatus, backup string) {
-				switch status {
-				case restoreWritten:
-					p.Line("  Restored: %s", dest)
-					if backup != "" {
-						p.Line("  Backup:   %s", backup)
-					}
-				case restoreUnchanged:
-					p.Line("  Unchanged: %s", dest)
-				case restoreSkipped:
-					p.Warn("  Skipped (declined overwrite): %s", dest)
-				}
-			}
 
-			// Restore SSH private key.
-			sshAgeSrc := filepath.Join(src, keyName+".age")
-			if runner.FileExists(sshAgeSrc) {
-				sshDest := filepath.Join(home, ".ssh", keyName)
-				status, backup, err := restoreSecretFile(ctx, runner, identity, sshAgeSrc, sshDest, 0700, confirm)
-				if err != nil {
-					return fmt.Errorf("restoring SSH key: %w", err)
-				}
-				report(sshDest, status, backup)
-			} else {
-				p.Line("  SSH key archive not found, skipping: %s", sshAgeSrc)
+			if _, err := secretsRestoreFiles(ctx, runner, p, state, home, args[0], yes); err != nil {
+				return err
 			}
-
-			// Restore shell secrets.
-			shellAgeSrc := filepath.Join(src, "90-secrets.sh.age")
-			if runner.FileExists(shellAgeSrc) {
-				shellDest := filepath.Join(home, ".config", "shell", "90-secrets.sh")
-				status, backup, err := restoreSecretFile(ctx, runner, identity, shellAgeSrc, shellDest, 0755, confirm)
-				if err != nil {
-					return fmt.Errorf("restoring shell secrets: %w", err)
-				}
-				report(shellDest, status, backup)
-			} else {
-				p.Line("  Shell secrets archive not found, skipping: %s", shellAgeSrc)
-			}
-
 			p.Line("Restore complete.")
 			return nil
 		},
@@ -449,9 +648,9 @@ func newSecretsStatusCmd() *cobra.Command {
 				return err
 			}
 
-			keyName := state.SSH.KeyName
-			if keyName == "" {
-				keyName = "id_ed25519"
+			entries, err := secretEntries(state, home)
+			if err != nil {
+				return err
 			}
 
 			runner := secretsRunner(cmd)
@@ -466,20 +665,18 @@ func newSecretsStatusCmd() *cobra.Command {
 			}
 
 			p.Line("Plaintext files:")
-			checkFile("SSH key (~/.ssh/"+keyName+")", filepath.Join(home, ".ssh", keyName))
-			checkFile("Shell secrets", filepath.Join(home, ".config", "shell", "90-secrets.sh"))
+			for _, entry := range entries {
+				checkFile(entry.Label, entry.Plain)
+			}
 
 			p.Line("")
 			p.Line("Encrypted files:")
-			checkFile(keyName+".age", filepath.Join(storeDir, keyName+".age"))
-			checkFile("90-secrets.sh.age", filepath.Join(storeDir, "90-secrets.sh.age"))
+			for _, entry := range entries {
+				checkFile(entry.AgeName, filepath.Join(storeDir, entry.AgeName))
+			}
 
 			p.Line("")
-			identity := state.Secrets.AgeIdentity
-			if identity == "" {
-				identity = filepath.Join(home, ".ssh", "id_ed25519")
-			}
-			p.Line("  Age identity: %s", identity)
+			p.Line("  Age identity: %s", resolveAgeIdentity(state, home))
 			if len(state.Secrets.AgeRecipients) > 0 {
 				p.Line("  Age recipients:")
 				for _, r := range state.Secrets.AgeRecipients {
