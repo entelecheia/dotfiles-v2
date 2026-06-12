@@ -82,3 +82,32 @@ func TestProfileCLIRestoreRejectsDeadLatestFlag(t *testing.T) {
 		t.Error("removed --latest flag should be rejected")
 	}
 }
+
+func TestProfileCLICrossHostRestore(t *testing.T) {
+	home, root := newProfileCLIFixture(t)
+	statePath := filepath.Join(home, ".config", "dotfiles", "config.yaml")
+
+	// Simulate a snapshot taken on another machine by backing up and then
+	// renaming the host directory.
+	if _, _, err := runDotForTest("profile", "backup", "--to", root, "--tag", "other"); err != nil {
+		t.Fatal(err)
+	}
+	profiles := filepath.Join(root, "profiles")
+	entries, err := os.ReadDir(profiles)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("profiles dir: %v %v", entries, err)
+	}
+	if err := os.Rename(filepath.Join(profiles, entries[0].Name()), filepath.Join(profiles, "otherhost")); err != nil {
+		t.Fatal(err)
+	}
+
+	writeCLITestFile(t, statePath, "name: mutated\n")
+	out, errOut, err := runDotForTest("profile", "restore", "--from", root, "--host", "otherhost", "--yes")
+	if err != nil {
+		t.Fatalf("cross-host restore: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	got, _ := os.ReadFile(statePath)
+	if string(got) != "name: original\n" {
+		t.Errorf("state not restored cross-host: %q", got)
+	}
+}

@@ -764,3 +764,23 @@ func DetectDriveCandidate(home string) string {
 	}
 	return ""
 }
+
+// ListHosts enumerates the hostnames that have app-settings archives under
+// root, sorted. Returns (nil, nil) when the tree doesn't exist yet.
+func ListHosts(root string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(root, "app-settings"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, en := range entries {
+		if en.IsDir() {
+			out = append(out, en.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}

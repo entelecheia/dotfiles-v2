@@ -104,6 +104,7 @@ func newAIStatusCmd() *cobra.Command {
 		RunE:  runAIStatus,
 	}
 	c.Flags().String("from", "", "Backup root to inspect")
+	c.Flags().String("host", "", "Hostname to inspect (default: this host)")
 	c.Flags().Bool("include-auth", false, "Include auth/local-secret paths in status")
 	return c
 }
@@ -114,6 +115,7 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 	p := printerFrom(cmd)
 	p.Header("AI Config Status")
 	p.KV("Host", eng.Hostname)
@@ -187,6 +189,7 @@ func newAIRestoreCmd() *cobra.Command {
 		RunE:  runAIRestore,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
 	c.Flags().String("version", "", `Specific version to restore, or "latest" (default: latest)`)
 	c.Flags().Bool("include-auth", false, "Restore auth/local-secret files from the snapshot")
 	c.Flags().Bool("reapply-agents", false, "After restore, reapply the agents SSOT to tool targets")
@@ -202,6 +205,7 @@ func runAIRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 	p := printerFrom(cmd)
 	if version == "" || version == "latest" {
 		v, err := eng.ResolveLatest()
@@ -999,6 +1003,7 @@ func newAIPruneCmd() *cobra.Command {
 		RunE:  runAIPrune,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Hostname to prune (default: this host)")
 	c.Flags().Int("keep", 5, "Number of most recent snapshots to keep")
 	return c
 }
@@ -1010,6 +1015,7 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 	p := printerFrom(cmd)
 
 	all, err := eng.List()

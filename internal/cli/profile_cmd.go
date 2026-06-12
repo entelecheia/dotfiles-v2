@@ -189,6 +189,16 @@ func newProfileEngine(cmd *cobra.Command) (*profilesnap.Engine, error) {
 	}, nil
 }
 
+// hostOverride returns the --host flag value when set, else current.
+// Restore/list-style commands use it to point the engine at another
+// machine's snapshots under the same backup root (cross-host restore).
+func hostOverride(cmd *cobra.Command, current string) string {
+	if h, err := cmd.Flags().GetString("host"); err == nil && h != "" {
+		return h
+	}
+	return current
+}
+
 // --- backup ---
 
 func newProfileBackupCmd() *cobra.Command {
@@ -248,6 +258,7 @@ func newProfileRestoreCmd() *cobra.Command {
 		RunE:  runProfileRestore,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
 	c.Flags().String("version", "", "Specific version to restore (default: latest)")
 	c.Flags().Bool("include-secrets", false, "Restore ~/.ssh/age_key* from the snapshot if present")
 	c.Flags().Bool("no-state", false, "Skip copying config.yaml back to ~/.config/dotfiles/")
@@ -260,6 +271,7 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 	version, _ := cmd.Flags().GetString("version")
 	includeSecrets, _ := cmd.Flags().GetBool("include-secrets")
 	noState, _ := cmd.Flags().GetBool("no-state")
@@ -334,6 +346,7 @@ func newProfileListCmd() *cobra.Command {
 		RunE:  runProfileList,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Hostname to list (default: this host)")
 	return c
 }
 
@@ -342,6 +355,7 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 	snaps, err := eng.List()
 	if err != nil {
 		return err
@@ -391,6 +405,7 @@ func newProfilePruneCmd() *cobra.Command {
 		RunE:  runProfilePrune,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Hostname to prune (default: this host)")
 	c.Flags().Int("keep", 5, "Number of most recent snapshots to keep")
 	return c
 }
@@ -401,6 +416,7 @@ func runProfilePrune(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 	keep, _ := cmd.Flags().GetInt("keep")
 	p := printerFrom(cmd)
 

@@ -346,6 +346,7 @@ func newAppsStatusCmd() *cobra.Command {
 		RunE:  runAppsStatus,
 	}
 	c.Flags().String("from", "", "Backup root to inspect (overrides configured BackupDir)")
+	c.Flags().String("host", "", "Hostname to inspect (default: this host)")
 	return c
 }
 
@@ -354,6 +355,7 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 	mf := eng.Manifest
 
 	var installed map[string]bool
@@ -728,6 +730,7 @@ func newAppsRestoreCmd() *cobra.Command {
 		RunE:  runAppsRestore,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupDir)")
+	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
 	c.Flags().Bool("all", false, "Restore every manifest entry")
 	return c
 }
@@ -743,6 +746,7 @@ func runAppsRestore(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	eng.Hostname = hostOverride(cmd, eng.Hostname)
 
 	// Apps captured by name discovery on the source machine live only in
 	// the archive — synthesize entries for them so they restore too.

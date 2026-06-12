@@ -1044,3 +1044,23 @@ func isExcluded(rel string) bool {
 	}
 	return false
 }
+
+// ListHosts enumerates the hostnames that have AI config snapshots under
+// root, sorted. Returns (nil, nil) when the tree doesn't exist yet.
+func ListHosts(root string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(root, "ai-config"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, en := range entries {
+		if en.IsDir() {
+			out = append(out, en.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}

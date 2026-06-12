@@ -445,3 +445,23 @@ func TestUniqueVersionExhaustionErrors(t *testing.T) {
 		t.Error("expected exhaustion error instead of silently reusing an id")
 	}
 }
+
+func TestListHosts(t *testing.T) {
+	root := t.TempDir()
+	if hosts, err := ListHosts(root); err != nil || hosts != nil {
+		t.Fatalf("missing tree should be (nil, nil): %v %v", hosts, err)
+	}
+	for _, h := range []string{"zeta", "alpha"} {
+		if err := os.MkdirAll(filepath.Join(root, "profiles", h), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(root, "profiles", "stray.txt"), "x", 0o644)
+	hosts, err := ListHosts(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 2 || hosts[0] != "alpha" || hosts[1] != "zeta" {
+		t.Errorf("hosts = %v", hosts)
+	}
+}

@@ -442,3 +442,22 @@ func TestLastBackupStampRoundtrip(t *testing.T) {
 		t.Errorf("stamp roundtrip wrong: %+v", got)
 	}
 }
+
+func TestListHosts(t *testing.T) {
+	root := t.TempDir()
+	if hosts, err := ListHosts(root); err != nil || hosts != nil {
+		t.Fatalf("missing tree should be (nil, nil): %v %v", hosts, err)
+	}
+	for _, h := range []string{"mac2", "mac1"} {
+		if err := os.MkdirAll(filepath.Join(root, "app-settings", h), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hosts, err := ListHosts(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 2 || hosts[0] != "mac1" || hosts[1] != "mac2" {
+		t.Errorf("hosts = %v", hosts)
+	}
+}

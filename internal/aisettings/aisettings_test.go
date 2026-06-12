@@ -467,3 +467,22 @@ func TestAnchorSettingsBackupRestoreRoundtrip(t *testing.T) {
 		t.Errorf("anchor settings not restored: %q", got)
 	}
 }
+
+func TestAIListHosts(t *testing.T) {
+	root := t.TempDir()
+	if hosts, err := ListHosts(root); err != nil || hosts != nil {
+		t.Fatalf("missing tree should be (nil, nil): %v %v", hosts, err)
+	}
+	for _, h := range []string{"b-host", "a-host"} {
+		if err := os.MkdirAll(filepath.Join(root, "ai-config", h), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hosts, err := ListHosts(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 2 || hosts[0] != "a-host" || hosts[1] != "b-host" {
+		t.Errorf("hosts = %v", hosts)
+	}
+}

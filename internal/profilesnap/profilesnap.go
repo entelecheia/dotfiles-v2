@@ -587,3 +587,23 @@ func copyFile(runner *exec.Runner, src, dst string) error {
 	}
 	return os.Rename(tmp, dst)
 }
+
+// ListHosts enumerates the hostnames that have profile snapshots under
+// root, sorted. Returns (nil, nil) when the tree doesn't exist yet.
+func ListHosts(root string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(root, "profiles"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, en := range entries {
+		if en.IsDir() {
+			out = append(out, en.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
