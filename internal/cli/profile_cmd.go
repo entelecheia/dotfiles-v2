@@ -231,7 +231,9 @@ func runProfileBackup(cmd *cobra.Command, _ []string) error {
 		p.Line("  %s  %s", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
 	}
 	if snap.WithSecret {
-		p.Line("  %s  %s", ui.StyleKey.Render("Secrets:"), ui.StyleSuccess.Render("included"))
+		p.Line("  %s  %s", ui.StyleKey.Render("Secrets:"), ui.StyleSuccess.Render(fmt.Sprintf("included (%d file(s))", snap.SecretsCopied)))
+	} else if includeSecrets {
+		p.Warn("  --include-secrets requested but no age_key* found under ~/.ssh — snapshot contains no secrets")
 	}
 	return nil
 }
@@ -247,7 +249,6 @@ func newProfileRestoreCmd() *cobra.Command {
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
 	c.Flags().String("version", "", "Specific version to restore (default: latest)")
-	c.Flags().Bool("latest", false, "Restore the version pointed at by latest.txt (redundant with default)")
 	c.Flags().Bool("include-secrets", false, "Restore ~/.ssh/age_key* from the snapshot if present")
 	c.Flags().Bool("no-state", false, "Skip copying config.yaml back to ~/.config/dotfiles/")
 	return c
@@ -273,7 +274,14 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	}
 
 	if !yes {
-		p.Line("About to overwrite %s from snapshot %s.", eng.StatePath, version)
+		if noState {
+			p.Line("About to restore snapshot %s (state copy skipped via --no-state).", version)
+		} else {
+			p.Line("About to overwrite %s from snapshot %s.", eng.StatePath, version)
+		}
+		if includeSecrets {
+			p.Line("Also overwrites age_key* under %s when the snapshot contains secrets (a pre-restore copy is saved first).", eng.SecretsDir)
+		}
 		ok, err := ui.ConfirmBool("Continue?", false, false)
 		if err != nil {
 			return err
@@ -297,6 +305,21 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	p.Line("  %s  %s", ui.StyleKey.Render("Path:"), ui.StyleValue.Render(snap.Path))
 	if snap.Tag != "" {
 		p.Line("  %s  %s", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
+	}
+	if snap.RestoredState {
+		p.Line("  %s  %s", ui.StyleKey.Render("State:"), ui.StyleValue.Render("restored → "+eng.StatePath))
+	} else {
+		p.Line("  %s  %s", ui.StyleKey.Render("State:"), ui.StyleHint.Render("skipped (--no-state)"))
+	}
+	if includeSecrets {
+		if snap.RestoredSecrets > 0 {
+			p.Line("  %s  %s", ui.StyleKey.Render("Secrets:"), ui.StyleValue.Render(fmt.Sprintf("%d file(s) → %s", snap.RestoredSecrets, eng.SecretsDir)))
+		} else {
+			p.Warn("  Secrets: requested but snapshot %s contains none", snap.Version)
+		}
+	}
+	if snap.PreRestoreBackup != "" {
+		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(snap.PreRestoreBackup))
 	}
 	return nil
 }

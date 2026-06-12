@@ -15,6 +15,7 @@
 package profilesnap
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -48,6 +49,14 @@ type Snapshot struct {
 	Path       string // absolute path to the version directory
 	IsLatest   bool
 	WithSecret bool
+
+	// Backup outcome.
+	SecretsCopied int // number of age_key* files captured
+
+	// Restore outcome.
+	RestoredState    bool   // config.yaml was copied back to StatePath
+	RestoredSecrets  int    // secret files ensured under SecretsDir
+	PreRestoreBackup string // dir holding pre-overwrite copies, "" if none taken
 }
 
 // Engine executes backup/restore/list operations scoped to a host.
@@ -84,16 +93,16 @@ func NewVersion(t time.Time) string {
 // uniqueVersion returns an unused version id near t; suffix "-N" is appended
 // when an earlier snapshot already occupies the natural slot. Protects against
 // back-to-back calls within the same 1s window.
-func (e *Engine) uniqueVersion(t time.Time) string {
+func (e *Engine) uniqueVersion(t time.Time) (string, error) {
 	base := NewVersion(t)
 	candidate := base
 	for i := 2; i < 100; i++ {
 		if _, err := os.Stat(e.VersionPath(candidate)); err != nil && os.IsNotExist(err) {
-			return candidate
+			return candidate, nil
 		}
 		candidate = fmt.Sprintf("%s-%d", base, i)
 	}
-	return candidate
+	return "", fmt.Errorf("no free version id near %s under %s", base, e.HostRoot())
 }
 
 // BackupOptions tune Backup behavior.
@@ -103,13 +112,24 @@ type BackupOptions struct {
 }
 
 // Backup writes a new version directory and advances latest.txt.
-// Returns the created Snapshot.
+// Returns the created Snapshot. A partially written version directory is
+// removed when any step before meta.yaml fails, so List/latest never see
+// orphan snapshots.
 func (e *Engine) Backup(opts BackupOptions) (*Snapshot, error) {
-	version := e.uniqueVersion(time.Now())
+	version, err := e.uniqueVersion(time.Now())
+	if err != nil {
+		return nil, err
+	}
 	dest := e.VersionPath(version)
 	if err := e.Runner.MkdirAll(dest, 0o755); err != nil {
 		return nil, fmt.Errorf("create version dir: %w", err)
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = e.Runner.RemoveAll(dest)
+		}
+	}()
 
 	// 1. state file
 	if _, err := os.Stat(e.StatePath); err == nil {
@@ -131,38 +151,44 @@ func (e *Engine) Backup(opts BackupOptions) (*Snapshot, error) {
 	}
 
 	// 2. secrets (age identities)
+	secretsCopied := 0
 	if opts.IncludeSecrets {
-		if err := e.copySecrets(filepath.Join(dest, "secrets")); err != nil {
+		secretsCopied, err = e.copySecrets(filepath.Join(dest, "secrets"))
+		if err != nil {
 			return nil, fmt.Errorf("copy secrets: %w", err)
 		}
 	}
+	withSecrets := opts.IncludeSecrets && secretsCopied > 0
 
-	// 3. meta
+	// 3. meta — the snapshot is committed once meta.yaml exists.
 	meta := Meta{
 		Version:        version,
 		Tag:            opts.Tag,
 		Hostname:       e.Hostname,
 		CreatedAt:      time.Now().UTC(),
-		IncludeSecrets: opts.IncludeSecrets,
+		IncludeSecrets: withSecrets,
 		StateFile:      e.StatePath,
 		User:           e.User,
 	}
 	if err := writeMeta(e.Runner, filepath.Join(dest, "meta.yaml"), meta); err != nil {
 		return nil, fmt.Errorf("write meta: %w", err)
 	}
+	committed = true
 
-	// 4. latest pointer
+	// 4. latest pointer — failure here keeps the (complete) snapshot;
+	// readLatest falls back to the newest directory.
 	if err := e.Runner.WriteFile(e.LatestPointerPath(), []byte(version+"\n"), 0o644); err != nil {
 		return nil, fmt.Errorf("write latest.txt: %w", err)
 	}
 
 	return &Snapshot{
-		Version:    version,
-		Tag:        opts.Tag,
-		CreatedAt:  meta.CreatedAt,
-		Path:       dest,
-		IsLatest:   true,
-		WithSecret: opts.IncludeSecrets,
+		Version:       version,
+		Tag:           opts.Tag,
+		CreatedAt:     meta.CreatedAt,
+		Path:          dest,
+		IsLatest:      true,
+		WithSecret:    withSecrets,
+		SecretsCopied: secretsCopied,
 	}, nil
 }
 
@@ -174,7 +200,12 @@ type RestoreOptions struct {
 }
 
 // Restore copies state + optional secrets from a snapshot back to $HOME.
-// Returns the Snapshot that was applied.
+// Existing files that would be overwritten are first copied into a
+// pre-restore backup directory under
+// <HomeDir>/.local/share/dotfiles/backup/profile-pre-restore/<ts>/ —
+// deliberately outside both SecretsDir (so copySecrets never sweeps backups
+// into future snapshots) and HostRoot (so List/Prune never mistake them for
+// versions). Returns the Snapshot that was applied.
 func (e *Engine) Restore(opts RestoreOptions) (*Snapshot, error) {
 	version := opts.Version
 	if version == "" {
@@ -191,33 +222,67 @@ func (e *Engine) Restore(opts RestoreOptions) (*Snapshot, error) {
 
 	meta, _ := readMeta(filepath.Join(src, "meta.yaml"))
 
-	if opts.IncludeState {
-		srcCfg := filepath.Join(src, "config.yaml")
-		if _, err := os.Stat(srcCfg); err == nil {
-			if err := e.Runner.MkdirAll(filepath.Dir(e.StatePath), 0o755); err != nil {
-				return nil, err
+	preRoot := e.preRestoreDir(time.Now())
+	preUsed := false
+	backupExisting := func(live, sub string) error {
+		if _, err := os.Stat(live); err != nil {
+			if os.IsNotExist(err) {
+				return nil
 			}
-			if err := copyFile(e.Runner, srcCfg, e.StatePath); err != nil {
-				return nil, fmt.Errorf("restore state: %w", err)
-			}
+			return fmt.Errorf("stat %s: %w", live, err)
 		}
+		dst := filepath.Join(preRoot, sub)
+		if err := e.Runner.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return err
+		}
+		if err := copyFile(e.Runner, live, dst); err != nil {
+			return fmt.Errorf("pre-restore backup of %s: %w", live, err)
+		}
+		preUsed = true
+		return nil
 	}
 
-	if opts.IncludeSecrets {
-		secSrc := filepath.Join(src, "secrets")
-		if _, err := os.Stat(secSrc); err == nil {
-			if err := copyDir(e.Runner, secSrc, e.SecretsDir); err != nil {
-				return nil, fmt.Errorf("restore secrets: %w", err)
+	restoredState := false
+	if opts.IncludeState {
+		srcCfg := filepath.Join(src, "config.yaml")
+		if _, err := os.Stat(srcCfg); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("snapshot %s contains no config.yaml; use --no-state to skip state restore", version)
 			}
+			return nil, fmt.Errorf("stat snapshot config: %w", err)
 		}
+		if err := backupExisting(e.StatePath, "config.yaml"); err != nil {
+			return nil, err
+		}
+		if err := e.Runner.MkdirAll(filepath.Dir(e.StatePath), 0o755); err != nil {
+			return nil, err
+		}
+		if err := copyFile(e.Runner, srcCfg, e.StatePath); err != nil {
+			return nil, fmt.Errorf("restore state: %w", err)
+		}
+		restoredState = true
+	}
+
+	restoredSecrets := 0
+	if opts.IncludeSecrets {
+		n, err := e.restoreSecrets(filepath.Join(src, "secrets"), backupExisting)
+		if err != nil {
+			return nil, err
+		}
+		restoredSecrets = n
 	}
 
 	latest, _ := e.readLatest()
 	snap := &Snapshot{
-		Version:    version,
-		Path:       src,
-		IsLatest:   version == latest,
-		WithSecret: meta != nil && meta.IncludeSecrets,
+		Version:         version,
+		Path:            src,
+		IsLatest:        version == latest,
+		WithSecret:      meta != nil && meta.IncludeSecrets,
+		RestoredState:   restoredState,
+		RestoredSecrets: restoredSecrets,
+	}
+	if preUsed && !e.Runner.DryRun {
+		snap.PreRestoreBackup = preRoot
 	}
 	if meta != nil {
 		snap.Tag = meta.Tag
@@ -226,8 +291,95 @@ func (e *Engine) Restore(opts RestoreOptions) (*Snapshot, error) {
 	return snap, nil
 }
 
+// preRestoreDir picks an unused timestamped directory for pre-overwrite
+// copies. The directory itself is created lazily by the first backup.
+func (e *Engine) preRestoreDir(t time.Time) string {
+	base := filepath.Join(e.HomeDir, ".local", "share", "dotfiles", "backup", "profile-pre-restore", NewVersion(t))
+	dir := base
+	for i := 2; ; i++ {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return dir
+		}
+		dir = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
+// restoreSecrets copies each snapshot secret file back into SecretsDir,
+// backing up differing existing files first and forcing restrictive modes
+// (0700 dir, 0600 files) regardless of the modes stored in the snapshot —
+// cloud backends may have normalized them. Byte-identical files are left in
+// place (permissions still healed). Returns the number of files ensured.
+func (e *Engine) restoreSecrets(secSrc string, backupExisting func(live, sub string) error) (int, error) {
+	entries, err := os.ReadDir(secSrc)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read snapshot secrets: %w", err)
+	}
+	restored := 0
+	for _, en := range entries {
+		if en.IsDir() {
+			continue
+		}
+		name := en.Name()
+		sp := filepath.Join(secSrc, name)
+		dp := filepath.Join(e.SecretsDir, name)
+
+		if restored == 0 {
+			if err := e.Runner.MkdirAll(e.SecretsDir, 0o700); err != nil {
+				return restored, err
+			}
+			if !e.Runner.DryRun {
+				if err := os.Chmod(e.SecretsDir, 0o700); err != nil {
+					return restored, fmt.Errorf("restoring permissions on %s: %w", e.SecretsDir, err)
+				}
+			}
+		}
+
+		newData, err := os.ReadFile(sp)
+		if err != nil {
+			return restored, fmt.Errorf("read snapshot secret %s: %w", name, err)
+		}
+		if oldData, err := os.ReadFile(dp); err == nil {
+			if bytes.Equal(oldData, newData) {
+				if !e.Runner.DryRun {
+					if err := os.Chmod(dp, 0o600); err != nil {
+						return restored, fmt.Errorf("restoring permissions on %s: %w", dp, err)
+					}
+				}
+				restored++
+				continue
+			}
+			if err := backupExisting(dp, filepath.Join("secrets", name)); err != nil {
+				return restored, err
+			}
+		} else if !os.IsNotExist(err) {
+			return restored, fmt.Errorf("read existing %s: %w", dp, err)
+		}
+
+		if err := copyFile(e.Runner, sp, dp); err != nil {
+			return restored, fmt.Errorf("restore secret %s: %w", name, err)
+		}
+		if !e.Runner.DryRun {
+			if err := os.Chmod(dp, 0o600); err != nil {
+				return restored, fmt.Errorf("restoring permissions on %s: %w", dp, err)
+			}
+		}
+		restored++
+	}
+	return restored, nil
+}
+
 // List enumerates snapshots for the host, newest-first.
 func (e *Engine) List() ([]Snapshot, error) {
+	return e.list(false)
+}
+
+// list optionally skips the latest-pointer lookup: readLatest's fallback
+// enumerates directories via list(true), so going through List() there
+// would recurse forever whenever latest.txt is missing.
+func (e *Engine) list(withoutLatest bool) ([]Snapshot, error) {
 	entries, err := os.ReadDir(e.HostRoot())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -235,20 +387,27 @@ func (e *Engine) List() ([]Snapshot, error) {
 		}
 		return nil, err
 	}
-	latest, _ := e.readLatest()
+	latest := ""
+	if !withoutLatest {
+		latest, _ = e.readLatest()
+	}
 	var out []Snapshot
 	for _, en := range entries {
 		if !en.IsDir() {
 			continue
 		}
 		v := en.Name()
-		meta, _ := readMeta(filepath.Join(e.HostRoot(), v, "meta.yaml"))
-		snap := Snapshot{Version: v, Path: filepath.Join(e.HostRoot(), v), IsLatest: v == latest}
-		if meta != nil {
-			snap.Tag = meta.Tag
-			snap.CreatedAt = meta.CreatedAt
-			snap.WithSecret = meta.IncludeSecrets
+		meta, err := readMeta(filepath.Join(e.HostRoot(), v, "meta.yaml"))
+		if err != nil || meta == nil {
+			// Not a committed snapshot (partial dir from an old failed
+			// backup, or an unrelated directory) — never list, never let
+			// the latest fallback or Prune act on it.
+			continue
 		}
+		snap := Snapshot{Version: v, Path: filepath.Join(e.HostRoot(), v), IsLatest: v == latest}
+		snap.Tag = meta.Tag
+		snap.CreatedAt = meta.CreatedAt
+		snap.WithSecret = meta.IncludeSecrets
 		out = append(out, snap)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -298,7 +457,7 @@ func (e *Engine) readLatest() (string, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Fall back to newest directory.
-			all, lerr := e.List()
+			all, lerr := e.list(true)
 			if lerr != nil {
 				return "", lerr
 			}
@@ -312,27 +471,34 @@ func (e *Engine) readLatest() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func (e *Engine) copySecrets(destDir string) error {
+// copySecrets captures ~/.ssh/age_key* into the snapshot and returns how
+// many files it copied. The secrets/ directory is only created when at
+// least one key exists, so meta.IncludeSecrets stays truthful.
+func (e *Engine) copySecrets(destDir string) (int, error) {
 	if _, err := os.Stat(e.SecretsDir); err != nil {
-		return nil // no ~/.ssh yet — nothing to copy
-	}
-	if err := e.Runner.MkdirAll(destDir, 0o700); err != nil {
-		return err
+		return 0, nil // no ~/.ssh yet — nothing to copy
 	}
 	entries, err := os.ReadDir(e.SecretsDir)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	copied := 0
 	for _, en := range entries {
 		name := en.Name()
 		if !strings.HasPrefix(name, "age_key") {
 			continue
 		}
-		if err := copyFile(e.Runner, filepath.Join(e.SecretsDir, name), filepath.Join(destDir, name)); err != nil {
-			return err
+		if copied == 0 {
+			if err := e.Runner.MkdirAll(destDir, 0o700); err != nil {
+				return 0, err
+			}
 		}
+		if err := copyFile(e.Runner, filepath.Join(e.SecretsDir, name), filepath.Join(destDir, name)); err != nil {
+			return copied, err
+		}
+		copied++
 	}
-	return nil
+	return copied, nil
 }
 
 func (e *Engine) writeInstallList(dest string, state *config.UserState) error {
@@ -420,47 +586,4 @@ func copyFile(runner *exec.Runner, src, dst string) error {
 		return err
 	}
 	return os.Rename(tmp, dst)
-}
-
-func copyDir(runner *exec.Runner, src, dst string) error {
-	if runner.DryRun {
-		runner.Logger.Info("dry-run: copy dir", "src", src, "dst", dst)
-		return nil
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	for _, en := range entries {
-		sp := filepath.Join(src, en.Name())
-		dp := filepath.Join(dst, en.Name())
-		info, err := en.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(sp)
-			if err != nil {
-				continue
-			}
-			_ = os.Remove(dp)
-			if err := os.Symlink(target, dp); err != nil {
-				return err
-			}
-			continue
-		}
-		if info.IsDir() {
-			if err := copyDir(runner, sp, dp); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := copyFile(runner, sp, dp); err != nil {
-			return err
-		}
-	}
-	return nil
 }
