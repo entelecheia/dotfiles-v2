@@ -52,6 +52,10 @@ type Summary struct {
 	Entries []EntrySummary
 	Files   int
 	Bytes   int64
+
+	// PreBackupPath is set by restore/import when existing live files were
+	// preserved before being overwritten ("" when nothing was preserved).
+	PreBackupPath string
 }
 
 // Meta records snapshot/archive provenance.
@@ -175,13 +179,21 @@ type RestoreOptions struct {
 	IncludeAuth bool
 }
 
-// Backup creates a new host-scoped versioned snapshot.
+// Backup creates a new host-scoped versioned snapshot. A partially written
+// version directory is removed when any step before the metadata files
+// fails, so List/ResolveLatest never see orphan snapshots.
 func (e *Engine) Backup(opts BackupOptions) (*Summary, error) {
 	version := e.uniqueVersion(time.Now())
 	dest := e.VersionPath(version)
 	if err := e.Runner.MkdirAll(filepath.Join(dest, homePrefix), 0o755); err != nil {
 		return nil, fmt.Errorf("create snapshot: %w", err)
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = e.Runner.RemoveAll(dest)
+		}
+	}()
 	sum, err := e.copyFromHome(filepath.Join(dest, homePrefix), opts.IncludeAuth)
 	if err != nil {
 		return nil, err
@@ -191,6 +203,9 @@ func (e *Engine) Backup(opts BackupOptions) (*Summary, error) {
 	if err := e.writeSnapshotMetadata(dest, version, opts.Tag, opts.IncludeAuth, sum); err != nil {
 		return nil, err
 	}
+	committed = true
+	// Pointer failure keeps the (complete) snapshot; ResolveLatest falls
+	// back to the newest directory.
 	if err := e.Runner.WriteFile(e.LatestPointerPath(), []byte(version+"\n"), 0o644); err != nil {
 		return nil, fmt.Errorf("write latest.txt: %w", err)
 	}
@@ -220,7 +235,9 @@ func (e *Engine) Restore(opts RestoreOptions) (*Summary, error) {
 	return sum, nil
 }
 
-// Export writes a portable tar.gz archive.
+// Export writes a portable tar.gz archive. The archive file is always
+// 0600: with IncludeAuth it contains OAuth/API credentials in plaintext,
+// and nothing depends on it being group/world-readable otherwise.
 func (e *Engine) Export(path string, opts BackupOptions) (*Summary, error) {
 	if e.Runner.DryRun {
 		e.Runner.Logger.Info("dry-run: export AI config", "path", path)
@@ -234,11 +251,15 @@ func (e *Engine) Export(path string, opts BackupOptions) (*Summary, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create export dir: %w", err)
 	}
-	out, err := os.Create(path)
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create archive: %w", err)
 	}
 	defer out.Close()
+	// O_CREATE's mode is ignored when the file already existed — heal it.
+	if err := out.Chmod(0o600); err != nil {
+		return nil, fmt.Errorf("chmod archive: %w", err)
+	}
 	gw := gzip.NewWriter(out)
 	defer gw.Close()
 	tw := tar.NewWriter(gw)
@@ -334,18 +355,22 @@ func (e *Engine) list(withoutLatest bool) ([]Snapshot, error) {
 			continue
 		}
 		version := entry.Name()
-		meta, _ := readMeta(filepath.Join(e.HostRoot(), version, "meta.yaml"))
+		meta, err := readMeta(filepath.Join(e.HostRoot(), version, "meta.yaml"))
+		if err != nil || meta == nil {
+			// Not a committed snapshot (partial dir from an old failed
+			// backup, or an unrelated directory) — never list it, never let
+			// the latest fallback pick it.
+			continue
+		}
 		manifest, _ := readArchiveManifest(filepath.Join(e.HostRoot(), version, "manifest.yaml"))
 		s := Snapshot{
 			Version:  version,
 			Path:     filepath.Join(e.HostRoot(), version),
 			IsLatest: version == latest,
 		}
-		if meta != nil {
-			s.Tag = meta.Tag
-			s.CreatedAt = meta.CreatedAt
-			s.IncludeAuth = meta.IncludeAuth
-		}
+		s.Tag = meta.Tag
+		s.CreatedAt = meta.CreatedAt
+		s.IncludeAuth = meta.IncludeAuth
 		if manifest != nil {
 			for _, e := range manifest.Entries {
 				s.Files += e.Files
@@ -357,10 +382,17 @@ func (e *Engine) list(withoutLatest bool) ([]Snapshot, error) {
 	return out, nil
 }
 
-// ResolveLatest returns the latest snapshot id.
+// ResolveLatest returns the latest snapshot id. An empty or dangling
+// pointer (the version was pruned/deleted) falls back to the newest
+// existing snapshot — note the explicit empty check: VersionPath("") is
+// HostRoot() itself, which exists, so a stat alone would pass.
 func (e *Engine) ResolveLatest() (string, error) {
 	if latest, err := e.readLatestPointer(); err == nil {
-		return latest, nil
+		if latest != "" {
+			if _, serr := os.Stat(e.VersionPath(latest)); serr == nil {
+				return latest, nil
+			}
+		}
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
@@ -372,6 +404,35 @@ func (e *Engine) ResolveLatest() (string, error) {
 		return "", fmt.Errorf("no snapshots under %s", e.HostRoot())
 	}
 	return all[0].Version, nil
+}
+
+// Prune removes older snapshots, keeping the newest `keep` (including
+// whatever latest.txt points at).
+func (e *Engine) Prune(keep int) ([]string, error) {
+	if keep < 1 {
+		keep = 1
+	}
+	all, err := e.List()
+	if err != nil {
+		return nil, err
+	}
+	if len(all) <= keep {
+		return nil, nil
+	}
+	latest, _ := e.ResolveLatest()
+	removed := make([]string, 0, len(all)-keep)
+	kept := 0
+	for _, s := range all {
+		if kept < keep || s.Version == latest {
+			kept++
+			continue
+		}
+		if err := e.Runner.RemoveAll(s.Path); err != nil {
+			return removed, err
+		}
+		removed = append(removed, s.Version)
+	}
+	return removed, nil
 }
 
 func (e *Engine) readLatestPointer() (string, error) {
@@ -469,6 +530,10 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 			entries = append(entries, EntrySummary{Tool: entry.Tool, Path: entry.Path, Auth: entry.Auth})
 		}
 	}
+	// One pre-restore dir per restore run, so the user gets a single
+	// "previous files" location instead of one fragment per entry.
+	preRoot := e.preRestoreDir(time.Now())
+	preUsed := false
 	sum := &Summary{}
 	for _, entry := range entries {
 		if entry.Auth && !includeAuth {
@@ -486,8 +551,12 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 			sum.Entries = append(sum.Entries, es)
 			continue
 		}
-		if err := e.backupExisting(dst, entry.Path); err != nil {
+		moved, err := e.backupExisting(dst, entry.Path, preRoot)
+		if err != nil {
 			return nil, err
+		}
+		if moved {
+			preUsed = true
 		}
 		if !e.Runner.DryRun {
 			_ = os.RemoveAll(dst)
@@ -503,7 +572,23 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 		sum.Bytes += bytes
 		sum.Entries = append(sum.Entries, es)
 	}
+	if preUsed && !e.Runner.DryRun {
+		sum.PreBackupPath = preRoot
+	}
 	return sum, nil
+}
+
+// preRestoreDir picks an unused timestamped directory under the documented
+// pre-restore location. Created lazily by backupExisting.
+func (e *Engine) preRestoreDir(t time.Time) string {
+	base := filepath.Join(e.HomeDir, ".local", "share", "dotfiles", "backup", "ai", NewVersion(t))
+	dir := base
+	for i := 2; ; i++ {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return dir
+		}
+		dir = fmt.Sprintf("%s-%d", base, i)
+	}
 }
 
 func (e *Engine) writeSnapshotMetadata(dest, version, tag string, includeAuth bool, sum *Summary) error {
@@ -527,18 +612,83 @@ func (e *Engine) writeSnapshotMetadata(dest, version, tag string, includeAuth bo
 	return nil
 }
 
-func (e *Engine) backupExisting(path, rel string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil
+// backupExisting preserves the live path into preRoot before restore
+// removes and overwrites it. The whole tree is kept verbatim — no
+// isExcluded filter: restore deletes the live tree entirely, so anything
+// skipped here (session *.jsonl, logs, caches inside a managed dir) would
+// be unrecoverable; the snapshot excluded them at backup time too. Rename
+// is tried first; on cross-device failure it falls back to an unfiltered
+// copy plus removal. Returns whether anything was preserved.
+func (e *Engine) backupExisting(path, rel, preRoot string) (bool, error) {
+	if _, err := os.Lstat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
-	ts := time.Now().UTC().Format("20060102T150405Z")
-	dst := filepath.Join(e.HomeDir, ".local", "share", "dotfiles", "backup", "ai", ts, rel)
-	_, _, err = e.copyTree(path, dst, info, rel)
-	if err != nil {
-		return fmt.Errorf("backup existing %s: %w", path, err)
+	if e.Runner.DryRun {
+		e.Runner.Logger.Info("dry-run: would preserve existing", "path", path)
+		return false, nil
 	}
-	return nil
+	dst := filepath.Join(preRoot, rel)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.Rename(path, dst); err == nil {
+		return true, nil
+	}
+	if err := e.copyTreeUnfiltered(path, dst); err != nil {
+		return false, fmt.Errorf("backup existing %s: %w", path, err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// copyTreeUnfiltered copies a file/dir/symlink tree without the managed-
+// path exclusion rules. Only used by backupExisting's cross-device
+// fallback, which already guarded against dry-run.
+func (e *Engine) copyTreeUnfiltered(src, dst string) error {
+	copyOne := func(p, target string, info os.FileInfo) error {
+		if info.Mode()&os.ModeSymlink != 0 {
+			t, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(target)
+			return os.Symlink(t, target)
+		}
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode()&0o777)
+		}
+		_, err := copyFile(e.Runner, p, target, info.Mode())
+		return err
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return copyOne(src, dst, info)
+	}
+	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, rerr := filepath.Rel(src, p)
+		if rerr != nil {
+			return rerr
+		}
+		fi, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		return copyOne(p, filepath.Join(dst, rel), fi)
+	})
 }
 
 type managedTreeItem struct {

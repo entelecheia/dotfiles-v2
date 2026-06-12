@@ -525,13 +525,17 @@ func aiSummaryPayload(sum *aisettings.Summary) map[string]any {
 	if sum == nil {
 		return map[string]any{}
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"version":       sum.Version,
 		"path":          sum.Path,
 		"entries_count": len(sum.Entries),
 		"files":         sum.Files,
 		"bytes":         sum.Bytes,
 	}
+	if sum.PreBackupPath != "" {
+		payload["pre_backup_path"] = sum.PreBackupPath
+	}
+	return payload
 }
 
 func agentsApplyPayload(result *aisettings.ApplyResult) map[string]any {
