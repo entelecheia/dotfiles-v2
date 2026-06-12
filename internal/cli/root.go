@@ -82,6 +82,7 @@ Also available as 'dotfiles' for back-compat.`,
 
 	// One-stop interactive backup/restore wizards
 	root.AddCommand(newBackupCmd())
+	root.AddCommand(newRestoreCmd())
 
 	// Profile snapshots (config + app lists + optional secrets)
 	root.AddCommand(newProfileCmd())

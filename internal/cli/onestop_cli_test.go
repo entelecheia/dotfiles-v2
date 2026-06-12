@@ -31,7 +31,8 @@ func newOnestopFixture(t *testing.T) *onestopFixture {
 	}
 	writeCLITestFile(t, filepath.Join(home, ".claude", "settings.json"), `{"model":"opus"}`)
 	writeCLITestFile(t, filepath.Join(home, ".anchor", "settings.json"), `{"theme":"dark"}`)
-	writeCLITestFile(t, filepath.Join(home, ".local", "share", "dotfiles-secrets", "x.age"), "encrypted-payload")
+	writeCLITestFile(t, filepath.Join(home, ".ssh", "id_ed25519"), "identity-material")
+	writeCLITestFile(t, filepath.Join(home, ".local", "share", "dotfiles-secrets", "90-secrets.sh.age"), "export SECRET=1\n")
 
 	host, err := os.Hostname()
 	if err != nil {
@@ -97,7 +98,7 @@ func TestOnestopBackupAllDomains(t *testing.T) {
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(f.root, "secrets-age", f.host, "x.age")); err != nil {
+	if _, err := os.Stat(filepath.Join(f.root, "secrets-age", f.host, "90-secrets.sh.age")); err != nil {
 		t.Errorf("secrets archive missing: %v", err)
 	}
 
@@ -151,5 +152,128 @@ func TestOnestopBackupCustomTagPropagates(t *testing.T) {
 	}
 	if tag := readTag(t, filepath.Join(aiHost, latestVersion(t, aiHost), "meta.yaml")); tag != "migrate-2026" {
 		t.Errorf("ai tag = %q", tag)
+	}
+}
+
+func TestOnestopRestoreCrossHost(t *testing.T) {
+	f := newOnestopFixture(t)
+
+	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "profile,ai,secrets", "--include-secrets"); err != nil {
+		t.Fatal(err)
+	}
+	// Move every per-host tree to a fake other host.
+	for _, tree := range []string{"profiles", "ai-config", "secrets-age"} {
+		if err := os.Rename(filepath.Join(f.root, tree, f.host), filepath.Join(f.root, tree, "otherhost")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	statePath := filepath.Join(f.home, ".config", "dotfiles", "config.yaml")
+	writeCLITestFile(t, statePath, "name: mutated\n")
+	writeCLITestFile(t, filepath.Join(f.home, ".claude", "settings.json"), `{"model":"mutated"}`)
+
+	// stubAge so the secrets step "decrypts" by copying.
+	stubAge(t, false)
+
+	out, errOut, err := runDotForTest("restore", "--yes", "--from", f.root, "--host", "otherhost",
+		"--scope", "profile,ai,secrets", "--include-secrets")
+	if err != nil {
+		t.Fatalf("restore: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if !strings.Contains(out, "one-stop restore complete") {
+		t.Errorf("missing completion line:\n%s", out)
+	}
+	got, _ := os.ReadFile(statePath)
+	if string(got) != "name: original\n" {
+		t.Errorf("state not restored: %q", got)
+	}
+	claude, _ := os.ReadFile(filepath.Join(f.home, ".claude", "settings.json"))
+	if string(claude) != `{"model":"opus"}` {
+		t.Errorf("claude settings not restored: %q", claude)
+	}
+	shell, err := os.ReadFile(filepath.Join(f.home, ".config", "shell", "90-secrets.sh"))
+	if err != nil || string(shell) != "export SECRET=1\n" {
+		t.Errorf("shell secrets not restored: %q err=%v", shell, err)
+	}
+}
+
+func TestOnestopRestoreProfileFailureAborts(t *testing.T) {
+	f := newOnestopFixture(t)
+	// Only an AI snapshot exists — no profile tree.
+	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "ai"); err != nil {
+		t.Fatal(err)
+	}
+
+	// profile is unavailable, so explicitly requesting it must fail fast.
+	_, _, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "profile,ai")
+	if err == nil || !strings.Contains(err.Error(), "profile") {
+		t.Fatalf("expected unavailable-profile error, got %v", err)
+	}
+
+	// ai-only restore succeeds.
+	writeCLITestFile(t, filepath.Join(f.home, ".claude", "settings.json"), `{"model":"mutated"}`)
+	out, errOut, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "ai")
+	if err != nil {
+		t.Fatalf("ai-only restore: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	claude, _ := os.ReadFile(filepath.Join(f.home, ".claude", "settings.json"))
+	if string(claude) != `{"model":"opus"}` {
+		t.Errorf("claude settings not restored: %q", claude)
+	}
+}
+
+func TestOnestopRestorePinsSessionRoot(t *testing.T) {
+	f := newOnestopFixture(t)
+
+	// The snapshot's config.yaml carries another machine's backup_root.
+	writeCLITestFile(t, filepath.Join(f.home, ".config", "dotfiles", "config.yaml"),
+		"name: original\nmodules:\n  macapps:\n    backup_root: /nonexistent/other-machine-root\n")
+	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "profile,ai"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Local state has no backup_root; restore from --from must keep using
+	// the session root for the AI step even after profile restore rewrote
+	// config.yaml with the foreign backup_root.
+	writeCLITestFile(t, filepath.Join(f.home, ".config", "dotfiles", "config.yaml"), "name: local\n")
+	writeCLITestFile(t, filepath.Join(f.home, ".claude", "settings.json"), `{"model":"mutated"}`)
+
+	out, errOut, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "profile,ai")
+	if err != nil {
+		t.Fatalf("restore: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	got, _ := os.ReadFile(filepath.Join(f.home, ".config", "dotfiles", "config.yaml"))
+	if !strings.Contains(string(got), "/nonexistent/other-machine-root") {
+		t.Fatalf("profile restore should have brought back the foreign config: %q", got)
+	}
+	claude, _ := os.ReadFile(filepath.Join(f.home, ".claude", "settings.json"))
+	if string(claude) != `{"model":"opus"}` {
+		t.Errorf("ai step did not use the pinned session root: %q", claude)
+	}
+}
+
+func TestOnestopRestoreNoBackupsAbortsBeforeChanges(t *testing.T) {
+	f := newOnestopFixture(t)
+	empty := t.TempDir()
+	_, _, err := runDotForTest("restore", "--yes", "--from", empty)
+	if err == nil || !strings.Contains(err.Error(), "no backups found") {
+		t.Fatalf("expected preflight error, got %v", err)
+	}
+	_ = f
+}
+
+func TestOnestopRestoreUnmatchedSecretArchiveFails(t *testing.T) {
+	f := newOnestopFixture(t)
+	// An archive that matches no secretEntries name (e.g. an SSH key from a
+	// host with a different ssh.key_name).
+	writeCLITestFile(t, filepath.Join(f.home, ".local", "share", "dotfiles-secrets", "id_rsa.age"), "foreign-key")
+	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "secrets"); err != nil {
+		t.Fatal(err)
+	}
+	// x.age matches no secretEntries name → wizard must flag the step.
+	stubAge(t, false)
+	_, _, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "secrets")
+	if err == nil || !strings.Contains(err.Error(), "restore step(s) failed") {
+		t.Fatalf("expected failed-step error for unmatched archive, got %v", err)
 	}
 }

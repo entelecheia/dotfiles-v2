@@ -63,7 +63,7 @@ func runOnestopBackup(cmd *cobra.Command, _ []string) error {
 	p.Header("One-stop Backup")
 
 	// 1. Backup root.
-	if err := o.confirmRoot(); err != nil {
+	if err := o.confirmRoot(true); err != nil {
 		return err
 	}
 

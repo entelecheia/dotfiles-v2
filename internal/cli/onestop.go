@@ -156,9 +156,10 @@ func (o *onestopCtx) rootSource() string {
 	return "local default"
 }
 
-// confirmRoot shows the resolved root, lets the user adjust it, and offers
-// to persist a newly chosen root when none was saved before.
-func (o *onestopCtx) confirmRoot() error {
+// confirmRoot shows the resolved root and lets the user adjust it. When
+// offerSave is true (backup), a newly chosen root may be persisted to
+// state; restore never writes state before its preflight has passed.
+func (o *onestopCtx) confirmRoot(offerSave bool) error {
 	o.p.KV("Root", o.root)
 	o.p.KV("Source", o.rootSource())
 	if o.yes {
@@ -175,7 +176,7 @@ func (o *onestopCtx) confirmRoot() error {
 	}
 	changed := edited != o.root
 	o.root = edited
-	if changed && !hadSaved {
+	if offerSave && changed && !hadSaved {
 		save, err := ui.ConfirmBool("Save this root to state for future runs?", true, false)
 		if err != nil {
 			return err
