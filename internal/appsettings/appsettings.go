@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -108,16 +110,19 @@ func (e *Engine) archivePath(token, rel string) string {
 type AppSummary struct {
 	Token   string
 	Copied  int // paths fully processed
-	Missing int // paths that had no source
+	Missing int // paths that had no source (informational, not an error)
+	Failed  int // paths whose copy errored — the operation did not complete
 	Files   int // individual files copied (for directory walks)
 	Bytes   int64
 }
 
 // Summary aggregates per-app results.
 type Summary struct {
-	Apps  []AppSummary
-	Files int
-	Bytes int64
+	Apps          []AppSummary
+	Files         int
+	Bytes         int64
+	Failed        int    // total failed paths across apps
+	PreBackupPath string // restore only: dir holding pre-overwrite copies, "" if none
 }
 
 // AppStatus is produced by Status(): counts of available/backed-up paths.
@@ -185,7 +190,12 @@ func isExcluded(rel string) bool {
 // --- Backup ---
 
 // Backup copies the listed apps (or all manifest apps when tokens is empty)
-// into the host-scoped archive. Missing sources are reported but do not abort.
+// into the host-scoped archive. Missing sources are reported but do not
+// abort; copy errors are counted in Failed. Each app is staged into
+// <HostRoot>/.staging/ and swapped into place only when every attempted copy
+// succeeded, so a failed backup never corrupts the previous (and only)
+// archived copy. Paths whose live source is gone are seeded from the
+// existing archive so the swap preserves them.
 func (e *Engine) Backup(ctx context.Context, tokens []string) (*Summary, error) {
 	targets := e.selectTokens(tokens)
 	if len(targets) == 0 {
@@ -195,6 +205,9 @@ func (e *Engine) Backup(ctx context.Context, tokens []string) (*Summary, error) 
 	if err := e.Runner.MkdirAll(e.HostRoot(), 0o755); err != nil {
 		return nil, fmt.Errorf("create host root %s: %w", e.HostRoot(), err)
 	}
+	if !e.Runner.DryRun {
+		e.recoverStaging()
+	}
 
 	sum := &Summary{}
 	for _, token := range targets {
@@ -202,46 +215,152 @@ func (e *Engine) Backup(ctx context.Context, tokens []string) (*Summary, error) 
 		if app == nil {
 			continue
 		}
-		as := AppSummary{Token: token}
-		for _, p := range app.Paths {
-			src := e.libraryPath(p.Path)
-			dst := e.archivePath(token, p.Path)
-			fi, err := os.Lstat(src)
-			if err != nil {
-				as.Missing++
-				continue
-			}
-			files, bytes, err := e.copyTree(src, dst, fi)
-			if err != nil {
-				e.Runner.Logger.Warn("backup copy failed", "app", token, "src", src, "err", err)
-				as.Missing++
-				continue
-			}
-			as.Copied++
-			as.Files += files
-			as.Bytes += bytes
-		}
+		as := e.backupApp(token, app)
 		sum.Apps = append(sum.Apps, as)
 		sum.Files += as.Files
 		sum.Bytes += as.Bytes
+		sum.Failed += as.Failed
 	}
 	return sum, nil
+}
+
+// backupApp stages one app's paths and commits the staging dir atomically.
+// In dry-run mode it copies straight at the final destinations (all copy
+// primitives are no-ops there) so counters still reflect the plan.
+func (e *Engine) backupApp(token string, app *AppEntry) AppSummary {
+	as := AppSummary{Token: token}
+
+	destFor := func(rel string) string { return e.archivePath(token, rel) }
+	staging := ""
+	if !e.Runner.DryRun {
+		staging = filepath.Join(e.HostRoot(), ".staging", fmt.Sprintf("%s.%d", token, os.Getpid()))
+		_ = os.RemoveAll(staging)
+		destFor = func(rel string) string { return filepath.Join(staging, rel) }
+	}
+
+	for _, p := range app.Paths {
+		src := e.libraryPath(p.Path)
+		fi, err := os.Lstat(src)
+		if err != nil {
+			// Live source missing: carry the archived copy (if any) into the
+			// staging tree so the swap never wipes the only remaining copy.
+			if staging != "" {
+				archived := e.archivePath(token, p.Path)
+				if afi, aerr := os.Lstat(archived); aerr == nil {
+					if _, _, serr := e.copyTree(archived, destFor(p.Path), afi); serr != nil {
+						e.Runner.Logger.Warn("backup: preserving archived copy failed", "app", token, "path", p.Path, "err", serr)
+						as.Failed++
+						continue
+					}
+				}
+			}
+			as.Missing++
+			continue
+		}
+		files, bytes, err := e.copyTree(src, destFor(p.Path), fi)
+		if err != nil {
+			e.Runner.Logger.Warn("backup copy failed", "app", token, "src", src, "err", err)
+			as.Failed++
+			continue
+		}
+		as.Copied++
+		as.Files += files
+		as.Bytes += bytes
+	}
+
+	if staging == "" {
+		return as
+	}
+	if as.Failed > 0 {
+		// Discard the partial staging tree; the existing archive stays intact.
+		_ = os.RemoveAll(staging)
+		return as
+	}
+	if err := e.commitStaging(token, staging); err != nil {
+		e.Runner.Logger.Warn("backup commit failed; previous archive kept", "app", token, "err", err)
+		_ = os.RemoveAll(staging)
+		as.Failed++
+	}
+	return as
+}
+
+// commitStaging swaps the staged tree into place via a .prev rename so a
+// crash at any point leaves either the old or the new archive recoverable
+// (see recoverStaging). A staging dir that was never created (every path
+// missing with no prior archive) is a no-op.
+func (e *Engine) commitStaging(token, staging string) error {
+	if _, err := os.Lstat(staging); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	final := filepath.Join(e.HostRoot(), token)
+	prev := final + ".prev"
+	_ = os.RemoveAll(prev)
+	hadPrev := false
+	if _, err := os.Lstat(final); err == nil {
+		if err := os.Rename(final, prev); err != nil {
+			return err
+		}
+		hadPrev = true
+	}
+	if err := os.Rename(staging, final); err != nil {
+		if hadPrev {
+			_ = os.Rename(prev, final)
+		}
+		return err
+	}
+	_ = os.RemoveAll(prev)
+	return nil
+}
+
+// recoverStaging repairs the archive after an interrupted commit: a stray
+// <token>.prev with no <token> dir is renamed back, leftover .prev and
+// .staging trees are removed.
+func (e *Engine) recoverStaging() {
+	entries, err := os.ReadDir(e.HostRoot())
+	if err != nil {
+		return
+	}
+	for _, en := range entries {
+		name := en.Name()
+		if !en.IsDir() || !strings.HasSuffix(name, ".prev") {
+			continue
+		}
+		prev := filepath.Join(e.HostRoot(), name)
+		final := filepath.Join(e.HostRoot(), strings.TrimSuffix(name, ".prev"))
+		if _, err := os.Lstat(final); os.IsNotExist(err) {
+			_ = os.Rename(prev, final)
+		} else {
+			_ = os.RemoveAll(prev)
+		}
+	}
+	_ = os.RemoveAll(filepath.Join(e.HostRoot(), ".staging"))
 }
 
 // --- Restore ---
 
 // Restore copies from the host-scoped archive back to $HOME/Library.
-// Missing sources (not yet backed up) are skipped. Existing live files are
-// snapshotted to ~/.local/share/dotfiles/backup/ before being overwritten.
+// Missing sources (not yet backed up) are skipped; copy errors are counted
+// in Failed. Existing live paths are snapshotted to
+// <HomeDir>/.local/share/dotfiles/backup/app-settings/<ts>/<token>/ before
+// being overwritten; the location is reported via Summary.PreBackupPath.
+// A path whose pre-restore snapshot fails is left untouched.
 func (e *Engine) Restore(ctx context.Context, tokens []string) (*Summary, error) {
 	if _, err := os.Stat(e.HostRoot()); err != nil {
 		return nil, fmt.Errorf("no backup at %s (hostname=%s)", e.HostRoot(), e.Hostname)
+	}
+	if !e.Runner.DryRun {
+		e.recoverStaging()
 	}
 	targets := e.selectTokens(tokens)
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("no apps selected for restore")
 	}
 
+	preRoot := e.preRestoreDir(time.Now())
+	preUsed := false
 	sum := &Summary{}
 	for _, token := range targets {
 		app := e.Manifest.App(token)
@@ -257,10 +376,18 @@ func (e *Engine) Restore(ctx context.Context, tokens []string) (*Summary, error)
 				as.Missing++
 				continue
 			}
+			if lfi, lerr := os.Lstat(dst); lerr == nil {
+				if _, _, berr := e.copyTree(dst, filepath.Join(preRoot, token, p.Path), lfi); berr != nil {
+					e.Runner.Logger.Warn("pre-restore snapshot failed; leaving live path untouched", "app", token, "path", dst, "err", berr)
+					as.Failed++
+					continue
+				}
+				preUsed = true
+			}
 			files, bytes, err := e.copyTree(src, dst, fi)
 			if err != nil {
 				e.Runner.Logger.Warn("restore copy failed", "app", token, "src", src, "err", err)
-				as.Missing++
+				as.Failed++
 				continue
 			}
 			as.Copied++
@@ -270,8 +397,25 @@ func (e *Engine) Restore(ctx context.Context, tokens []string) (*Summary, error)
 		sum.Apps = append(sum.Apps, as)
 		sum.Files += as.Files
 		sum.Bytes += as.Bytes
+		sum.Failed += as.Failed
+	}
+	if preUsed && !e.Runner.DryRun {
+		sum.PreBackupPath = preRoot
 	}
 	return sum, nil
+}
+
+// preRestoreDir picks an unused timestamped directory for pre-overwrite
+// copies, outside the archive tree. Created lazily by the first copy.
+func (e *Engine) preRestoreDir(t time.Time) string {
+	base := filepath.Join(e.HomeDir, ".local", "share", "dotfiles", "backup", "app-settings", t.UTC().Format("20060102T150405Z"))
+	dir := base
+	for i := 2; ; i++ {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return dir
+		}
+		dir = fmt.Sprintf("%s-%d", base, i)
+	}
 }
 
 // FlushCFPrefsd asks cfprefsd to release cached plists so the target apps
@@ -305,6 +449,128 @@ func (e *Engine) Status(tokens []string) []AppStatus {
 		out = append(out, st)
 	}
 	return out
+}
+
+// --- Archived (non-manifest) apps ---
+
+// AdoptArchivedApps synthesizes manifest entries for token directories that
+// exist in the host archive but not in the embedded manifest — apps captured
+// via DiscoverApp on a previous run (e.g. "Moom Classic"). Without this,
+// selectTokens silently drops them and their archived settings can never be
+// restored. Manifest entries keep precedence; returns the adopted tokens.
+func (e *Engine) AdoptArchivedApps() []string {
+	entries, err := os.ReadDir(e.HostRoot())
+	if err != nil {
+		return nil
+	}
+	var adopted []string
+	for _, en := range entries {
+		name := en.Name()
+		if !en.IsDir() || name == ".staging" || strings.HasSuffix(name, ".prev") {
+			continue
+		}
+		if e.Manifest.App(name) != nil {
+			continue
+		}
+		if entry := e.archivedAppEntry(name); entry != nil {
+			e.Manifest.Apps = append(e.Manifest.Apps, *entry)
+			adopted = append(adopted, name)
+		}
+	}
+	sort.Strings(adopted)
+	return adopted
+}
+
+// archivedAppEntry rebuilds an AppEntry from the archive layout using the
+// manifest's depth-2 convention: top-level files map to file entries
+// (Preferences/<name>.plist) and each immediate child of a top-level dir
+// maps to a directory root (Application Support/<dir>, Containers/<id>,
+// Group Containers/<id>) that copyTree recurses into.
+func (e *Engine) archivedAppEntry(token string) *AppEntry {
+	tokenDir := filepath.Join(e.HostRoot(), token)
+	top, err := os.ReadDir(tokenDir)
+	if err != nil {
+		return nil
+	}
+	typeFor := func(category string) string {
+		switch category {
+		case "Preferences":
+			return "pref"
+		case "Containers":
+			return "container"
+		case "Group Containers":
+			return "group"
+		default:
+			return "support"
+		}
+	}
+	var paths []PathEntry
+	for _, t := range top {
+		name := t.Name()
+		if name == ".DS_Store" {
+			continue
+		}
+		if !t.IsDir() {
+			paths = append(paths, PathEntry{Type: typeFor(""), Path: name})
+			continue
+		}
+		children, err := os.ReadDir(filepath.Join(tokenDir, name))
+		if err != nil {
+			continue
+		}
+		for _, c := range children {
+			if c.Name() == ".DS_Store" {
+				continue
+			}
+			paths = append(paths, PathEntry{Type: typeFor(name), Path: filepath.Join(name, c.Name())})
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return &AppEntry{Token: token, Paths: paths}
+}
+
+// --- Last-backup stamp ---
+
+// BackupStamp records when (and with what tag) the unversioned app-settings
+// tree was last written, so multi-domain tooling can correlate it with the
+// versioned profile/ai snapshots.
+type BackupStamp struct {
+	Tag       string    `yaml:"tag,omitempty"`
+	CreatedAt time.Time `yaml:"created_at"`
+	Tokens    []string  `yaml:"tokens,omitempty"`
+	Files     int       `yaml:"files"`
+}
+
+// LastBackupStampPath returns <host-root>/last-backup.yaml.
+func (e *Engine) LastBackupStampPath() string {
+	return filepath.Join(e.HostRoot(), "last-backup.yaml")
+}
+
+// WriteLastBackupStamp persists the stamp; honors dry-run via the Runner.
+func (e *Engine) WriteLastBackupStamp(stamp BackupStamp) error {
+	data, err := yaml.Marshal(stamp)
+	if err != nil {
+		return err
+	}
+	return e.Runner.WriteFile(e.LastBackupStampPath(), data, 0o644)
+}
+
+// ReadLastBackupStamp loads the stamp; returns (nil, nil) when absent.
+func (e *Engine) ReadLastBackupStamp() (*BackupStamp, error) {
+	data, err := os.ReadFile(e.LastBackupStampPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var stamp BackupStamp
+	if err := yaml.Unmarshal(data, &stamp); err != nil {
+		return nil, err
+	}
+	return &stamp, nil
 }
 
 // --- Helpers ---

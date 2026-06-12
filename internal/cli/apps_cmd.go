@@ -488,6 +488,20 @@ func runAppsBackup(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	default:
+		// Saved selections may contain display-name tokens that aren't in
+		// the embedded manifest (apps discovered in earlier interactive
+		// runs). Re-resolve them before the manifest intersection inside
+		// resolveBackupTokens silently drops them; fall back to the archive
+		// layout when the app is no longer on disk.
+		for _, t := range state.Modules.MacApps.BackupApps {
+			if eng.Manifest.App(t) != nil {
+				continue
+			}
+			if discovered := appsettings.DiscoverApp(eng.HomeDir, t); discovered != nil {
+				eng.Manifest.Apps = append(eng.Manifest.Apps, *discovered)
+			}
+		}
+		eng.AdoptArchivedApps()
 		tokens = resolveBackupTokens(cmd, eng)
 	}
 
@@ -501,14 +515,36 @@ func runAppsBackup(cmd *cobra.Command, args []string) error {
 	}
 	printAppSummary(p, "Backup", sum)
 
-	// Record last backup (skipped in dry-run)
-	if !eng.Runner.DryRun {
-		if err := recordLastBackup(cmd, eng.HostRoot(), sum.Files); err != nil {
-			eng.Runner.Logger.Warn("record last backup", "err", err)
+	// Record last backup on the in-memory state so a later persist (e.g.
+	// the interactive save-selection path) can't overwrite the stamp with
+	// a stale pre-backup snapshot of the state file.
+	stamped := false
+	if !eng.Runner.DryRun && sum.Failed == 0 {
+		state.Modules.MacApps.LastBackup = &config.BackupRecord{
+			Path:  eng.HostRoot(),
+			Time:  time.Now(),
+			Files: sum.Files,
+		}
+		stamped = true
+		if err := eng.WriteLastBackupStamp(appsettings.BackupStamp{
+			CreatedAt: time.Now().UTC(),
+			Tokens:    tokens,
+			Files:     sum.Files,
+		}); err != nil {
+			eng.Runner.Logger.Warn("write last-backup stamp", "err", err)
 		}
 	}
 	if saveAfter {
-		return persistUserState(cmd, state)
+		if err := persistUserState(cmd, state); err != nil {
+			return err
+		}
+	} else if stamped {
+		if err := persistUserState(cmd, state); err != nil {
+			eng.Runner.Logger.Warn("record last backup", "err", err)
+		}
+	}
+	if sum.Failed > 0 {
+		return fmt.Errorf("%d path(s) failed to back up — previous archive copies were kept", sum.Failed)
 	}
 	return nil
 }
@@ -708,13 +744,19 @@ func runAppsRestore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Apps captured by name discovery on the source machine live only in
+	// the archive — synthesize entries for them so they restore too.
+	adopted := eng.AdoptArchivedApps()
+
 	tokens := args
 	if len(tokens) == 0 {
 		tokens = resolveBackupTokens(cmd, eng)
+		tokens = sliceutil.Dedupe(append(tokens, adopted...))
 	}
 
 	if !yes {
 		p.Line("%s", ui.StyleWarning.Render("This overwrites local app settings. Quit target apps first."))
+		p.Line("%s", ui.StyleHint.Render("  (existing files are snapshotted under ~/.local/share/dotfiles/backup/app-settings/ first)"))
 		ok, err := ui.ConfirmBool("Continue with restore?", false, false)
 		if err != nil {
 			return err
@@ -730,8 +772,14 @@ func runAppsRestore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	printAppSummary(p, "Restore", sum)
+	if sum.PreBackupPath != "" {
+		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(sum.PreBackupPath))
+	}
 	if !eng.Runner.DryRun {
 		eng.FlushCFPrefsd(context.Background())
+	}
+	if sum.Failed > 0 {
+		return fmt.Errorf("%d path(s) failed to restore", sum.Failed)
 	}
 	return nil
 }
@@ -867,34 +915,18 @@ func intersectManifest(tokens []string, mf *appsettings.Manifest) []string {
 func printAppSummary(p *Printer, label string, sum *appsettings.Summary) {
 	p.Header(label + " Summary")
 	for _, a := range sum.Apps {
-		p.Bullet(ui.StyleHint.Render(ui.MarkPartial),
-			fmt.Sprintf("%s  paths: %d copied / %d missing  files: %d  bytes: %d",
-				ui.StyleValue.Render(a.Token), a.Copied, a.Missing, a.Files, a.Bytes))
+		line := fmt.Sprintf("%s  paths: %d copied / %d missing  files: %d  bytes: %d",
+			ui.StyleValue.Render(a.Token), a.Copied, a.Missing, a.Files, a.Bytes)
+		marker := ui.StyleHint.Render(ui.MarkPartial)
+		if a.Failed > 0 {
+			line += "  " + ui.StyleError.Render(fmt.Sprintf("failed: %d", a.Failed))
+			marker = ui.StyleError.Render(ui.MarkFail)
+		}
+		p.Bullet(marker, line)
 	}
 	p.Blank()
 	p.Line("  Total: %d file(s), %d byte(s)", sum.Files, sum.Bytes)
-}
-
-// recordLastBackup stamps state.Modules.MacApps.LastBackup with the timestamp + counts.
-func recordLastBackup(cmd *cobra.Command, path string, files int) error {
-	homeOverride, _ := cmd.Flags().GetString("home")
-	var state *config.UserState
-	var err error
-	if homeOverride != "" {
-		state, err = config.LoadStateForHome(homeOverride)
-	} else {
-		state, err = config.LoadState()
+	if sum.Failed > 0 {
+		p.Warn("  %d path(s) failed", sum.Failed)
 	}
-	if err != nil {
-		return err
-	}
-	state.Modules.MacApps.LastBackup = &config.BackupRecord{
-		Path:  path,
-		Time:  time.Now(),
-		Files: files,
-	}
-	if homeOverride != "" {
-		return config.SaveStateForHome(homeOverride, state)
-	}
-	return config.SaveState(state)
 }
