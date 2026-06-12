@@ -133,6 +133,10 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/plugins", Description: "Antigravity CLI plugins"},
 		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md", Description: "GitHub Copilot global instructions"},
 		{Tool: "aider", Path: ".aider.conf.md", Description: "Aider global instructions"},
+		// Anchor settings files only — skills/_sources/env are Anchor-managed
+		// git repos and venvs that Anchor restores itself.
+		{Tool: "anchor", Path: ".anchor/settings.json", Description: "Anchor app settings"},
+		{Tool: "anchor", Path: ".anchor/sites.json", Description: "Anchor sites registry"},
 	}
 	authEntries := []Entry{
 		{Tool: "claude", Path: ".claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},

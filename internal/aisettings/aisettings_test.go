@@ -421,3 +421,49 @@ func TestAIBackupFailureLeavesNoOrphanDir(t *testing.T) {
 		}
 	}
 }
+
+func TestEntriesIncludeAnchorSettingsOnly(t *testing.T) {
+	var anchorPaths []string
+	for _, e := range Entries(false) {
+		if e.Tool == "anchor" {
+			anchorPaths = append(anchorPaths, e.Path)
+			if isExcluded(e.Path) {
+				t.Errorf("anchor entry %q is filtered by isExcluded", e.Path)
+			}
+		}
+	}
+	want := []string{".anchor/settings.json", ".anchor/sites.json"}
+	if len(anchorPaths) != len(want) {
+		t.Fatalf("anchor entries = %v, want %v", anchorPaths, want)
+	}
+	for i, p := range want {
+		if anchorPaths[i] != p {
+			t.Errorf("anchor entry %d = %q, want %q", i, anchorPaths[i], p)
+		}
+	}
+}
+
+func TestAnchorSettingsBackupRestoreRoundtrip(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".anchor", "settings.json"), []byte(`{"theme":"dark"}`))
+	mustWrite(t, filepath.Join(home, ".anchor", "sites.json"), []byte(`[{"name":"halla-ai"}]`))
+
+	sum, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".anchor/settings.json", ".anchor/sites.json"} {
+		if _, err := os.Stat(filepath.Join(sum.Path, "home", rel)); err != nil {
+			t.Errorf("snapshot missing %s: %v", rel, err)
+		}
+	}
+
+	mustWrite(t, filepath.Join(home, ".anchor", "settings.json"), []byte(`{"theme":"mutated"}`))
+	if _, err := eng.Restore(RestoreOptions{Version: sum.Version}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(home, ".anchor", "settings.json"))
+	if string(got) != `{"theme":"dark"}` {
+		t.Errorf("anchor settings not restored: %q", got)
+	}
+}
