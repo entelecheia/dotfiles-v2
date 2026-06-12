@@ -138,6 +138,13 @@ func (o *onestopCtx) secretsArchiveDir() string {
 	return filepath.Join(o.root, "secrets-age", o.host)
 }
 
+// secretsStoreDir is the local encrypted store, resolved against the
+// session home so --home overrides reach the secrets domain too
+// (secretsStorePath always uses os.UserHomeDir).
+func (o *onestopCtx) secretsStoreDir() string {
+	return filepath.Join(o.home, secretsDir)
+}
+
 // rootSource explains where the initial root came from, for the wizard's
 // root-confirmation display.
 func (o *onestopCtx) rootSource() string {

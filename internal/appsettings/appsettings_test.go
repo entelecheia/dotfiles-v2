@@ -244,6 +244,9 @@ func TestRestoreSnapshotsExistingFilesFirst(t *testing.T) {
 }
 
 func TestBackupFailureKeepsPreviousArchive(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based failure injection is ineffective as root")
+	}
 	home := t.TempDir()
 	support := filepath.Join(home, "Library", "Application Support", "Foo")
 	if err := os.MkdirAll(support, 0o755); err != nil {

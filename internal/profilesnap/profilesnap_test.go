@@ -284,6 +284,9 @@ func TestRestoreForcesSecretPermissions(t *testing.T) {
 }
 
 func TestBackupFailureLeavesNoOrphanDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based failure injection is ineffective as root")
+	}
 	home := t.TempDir()
 	root := t.TempDir()
 	eng := newTestEngine(t, home, root)

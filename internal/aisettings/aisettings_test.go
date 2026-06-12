@@ -400,6 +400,9 @@ func TestExportArchiveIsOwnerOnly(t *testing.T) {
 }
 
 func TestAIBackupFailureLeavesNoOrphanDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based failure injection is ineffective as root")
+	}
 	eng, home, _ := testEngine(t)
 	cfg := filepath.Join(home, ".codex", "config.toml")
 	mustWrite(t, cfg, []byte("x"))

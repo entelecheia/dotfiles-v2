@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -549,5 +550,75 @@ func TestSecretsInitCLI_RoundtripVerifiedSuccess(t *testing.T) {
 	litter, _ := filepath.Glob(filepath.Join(home, ".local", "share", "dotfiles-secrets", ".*"))
 	if len(litter) != 0 {
 		t.Errorf("temp litter in store: %v", litter)
+	}
+}
+
+func TestSecretsInitCLI_MissingIdentitySkipsVerification(t *testing.T) {
+	stubAge(t, false)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	// Identity points at a path that doesn't exist yet (fresh machine):
+	// init must warn, skip verification, and still encrypt.
+	writeCLITestFile(t, filepath.Join(home, ".config", "dotfiles", "config.yaml"),
+		"secrets:\n  age_recipients: [\"age1good\"]\n  age_identity: ~/.ssh/missing_age_key\n")
+	writeCLITestFile(t, filepath.Join(home, ".ssh", "id_ed25519"), "ssh-key-material")
+
+	out, errOut, err := runDotForTest("secrets", "init")
+	if err != nil {
+		t.Fatalf("init must succeed with verification skipped: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if !strings.Contains(errOut, "verification skipped") || !strings.Contains(errOut, "not found") {
+		t.Errorf("missing skip warning on stderr:\nstdout=%s\nstderr=%s", out, errOut)
+	}
+	archive := filepath.Join(home, ".local", "share", "dotfiles-secrets", "id_ed25519.age")
+	got, err := os.ReadFile(archive)
+	if err != nil || string(got) != "ssh-key-material" {
+		t.Errorf("archive not written despite skipped verification: %q err=%v", got, err)
+	}
+}
+
+// stubSSHKeygen installs an ssh-keygen stub that exits with the given code,
+// simulating a passphrase-protected (exit 1) or unprotected (exit 0) key.
+func stubSSHKeygen(t *testing.T, exitCode int) {
+	t.Helper()
+	bin := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\nexit %d\n", exitCode)
+	if err := os.WriteFile(filepath.Join(bin, "ssh-keygen"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestSecretsVerifier_PassphraseProtectedIdentitySkips(t *testing.T) {
+	stubSSHKeygen(t, 1) // ssh-keygen -y -P "" fails → passphrase-protected
+	dir := t.TempDir()
+	identity := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(identity, []byte("-----BEGIN OPENSSH PRIVATE KEY-----"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	runner := exec.NewRunner(false, logger)
+
+	verify, reason := secretsVerifier(context.Background(), runner, identity)
+	if verify != nil || !strings.Contains(reason, "passphrase-protected") {
+		t.Errorf("verify=%v reason=%q, want skip with passphrase reason", verify != nil, reason)
+	}
+}
+
+func TestSecretsVerifier_UnprotectedSSHIdentityVerifies(t *testing.T) {
+	stubSSHKeygen(t, 0)
+	dir := t.TempDir()
+	identity := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(identity, []byte("-----BEGIN OPENSSH PRIVATE KEY-----"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	runner := exec.NewRunner(false, logger)
+
+	verify, reason := secretsVerifier(context.Background(), runner, identity)
+	if verify == nil || reason != "" {
+		t.Errorf("verify=%v reason=%q, want a usable verifier", verify != nil, reason)
 	}
 }

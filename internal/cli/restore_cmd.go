@@ -182,10 +182,14 @@ func runOnestopRestore(cmd *cobra.Command, _ []string) error {
 		}
 		// Reload state so later steps see the restored configuration; the
 		// session root stays pinned — a config.yaml from another machine
-		// must not redirect the remaining steps mid-run.
+		// must not redirect the remaining steps mid-run. A reload failure
+		// aborts like a profile failure: continuing with the stale state
+		// would restore secrets/apps against the wrong configuration.
 		if !o.dryRun {
 			if err := o.reloadState(); err != nil {
 				steps = append(steps, onestopStep{Name: "state", Err: err})
+				printOnestopSummary(p, steps)
+				return fmt.Errorf("state reload failed — aborting (later steps depend on the restored state): %w", err)
 			}
 		}
 		if runApplyAfter {

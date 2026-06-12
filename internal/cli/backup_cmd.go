@@ -80,10 +80,7 @@ func runOnestopBackup(cmd *cobra.Command, _ []string) error {
 	}
 	available = append(available, "ai")
 	labels["ai"] = "ai — AI CLI/agent settings + Anchor settings"
-	storeDir, err := secretsStorePath()
-	if err != nil {
-		return err
-	}
+	storeDir := o.secretsStoreDir()
 	if hasAgeArchives(storeDir) {
 		available = append(available, "secrets")
 		labels["secrets"] = "secrets — encrypted .age archives"
