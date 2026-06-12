@@ -80,6 +80,9 @@ Also available as 'dotfiles' for back-compat.`,
 	// macOS apps + settings backup/restore
 	root.AddCommand(newAppsCmd())
 
+	// One-stop interactive backup/restore wizards
+	root.AddCommand(newBackupCmd())
+
 	// Profile snapshots (config + app lists + optional secrets)
 	root.AddCommand(newProfileCmd())
 
