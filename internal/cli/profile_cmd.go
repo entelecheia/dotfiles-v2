@@ -189,6 +189,38 @@ func newProfileEngine(cmd *cobra.Command) (*profilesnap.Engine, error) {
 	}, nil
 }
 
+// hostOverride returns the --host flag value when set, else current.
+// Restore/list-style commands use it to point the engine at another
+// machine's snapshots under the same backup root (cross-host restore).
+// The value becomes a directory segment in <root>/<tree>/<host>/ and feeds
+// destructive operations (prune's RemoveAll, restore overwrites), so it is
+// validated to a single safe path segment to prevent traversal out of the
+// backup tree.
+func hostOverride(cmd *cobra.Command, current string) (string, error) {
+	h, err := cmd.Flags().GetString("host")
+	if err != nil || h == "" {
+		return current, nil
+	}
+	if !isSafePathSegment(h) {
+		return "", fmt.Errorf("invalid --host %q: must be a bare hostname (no %q, %q, or path separators)", h, ".", "..")
+	}
+	return h, nil
+}
+
+// isSafePathSegment reports whether s is usable as a single directory name
+// without escaping its parent: non-empty, not "."/"..", and free of path
+// separators. Used to gate user-supplied host/token values before they
+// reach filepath.Join + destructive filesystem operations.
+func isSafePathSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	if strings.ContainsRune(s, '/') || strings.ContainsRune(s, os.PathSeparator) {
+		return false
+	}
+	return true
+}
+
 // --- backup ---
 
 func newProfileBackupCmd() *cobra.Command {
@@ -231,7 +263,9 @@ func runProfileBackup(cmd *cobra.Command, _ []string) error {
 		p.Line("  %s  %s", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
 	}
 	if snap.WithSecret {
-		p.Line("  %s  %s", ui.StyleKey.Render("Secrets:"), ui.StyleSuccess.Render("included"))
+		p.Line("  %s  %s", ui.StyleKey.Render("Secrets:"), ui.StyleSuccess.Render(fmt.Sprintf("included (%d file(s))", snap.SecretsCopied)))
+	} else if includeSecrets {
+		p.Warn("  --include-secrets requested but no age_key* found under ~/.ssh — snapshot contains no secrets")
 	}
 	return nil
 }
@@ -246,8 +280,8 @@ func newProfileRestoreCmd() *cobra.Command {
 		RunE:  runProfileRestore,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
 	c.Flags().String("version", "", "Specific version to restore (default: latest)")
-	c.Flags().Bool("latest", false, "Restore the version pointed at by latest.txt (redundant with default)")
 	c.Flags().Bool("include-secrets", false, "Restore ~/.ssh/age_key* from the snapshot if present")
 	c.Flags().Bool("no-state", false, "Skip copying config.yaml back to ~/.config/dotfiles/")
 	return c
@@ -259,6 +293,11 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	version, _ := cmd.Flags().GetString("version")
 	includeSecrets, _ := cmd.Flags().GetBool("include-secrets")
 	noState, _ := cmd.Flags().GetBool("no-state")
@@ -273,7 +312,14 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	}
 
 	if !yes {
-		p.Line("About to overwrite %s from snapshot %s.", eng.StatePath, version)
+		if noState {
+			p.Line("About to restore snapshot %s (state copy skipped via --no-state).", version)
+		} else {
+			p.Line("About to overwrite %s from snapshot %s.", eng.StatePath, version)
+		}
+		if includeSecrets {
+			p.Line("Also overwrites age_key* under %s when the snapshot contains secrets (a pre-restore copy is saved first).", eng.SecretsDir)
+		}
 		ok, err := ui.ConfirmBool("Continue?", false, false)
 		if err != nil {
 			return err
@@ -298,6 +344,21 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	if snap.Tag != "" {
 		p.Line("  %s  %s", ui.StyleKey.Render("Tag:"), ui.StyleValue.Render(snap.Tag))
 	}
+	if snap.RestoredState {
+		p.Line("  %s  %s", ui.StyleKey.Render("State:"), ui.StyleValue.Render("restored → "+eng.StatePath))
+	} else {
+		p.Line("  %s  %s", ui.StyleKey.Render("State:"), ui.StyleHint.Render("skipped (--no-state)"))
+	}
+	if includeSecrets {
+		if snap.RestoredSecrets > 0 {
+			p.Line("  %s  %s", ui.StyleKey.Render("Secrets:"), ui.StyleValue.Render(fmt.Sprintf("%d file(s) → %s", snap.RestoredSecrets, eng.SecretsDir)))
+		} else {
+			p.Warn("  Secrets: requested but snapshot %s contains none", snap.Version)
+		}
+	}
+	if snap.PreRestoreBackup != "" {
+		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(snap.PreRestoreBackup))
+	}
 	return nil
 }
 
@@ -311,6 +372,7 @@ func newProfileListCmd() *cobra.Command {
 		RunE:  runProfileList,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Hostname to list (default: this host)")
 	return c
 }
 
@@ -319,6 +381,11 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	snaps, err := eng.List()
 	if err != nil {
 		return err
@@ -368,6 +435,7 @@ func newProfilePruneCmd() *cobra.Command {
 		RunE:  runProfilePrune,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Hostname to prune (default: this host)")
 	c.Flags().Int("keep", 5, "Number of most recent snapshots to keep")
 	return c
 }
@@ -378,6 +446,11 @@ func runProfilePrune(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	keep, _ := cmd.Flags().GetInt("keep")
 	p := printerFrom(cmd)
 

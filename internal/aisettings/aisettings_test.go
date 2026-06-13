@@ -231,3 +231,349 @@ func hasEntryPath(entries []Entry, path string) bool {
 	}
 	return false
 }
+
+func TestRestorePreservesExcludedLiveFiles(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "prompts", "draft.md"), []byte("v1"))
+
+	sum, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A session log inside the managed dir: excluded from snapshots, but it
+	// must survive restore via the pre-restore backup.
+	logPath := filepath.Join(home, ".codex", "prompts", "session.jsonl")
+	mustWrite(t, logPath, []byte("precious-session-data"))
+	mustWrite(t, filepath.Join(home, ".codex", "prompts", "draft.md"), []byte("v2"))
+
+	rsum, err := eng.Restore(RestoreOptions{Version: sum.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rsum.PreBackupPath == "" {
+		t.Fatal("PreBackupPath not set")
+	}
+	preserved, err := os.ReadFile(filepath.Join(rsum.PreBackupPath, ".codex", "prompts", "session.jsonl"))
+	if err != nil || string(preserved) != "precious-session-data" {
+		t.Errorf("excluded live file not preserved: %q err=%v", preserved, err)
+	}
+	got, _ := os.ReadFile(filepath.Join(home, ".codex", "prompts", "draft.md"))
+	if string(got) != "v1" {
+		t.Errorf("restore content: %q", got)
+	}
+}
+
+func TestRestoreUsesSinglePreBackupDir(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("a"))
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("b"))
+
+	sum, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("a2"))
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("b2"))
+
+	rsum, err := eng.Restore(RestoreOptions{Version: sum.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rsum.PreBackupPath == "" {
+		t.Fatal("PreBackupPath not set")
+	}
+	for _, rel := range []string{".codex/config.toml", ".codex/AGENTS.md"} {
+		if _, err := os.Stat(filepath.Join(rsum.PreBackupPath, rel)); err != nil {
+			t.Errorf("entry %s missing from the single pre-backup dir: %v", rel, err)
+		}
+	}
+	// Exactly one dated dir under backup/ai.
+	aiBackup := filepath.Join(home, ".local", "share", "dotfiles", "backup", "ai")
+	entries, err := os.ReadDir(aiBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("pre-restore backups fragmented across %d dirs", len(entries))
+	}
+}
+
+func TestResolveLatestFallsBackOnDanglingPointer(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("x"))
+
+	s1, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Point latest.txt at a deleted version.
+	mustWrite(t, eng.LatestPointerPath(), []byte("19990101T000000Z\n"))
+	got, err := eng.ResolveLatest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != s1.Version {
+		t.Errorf("dangling pointer: got %q want %q", got, s1.Version)
+	}
+
+	// Empty pointer must not resolve to the host root.
+	mustWrite(t, eng.LatestPointerPath(), []byte("\n"))
+	got, err = eng.ResolveLatest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != s1.Version {
+		t.Errorf("empty pointer: got %q want %q", got, s1.Version)
+	}
+}
+
+func TestAIListSkipsDirsWithoutMeta(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("x"))
+	s1, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(eng.VersionPath("99999999T999999Z"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snaps, err := eng.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 1 || snaps[0].Version != s1.Version {
+		t.Errorf("List must skip meta-less dirs: %+v", snaps)
+	}
+}
+
+func TestAIPruneKeepsNewest(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("x"))
+
+	s1, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Synthesize two older snapshots with valid meta.
+	for _, v := range []string{"20200101T000000Z", "20210101T000000Z"} {
+		dir := eng.VersionPath(v)
+		mustWrite(t, filepath.Join(dir, "meta.yaml"), []byte("version: "+v+"\nhostname: testhost\n"))
+	}
+	removed, err := eng.Prune(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed = %v", removed)
+	}
+	snaps, err := eng.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 1 || snaps[0].Version != s1.Version {
+		t.Errorf("prune kept wrong snapshot: %+v", snaps)
+	}
+}
+
+func TestExportArchiveIsOwnerOnly(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("x"))
+	mustWrite(t, filepath.Join(home, ".codex", "auth.json"), []byte("secret"))
+
+	archive := filepath.Join(home, "out", "ai.tar.gz")
+	// Pre-create world-readable to verify the heal path.
+	mustWrite(t, archive, []byte("old"))
+	if err := os.Chmod(archive, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Export(archive, BackupOptions{IncludeAuth: true}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("archive mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestAIBackupFailureLeavesNoOrphanDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based failure injection is ineffective as root")
+	}
+	eng, home, _ := testEngine(t)
+	cfg := filepath.Join(home, ".codex", "config.toml")
+	mustWrite(t, cfg, []byte("x"))
+	if err := os.Chmod(cfg, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+
+	if _, err := eng.Backup(BackupOptions{}); err == nil {
+		t.Fatal("expected backup to fail on unreadable entry")
+	}
+	entries, err := os.ReadDir(eng.HostRoot())
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, en := range entries {
+		if en.IsDir() {
+			t.Errorf("orphan version dir left behind: %s", en.Name())
+		}
+	}
+}
+
+func TestEntriesIncludeAnchorSettingsOnly(t *testing.T) {
+	var anchorPaths []string
+	for _, e := range Entries(false) {
+		if e.Tool == "anchor" {
+			anchorPaths = append(anchorPaths, e.Path)
+			if isExcluded(e.Path) {
+				t.Errorf("anchor entry %q is filtered by isExcluded", e.Path)
+			}
+		}
+	}
+	want := []string{".anchor/settings.json", ".anchor/sites.json"}
+	if len(anchorPaths) != len(want) {
+		t.Fatalf("anchor entries = %v, want %v", anchorPaths, want)
+	}
+	for i, p := range want {
+		if anchorPaths[i] != p {
+			t.Errorf("anchor entry %d = %q, want %q", i, anchorPaths[i], p)
+		}
+	}
+}
+
+func TestAnchorSettingsBackupRestoreRoundtrip(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".anchor", "settings.json"), []byte(`{"theme":"dark"}`))
+	mustWrite(t, filepath.Join(home, ".anchor", "sites.json"), []byte(`[{"name":"halla-ai"}]`))
+
+	sum, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".anchor/settings.json", ".anchor/sites.json"} {
+		if _, err := os.Stat(filepath.Join(sum.Path, "home", rel)); err != nil {
+			t.Errorf("snapshot missing %s: %v", rel, err)
+		}
+	}
+
+	mustWrite(t, filepath.Join(home, ".anchor", "settings.json"), []byte(`{"theme":"mutated"}`))
+	if _, err := eng.Restore(RestoreOptions{Version: sum.Version}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(home, ".anchor", "settings.json"))
+	if string(got) != `{"theme":"dark"}` {
+		t.Errorf("anchor settings not restored: %q", got)
+	}
+}
+
+func TestAIListHosts(t *testing.T) {
+	root := t.TempDir()
+	if hosts, err := ListHosts(root); err != nil || hosts != nil {
+		t.Fatalf("missing tree should be (nil, nil): %v %v", hosts, err)
+	}
+	for _, h := range []string{"b-host", "a-host"} {
+		if err := os.MkdirAll(filepath.Join(root, "ai-config", h), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hosts, err := ListHosts(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 2 || hosts[0] != "a-host" || hosts[1] != "b-host" {
+		t.Errorf("hosts = %v", hosts)
+	}
+}
+
+func TestCopyTreeUnfilteredKeepsExcludedFiles(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	src := filepath.Join(home, "src")
+	mustWrite(t, filepath.Join(src, "config.toml"), []byte("cfg"))
+	mustWrite(t, filepath.Join(src, "prompts", "session.jsonl"), []byte("session-data"))
+	// A relative symlink inside the tree.
+	if err := os.Symlink("config.toml", filepath.Join(src, "link.toml")); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(home, "dst")
+	if err := eng.copyTreeUnfiltered(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	// The whole point of the unfiltered copy: isExcluded patterns (*.jsonl)
+	// are NOT skipped, unlike the managed copyTree.
+	got, err := os.ReadFile(filepath.Join(dst, "prompts", "session.jsonl"))
+	if err != nil || string(got) != "session-data" {
+		t.Errorf("excluded file not copied: %q err=%v", got, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "config.toml")); string(got) != "cfg" {
+		t.Errorf("regular file content: %q", got)
+	}
+	target, err := os.Readlink(filepath.Join(dst, "link.toml"))
+	if err != nil || target != "config.toml" {
+		t.Errorf("symlink not preserved: %q err=%v", target, err)
+	}
+}
+
+func TestBackupExistingCrossDeviceFallback(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	rel := ".codex/prompts"
+	live := filepath.Join(home, rel)
+	mustWrite(t, filepath.Join(live, "draft.md"), []byte("v1"))
+	mustWrite(t, filepath.Join(live, "session.jsonl"), []byte("session"))
+
+	// Force os.Rename to fail (simulating EXDEV) by pre-creating the
+	// destination as a non-empty directory: rename onto a non-empty dir
+	// errors, exercising the copyTreeUnfiltered + RemoveAll fallback.
+	preRoot := filepath.Join(home, "prebak")
+	dst := filepath.Join(preRoot, rel)
+	mustWrite(t, filepath.Join(dst, "occupied"), []byte("x"))
+
+	moved, err := eng.backupExisting(live, rel, preRoot)
+	if err != nil {
+		t.Fatalf("backupExisting: %v", err)
+	}
+	if !moved {
+		t.Fatal("expected moved=true")
+	}
+	// Fallback copied the whole live tree (including the excluded .jsonl)...
+	if got, err := os.ReadFile(filepath.Join(dst, "draft.md")); err != nil || string(got) != "v1" {
+		t.Errorf("draft not preserved via fallback: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "session.jsonl")); err != nil || string(got) != "session" {
+		t.Errorf("excluded session not preserved via fallback: %q err=%v", got, err)
+	}
+	// ...and removed the live tree afterward.
+	if _, err := os.Stat(live); !os.IsNotExist(err) {
+		t.Errorf("live tree not removed after fallback: %v", err)
+	}
+}
+
+func TestRestorePreBackupDirIsOwnerOnly(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("v1"))
+	sum, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("v2"))
+
+	rsum, err := eng.Restore(RestoreOptions{Version: sum.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rsum.PreBackupPath == "" {
+		t.Fatal("PreBackupPath not set")
+	}
+	info, err := os.Stat(rsum.PreBackupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("pre-restore dir mode = %v, want 0700 (may hold auth creds)", info.Mode().Perm())
+	}
+}

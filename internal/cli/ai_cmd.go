@@ -32,6 +32,7 @@ Codex, Antigravity, or ChatGPT apps; use 'dot apps install' for Homebrew casks.`
 	cmd.AddCommand(newAIRestoreCmd())
 	cmd.AddCommand(newAIExportCmd())
 	cmd.AddCommand(newAIImportCmd())
+	cmd.AddCommand(newAIPruneCmd())
 	cmd.AddCommand(newAIHudCmd())
 	cmd.AddCommand(newAICoauthoredGuardCmd())
 	cmd.AddCommand(newAIAgentsCmd())
@@ -103,6 +104,7 @@ func newAIStatusCmd() *cobra.Command {
 		RunE:  runAIStatus,
 	}
 	c.Flags().String("from", "", "Backup root to inspect")
+	c.Flags().String("host", "", "Hostname to inspect (default: this host)")
 	c.Flags().Bool("include-auth", false, "Include auth/local-secret paths in status")
 	return c
 }
@@ -113,6 +115,11 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	p := printerFrom(cmd)
 	p.Header("AI Config Status")
 	p.KV("Host", eng.Hostname)
@@ -173,9 +180,7 @@ func runAIBackup(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := auditAIEvent(cmd, "ai.backup", aiSummaryPayload(sum)); err != nil {
-		return err
-	}
+	auditAIEventBestEffort(cmd, "ai.backup", aiSummaryPayload(sum))
 	printAISummary(printerFrom(cmd), "AI Backup", sum)
 	return nil
 }
@@ -188,6 +193,7 @@ func newAIRestoreCmd() *cobra.Command {
 		RunE:  runAIRestore,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
 	c.Flags().String("version", "", `Specific version to restore, or "latest" (default: latest)`)
 	c.Flags().Bool("include-auth", false, "Restore auth/local-secret files from the snapshot")
 	c.Flags().Bool("reapply-agents", false, "After restore, reapply the agents SSOT to tool targets")
@@ -203,6 +209,11 @@ func runAIRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	p := printerFrom(cmd)
 	if version == "" || version == "latest" {
 		v, err := eng.ResolveLatest()
@@ -226,10 +237,11 @@ func runAIRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := auditAIEvent(cmd, "ai.restore", aiSummaryPayload(sum)); err != nil {
-		return err
-	}
+	auditAIEventBestEffort(cmd, "ai.restore", aiSummaryPayload(sum))
 	printAISummary(p, "AI Restore", sum)
+	if sum.PreBackupPath != "" {
+		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(sum.PreBackupPath))
+	}
 	if reapplyAgents {
 		mgr := newAgentsManagerFromCmd(cmd)
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -269,9 +281,7 @@ func runAIExport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := auditAIEvent(cmd, "ai.export", aiSummaryPayload(sum)); err != nil {
-		return err
-	}
+	auditAIEventBestEffort(cmd, "ai.export", aiSummaryPayload(sum))
 	printAISummary(printerFrom(cmd), "AI Export", sum)
 	return nil
 }
@@ -310,10 +320,11 @@ func runAIImport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := auditAIEvent(cmd, "ai.import", aiSummaryPayload(sum)); err != nil {
-		return err
-	}
+	auditAIEventBestEffort(cmd, "ai.import", aiSummaryPayload(sum))
 	printAISummary(p, "AI Import", sum)
+	if sum.PreBackupPath != "" {
+		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(sum.PreBackupPath))
+	}
 	return nil
 }
 
@@ -981,6 +992,73 @@ func aiEntryManagedByAgents(path string) bool {
 		}
 	}
 	return false
+}
+
+// auditAIEventBestEffort appends to the audit log but never fails the
+// command: the operation already succeeded, and an unwritable audit log
+// must not turn that success into an error.
+func auditAIEventBestEffort(cmd *cobra.Command, typ string, payload map[string]any) {
+	if err := auditAIEvent(cmd, typ, payload); err != nil {
+		printerFrom(cmd).Warn("  audit log write failed: %v", err)
+	}
+}
+
+func newAIPruneCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "prune",
+		Short: "Delete older AI config snapshots, keeping the newest N",
+		Args:  cobra.NoArgs,
+		RunE:  runAIPrune,
+	}
+	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
+	c.Flags().String("host", "", "Hostname to prune (default: this host)")
+	c.Flags().Int("keep", 5, "Number of most recent snapshots to keep")
+	return c
+}
+
+func runAIPrune(cmd *cobra.Command, _ []string) error {
+	yes, _ := cmd.Flags().GetBool("yes")
+	keep, _ := cmd.Flags().GetInt("keep")
+	eng, err := newAIEngine(cmd)
+	if err != nil {
+		return err
+	}
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
+	p := printerFrom(cmd)
+
+	all, err := eng.List()
+	if err != nil {
+		return err
+	}
+	if len(all) <= keep {
+		p.Line("Nothing to prune (%d snapshots <= keep=%d).", len(all), keep)
+		return nil
+	}
+	toDelete := len(all) - keep
+	if !yes {
+		p.Line("About to delete %d snapshot(s) under %s.", toDelete, eng.HostRoot())
+		ok, err := ui.ConfirmBool("Continue?", false, false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			p.Line("aborted")
+			return nil
+		}
+	}
+	removed, err := eng.Prune(keep)
+	if err != nil {
+		return err
+	}
+	p.Line("Pruned %d snapshot(s):", len(removed))
+	for _, v := range removed {
+		p.Line("  - %s", v)
+	}
+	return nil
 }
 
 func newAIEngine(cmd *cobra.Command) (*aisettings.Engine, error) {
