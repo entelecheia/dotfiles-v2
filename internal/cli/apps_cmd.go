@@ -866,8 +866,8 @@ func resolveBackupRoot(cmd *cobra.Command, state *config.UserState, home string)
 	if state.Modules.MacApps.BackupRoot != "" {
 		return appsettings.ExpandHome(state.Modules.MacApps.BackupRoot, home)
 	}
-	if drive := appsettings.DetectDriveCandidate(home); drive != "" {
-		return drive
+	if cloud := appsettings.DetectCloudCandidate(home); cloud != "" {
+		return cloud
 	}
 	return appsettings.DefaultBackupRoot(home)
 }

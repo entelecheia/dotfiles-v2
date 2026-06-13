@@ -71,7 +71,7 @@ func splitCaskList(s string) []string {
 
 func pickBackupChoice(path string, detectedDrive bool) string {
 	if detectedDrive {
-		return "drive (auto-detected)"
+		return "cloud (auto-detected)"
 	}
 	if strings.Contains(path, "/.local/share/dotfiles/") {
 		return "local"

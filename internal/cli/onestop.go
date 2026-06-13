@@ -173,8 +173,8 @@ func (o *onestopCtx) rootSource() string {
 	if o.state.Modules.MacApps.BackupRoot != "" {
 		return "state (backup_root)"
 	}
-	if appsettings.DetectDriveCandidate(o.home) != "" {
-		return "auto-detected (Drive)"
+	if appsettings.DetectCloudCandidate(o.home) != "" {
+		return "auto-detected (cloud)"
 	}
 	return "local default"
 }

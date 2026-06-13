@@ -94,9 +94,9 @@ func runProfileRoot(cmd *cobra.Command, args []string) error {
 		p.Line("  %s  %s", ui.StyleKey.Render("Effective:"), ui.StyleValue.Render(effective))
 
 	case detect:
-		drive := appsettings.DetectDriveCandidate(home)
+		drive := appsettings.DetectCloudCandidate(home)
 		if drive == "" {
-			return fmt.Errorf("no Google Drive secrets folder detected under %s", home)
+			return fmt.Errorf("no cloud (Dropbox/Google Drive) secrets folder detected under %s", home)
 		}
 		state.Modules.MacApps.BackupRoot = drive
 		if err := persistProfileState(cmd, state); err != nil {
@@ -121,8 +121,8 @@ func runProfileRoot(cmd *cobra.Command, args []string) error {
 		source := "default"
 		if saved != "" {
 			source = "state"
-		} else if d := appsettings.DetectDriveCandidate(home); d != "" {
-			source = "auto-detected (Drive)"
+		} else if d := appsettings.DetectCloudCandidate(home); d != "" {
+			source = "auto-detected (cloud)"
 		}
 		p.Line("  %s  %s", ui.StyleKey.Render("Root:"), ui.StyleValue.Render(effective))
 		p.Line("  %s  %s", ui.StyleKey.Render("Source:"), ui.StyleHint.Render(source))

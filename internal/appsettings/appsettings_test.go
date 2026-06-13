@@ -613,3 +613,68 @@ func TestSafeToken(t *testing.T) {
 		}
 	}
 }
+
+func TestDetectCloudCandidatePrefersDropbox(t *testing.T) {
+	home := t.TempDir()
+	cs := filepath.Join(home, "Library", "CloudStorage")
+	// Both a Google Drive and a Dropbox cloud root, each with a secrets marker.
+	if err := os.MkdirAll(filepath.Join(cs, "GoogleDrive-x@gmail.com", "My Drive", "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cs, "Dropbox", "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := DetectCloudCandidate(home)
+	want := filepath.Join(cs, "Dropbox", "secrets", "dotfiles-backup")
+	if got != want {
+		t.Errorf("DetectCloudCandidate = %q, want Dropbox %q", got, want)
+	}
+}
+
+func TestDetectCloudCandidateFallsBackToDrive(t *testing.T) {
+	home := t.TempDir()
+	cs := filepath.Join(home, "Library", "CloudStorage")
+	if err := os.MkdirAll(filepath.Join(cs, "GoogleDrive-x@gmail.com", "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := DetectCloudCandidate(home)
+	want := filepath.Join(cs, "GoogleDrive-x@gmail.com", "secrets", "dotfiles-backup")
+	if got != want {
+		t.Errorf("DetectCloudCandidate = %q, want Drive %q", got, want)
+	}
+}
+
+func TestDetectCloudCandidateHonorsDropboxSymlinkInHome(t *testing.T) {
+	home := t.TempDir()
+	real := filepath.Join(home, "Library", "CloudStorage", "Dropbox")
+	if err := os.MkdirAll(filepath.Join(real, "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// ~/Dropbox symlink → the CloudStorage dir (as on a real machine).
+	if err := os.Symlink(real, filepath.Join(home, "Dropbox")); err != nil {
+		t.Fatal(err)
+	}
+	got := DetectCloudCandidate(home)
+	// CloudStorage is scanned first → canonical path wins over the symlink.
+	want := filepath.Join(real, "secrets", "dotfiles-backup")
+	if got != want {
+		t.Errorf("DetectCloudCandidate = %q, want canonical %q", got, want)
+	}
+}
+
+func TestDetectCloudCandidateRequiresSecretsMarker(t *testing.T) {
+	home := t.TempDir()
+	// Dropbox dir present but no secrets/ subdir, and no Drive → "".
+	if err := os.MkdirAll(filepath.Join(home, "Library", "CloudStorage", "Dropbox", "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := DetectCloudCandidate(home); got != "" {
+		t.Errorf("DetectCloudCandidate = %q, want empty (no secrets marker)", got)
+	}
+}
+
+func TestDetectCloudCandidateNoCloud(t *testing.T) {
+	if got := DetectCloudCandidate(t.TempDir()); got != "" {
+		t.Errorf("DetectCloudCandidate = %q, want empty", got)
+	}
+}
