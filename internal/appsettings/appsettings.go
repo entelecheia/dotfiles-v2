@@ -238,6 +238,7 @@ func (e *Engine) backupApp(token string, app *AppEntry) AppSummary {
 		destFor = func(rel string) string { return filepath.Join(staging, rel) }
 	}
 
+	var failedPaths []string
 	for _, p := range app.Paths {
 		src := e.libraryPath(p.Path)
 		fi, err := os.Lstat(src)
@@ -250,6 +251,7 @@ func (e *Engine) backupApp(token string, app *AppEntry) AppSummary {
 					if _, _, serr := e.copyTree(archived, destFor(p.Path), afi); serr != nil {
 						e.Runner.Logger.Warn("backup: preserving archived copy failed", "app", token, "path", p.Path, "err", serr)
 						as.Failed++
+						failedPaths = append(failedPaths, p.Path)
 						continue
 					}
 				}
@@ -261,6 +263,7 @@ func (e *Engine) backupApp(token string, app *AppEntry) AppSummary {
 		if err != nil {
 			e.Runner.Logger.Warn("backup copy failed", "app", token, "src", src, "err", err)
 			as.Failed++
+			failedPaths = append(failedPaths, p.Path)
 			continue
 		}
 		as.Copied++
@@ -272,9 +275,17 @@ func (e *Engine) backupApp(token string, app *AppEntry) AppSummary {
 		return as
 	}
 	if as.Failed > 0 {
-		// Discard the partial staging tree; the existing archive stays intact.
-		_ = os.RemoveAll(staging)
-		return as
+		// Partial failure: keep the paths that DID stage by seeding each
+		// failed path's previous archive copy into the staging tree, so the
+		// atomic swap refreshes the readable paths without wiping the only
+		// copy of an unreadable one (e.g. a TCC-protected Containers path
+		// that fails on every run). If any failed path can't be seeded from
+		// the archive, fall back to discarding the whole staging tree — a
+		// partial commit would delete that path's sole archived copy.
+		if !e.seedFailedPaths(token, staging, failedPaths) {
+			_ = os.RemoveAll(staging)
+			return as
+		}
 	}
 	if err := e.commitStaging(token, staging); err != nil {
 		e.Runner.Logger.Warn("backup commit failed; previous archive kept", "app", token, "err", err)
@@ -282,6 +293,30 @@ func (e *Engine) backupApp(token string, app *AppEntry) AppSummary {
 		as.Failed++
 	}
 	return as
+}
+
+// seedFailedPaths copies each failed path's existing archive copy into the
+// staging tree so the commit preserves it. Returns false (caller must
+// discard staging) when any failed path has an archive copy that can't be
+// seeded — committing then would lose that path's only copy.
+func (e *Engine) seedFailedPaths(token, staging string, failedPaths []string) bool {
+	for _, rel := range failedPaths {
+		staged := filepath.Join(staging, rel)
+		// copyTree can fail mid-walk and leave a partial staged subtree;
+		// clear it so seeding never commits a mixed new/old tree.
+		_ = os.RemoveAll(staged)
+		archived := e.archivePath(token, rel)
+		afi, err := os.Lstat(archived)
+		if err != nil {
+			// No prior archive copy — nothing to lose, nothing to seed.
+			continue
+		}
+		if _, _, serr := e.copyTree(archived, staged, afi); serr != nil {
+			e.Runner.Logger.Warn("backup: seeding previous archive copy failed", "app", token, "path", rel, "err", serr)
+			return false
+		}
+	}
+	return true
 }
 
 // commitStaging swaps the staged tree into place via a .prev rename so a

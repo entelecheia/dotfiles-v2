@@ -242,7 +242,7 @@ func (o *onestopCtx) backupAppsStep(tag string) onestopStep {
 		return onestopStep{Name: "apps", Err: err}
 	}
 	if sum.Failed > 0 {
-		return onestopStep{Name: "apps", Err: fmt.Errorf("%d path(s) failed — previous archive copies were kept", sum.Failed)}
+		return onestopStep{Name: "apps", Err: fmt.Errorf("%d path(s) failed — their previous archive copies were kept (other paths refreshed)", sum.Failed)}
 	}
 	if !o.dryRun {
 		o.state.Modules.MacApps.LastBackup = &config.BackupRecord{

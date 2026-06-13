@@ -635,7 +635,9 @@ func (e *Engine) backupExisting(path, rel, preRoot string) (bool, error) {
 		return false, nil
 	}
 	dst := filepath.Join(preRoot, rel)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	// 0700: preRoot may hold auth credentials (settings.local.json,
+	// auth.json) when restoring with --include-auth.
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return false, err
 	}
 	if err := os.Rename(path, dst); err == nil {
@@ -660,7 +662,7 @@ func (e *Engine) copyTreeUnfiltered(src, dst string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
 			}
 			_ = os.Remove(target)

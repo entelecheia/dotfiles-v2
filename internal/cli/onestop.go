@@ -184,14 +184,18 @@ func (o *onestopCtx) confirmRoot(offerSave bool) error {
 	changed := edited != o.root
 	o.root = edited
 	if offerSave && changed && !hadSaved {
-		save, err := ui.ConfirmBool("Save this root to state for future runs?", true, false)
-		if err != nil {
-			return err
-		}
-		if save {
-			o.state.Modules.MacApps.BackupRoot = edited
-			if err := persistUserState(o.cmd, o.state); err != nil {
-				o.p.Warn("  could not save backup root: %v", err)
+		if o.dryRun {
+			o.p.Line("  %s", ui.StyleHint.Render("[dry-run] would offer to save this root to state"))
+		} else {
+			save, err := ui.ConfirmBool("Save this root to state for future runs?", true, false)
+			if err != nil {
+				return err
+			}
+			if save {
+				o.state.Modules.MacApps.BackupRoot = edited
+				if err := persistUserState(o.cmd, o.state); err != nil {
+					o.p.Warn("  could not save backup root: %v", err)
+				}
 			}
 		}
 	}

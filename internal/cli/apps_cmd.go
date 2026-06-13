@@ -546,7 +546,7 @@ func runAppsBackup(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if sum.Failed > 0 {
-		return fmt.Errorf("%d path(s) failed to back up — previous archive copies were kept", sum.Failed)
+		return fmt.Errorf("%d path(s) failed to back up — their previous archive copies were kept (other paths refreshed)", sum.Failed)
 	}
 	return nil
 }

@@ -78,8 +78,8 @@ func TestProfileCLIRestoreRejectsDeadLatestFlag(t *testing.T) {
 	if _, _, err := runDotForTest("profile", "backup", "--to", root); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := runDotForTest("profile", "restore", "--from", root, "--latest", "--yes"); err == nil {
-		t.Error("removed --latest flag should be rejected")
+	if _, _, err := runDotForTest("profile", "restore", "--from", root, "--latest", "--yes"); err == nil || !strings.Contains(err.Error(), "unknown flag: --latest") {
+		t.Errorf("removed --latest flag should be rejected with unknown-flag error, got: %v", err)
 	}
 }
 

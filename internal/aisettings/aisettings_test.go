@@ -489,3 +489,91 @@ func TestAIListHosts(t *testing.T) {
 		t.Errorf("hosts = %v", hosts)
 	}
 }
+
+func TestCopyTreeUnfilteredKeepsExcludedFiles(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	src := filepath.Join(home, "src")
+	mustWrite(t, filepath.Join(src, "config.toml"), []byte("cfg"))
+	mustWrite(t, filepath.Join(src, "prompts", "session.jsonl"), []byte("session-data"))
+	// A relative symlink inside the tree.
+	if err := os.Symlink("config.toml", filepath.Join(src, "link.toml")); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(home, "dst")
+	if err := eng.copyTreeUnfiltered(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	// The whole point of the unfiltered copy: isExcluded patterns (*.jsonl)
+	// are NOT skipped, unlike the managed copyTree.
+	got, err := os.ReadFile(filepath.Join(dst, "prompts", "session.jsonl"))
+	if err != nil || string(got) != "session-data" {
+		t.Errorf("excluded file not copied: %q err=%v", got, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "config.toml")); string(got) != "cfg" {
+		t.Errorf("regular file content: %q", got)
+	}
+	target, err := os.Readlink(filepath.Join(dst, "link.toml"))
+	if err != nil || target != "config.toml" {
+		t.Errorf("symlink not preserved: %q err=%v", target, err)
+	}
+}
+
+func TestBackupExistingCrossDeviceFallback(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	rel := ".codex/prompts"
+	live := filepath.Join(home, rel)
+	mustWrite(t, filepath.Join(live, "draft.md"), []byte("v1"))
+	mustWrite(t, filepath.Join(live, "session.jsonl"), []byte("session"))
+
+	// Force os.Rename to fail (simulating EXDEV) by pre-creating the
+	// destination as a non-empty directory: rename onto a non-empty dir
+	// errors, exercising the copyTreeUnfiltered + RemoveAll fallback.
+	preRoot := filepath.Join(home, "prebak")
+	dst := filepath.Join(preRoot, rel)
+	mustWrite(t, filepath.Join(dst, "occupied"), []byte("x"))
+
+	moved, err := eng.backupExisting(live, rel, preRoot)
+	if err != nil {
+		t.Fatalf("backupExisting: %v", err)
+	}
+	if !moved {
+		t.Fatal("expected moved=true")
+	}
+	// Fallback copied the whole live tree (including the excluded .jsonl)...
+	if got, err := os.ReadFile(filepath.Join(dst, "draft.md")); err != nil || string(got) != "v1" {
+		t.Errorf("draft not preserved via fallback: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "session.jsonl")); err != nil || string(got) != "session" {
+		t.Errorf("excluded session not preserved via fallback: %q err=%v", got, err)
+	}
+	// ...and removed the live tree afterward.
+	if _, err := os.Stat(live); !os.IsNotExist(err) {
+		t.Errorf("live tree not removed after fallback: %v", err)
+	}
+}
+
+func TestRestorePreBackupDirIsOwnerOnly(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("v1"))
+	sum, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("v2"))
+
+	rsum, err := eng.Restore(RestoreOptions{Version: sum.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rsum.PreBackupPath == "" {
+		t.Fatal("PreBackupPath not set")
+	}
+	info, err := os.Stat(rsum.PreBackupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("pre-restore dir mode = %v, want 0700 (may hold auth creds)", info.Mode().Perm())
+	}
+}

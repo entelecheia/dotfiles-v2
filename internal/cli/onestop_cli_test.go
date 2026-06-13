@@ -115,6 +115,11 @@ func TestOnestopBackupAllDomains(t *testing.T) {
 
 func TestOnestopBackupDryRunWritesNothing(t *testing.T) {
 	f := newOnestopFixture(t)
+	cfgPath := filepath.Join(f.home, ".config", "dotfiles", "config.yaml")
+	cfgBefore, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	out, errOut, err := runDotForTest("backup", "--yes", "--dry-run", "--to", f.root, "--scope", "profile,ai,secrets", "--include-secrets")
 	if err != nil {
@@ -129,6 +134,10 @@ func TestOnestopBackupDryRunWritesNothing(t *testing.T) {
 	})
 	if len(found) > 0 {
 		t.Errorf("dry-run created files under the backup root: %v", found)
+	}
+	// No state write either (catches any unguarded persistUserState).
+	if cfgAfter, _ := os.ReadFile(cfgPath); string(cfgAfter) != string(cfgBefore) {
+		t.Errorf("dry-run mutated config.yaml:\nbefore=%q\nafter=%q", cfgBefore, cfgAfter)
 	}
 }
 
@@ -259,7 +268,17 @@ func TestOnestopRestoreNoBackupsAbortsBeforeChanges(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no backups found") {
 		t.Fatalf("expected preflight error, got %v", err)
 	}
-	_ = f
+	// Preflight must abort before touching any local file.
+	if got, _ := os.ReadFile(filepath.Join(f.home, ".config", "dotfiles", "config.yaml")); string(got) != "name: original\n" {
+		t.Errorf("config.yaml changed: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(f.home, ".claude", "settings.json")); string(got) != `{"model":"opus"}` {
+		t.Errorf("claude settings changed: %q", got)
+	}
+	// No pre-restore backup trees (profilesnap or aisettings) were created.
+	if _, err := os.Stat(filepath.Join(f.home, ".local", "share", "dotfiles", "backup")); !os.IsNotExist(err) {
+		t.Errorf("pre-restore backup tree created despite preflight abort: %v", err)
+	}
 }
 
 func TestOnestopRestoreUnmatchedSecretArchiveFails(t *testing.T) {
@@ -275,5 +294,52 @@ func TestOnestopRestoreUnmatchedSecretArchiveFails(t *testing.T) {
 	_, _, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "secrets")
 	if err == nil || !strings.Contains(err.Error(), "restore step(s) failed") {
 		t.Fatalf("expected failed-step error for unmatched archive, got %v", err)
+	}
+}
+
+func TestOnestopRestoreApplyStepDryRun(t *testing.T) {
+	f := newOnestopFixture(t)
+	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "profile"); err != nil {
+		t.Fatal(err)
+	}
+
+	// --dry-run --apply: applyStep must short-circuit (no runApply, no
+	// config.yaml write) and still appear in the summary.
+	out, errOut, err := runDotForTest("restore", "--yes", "--dry-run", "--apply", "--from", f.root, "--scope", "profile")
+	if err != nil {
+		t.Fatalf("dry-run restore --apply: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if !strings.Contains(out, "apply") || !strings.Contains(out, "would run dot apply") {
+		t.Errorf("apply step missing or not short-circuited in dry-run:\n%s", out)
+	}
+	if !strings.Contains(out, "one-stop restore complete") {
+		t.Errorf("restore did not complete:\n%s", out)
+	}
+}
+
+func TestOnestopRestoreStateReloadFailureAborts(t *testing.T) {
+	f := newOnestopFixture(t)
+	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "profile,ai"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt the snapshot's config.yaml with invalid YAML so the
+	// post-profile state reload fails (an empty/missing file would load as
+	// a zero value or fail the profile step instead).
+	profileHost := filepath.Join(f.root, "profiles", f.host)
+	snapCfg := filepath.Join(profileHost, latestVersion(t, profileHost), "config.yaml")
+	writeCLITestFile(t, snapCfg, "{invalid yaml")
+
+	// Mutate the live AI target so we can prove the AI step never ran.
+	writeCLITestFile(t, filepath.Join(f.home, ".claude", "settings.json"), `{"model":"mutated"}`)
+
+	_, _, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "profile,ai")
+	if err == nil || !strings.Contains(err.Error(), "state reload failed") {
+		t.Fatalf("expected state-reload abort, got %v", err)
+	}
+	// AI step must not have run — abort happens right after the reload.
+	got, _ := os.ReadFile(filepath.Join(f.home, ".claude", "settings.json"))
+	if string(got) != `{"model":"mutated"}` {
+		t.Errorf("AI step ran despite reload abort: %q", got)
 	}
 }

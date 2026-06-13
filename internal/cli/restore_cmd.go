@@ -390,8 +390,14 @@ func (o *onestopCtx) restoreProfileStep(version string, includeSecrets bool) one
 }
 
 func (o *onestopCtx) applyStep() onestopStep {
-	// In-process: persistent flags (--yes/--dry-run/--home/...) are
-	// inherited via the shared command; runApply reloads state itself.
+	// In dry-run the state reload was skipped, so runApply would preview
+	// against the un-restored state and (via apply.go) write config.yaml
+	// before its own dry-run gate — short-circuit instead.
+	if o.dryRun {
+		return onestopStep{Name: "apply", Detail: "dry-run: would run dot apply"}
+	}
+	// In-process: persistent flags (--yes/--home/...) are inherited via the
+	// shared command; runApply reloads state itself.
 	if err := runApply(o.cmd, nil); err != nil {
 		return onestopStep{Name: "apply", Err: err}
 	}

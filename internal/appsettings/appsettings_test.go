@@ -248,36 +248,52 @@ func TestBackupFailureKeepsPreviousArchive(t *testing.T) {
 		t.Skip("chmod-based failure injection is ineffective as root")
 	}
 	home := t.TempDir()
+	prefDir := filepath.Join(home, "Library", "Preferences")
 	support := filepath.Join(home, "Library", "Application Support", "Foo")
-	if err := os.MkdirAll(support, 0o755); err != nil {
+	for _, d := range []string{prefDir, support} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two paths on one token: a TCC-style unreadable one and a readable one.
+	guarded := filepath.Join(support, "settings.json")
+	readable := filepath.Join(prefDir, "com.foo.plist")
+	if err := os.WriteFile(guarded, []byte("v1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := filepath.Join(support, "settings.json")
-	if err := os.WriteFile(cfg, []byte("v1"), 0o644); err != nil {
+	if err := os.WriteFile(readable, []byte("r1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mf := &Manifest{Apps: []AppEntry{{
 		Token: "foo",
-		Paths: []PathEntry{{Type: "support", Path: "Application Support/Foo"}},
+		Paths: []PathEntry{
+			{Type: "support", Path: "Application Support/Foo"},
+			{Type: "pref", Path: "Preferences/com.foo.plist"},
+		},
 	}}}
 	eng := newRoundtripEngine(t, home, mf)
 
 	if _, err := eng.Backup(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	archived := filepath.Join(eng.HostRoot(), "foo", "Application Support", "Foo", "settings.json")
-	if _, err := os.Stat(archived); err != nil {
+	guardedArchive := filepath.Join(eng.HostRoot(), "foo", "Application Support", "Foo", "settings.json")
+	readableArchive := filepath.Join(eng.HostRoot(), "foo", "Preferences", "com.foo.plist")
+	if _, err := os.Stat(guardedArchive); err != nil {
 		t.Fatal(err)
 	}
 
-	// Make the live copy unreadable so the next backup fails mid-token.
-	if err := os.WriteFile(cfg, []byte("v2"), 0o644); err != nil {
+	// Mutate both, then make the guarded path unreadable so the next backup
+	// fails on it but still stages the readable one.
+	if err := os.WriteFile(guarded, []byte("v2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(cfg, 0o000); err != nil {
+	if err := os.WriteFile(readable, []byte("r2"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(cfg, 0o644) })
+	if err := os.Chmod(guarded, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(guarded, 0o644) })
 
 	sum, err := eng.Backup(context.Background(), nil)
 	if err != nil {
@@ -286,16 +302,68 @@ func TestBackupFailureKeepsPreviousArchive(t *testing.T) {
 	if sum.Failed == 0 {
 		t.Fatal("expected Failed > 0 for unreadable source")
 	}
-	got, err := os.ReadFile(archived)
-	if err != nil || string(got) != "v1" {
-		t.Errorf("previous archive corrupted: %q err=%v", got, err)
+	// Guarded path keeps its previous (v1) copy — not wiped, not partial.
+	if got, err := os.ReadFile(guardedArchive); err != nil || string(got) != "v1" {
+		t.Errorf("guarded archive should keep v1, got %q err=%v", got, err)
 	}
-	if _, err := os.Stat(filepath.Join(eng.HostRoot(), ".staging")); !os.IsNotExist(err) {
-		// recoverStaging on next run also clears it; immediate cleanup expected.
-		entries, _ := os.ReadDir(filepath.Join(eng.HostRoot(), ".staging"))
-		if len(entries) > 0 {
-			t.Errorf("staging leftovers remain: %v", entries)
-		}
+	// Readable path on the same token IS refreshed (partial salvage).
+	if got, err := os.ReadFile(readableArchive); err != nil || string(got) != "r2" {
+		t.Errorf("readable archive should refresh to r2, got %q err=%v", got, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(eng.HostRoot(), ".staging")); len(entries) > 0 {
+		t.Errorf("staging leftovers remain: %v", entries)
+	}
+}
+
+// TestBackupCommitsReadableWhenFailedPathNeverArchived verifies that on a
+// first-ever backup where one path fails and has no prior archive copy,
+// the readable path is still committed — nothing is lost because the
+// failed path was never archived, and refusing to commit would mean a
+// persistently-unreadable path blocks the readable one from ever backing
+// up (the regression this fix targets).
+func TestBackupCommitsReadableWhenFailedPathNeverArchived(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based failure injection is ineffective as root")
+	}
+	home := t.TempDir()
+	prefDir := filepath.Join(home, "Library", "Preferences")
+	if err := os.MkdirAll(prefDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	readable := filepath.Join(prefDir, "com.read.plist")
+	guarded := filepath.Join(prefDir, "com.guard.plist")
+	if err := os.WriteFile(readable, []byte("r1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(guarded, []byte("g1"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(guarded, 0o644) })
+	mf := &Manifest{Apps: []AppEntry{{
+		Token: "foo",
+		Paths: []PathEntry{
+			{Type: "pref", Path: "Preferences/com.read.plist"},
+			{Type: "pref", Path: "Preferences/com.guard.plist"},
+		},
+	}}}
+	eng := newRoundtripEngine(t, home, mf)
+
+	sum, err := eng.Backup(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Failed == 0 {
+		t.Fatal("expected Failed > 0")
+	}
+	// Readable path committed; guarded path simply absent (never archived).
+	if got, err := os.ReadFile(filepath.Join(eng.HostRoot(), "foo", "Preferences", "com.read.plist")); err != nil || string(got) != "r1" {
+		t.Errorf("readable path not committed: %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(eng.HostRoot(), "foo", "Preferences", "com.guard.plist")); !os.IsNotExist(err) {
+		t.Errorf("guarded path should be absent (never archived): %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(eng.HostRoot(), ".staging")); len(entries) > 0 {
+		t.Errorf("staging leftovers remain: %v", entries)
 	}
 }
 
@@ -335,27 +403,65 @@ func TestBackupSeedsArchivedCopyWhenLiveMissing(t *testing.T) {
 	}
 }
 
-func TestRecoverStagingRestoresOrphanPrev(t *testing.T) {
-	home := t.TempDir()
-	mf := &Manifest{Apps: []AppEntry{{
-		Token: "x",
-		Paths: []PathEntry{{Type: "pref", Path: "Preferences/com.x.plist"}},
-	}}}
-	eng := newRoundtripEngine(t, home, mf)
-
-	// Simulate a crash between "final -> prev" and "staging -> final".
-	prev := filepath.Join(eng.HostRoot(), "x.prev")
+// seedOrphanPrev simulates a crash between "final -> prev" and
+// "staging -> final": only <token>.prev exists, holding "old".
+func seedOrphanPrev(t *testing.T, eng *Engine, token string) {
+	t.Helper()
+	prev := filepath.Join(eng.HostRoot(), token+".prev")
 	if err := os.MkdirAll(filepath.Join(prev, "Preferences"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(prev, "Preferences", "com.x.plist"), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	eng.recoverStaging()
+// TestBackupRecoversOrphanPrev drives recovery through the real Backup
+// entry point (not recoverStaging directly), pinning the call-site wiring.
+// The token has no live source, so Backup does no copying — only the
+// recovery pass runs.
+func TestBackupRecoversOrphanPrev(t *testing.T) {
+	home := t.TempDir()
+	mf := &Manifest{Apps: []AppEntry{{
+		Token: "x",
+		Paths: []PathEntry{{Type: "pref", Path: "Preferences/com.x.plist"}},
+	}}}
+	eng := newRoundtripEngine(t, home, mf)
+	if err := os.MkdirAll(eng.HostRoot(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seedOrphanPrev(t, eng, "x")
+
+	if _, err := eng.Backup(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
 	got, err := os.ReadFile(filepath.Join(eng.HostRoot(), "x", "Preferences", "com.x.plist"))
 	if err != nil || string(got) != "old" {
-		t.Errorf("orphan .prev not recovered: %q err=%v", got, err)
+		t.Errorf("Backup did not recover orphan .prev: %q err=%v", got, err)
+	}
+}
+
+// TestRestoreRecoversOrphanPrev pins the Restore call site, which has its
+// own recoverStaging invocation independent of Backup's.
+func TestRestoreRecoversOrphanPrev(t *testing.T) {
+	home := t.TempDir()
+	mf := &Manifest{Apps: []AppEntry{{
+		Token: "x",
+		Paths: []PathEntry{{Type: "pref", Path: "Preferences/com.x.plist"}},
+	}}}
+	eng := newRoundtripEngine(t, home, mf)
+	if err := os.MkdirAll(eng.HostRoot(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seedOrphanPrev(t, eng, "x")
+
+	if _, err := eng.Restore(context.Background(), []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	// Recovery renamed x.prev → x, then Restore copied it back to Library.
+	got, err := os.ReadFile(filepath.Join(home, "Library", "Preferences", "com.x.plist"))
+	if err != nil || string(got) != "old" {
+		t.Errorf("Restore did not recover+apply orphan .prev: %q err=%v", got, err)
 	}
 }
 
