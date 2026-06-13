@@ -622,3 +622,83 @@ func TestSecretsVerifier_UnprotectedSSHIdentityVerifies(t *testing.T) {
 		t.Errorf("verify=%v reason=%q, want a usable verifier", verify != nil, reason)
 	}
 }
+
+// shortHost returns this machine's short hostname, matching the wizard's
+// host-scoping used by secrets backup.
+func shortHost(t *testing.T) string {
+	t.Helper()
+	h, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := strings.Index(h, "."); i > 0 {
+		h = h[:i]
+	}
+	return h
+}
+
+func TestSecretsBackupCLI_DefaultDestFollowsBackupRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	root := filepath.Join(home, "Dropbox", "secrets", "dotfiles-backup")
+	writeCLITestFile(t, filepath.Join(home, ".config", "dotfiles", "config.yaml"),
+		"modules:\n  macapps:\n    backup_root: "+root+"\n")
+	writeCLITestFile(t, filepath.Join(home, ".local", "share", "dotfiles-secrets", "x.age"), "payload")
+
+	out, errOut, err := runDotForTest("secrets", "backup")
+	if err != nil {
+		t.Fatalf("secrets backup (no arg): %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	wantDest := filepath.Join(root, "secrets-age", shortHost(t))
+	if !strings.Contains(out, wantDest) {
+		t.Errorf("default destination not shown:\nwant %s\n%s", wantDest, out)
+	}
+	if _, err := os.Stat(filepath.Join(wantDest, "x.age")); err != nil {
+		t.Errorf("archive not copied to default dest: %v", err)
+	}
+}
+
+func TestSecretsBackupCLI_ExplicitDestUnchanged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	writeCLITestFile(t, filepath.Join(home, ".config", "dotfiles", "config.yaml"), "name: x\n")
+	writeCLITestFile(t, filepath.Join(home, ".local", "share", "dotfiles-secrets", "x.age"), "payload")
+
+	dest := filepath.Join(home, "explicit-dest")
+	out, errOut, err := runDotForTest("secrets", "backup", dest)
+	if err != nil {
+		t.Fatalf("secrets backup (explicit): %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "x.age")); err != nil {
+		t.Errorf("archive not copied to explicit dest: %v", err)
+	}
+	// Explicit dest must NOT be wrapped in secrets-age/<host>.
+	if strings.Contains(out, filepath.Join(dest, "secrets-age")) {
+		t.Errorf("explicit dest should be used verbatim:\n%s", out)
+	}
+}
+
+func TestSecretsBackupCLI_DefaultDestDryRunWritesNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	root := filepath.Join(home, "Dropbox", "secrets", "dotfiles-backup")
+	writeCLITestFile(t, filepath.Join(home, ".config", "dotfiles", "config.yaml"),
+		"modules:\n  macapps:\n    backup_root: "+root+"\n")
+	writeCLITestFile(t, filepath.Join(home, ".local", "share", "dotfiles-secrets", "x.age"), "payload")
+
+	out, _, err := runDotForTest("secrets", "backup", "--dry-run")
+	if err != nil {
+		t.Fatalf("secrets backup --dry-run: %v", err)
+	}
+	wantDest := filepath.Join(root, "secrets-age", shortHost(t))
+	if !strings.Contains(out, wantDest) {
+		t.Errorf("dry-run should still show the default dest %s:\n%s", wantDest, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "Dropbox")); !os.IsNotExist(err) {
+		t.Errorf("dry-run created the Dropbox destination tree: %v", err)
+	}
+}
