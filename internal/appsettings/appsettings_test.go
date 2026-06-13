@@ -570,3 +570,46 @@ func TestListHosts(t *testing.T) {
 		t.Errorf("hosts = %v", hosts)
 	}
 }
+
+func TestBackupRefusesUnsafeToken(t *testing.T) {
+	home := t.TempDir()
+	plistPath := filepath.Join(home, "Library", "Preferences", "com.x.plist")
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plistPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A traversal token that would escape HostRoot via filepath.Join and
+	// feed os.RemoveAll/os.Rename if not guarded.
+	mf := &Manifest{Apps: []AppEntry{{
+		Token: "../escape",
+		Paths: []PathEntry{{Type: "pref", Path: "Preferences/com.x.plist"}},
+	}}}
+	eng := newRoundtripEngine(t, home, mf)
+
+	sum, err := eng.Backup(context.Background(), []string{"../escape"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Failed == 0 {
+		t.Fatal("unsafe token should be counted as Failed, not silently processed")
+	}
+	// Nothing escaped the host tree: the sibling dir must not exist.
+	if _, err := os.Stat(filepath.Join(eng.Root, "app-settings", "escape")); !os.IsNotExist(err) {
+		t.Errorf("unsafe token escaped host root: %v", err)
+	}
+}
+
+func TestSafeToken(t *testing.T) {
+	for _, bad := range []string{"", ".", "..", "a/b", "../x", "x/../y"} {
+		if safeToken(bad) {
+			t.Errorf("safeToken(%q) = true, want false", bad)
+		}
+	}
+	for _, ok := range []string{"raycast", "Moom Classic", "com.foo.bar", "1password"} {
+		if !safeToken(ok) {
+			t.Errorf("safeToken(%q) = false, want true", ok)
+		}
+	}
+}

@@ -115,7 +115,11 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	p := printerFrom(cmd)
 	p.Header("AI Config Status")
 	p.KV("Host", eng.Hostname)
@@ -205,7 +209,11 @@ func runAIRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	p := printerFrom(cmd)
 	if version == "" || version == "latest" {
 		v, err := eng.ResolveLatest()
@@ -1015,7 +1023,11 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	p := printerFrom(cmd)
 
 	all, err := eng.List()

@@ -94,6 +94,22 @@ func (o *onestopCtx) reloadState() error {
 	return nil
 }
 
+// loadStateFromSnapshot loads in-memory state directly from a snapshot's
+// config.yaml. Used in dry-run restore, where the profile step does not
+// write config.yaml, so reloadState would re-read the un-restored local
+// state and make later previews (secrets identity, app list) misleading.
+func (o *onestopCtx) loadStateFromSnapshot(configPath string) error {
+	if configPath == "" {
+		return nil
+	}
+	state, err := config.LoadStateFrom(configPath)
+	if err != nil {
+		return fmt.Errorf("load snapshot state: %w", err)
+	}
+	o.state = state
+	return nil
+}
+
 // --- engine builders pinned to the session root + host ---
 
 func (o *onestopCtx) profileEngine() *profilesnap.Engine {

@@ -174,23 +174,30 @@ func runOnestopRestore(cmd *cobra.Command, _ []string) error {
 	// independent — failures are recorded and the run continues.
 	var steps []onestopStep
 	if selected["profile"] {
-		step := o.restoreProfileStep(profileVersion, includeSecrets)
+		step, srcConfig := o.restoreProfileStep(profileVersion, includeSecrets)
 		steps = append(steps, step)
 		if step.Err != nil {
 			printOnestopSummary(p, steps)
 			return fmt.Errorf("profile restore failed — aborting (later steps depend on the restored state): %w", step.Err)
 		}
-		// Reload state so later steps see the restored configuration; the
-		// session root stays pinned — a config.yaml from another machine
-		// must not redirect the remaining steps mid-run. A reload failure
-		// aborts like a profile failure: continuing with the stale state
-		// would restore secrets/apps against the wrong configuration.
-		if !o.dryRun {
-			if err := o.reloadState(); err != nil {
-				steps = append(steps, onestopStep{Name: "state", Err: err})
-				printOnestopSummary(p, steps)
-				return fmt.Errorf("state reload failed — aborting (later steps depend on the restored state): %w", err)
-			}
+		// Sync in-memory state to the restored configuration so later steps
+		// (secrets identity/key_name, app backup list) see it; the session
+		// root stays pinned — a config.yaml from another machine must not
+		// redirect the remaining steps mid-run. In a real run we reload the
+		// just-written config; in dry-run config.yaml was never written, so
+		// we load the source snapshot directly to keep the preview faithful.
+		// Either failure aborts like a profile failure: continuing with the
+		// wrong state would restore secrets/apps against it.
+		var stateErr error
+		if o.dryRun {
+			stateErr = o.loadStateFromSnapshot(srcConfig)
+		} else {
+			stateErr = o.reloadState()
+		}
+		if stateErr != nil {
+			steps = append(steps, onestopStep{Name: "state", Err: stateErr})
+			printOnestopSummary(p, steps)
+			return fmt.Errorf("state reload failed — aborting (later steps depend on the restored state): %w", stateErr)
 		}
 		if runApplyAfter {
 			steps = append(steps, o.applyStep())
@@ -369,7 +376,11 @@ func orLatest(version string) string {
 
 // --- step implementations ---
 
-func (o *onestopCtx) restoreProfileStep(version string, includeSecrets bool) onestopStep {
+// restoreProfileStep restores the profile snapshot and returns the step
+// plus the path to the snapshot's source config.yaml (empty on error), so
+// the caller can sync in-memory state from it during a dry-run where
+// config.yaml is never written.
+func (o *onestopCtx) restoreProfileStep(version string, includeSecrets bool) (onestopStep, string) {
 	eng := o.profileEngine()
 	snap, err := eng.Restore(profilesnap.RestoreOptions{
 		Version:        version,
@@ -377,7 +388,7 @@ func (o *onestopCtx) restoreProfileStep(version string, includeSecrets bool) one
 		IncludeState:   true,
 	})
 	if err != nil {
-		return onestopStep{Name: "profile", Err: err}
+		return onestopStep{Name: "profile", Err: err}, ""
 	}
 	detail := fmt.Sprintf("version %s → %s", snap.Version, eng.StatePath)
 	if snap.PreRestoreBackup != "" {
@@ -386,7 +397,7 @@ func (o *onestopCtx) restoreProfileStep(version string, includeSecrets bool) one
 	if includeSecrets && snap.RestoredSecrets == 0 {
 		o.p.Warn("  profile: age keys requested but snapshot %s contains none", snap.Version)
 	}
-	return onestopStep{Name: "profile", Detail: detail}
+	return onestopStep{Name: "profile", Detail: detail}, filepath.Join(snap.Path, "config.yaml")
 }
 
 func (o *onestopCtx) applyStep() onestopStep {
@@ -410,12 +421,18 @@ func (o *onestopCtx) restoreSecretsStep() onestopStep {
 	if err != nil {
 		return onestopStep{Name: "secrets", Err: err}
 	}
+	detail := fmt.Sprintf("%d restored, %d unchanged, %d skipped",
+		result.Restored, result.Unchanged, result.Skipped)
+	// Unmatched .age archives (e.g. a key from a host with a different
+	// ssh.key_name, or an obsolete leftover) are non-fatal: every entry
+	// that maps to the restored config was restored. secretsRestoreFiles
+	// already printed a prominent warning with a remediation hint, so we
+	// surface the count in the summary detail without failing the run.
 	if len(result.Unmatched) > 0 {
-		return onestopStep{Name: "secrets", Err: fmt.Errorf("%d archive(s) not restored (no matching entry): %s",
-			len(result.Unmatched), strings.Join(result.Unmatched, ", "))}
+		detail += fmt.Sprintf("; %d unmatched archive(s) not restored: %s",
+			len(result.Unmatched), strings.Join(result.Unmatched, ", "))
 	}
-	return onestopStep{Name: "secrets", Detail: fmt.Sprintf("%d restored, %d unchanged, %d skipped",
-		result.Restored, result.Unchanged, result.Skipped)}
+	return onestopStep{Name: "secrets", Detail: detail}
 }
 
 func (o *onestopCtx) restoreAppsStep() onestopStep {

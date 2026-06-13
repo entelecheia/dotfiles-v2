@@ -192,11 +192,33 @@ func newProfileEngine(cmd *cobra.Command) (*profilesnap.Engine, error) {
 // hostOverride returns the --host flag value when set, else current.
 // Restore/list-style commands use it to point the engine at another
 // machine's snapshots under the same backup root (cross-host restore).
-func hostOverride(cmd *cobra.Command, current string) string {
-	if h, err := cmd.Flags().GetString("host"); err == nil && h != "" {
-		return h
+// The value becomes a directory segment in <root>/<tree>/<host>/ and feeds
+// destructive operations (prune's RemoveAll, restore overwrites), so it is
+// validated to a single safe path segment to prevent traversal out of the
+// backup tree.
+func hostOverride(cmd *cobra.Command, current string) (string, error) {
+	h, err := cmd.Flags().GetString("host")
+	if err != nil || h == "" {
+		return current, nil
 	}
-	return current
+	if !isSafePathSegment(h) {
+		return "", fmt.Errorf("invalid --host %q: must be a bare hostname (no %q, %q, or path separators)", h, ".", "..")
+	}
+	return h, nil
+}
+
+// isSafePathSegment reports whether s is usable as a single directory name
+// without escaping its parent: non-empty, not "."/"..", and free of path
+// separators. Used to gate user-supplied host/token values before they
+// reach filepath.Join + destructive filesystem operations.
+func isSafePathSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	if strings.ContainsRune(s, '/') || strings.ContainsRune(s, os.PathSeparator) {
+		return false
+	}
+	return true
 }
 
 // --- backup ---
@@ -271,7 +293,11 @@ func runProfileRestore(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	version, _ := cmd.Flags().GetString("version")
 	includeSecrets, _ := cmd.Flags().GetBool("include-secrets")
 	noState, _ := cmd.Flags().GetBool("no-state")
@@ -355,7 +381,11 @@ func runProfileList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	snaps, err := eng.List()
 	if err != nil {
 		return err
@@ -416,7 +446,11 @@ func runProfilePrune(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	keep, _ := cmd.Flags().GetInt("keep")
 	p := printerFrom(cmd)
 

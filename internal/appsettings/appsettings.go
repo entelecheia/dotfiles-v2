@@ -230,6 +230,16 @@ func (e *Engine) Backup(ctx context.Context, tokens []string) (*Summary, error) 
 func (e *Engine) backupApp(token string, app *AppEntry) AppSummary {
 	as := AppSummary{Token: token}
 
+	// Defense-in-depth: a token becomes a directory segment under HostRoot
+	// and feeds os.RemoveAll/os.Rename. Tokens can originate from saved
+	// state or display-name discovery, so refuse any that would escape the
+	// host tree before touching the filesystem.
+	if !safeToken(token) {
+		e.Runner.Logger.Warn("backup: refusing unsafe app token", "token", token)
+		as.Failed = 1
+		return as
+	}
+
 	destFor := func(rel string) string { return e.archivePath(token, rel) }
 	staging := ""
 	if !e.Runner.DryRun {
@@ -400,6 +410,14 @@ func (e *Engine) Restore(ctx context.Context, tokens []string) (*Summary, error)
 	for _, token := range targets {
 		app := e.Manifest.App(token)
 		if app == nil {
+			continue
+		}
+		// Defense-in-depth: token feeds archivePath + the preRoot snapshot
+		// path; refuse traversal before any read/copy.
+		if !safeToken(token) {
+			e.Runner.Logger.Warn("restore: refusing unsafe app token", "token", token)
+			sum.Apps = append(sum.Apps, AppSummary{Token: token, Failed: 1})
+			sum.Failed++
 			continue
 		}
 		as := AppSummary{Token: token}
@@ -609,6 +627,18 @@ func (e *Engine) ReadLastBackupStamp() (*BackupStamp, error) {
 }
 
 // --- Helpers ---
+
+// safeToken reports whether an app token is usable as a single directory
+// segment under HostRoot without escaping it: non-empty, not "."/"..", and
+// free of path separators. Tokens can come from saved state or display-name
+// discovery, and they feed os.RemoveAll/os.Rename, so unsafe ones must be
+// refused before any filesystem operation.
+func safeToken(token string) bool {
+	if token == "" || token == "." || token == ".." {
+		return false
+	}
+	return !strings.ContainsRune(token, '/') && !strings.ContainsRune(token, os.PathSeparator)
+}
 
 func (e *Engine) selectTokens(requested []string) []string {
 	if len(requested) == 0 {

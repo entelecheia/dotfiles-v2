@@ -355,7 +355,11 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 	mf := eng.Manifest
 
 	var installed map[string]bool
@@ -746,7 +750,11 @@ func runAppsRestore(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	eng.Hostname = hostOverride(cmd, eng.Hostname)
+	host, err := hostOverride(cmd, eng.Hostname)
+	if err != nil {
+		return err
+	}
+	eng.Hostname = host
 
 	// Apps captured by name discovery on the source machine live only in
 	// the archive — synthesize entries for them so they restore too.

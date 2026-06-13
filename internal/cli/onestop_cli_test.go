@@ -281,19 +281,60 @@ func TestOnestopRestoreNoBackupsAbortsBeforeChanges(t *testing.T) {
 	}
 }
 
-func TestOnestopRestoreUnmatchedSecretArchiveFails(t *testing.T) {
+func TestOnestopRestoreUnmatchedSecretArchiveIsNonFatal(t *testing.T) {
 	f := newOnestopFixture(t)
-	// An archive that matches no secretEntries name (e.g. an SSH key from a
-	// host with a different ssh.key_name).
+	// An archive that maps to no secretEntries name (e.g. an SSH key from a
+	// host with a different ssh.key_name, or an obsolete leftover). The
+	// matching archives still restore, so this must NOT fail the run — only
+	// surface a warning + a summary note.
 	writeCLITestFile(t, filepath.Join(f.home, ".local", "share", "dotfiles-secrets", "id_rsa.age"), "foreign-key")
 	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "secrets"); err != nil {
 		t.Fatal(err)
 	}
-	// x.age matches no secretEntries name → wizard must flag the step.
 	stubAge(t, false)
-	_, _, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "secrets")
-	if err == nil || !strings.Contains(err.Error(), "restore step(s) failed") {
-		t.Fatalf("expected failed-step error for unmatched archive, got %v", err)
+	out, errOut, err := runDotForTest("restore", "--yes", "--from", f.root, "--scope", "secrets")
+	if err != nil {
+		t.Fatalf("unmatched archive must be non-fatal: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if !strings.Contains(out, "one-stop restore complete") {
+		t.Errorf("run should complete:\n%s", out)
+	}
+	if !strings.Contains(out, "unmatched") && !strings.Contains(out, "id_rsa.age") {
+		t.Errorf("summary should note the unmatched archive:\n%s", out)
+	}
+	// The warning with remediation hint is printed by secretsRestoreFiles.
+	if !strings.Contains(errOut, "id_rsa.age") {
+		t.Errorf("expected prominent unmatched-archive warning on stderr:\n%s", errOut)
+	}
+}
+
+func TestOnestopRestoreDryRunSyncsSnapshotState(t *testing.T) {
+	f := newOnestopFixture(t)
+	idPath := filepath.Join(f.home, ".ssh", "id_ed25519") // created by the fixture
+
+	// Back up profile+secrets with the snapshot config pointing age_identity
+	// at the existing key.
+	writeCLITestFile(t, filepath.Join(f.home, ".config", "dotfiles", "config.yaml"),
+		"name: original\nsecrets:\n  age_identity: "+idPath+"\n")
+	if _, _, err := runDotForTest("backup", "--yes", "--to", f.root, "--scope", "profile,secrets"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Locally point age_identity at a path that does NOT exist. Without the
+	// dry-run state sync, the secrets preview would resolve this missing
+	// local identity and falsely fail; with it, the snapshot's (existing)
+	// identity is used and the preview succeeds.
+	writeCLITestFile(t, filepath.Join(f.home, ".config", "dotfiles", "config.yaml"),
+		"name: local\nsecrets:\n  age_identity: "+filepath.Join(f.home, ".ssh", "ghost-missing")+"\n")
+
+	stubAge(t, false) // secretsRestoreFiles requires age on PATH even in dry-run
+
+	out, errOut, err := runDotForTest("restore", "--yes", "--dry-run", "--from", f.root, "--scope", "profile,secrets")
+	if err != nil {
+		t.Fatalf("dry-run should preview against the snapshot identity: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if !strings.Contains(out, "one-stop restore complete") {
+		t.Errorf("dry-run did not complete:\n%s", out)
 	}
 }
 
@@ -341,5 +382,24 @@ func TestOnestopRestoreStateReloadFailureAborts(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(f.home, ".claude", "settings.json"))
 	if string(got) != `{"model":"mutated"}` {
 		t.Errorf("AI step ran despite reload abort: %q", got)
+	}
+}
+
+func TestHostFlagRejectsTraversal(t *testing.T) {
+	_, root := newProfileCLIFixture(t)
+	// Seed a real snapshot so the command would otherwise proceed.
+	if _, _, err := runDotForTest("profile", "backup", "--to", root); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range [][]string{
+		{"profile", "list", "--from", root, "--host", "../../etc"},
+		{"profile", "restore", "--from", root, "--host", "..", "--yes"},
+		{"profile", "prune", "--from", root, "--host", "a/b", "--keep", "0", "--yes"},
+		{"ai", "status", "--from", root, "--host", "../evil"},
+	} {
+		_, _, err := runDotForTest(cmd...)
+		if err == nil || !strings.Contains(err.Error(), "invalid --host") {
+			t.Errorf("%v: expected invalid --host rejection, got %v", cmd, err)
+		}
 	}
 }
