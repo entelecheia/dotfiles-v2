@@ -218,24 +218,61 @@ func TestGsyncMirrorCLI_SetsLocalConfigAndPrints(t *testing.T) {
 	}
 }
 
-func TestGsyncMirrorCLI_DryRunWritesNothing(t *testing.T) {
+func TestGsyncMirrorCLI_PrintAndDryRunAreReadOnly(t *testing.T) {
 	f := newGsyncCLIFixture(t)
-	// Trigger local-config creation first (so we can detect an unwanted edit).
+	store := filepath.Join(f.local, ".dotfiles", "gdrive-sync")
+
+	// No-arg print on a fresh workspace must not create the local layout.
 	if _, _, err := runDotForTest("gsync", "mirror"); err != nil {
 		t.Fatal(err)
 	}
-	localCfg := filepath.Join(f.local, ".dotfiles", "gdrive-sync", "config.yaml")
-	before, _ := os.ReadFile(localCfg)
+	if _, err := os.Stat(store); !os.IsNotExist(err) {
+		t.Errorf("no-arg print created the local gsync layout: %v", err)
+	}
 
+	// --dry-run set: shows the would-be path, still no layout, no .gitignore.
 	newMirror := filepath.Join(f.home, "Dropbox", "work")
 	out, _, err := runDotForTest("gsync", "mirror", newMirror, "--dry-run")
 	if err != nil {
 		t.Fatalf("gsync mirror --dry-run: %v", err)
 	}
-	if !strings.Contains(out, "[dry-run]") {
-		t.Errorf("expected dry-run notice:\n%s", out)
+	if !strings.Contains(out, "[dry-run]") || !strings.Contains(out, newMirror) {
+		t.Errorf("dry-run output unexpected:\n%s", out)
 	}
-	if after, _ := os.ReadFile(localCfg); string(after) != string(before) {
-		t.Errorf("dry-run mutated local config:\nbefore=%s\nafter=%s", before, after)
+	if _, err := os.Stat(store); !os.IsNotExist(err) {
+		t.Errorf("dry-run created the local gsync layout: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.local, ".gitignore")); !os.IsNotExist(err) {
+		t.Errorf("dry-run created .gitignore: %v", err)
+	}
+}
+
+func TestGsyncMirrorCLI_HonorsHomeOverride(t *testing.T) {
+	f := newGsyncCLIFixture(t)
+	other := t.TempDir() // a different user's home
+	if err := os.MkdirAll(filepath.Join(other, ".config", "dotfiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// ~ in the path must expand against --home, and global state must be
+	// written for that home — not the current HOME.
+	out, errOut, err := runDotForTest("gsync", "mirror", "~/Dropbox/work", "--home", other)
+	if err != nil {
+		t.Fatalf("gsync mirror --home: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	wantMirror := filepath.Join(other, "Dropbox", "work")
+	if !strings.Contains(out, wantMirror) {
+		t.Errorf("~ should expand against --home %q:\n%s", wantMirror, out)
+	}
+	otherCfg, err := os.ReadFile(filepath.Join(other, ".config", "dotfiles", "config.yaml"))
+	if err != nil {
+		t.Fatalf("read --home state: %v", err)
+	}
+	if !strings.Contains(string(otherCfg), "mirror_path: "+wantMirror) {
+		t.Errorf("--home global state missing mirror_path:\n%s", otherCfg)
+	}
+	// The current user's state must NOT have been written with this mirror.
+	if cur, _ := os.ReadFile(filepath.Join(f.home, ".config", "dotfiles", "config.yaml")); strings.Contains(string(cur), wantMirror) {
+		t.Errorf("current-user state wrongly written under --home:\n%s", cur)
 	}
 }

@@ -371,19 +371,18 @@ func secretsBackupFiles(runner *exec.Runner, p *Printer, storeDir, dest string) 
 // matching the one-stop wizard's <root>/secrets-age/<host> layout. Used when
 // `dot secrets backup` is called without an explicit destination.
 func defaultSecretsBackupDest(cmd *cobra.Command) (string, error) {
+	homeOverride, _ := cmd.Flags().GetString("home")
 	home, _ := os.UserHomeDir()
-	if over, _ := cmd.Flags().GetString("home"); over != "" {
-		home = over
-	}
 	var state *config.UserState
 	var err error
-	if over, _ := cmd.Flags().GetString("home"); over != "" {
-		state, err = config.LoadStateForHome(over)
+	if homeOverride != "" {
+		home = homeOverride
+		state, err = config.LoadStateForHome(homeOverride)
 	} else {
 		state, err = config.LoadState()
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load user state for default secrets backup destination: %w", err)
 	}
 	// resolveBackupRoot reads --to/--from (not registered here — the guards
 	// skip them safely), then state.BackupRoot, then cloud-detect, then local.
