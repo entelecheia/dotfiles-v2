@@ -184,3 +184,58 @@ func TestGsyncPullCLI_StrictFlagWiring(t *testing.T) {
 		t.Errorf("--strict must reach PullTracked and plan the pull:\n%s", out)
 	}
 }
+
+func TestGsyncMirrorCLI_SetsLocalConfigAndPrints(t *testing.T) {
+	f := newGsyncCLIFixture(t)
+	newMirror := filepath.Join(f.home, "Dropbox", "work")
+
+	// Set the mirror.
+	out, errOut, err := runDotForTest("gsync", "mirror", newMirror)
+	if err != nil {
+		t.Fatalf("gsync mirror set: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	if !strings.Contains(out, "mirror path set") || !strings.Contains(out, newMirror) {
+		t.Errorf("set output unexpected:\n%s", out)
+	}
+
+	// Local config (authoritative for the current workspace) must carry it.
+	localCfg := filepath.Join(f.local, ".dotfiles", "gdrive-sync", "config.yaml")
+	data, err := os.ReadFile(localCfg)
+	if err != nil {
+		t.Fatalf("read local config: %v", err)
+	}
+	if !strings.Contains(string(data), "mirror_path: "+newMirror) {
+		t.Errorf("local config missing mirror_path:\n%s", data)
+	}
+
+	// No-arg prints the resolved mirror.
+	out, _, err = runDotForTest("gsync", "mirror")
+	if err != nil {
+		t.Fatalf("gsync mirror print: %v", err)
+	}
+	if !strings.Contains(out, newMirror) {
+		t.Errorf("print output should show %q:\n%s", newMirror, out)
+	}
+}
+
+func TestGsyncMirrorCLI_DryRunWritesNothing(t *testing.T) {
+	f := newGsyncCLIFixture(t)
+	// Trigger local-config creation first (so we can detect an unwanted edit).
+	if _, _, err := runDotForTest("gsync", "mirror"); err != nil {
+		t.Fatal(err)
+	}
+	localCfg := filepath.Join(f.local, ".dotfiles", "gdrive-sync", "config.yaml")
+	before, _ := os.ReadFile(localCfg)
+
+	newMirror := filepath.Join(f.home, "Dropbox", "work")
+	out, _, err := runDotForTest("gsync", "mirror", newMirror, "--dry-run")
+	if err != nil {
+		t.Fatalf("gsync mirror --dry-run: %v", err)
+	}
+	if !strings.Contains(out, "[dry-run]") {
+		t.Errorf("expected dry-run notice:\n%s", out)
+	}
+	if after, _ := os.ReadFile(localCfg); string(after) != string(before) {
+		t.Errorf("dry-run mutated local config:\nbefore=%s\nafter=%s", before, after)
+	}
+}

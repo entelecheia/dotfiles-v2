@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/gsync"
@@ -73,8 +74,73 @@ Run without a subcommand to print this help. Legacy alias: 'dot gdrive-sync' con
 		newGsyncPauseCmd(),
 		newGsyncSharedCmd(),
 		newGsyncInitCmd(),
+		newGsyncMirrorCmd(),
 	)
 	return cmd
+}
+
+// ── mirror ───────────────────────────────────────────────────────────────
+
+func newGsyncMirrorCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "mirror [path]",
+		Short: "Show or set the gsync mirror path (the cloud-synced tree)",
+		Long: `With no argument, prints the resolved mirror path.
+
+With a path, sets mirror_path in this workspace's local config
+(<workspace>/.dotfiles/gdrive-sync/config.yaml) so it takes effect
+immediately, and also records it in the global user state so future
+workspaces inherit it. Use this to point the mirror at, e.g.,
+~/Dropbox/work after switching cloud providers.`,
+		Args:         cobra.MaximumNArgs(1),
+		RunE:         runGsyncMirror,
+		SilenceUsage: true,
+	}
+}
+
+func runGsyncMirror(cmd *cobra.Command, args []string) error {
+	state, cfg, _, err := gsyncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	p := printerFrom(cmd)
+
+	if len(args) == 0 {
+		p.KV("Mirror", stripTrailingSlash(cfg.MirrorPath))
+		return nil
+	}
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved — bug in ResolveConfig")
+	}
+
+	home, _ := os.UserHomeDir()
+	mirror := appsettings.ExpandHome(args[0], home)
+
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	if dryRun {
+		p.Line("[dry-run] would set mirror_path to %s (local config + global state)", mirror)
+		return nil
+	}
+
+	// Local config governs the current workspace (global state is ignored
+	// once it exists), so write both: local for immediate effect, global so
+	// future workspaces inherit the new mirror.
+	localCfg, _, err := gsync.LoadLocalConfig(cfg.LocalPaths)
+	if err != nil {
+		return fmt.Errorf("load local config: %w", err)
+	}
+	localCfg.MirrorPath = mirror
+	if err := gsync.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
+		return fmt.Errorf("save local config: %w", err)
+	}
+	state.Modules.Gsync.MirrorPath = mirror
+	if err := config.SaveState(state); err != nil {
+		p.Warn("set local mirror but could not update global state: %v", err)
+	}
+
+	p.Line("%s", ui.StyleSuccess.Render("✓ mirror path set"))
+	p.KV("Mirror", mirror)
+	return nil
 }
 
 // ── init ─────────────────────────────────────────────────────────────────
