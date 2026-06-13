@@ -75,9 +75,14 @@ dot apps restore                      # plists, Application Support, containers
 dot ai restore                        # Claude/Codex/Antigravity/MCP settings
 ```
 
-The shared backup root lives in a single Drive folder
-(`<drive>/secrets/dotfiles-backup` by default) and holds every snapshot the
-user has taken across machines. `profile list` shows every version, and
+The shared backup root lives in a single cloud folder
+(`<cloud>/secrets/dotfiles-backup` by default) and holds every snapshot the
+user has taken across machines. Auto-detection prefers **Dropbox**
+(`~/Library/CloudStorage/Dropbox` or `~/Dropbox`) and falls back to Google
+Drive — both gated on a `secrets/` marker folder; override anytime with
+`dot profile root <path>`. `dot secrets backup` (no argument) and the gsync
+mirror default follow the same detected cloud root. `profile list` shows
+every version, and
 `profile restore --version <id>` rolls back to any specific one.
 
 **Option C — plain YAML export:**
@@ -332,12 +337,13 @@ dot sync resume          # resume auto-sync scheduler
 
 > Legacy alias `dot gdrive-sync` continues to work — same command, shorter name.
 
-Local rsync mirror between `~/workspace/work` (single primary) and the cloud-sync client's mirror tree (default `~/gdrive-workspace/work`). No SSH; the cloud client (Google Drive, Dropbox, etc.) handles the round-trip to the cloud.
+Local rsync mirror between `~/workspace/work` (single primary) and the cloud-sync client's mirror tree. The default mirror prefers a detected cloud root (`<cloud>/work`, Dropbox first) and falls back to `~/gdrive-workspace/work`; set it explicitly with `dot gsync mirror <path>`. No SSH; the cloud client (Dropbox, Google Drive, etc.) handles the round-trip to the cloud.
 
 **Git + Drive payload model.** Git remains the source of truth for text/source files. `gsync` fills the LFS-shaped gap for binaries and large artifacts while preserving Google Drive sharing benefits. The Git-tracked `<workspace>/.dotfiles/gdrive-sync/baseline.manifest` is the shared Drive payload index: `pull` restores or updates files listed there from the mirror, while baseline-unknown Drive files are staged by `intake` into `<workspace>/inbox/gdrive/<intake-ts>/` for manual routing. Deletes remain non-destructive by default.
 
 ```bash
 dot gsync init               # one-time: create <workspace>/.dotfiles/gdrive-sync/ + migrate global state
+dot gsync mirror ~/Dropbox/work           # point the mirror at a cloud folder (local + global)
 dot gsync setup              # rsync check + disable managed schedulers by default
 dot gsync setup --push-interval=15m --push-mode=clean
 dot gsync setup --pull-interval=15m --pull-mode=force

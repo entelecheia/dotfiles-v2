@@ -799,6 +799,46 @@ func ExpandHome(path, home string) string {
 	return path
 }
 
+// DetectCloudCandidate looks for the user's preferred cloud-storage secrets
+// folder to use as the shared backup root on macOS. Dropbox is preferred over
+// Google Drive (so a user who has switched to Dropbox auto-detects it). Returns
+// "<cloud>/secrets/dotfiles-backup" for the first cloud root whose "secrets"
+// marker exists, or "" when none is found.
+func DetectCloudCandidate(home string) string {
+	if dropbox := detectDropboxCandidate(home); dropbox != "" {
+		return dropbox
+	}
+	return DetectDriveCandidate(home)
+}
+
+// detectDropboxCandidate scans for a Dropbox cloud root (under
+// ~/Library/CloudStorage, then the ~/Dropbox symlink in home) that has a
+// "secrets" subdirectory marker. CloudStorage is scanned first so the
+// canonical path wins over the symlink. Returns "" when none qualifies.
+func detectDropboxCandidate(home string) string {
+	roots := []string{
+		filepath.Join(home, "Library", "CloudStorage"),
+		home,
+	}
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), "Dropbox") {
+				continue
+			}
+			// os.Stat follows the ~/Dropbox symlink and any symlinked secrets.
+			secrets := filepath.Join(root, e.Name(), "secrets")
+			if fi, err := os.Stat(secrets); err == nil && fi.IsDir() {
+				return filepath.Join(secrets, "dotfiles-backup")
+			}
+		}
+	}
+	return ""
+}
+
 // DetectDriveCandidate looks for the user's Drive secrets folder to use as the
 // shared backup root on macOS. Returns the first candidate whose parent exists.
 func DetectDriveCandidate(home string) string {

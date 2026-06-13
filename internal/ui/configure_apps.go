@@ -363,8 +363,8 @@ func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
 	rootDefault := state.Modules.MacApps.BackupRoot
 	detected := false
 	if rootDefault == "" {
-		if drive := appsettings.DetectDriveCandidate(fileutil.ExpandHome("~")); drive != "" {
-			rootDefault = drive
+		if cloud := appsettings.DetectCloudCandidate(fileutil.ExpandHome("~")); cloud != "" {
+			rootDefault = cloud
 			detected = true
 		} else {
 			home, _ := os.UserHomeDir()
@@ -372,18 +372,18 @@ func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
 		}
 	}
 	choice, err := Select("Backup root",
-		[]string{"drive (auto-detected)", "local", "custom"},
+		[]string{"cloud (auto-detected)", "local", "custom"},
 		pickBackupChoice(rootDefault, detected),
 		yes)
 	if err != nil {
 		return err
 	}
 	switch choice {
-	case "drive (auto-detected)":
+	case "cloud (auto-detected)":
 		if detected {
 			state.Modules.MacApps.BackupRoot = rootDefault
 		} else {
-			path, inputErr := Input("Drive backup root", rootDefault, yes)
+			path, inputErr := Input("Cloud backup root", rootDefault, yes)
 			if inputErr != nil {
 				return inputErr
 			}

@@ -49,6 +49,11 @@ func newTestConfig(t *testing.T) *Config {
 // previous test runs).
 func newIsolatedState(t *testing.T) *config.UserState {
 	t.Helper()
+	// Isolate HOME: ResolveConfig reads os.UserHomeDir() for the mirror
+	// default, which now consults cloud detection. A fresh temp home has no
+	// Dropbox/Drive, so the default stays the deterministic gdrive fallback
+	// regardless of the contributor's real ~/Library/CloudStorage.
+	t.Setenv("HOME", t.TempDir())
 	state := &config.UserState{}
 	state.Modules.Gsync.LocalPath = t.TempDir()
 	return state
@@ -387,5 +392,44 @@ func TestResolveConfigReadOnly_DoesNotCreateLocalStore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(local, ".gitignore")); !os.IsNotExist(err) {
 		t.Fatalf("read-only resolve created .gitignore or got unexpected error: %v", err)
+	}
+}
+
+func TestResolveConfig_PrefersCloudMirror(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// A Dropbox cloud root with a secrets marker → mirror default follows it.
+	if err := os.MkdirAll(filepath.Join(home, "Library", "CloudStorage", "Dropbox", "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := &config.UserState{}
+	state.Modules.Gsync.LocalPath = t.TempDir()
+
+	cfg, err := ResolveConfig(state)
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	want := filepath.Join(home, "Library", "CloudStorage", "Dropbox", "work") + "/"
+	if cfg.MirrorPath != want {
+		t.Errorf("MirrorPath = %q, want cloud mirror %q", cfg.MirrorPath, want)
+	}
+}
+
+func TestResolveConfig_LocalMirrorWinsOverCloud(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "Library", "CloudStorage", "Dropbox", "secrets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := &config.UserState{}
+	state.Modules.Gsync.LocalPath = t.TempDir()
+	state.Modules.Gsync.MirrorPath = "/explicit/mirror"
+
+	cfg, err := ResolveConfig(state)
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	if cfg.MirrorPath != "/explicit/mirror/" {
+		t.Errorf("MirrorPath = %q, want explicit /explicit/mirror/ (cloud must not override)", cfg.MirrorPath)
 	}
 }

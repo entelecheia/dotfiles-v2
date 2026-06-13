@@ -11,9 +11,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+// defaultMirrorPath is the mirror used when neither the local config nor the
+// global state set one. It prefers a detected cloud root (Dropbox, then
+// Google Drive) so the mirror follows the same cloud the backup root uses;
+// absent any cloud root it falls back to ~/gdrive-workspace/work.
+func defaultMirrorPath(home string) string {
+	if cloud := appsettings.DetectCloudCandidate(home); cloud != "" {
+		// cloud is "<root>/secrets/dotfiles-backup"; the mirror lives at
+		// "<root>/work", i.e. two levels up from the secrets marker.
+		return filepath.Join(filepath.Dir(filepath.Dir(cloud)), "work")
+	}
+	return filepath.Join(home, defaultMirrorRel)
+}
 
 // Defaults applied when the user state has not specified a value.
 const (
@@ -114,7 +128,7 @@ func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
 		mirrorPath = gs.MirrorPath
 	}
 	if mirrorPath == "" {
-		mirrorPath = filepath.Join(home, defaultMirrorRel)
+		mirrorPath = defaultMirrorPath(home)
 	}
 	mirrorPath = expandHome(mirrorPath, home)
 	if !strings.HasSuffix(mirrorPath, "/") {

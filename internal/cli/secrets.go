@@ -366,14 +366,45 @@ func secretsBackupFiles(runner *exec.Runner, p *Printer, storeDir, dest string) 
 	return copied, nil
 }
 
+// defaultSecretsBackupDest derives the secrets backup destination from the
+// shared backup root (which now prefers Dropbox via DetectCloudCandidate),
+// matching the one-stop wizard's <root>/secrets-age/<host> layout. Used when
+// `dot secrets backup` is called without an explicit destination.
+func defaultSecretsBackupDest(cmd *cobra.Command) (string, error) {
+	homeOverride, _ := cmd.Flags().GetString("home")
+	home, _ := os.UserHomeDir()
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		home = homeOverride
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
+	if err != nil {
+		return "", fmt.Errorf("load user state for default secrets backup destination: %w", err)
+	}
+	// resolveBackupRoot reads --to/--from (not registered here — the guards
+	// skip them safely), then state.BackupRoot, then cloud-detect, then local.
+	root := resolveBackupRoot(cmd, state, home)
+	host, _ := os.Hostname()
+	if i := strings.Index(host, "."); i > 0 {
+		host = host[:i]
+	}
+	return filepath.Join(root, "secrets-age", host), nil
+}
+
 // newSecretsBackupCmd copies *.age files to a destination directory.
 func newSecretsBackupCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "backup <destination>",
+		Use:   "backup [destination]",
 		Short: "Copy encrypted secrets to a destination directory",
-		Args:  cobra.ExactArgs(1),
+		Long: `Copy the encrypted *.age files from the local store to a destination.
+
+With no destination, defaults to <backup-root>/secrets-age/<host> — the
+same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dest := args[0]
 			storeDir, err := secretsStorePath()
 			if err != nil {
 				return err
@@ -381,6 +412,17 @@ func newSecretsBackupCmd() *cobra.Command {
 
 			runner := secretsRunner(cmd)
 			p := printerFrom(cmd)
+
+			var dest string
+			if len(args) == 1 {
+				dest = args[0]
+			} else {
+				dest, err = defaultSecretsBackupDest(cmd)
+				if err != nil {
+					return err
+				}
+				p.Line("Destination (default): %s", dest)
+			}
 
 			if _, err := os.Stat(storeDir); os.IsNotExist(err) {
 				p.Line("No secrets store found. Run 'dot secrets init' first.")
