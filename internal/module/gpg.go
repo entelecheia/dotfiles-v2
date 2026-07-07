@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-
-	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
+	"strings"
 )
 
 // GPGModule manages gpg-agent configuration and git signing setup.
@@ -13,26 +12,36 @@ type GPGModule struct{}
 
 func (m *GPGModule) Name() string { return "gpg" }
 
-func (m *GPGModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
-	var changes []Change
-
-	dest := filepath.Join(rc.HomeDir, ".gnupg", "gpg-agent.conf")
-	content, err := rc.Template.Render("gpg/gpg-agent.conf.tmpl", rc.Config.TemplateData())
-	if err != nil {
-		return nil, fmt.Errorf("rendering gpg/gpg-agent.conf.tmpl: %w", err)
+func (m *GPGModule) files(rc *RunContext) []templatedFile {
+	return []templatedFile{
+		{
+			templatePath: "gpg/gpg-agent.conf.tmpl",
+			destPath:     filepath.Join(rc.HomeDir, ".gnupg", "gpg-agent.conf"),
+			isTemplate:   true,
+			perm:         0600,
+		},
 	}
-	if fileutil.NeedsUpdate(rc.Runner, dest, content) {
-		changes = append(changes, Change{
-			Description: fmt.Sprintf("write %s", dest),
-			Command:     "render gpg/gpg-agent.conf.tmpl -> ~/.gnupg/gpg-agent.conf",
-		})
+}
+
+func (m *GPGModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
+	changes, err := checkTemplatedFiles(rc, m.files(rc))
+	if err != nil {
+		return nil, err
 	}
 
 	if rc.Config.Modules.Git.Signing {
-		changes = append(changes, Change{
-			Description: "configure git commit signing",
-			Command:     "git config --global commit.gpgsign true",
-		})
+		if gitGlobalConfigValue(ctx, rc, "commit.gpgsign") != "true" {
+			changes = append(changes, Change{
+				Description: "configure git commit signing",
+				Command:     "git config --global commit.gpgsign true",
+			})
+		}
+		if gitGlobalConfigValue(ctx, rc, "gpg.format") != "openpgp" {
+			changes = append(changes, Change{
+				Description: "configure git gpg format",
+				Command:     "git config --global gpg.format openpgp",
+			})
+		}
 	}
 
 	return &CheckResult{Satisfied: len(changes) == 0, Changes: changes}, nil
@@ -46,28 +55,38 @@ func (m *GPGModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, er
 		return nil, fmt.Errorf("creating %s: %w", gnupgDir, err)
 	}
 
-	dest := filepath.Join(gnupgDir, "gpg-agent.conf")
-	content, err := rc.Template.Render("gpg/gpg-agent.conf.tmpl", rc.Config.TemplateData())
+	fileMessages, err := applyTemplatedFiles(rc, m.files(rc))
 	if err != nil {
-		return nil, fmt.Errorf("rendering gpg/gpg-agent.conf.tmpl: %w", err)
+		return nil, err
 	}
-	written, err := fileutil.EnsureFile(rc.Runner, dest, content, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("writing %s: %w", dest, err)
-	}
-	if written {
-		messages = append(messages, fmt.Sprintf("wrote %s", dest))
-	}
+	messages = append(messages, fileMessages...)
 
 	if rc.Config.Modules.Git.Signing {
-		if _, err := rc.Runner.Run(ctx, "git", "config", "--global", "commit.gpgsign", "true"); err != nil {
-			return nil, fmt.Errorf("setting commit.gpgsign: %w", err)
+		changed := false
+		if gitGlobalConfigValue(ctx, rc, "commit.gpgsign") != "true" {
+			if _, err := rc.Runner.Run(ctx, "git", "config", "--global", "commit.gpgsign", "true"); err != nil {
+				return nil, fmt.Errorf("setting commit.gpgsign: %w", err)
+			}
+			changed = true
 		}
-		if _, err := rc.Runner.Run(ctx, "git", "config", "--global", "gpg.format", "openpgp"); err != nil {
-			return nil, fmt.Errorf("setting gpg.format: %w", err)
+		if gitGlobalConfigValue(ctx, rc, "gpg.format") != "openpgp" {
+			if _, err := rc.Runner.Run(ctx, "git", "config", "--global", "gpg.format", "openpgp"); err != nil {
+				return nil, fmt.Errorf("setting gpg.format: %w", err)
+			}
+			changed = true
 		}
-		messages = append(messages, "configured git commit signing")
+		if changed {
+			messages = append(messages, "configured git commit signing")
+		}
 	}
 
 	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
+}
+
+func gitGlobalConfigValue(ctx context.Context, rc *RunContext, key string) string {
+	result, err := rc.Runner.RunQuery(ctx, "git", "config", "--global", "--get", key)
+	if err != nil || result == nil || result.ExitCode != 0 {
+		return ""
+	}
+	return strings.TrimSpace(result.Stdout)
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # sync.sh — Integration test for sync command.
-# rclone is not available in CI Docker, so we test help/status flow only.
+# rsync scheduler setup is host-specific, so CI tests help/status flow only.
 set -euo pipefail
 
 # Find binary
@@ -43,7 +43,7 @@ echo "$SYNC_HELP" | grep -q "log" && pass "sync help shows log" || fail "sync he
 echo "$SYNC_HELP" | grep -q "pause" && pass "sync help shows pause" || fail "sync help shows pause"
 echo "$SYNC_HELP" | grep -q "resume" && pass "sync help shows resume" || fail "sync help shows resume"
 
-# ── 2. Status (no rclone) ───────────────────────────────────────────────────
+# ── 2. Status ────────────────────────────────────────────────────────────────
 echo "--- status ---"
 STATUS_OUT=$($BIN sync status 2>&1) || true
 echo "$STATUS_OUT" | grep -q "Workspace Sync Status" && pass "status shows header" || fail "status shows header"
@@ -52,7 +52,7 @@ echo "$STATUS_OUT" | grep -q "not installed" && pass "status shows scheduler not
 # ── 3. Sync without setup ───────────────────────────────────────────────────
 echo "--- sync without setup ---"
 SYNC_OUT=$($BIN sync 2>&1) || true
-# Should suggest setup (rclone not installed or filter missing)
+# Should suggest setup (rsync not installed or config missing)
 echo "$SYNC_OUT" | grep -qi "setup\|not installed\|not found" && pass "sync suggests setup" || fail "sync suggests setup"
 
 # ── 4. Log without log file ─────────────────────────────────────────────────

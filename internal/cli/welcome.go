@@ -36,7 +36,6 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	printWelcomeCmd(p, "dot config", "Display current config")
 	printWelcomeCmd(p, "dot clean", "Remove junk directories (node_modules, caches)")
 	printWelcomeCmd(p, "dot sync", "Sync binaries with remote server via rsync")
-	printWelcomeCmd(p, "dot clone", "Sync workspace with Google Drive via rclone")
 	printWelcomeCmd(p, "dot gsync", "Sync workspace artifacts with Drive mirror")
 	printWelcomeCmd(p, "dot backup", "One-stop backup wizard (profile, apps, AI, secrets)")
 	printWelcomeCmd(p, "dot restore", "One-stop restore wizard (cross-host migration)")
@@ -153,23 +152,8 @@ func printUsecases(cmd *cobra.Command) {
 				"Show sync health, scheduler state, last result"},
 		})
 
-	section(p, "6. Google Drive sync (rclone)",
-		"Keep workspace synced across Macs via rclone.",
-		[]usecase{
-			{"dot clone setup",
-				"One-time setup: install rclone, configure remote, deploy filter & scheduler"},
-			{"dot clone",
-				"Pull from remote (safe, read-only on remote)"},
-			{"dot clone push",
-				"Push local changes to remote"},
-			{"dot clone all",
-				"Bidirectional sync (pull then push)"},
-			{"dot clone status",
-				"Show sync health, last run, scheduler state"},
-		})
-
-	section(p, "7. Local rsync mirror (gsync)",
-		"Git-shared baseline tracks Drive payloads; push/pull preview first, intake stages new Drive files.",
+	section(p, "6. Local rsync mirror (gsync)",
+		"Git-shared baseline tracks mirror payloads; push/pull preview first, intake stages new mirror files.",
 		[]usecase{
 			{"dot gsync init",
 				"One-time: create <workspace>/.dotfiles/gdrive-sync/ + migrate global state"},
@@ -184,9 +168,9 @@ func printUsecases(cmd *cobra.Command) {
 			{"dot gsync push --propagate=create,update,delete",
 				"Override policy for one run (refused if list is empty)"},
 			{"dot gsync pull",
-				"Preview baseline-tracked Drive payload changes, then confirm"},
+				"Preview baseline-tracked mirror payload changes, then confirm"},
 			{"dot gsync intake",
-				"Stage new Drive-origin files into inbox/gdrive/<ts>/"},
+				"Stage new mirror-origin files into inbox/gdrive/<ts>/"},
 			{"dot gsync intake --strict",
 				"Use sha256 fingerprints (catches mtime-preserved content edits)"},
 			{"dot gsync inbox list",
@@ -202,23 +186,10 @@ func printUsecases(cmd *cobra.Command) {
 			{"dot gsync resume",
 				"Clear paused gate, re-arm installed schedulers"},
 			{"dot gsync shared",
-				"Manage shared-folder exclusions (auto-detected shortcuts + manual list)"},
+				"Manage manually curated shared-folder exclusions"},
 		})
 
-	section(p, "8. Google Drive exclusions (macOS)",
-		"Exclude heavy directories (node_modules, build caches) from Drive sync.",
-		[]usecase{
-			{"dot drive-exclude scan",
-				"Find excludable directories under ~/workspace"},
-			{"dot drive-exclude apply --dry-run",
-				"Preview exclusions"},
-			{"dot drive-exclude apply --yes",
-				"Apply xattr to all pending directories"},
-			{"dot drive-exclude add ~/myproject/node_modules",
-				"Manually exclude a specific path"},
-		})
-
-	section(p, "9. Secrets management (age encryption)",
+	section(p, "7. Secrets management (age encryption)",
 		"Encrypt SSH keys and shell secrets with age.",
 		[]usecase{
 			{"dot secrets init --scaffold",
@@ -233,7 +204,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Decrypt from backup on new machine"},
 		})
 
-	section(p, "10. macOS app management (cask install + settings backup)",
+	section(p, "8. macOS app management (cask install + settings backup)",
 		"Install apps from an embedded catalog; back up and restore per-app settings.",
 		[]usecase{
 			{"dot apps list",
@@ -254,7 +225,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Restore all backed-up settings (confirms first, flushes cfprefsd)"},
 		})
 
-	section(p, "11. Profile snapshots (versioned config backup)",
+	section(p, "9. Profile snapshots (versioned config backup)",
 		"Snapshot config.yaml, cask lists, and optional secrets into timestamped versions.",
 		[]usecase{
 			{"dot profile backup",
@@ -271,7 +242,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Delete snapshots older than the 5 most recent"},
 		})
 
-	section(p, "12. Cross-machine migration",
+	section(p, "10. Cross-machine migration",
 		"Move your full setup to a new Mac in minutes — one wizard per side.",
 		[]usecase{
 			{"dot backup",
@@ -288,7 +259,7 @@ func printUsecases(cmd *cobra.Command) {
 				"[new machine] Manual sequence equivalent to the wizard"},
 		})
 
-	section(p, "13. Prompt style",
+	section(p, "11. Prompt style",
 		"Switch between a minimal and a rich Starship prompt.",
 		[]usecase{
 			{"dot reconfigure",
@@ -297,7 +268,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Deploy the selected starship.toml immediately"},
 		})
 
-	section(p, "14. Updates and reconfiguration",
+	section(p, "12. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
 			{"dot update --check",
@@ -310,7 +281,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Show installed version and build info"},
 		})
 
-	section(p, "15. GPU server / DGX provisioning",
+	section(p, "13. GPU server / DGX provisioning",
 		"Deploy on a fresh GPU server — auto-detects NVIDIA + CUDA.",
 		[]usecase{
 			{"curl -fsSL .../install.sh | bash",
@@ -321,7 +292,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Apply server profile (no workspace, fonts, gpg, secrets)"},
 		})
 
-	section(p, "16. Troubleshooting",
+	section(p, "14. Troubleshooting",
 		"Diagnose and recover from issues.",
 		[]usecase{
 			{"dot doctor",
@@ -330,10 +301,6 @@ func printUsecases(cmd *cobra.Command) {
 				"Full environment dashboard at a glance"},
 			{"dot config",
 				"Show loaded configuration and system info"},
-			{"dot clone reconnect",
-				"Fix expired Google Drive authentication"},
-			{"dot clone log 100",
-				"View recent rclone sync log entries"},
 			{"dot sync log 100",
 				"View recent rsync sync log entries"},
 		})

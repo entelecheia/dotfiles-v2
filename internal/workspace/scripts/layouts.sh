@@ -149,10 +149,3 @@ load_layout() {
       ;;
   esac
 }
-
-list_layouts() {
-  echo "Available layouts:"
-  echo "  dev      Default 5-pane layout (Claude + monitor + files + git + shell)"
-  echo "  claude   7-pane Claude-focused (Claude + monitor + files + remote + git + shell + logs)"
-  echo "  monitor  4-pane server monitoring (monitor + git + shell + logs)"
-}

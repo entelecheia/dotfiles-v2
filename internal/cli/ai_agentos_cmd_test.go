@@ -42,10 +42,10 @@ description: Missing schema
 	}
 }
 
-func TestAISkillsListGeminiAliasScansAntigravity(t *testing.T) {
+func TestAISkillsListGeminiScansGeminiRoot(t *testing.T) {
 	home := t.TempDir()
-	writeCLITestFile(t, filepath.Join(home, ".gemini", "antigravity", "skills", "valid", "SKILL.md"), `---
-name: antigravity-skill
+	writeCLITestFile(t, filepath.Join(home, ".gemini", "skills", "valid", "SKILL.md"), `---
+name: gemini-skill
 description: Valid
 schema_version: v1
 ---
@@ -56,8 +56,8 @@ schema_version: v1
 	if err != nil {
 		t.Fatalf("skills list: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, `"tool": "antigravity"`) || !strings.Contains(out, `"name": "antigravity-skill"`) {
-		t.Fatalf("gemini alias did not scan antigravity roots:\n%s", out)
+	if !strings.Contains(out, `"tool": "gemini"`) || !strings.Contains(out, `"name": "gemini-skill"`) {
+		t.Fatalf("gemini scan did not use ~/.gemini/skills:\n%s", out)
 	}
 }
 

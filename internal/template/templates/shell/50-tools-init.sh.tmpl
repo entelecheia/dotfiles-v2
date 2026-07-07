@@ -9,3 +9,12 @@ command -v fnm &>/dev/null && eval "$(fnm env --use-on-cd --shell zsh)"
 
 # direnv
 command -v direnv &>/dev/null && eval "$(direnv hook zsh)"
+
+# conda / mamba
+if command -v conda &>/dev/null; then
+  __dot_conda_hook="$(conda shell.zsh hook 2>/dev/null)" && eval "$__dot_conda_hook"
+  unset __dot_conda_hook
+elif command -v mamba &>/dev/null; then
+  __dot_mamba_hook="$(mamba shell hook --shell zsh 2>/dev/null)" && eval "$__dot_mamba_hook"
+  unset __dot_mamba_hook
+fi

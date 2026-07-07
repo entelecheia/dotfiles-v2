@@ -36,7 +36,6 @@ packages_extra:
   - anchor-cli
   - btop
   - lazygit
-  - rclone
   - yazi
   - glow
   - csvlens

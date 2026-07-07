@@ -77,23 +77,35 @@ type Config struct {
 // workspace). Once .dotfiles/gdrive-sync/config.yaml exists, the
 // global block is no longer read.
 func ResolveConfig(state *config.UserState) (*Config, error) {
-	return resolveConfig(state, true)
+	return resolveConfig(state, true, "")
 }
 
 // ResolveConfigReadOnly resolves the same runtime values without creating
 // the local store, migrating global config, or healing .gitignore. Use it for
 // status/list commands that must not mutate the workspace.
 func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
-	return resolveConfig(state, false)
+	return resolveConfig(state, false, "")
 }
 
-func resolveConfig(state *config.UserState, migrate bool) (*Config, error) {
-	systemPaths, err := ResolvePaths()
+// ResolveConfigReadOnlyForHome is like ResolveConfigReadOnly but resolves all
+// home-relative paths (local/mirror defaults, `~` expansion, artifact paths)
+// against an explicit home directory instead of os.UserHomeDir(). Commands
+// that honor --home must use this so they operate on the target user's mirror
+// rather than the invoking user's. An empty home falls back to the current
+// user's home.
+func ResolveConfigReadOnlyForHome(state *config.UserState, home string) (*Config, error) {
+	return resolveConfig(state, false, home)
+}
+
+func resolveConfig(state *config.UserState, migrate bool, home string) (*Config, error) {
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	systemPaths, err := ResolvePathsForHome(home)
 	if err != nil {
 		return nil, err
 	}
 
-	home, _ := os.UserHomeDir()
 	gs := state.Modules.Gsync
 
 	localPath := gs.LocalPath

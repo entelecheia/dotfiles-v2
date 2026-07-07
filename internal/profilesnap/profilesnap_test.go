@@ -348,6 +348,28 @@ func TestListAndLatestSkipDirsWithoutMeta(t *testing.T) {
 	}
 }
 
+func TestResolveLatestFallsBackFromDanglingPointer(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	eng := newTestEngine(t, home, root)
+	writeFile(t, eng.StatePath, "name: x\n", 0o644)
+
+	snap, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(eng.LatestPointerPath(), []byte("missing-version\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := eng.ResolveLatest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest != snap.Version {
+		t.Fatalf("latest fallback picked %q, want %q", latest, snap.Version)
+	}
+}
+
 func TestRestoreErrorsWhenSnapshotHasNoState(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()

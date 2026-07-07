@@ -101,19 +101,20 @@ schema_version: v1
 	}
 }
 
-func TestDefaultSkillRootsAcceptsGeminiAliasForAntigravity(t *testing.T) {
+func TestDefaultSkillRootsTreatsGeminiAsOwnTool(t *testing.T) {
 	home := t.TempDir()
 	roots, err := DefaultSkillRoots(home, []string{"gemini"})
 	if err != nil {
 		t.Fatalf("DefaultSkillRoots: %v", err)
 	}
-	if len(roots) != 4 {
-		t.Fatalf("roots = %d, want 4 antigravity roots: %+v", len(roots), roots)
+	if len(roots) != 1 {
+		t.Fatalf("roots = %d, want 1 gemini root: %+v", len(roots), roots)
 	}
-	for _, root := range roots {
-		if root.Tool != "antigravity" {
-			t.Fatalf("root tool = %q, want antigravity", root.Tool)
-		}
+	if roots[0].Tool != "gemini" {
+		t.Fatalf("root tool = %q, want gemini", roots[0].Tool)
+	}
+	if roots[0].Path != filepath.Join(home, ".gemini", "skills") {
+		t.Fatalf("root path = %q, want ~/.gemini/skills", roots[0].Path)
 	}
 }
 

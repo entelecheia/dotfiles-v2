@@ -102,10 +102,7 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		s.Conflicts = append(s.Conflicts, confs...)
 	}
 
-	// Populate shared entries from a property-detected scan plus the
-	// operator's manual list. Errors are non-fatal — status is best-
-	// effort, and a permission hiccup mid-tree shouldn't black out the
-	// whole snapshot.
+	// Populate manual shared entries. Errors are non-fatal; status is best-effort.
 	if shared, err := ScanShared(s.MirrorPath, cfg.SharedExcludes); err == nil {
 		s.Shared = shared
 	}

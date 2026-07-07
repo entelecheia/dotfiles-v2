@@ -11,6 +11,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // Paths holds well-known file locations for rsync sync artifacts.
@@ -135,13 +136,7 @@ func remoteSpec(cfg *Config) string {
 // AcquireLock creates a POSIX-safe lock directory.
 // Returns a release function, or error if another sync is running.
 func AcquireLock(lockDir string) (func(), error) {
-	if err := os.Mkdir(lockDir, 0755); err != nil {
-		if os.IsExist(err) {
-			return nil, fmt.Errorf("another sync is running (lock: %s)", lockDir)
-		}
-		return nil, fmt.Errorf("creating lock: %w", err)
-	}
-	return func() { _ = os.Remove(lockDir) }, nil
+	return fileutil.AcquirePIDLock(lockDir)
 }
 
 // ── pull / push / sync ──────────────────────────────────────────────────

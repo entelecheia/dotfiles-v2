@@ -6,4 +6,5 @@ dist/
 .omc/
 .omx/
 .claude/
+.conductor/
 graphify-out/

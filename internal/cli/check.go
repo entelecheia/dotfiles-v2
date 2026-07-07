@@ -30,12 +30,27 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	profileName, _ := cmd.Flags().GetString("profile")
 	moduleFilter, _ := cmd.Flags().GetStringSlice("module")
 	configPath, _ := cmd.Flags().GetString("config")
+	homeOverride, _ := cmd.Flags().GetString("home")
 
 	if profileName == "" {
 		profileName = os.Getenv("DOTFILES_PROFILE")
 	}
+	if homeOverride == "" {
+		homeOverride = os.Getenv("DOTFILES_HOME")
+	}
 
-	state, err := config.LoadState()
+	home := homeOverride
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
@@ -67,8 +82,6 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	runner := exec.NewRunner(true, logger) // always dry-run for check
 	brew := exec.NewBrew(runner)
 	tmplEngine := template.NewEngine()
-
-	home, _ := os.UserHomeDir()
 
 	registry := module.NewRegistry()
 	moduleFilter, err = module.NormalizeFilter(moduleFilter)
