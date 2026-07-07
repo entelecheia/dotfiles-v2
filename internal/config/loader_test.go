@@ -178,6 +178,28 @@ func TestLoad_ProfilesDoNotInstallBunByDefault(t *testing.T) {
 	}
 }
 
+func TestLoad_ServerProfileLeavesWorkstationModulesDisabled(t *testing.T) {
+	cfg, err := Load("server", "", nil)
+	if err != nil {
+		t.Fatalf("Load server: %v", err)
+	}
+	if cfg.Modules.Workspace.Enabled {
+		t.Fatal("server profile should not enable workspace")
+	}
+	if cfg.Modules.Fonts.Enabled {
+		t.Fatal("server profile should not enable fonts")
+	}
+	if cfg.Modules.GPG.Enabled {
+		t.Fatal("server profile should not enable gpg")
+	}
+	if cfg.Modules.Secrets.Enabled {
+		t.Fatal("server profile should not enable secrets")
+	}
+	if !cfg.Modules.Tmux.Enabled || !cfg.Modules.AI.Enabled || !cfg.Modules.Conda.Enabled {
+		t.Fatalf("server profile should enable tmux, ai, and conda: %+v", cfg.Modules)
+	}
+}
+
 func TestLoad_ServerProfileExtraPackages(t *testing.T) {
 	cfg, err := Load("server", "", nil)
 	if err != nil {

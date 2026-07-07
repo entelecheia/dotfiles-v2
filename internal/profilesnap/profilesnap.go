@@ -17,7 +17,6 @@ package profilesnap
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/snapstore"
 )
 
 // Meta records the human-readable provenance of a snapshot.
@@ -87,22 +87,18 @@ func (e *Engine) LatestPointerPath() string {
 
 // NewVersion produces a filesystem-safe UTC version id.
 func NewVersion(t time.Time) string {
-	return t.UTC().Format("20060102T150405Z")
+	return snapstore.NewVersion(t)
 }
 
 // uniqueVersion returns an unused version id near t; suffix "-N" is appended
 // when an earlier snapshot already occupies the natural slot. Protects against
 // back-to-back calls within the same 1s window.
 func (e *Engine) uniqueVersion(t time.Time) (string, error) {
-	base := NewVersion(t)
-	candidate := base
-	for i := 2; i < 100; i++ {
-		if _, err := os.Stat(e.VersionPath(candidate)); err != nil && os.IsNotExist(err) {
-			return candidate, nil
-		}
-		candidate = fmt.Sprintf("%s-%d", base, i)
+	version, err := snapstore.UniqueVersion(t, e.VersionPath)
+	if err != nil {
+		return "", fmt.Errorf("%w under %s", err, e.HostRoot())
 	}
-	return "", fmt.Errorf("no free version id near %s under %s", base, e.HostRoot())
+	return version, nil
 }
 
 // BackupOptions tune Backup behavior.
@@ -294,14 +290,7 @@ func (e *Engine) Restore(opts RestoreOptions) (*Snapshot, error) {
 // preRestoreDir picks an unused timestamped directory for pre-overwrite
 // copies. The directory itself is created lazily by the first backup.
 func (e *Engine) preRestoreDir(t time.Time) string {
-	base := filepath.Join(e.HomeDir, ".local", "share", "dotfiles", "backup", "profile-pre-restore", NewVersion(t))
-	dir := base
-	for i := 2; ; i++ {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			return dir
-		}
-		dir = fmt.Sprintf("%s-%d", base, i)
-	}
+	return snapstore.PreRestoreDir(e.HomeDir, []string{"profile-pre-restore"}, t)
 }
 
 // restoreSecrets copies each snapshot secret file back into SecretsDir,
@@ -428,47 +417,34 @@ func (e *Engine) Prune(keep int) ([]string, error) {
 	if len(all) <= keep {
 		return nil, nil
 	}
-	latest, _ := e.readLatest()
-	removed := make([]string, 0, len(all)-keep)
-	kept := 0
+	latest, _ := e.ResolveLatest()
+	infos := make([]snapstore.SnapshotInfo, 0, len(all))
 	for _, s := range all {
-		if kept < keep || s.Version == latest {
-			kept++
-			continue
-		}
-		if err := e.Runner.RemoveAll(s.Path); err != nil {
-			return removed, err
-		}
-		removed = append(removed, s.Version)
+		infos = append(infos, snapstore.SnapshotInfo{Version: s.Version, Path: s.Path})
 	}
-	return removed, nil
+	return snapstore.Prune(e.Runner, keep, infos, latest)
 }
 
-// ResolveLatest returns the current "latest" version id, or empty string
-// when no pointer exists.
+// ResolveLatest returns the latest snapshot id. Missing, empty, or dangling
+// latest.txt pointers fall back to the newest committed snapshot.
 func (e *Engine) ResolveLatest() (string, error) {
-	return e.readLatest()
+	return snapstore.ResolveLatest(e.LatestPointerPath(), e.HostRoot(), e.VersionPath, func() ([]string, error) {
+		all, err := e.list(true)
+		if err != nil {
+			return nil, err
+		}
+		versions := make([]string, 0, len(all))
+		for _, s := range all {
+			versions = append(versions, s.Version)
+		}
+		return versions, nil
+	})
 }
 
 // --- internals ---
 
 func (e *Engine) readLatest() (string, error) {
-	data, err := os.ReadFile(e.LatestPointerPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Fall back to newest directory.
-			all, lerr := e.list(true)
-			if lerr != nil {
-				return "", lerr
-			}
-			if len(all) == 0 {
-				return "", fmt.Errorf("no snapshots under %s", e.HostRoot())
-			}
-			return all[0].Version, nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
+	return e.ResolveLatest()
 }
 
 // copySecrets captures ~/.ssh/age_key* into the snapshot and returns how
@@ -534,76 +510,24 @@ func (e *Engine) writeBackupList(dest string, state *config.UserState) error {
 }
 
 func writeMeta(runner *exec.Runner, path string, m Meta) error {
-	data, err := yaml.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return runner.WriteFile(path, data, 0o644)
+	return snapstore.WriteYAML(runner, path, m)
 }
 
 func readMeta(path string) (*Meta, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var m Meta
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
+	return snapstore.ReadYAML[Meta](path)
 }
 
 func copyFile(runner *exec.Runner, src, dst string) error {
-	if runner.DryRun {
-		runner.Logger.Info("dry-run: copy", "src", src, "dst", dst)
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	in, err := os.Open(src)
+	info, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-	info, err := in.Stat()
-	if err != nil {
-		return err
-	}
-	tmp := dst + ".tmp"
-	_ = os.Remove(tmp)
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode()&0o777)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, dst)
+	_, err = snapstore.CopyFile(runner, src, dst, info.Mode())
+	return err
 }
 
 // ListHosts enumerates the hostnames that have profile snapshots under
 // root, sorted. Returns (nil, nil) when the tree doesn't exist yet.
 func ListHosts(root string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(root, "profiles"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []string
-	for _, en := range entries {
-		if en.IsDir() {
-			out = append(out, en.Name())
-		}
-	}
-	sort.Strings(out)
-	return out, nil
+	return snapstore.ListHosts(root, "profiles")
 }

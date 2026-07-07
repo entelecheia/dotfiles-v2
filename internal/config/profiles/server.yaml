@@ -7,14 +7,6 @@ modules:
     enabled: true
   conda:
     enabled: true
-  workspace:
-    enabled: false
-  fonts:
-    enabled: false
-  gpg:
-    enabled: false
-  secrets:
-    enabled: false
   terminal:
     enabled: true
     warp: false

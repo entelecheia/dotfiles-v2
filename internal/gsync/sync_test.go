@@ -15,13 +15,9 @@ import (
 func newTestConfig(t *testing.T) *Config {
 	t.Helper()
 	dir := t.TempDir()
-	excludes, err := MaterializeExcludesFile(dir)
-	if err != nil {
-		t.Fatalf("MaterializeExcludesFile: %v", err)
-	}
-	includes, err := MaterializeIncludesFile(dir)
-	if err != nil {
-		t.Fatalf("MaterializeIncludesFile: %v", err)
+	paths := ResolveLocalPaths(dir)
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("EnsureLocalLayout: %v", err)
 	}
 	includePatterns, err := LoadDefaultIncludePatterns()
 	if err != nil {
@@ -30,15 +26,16 @@ func newTestConfig(t *testing.T) *Config {
 	return &Config{
 		LocalPath:       "/tmp/test-local/",
 		MirrorPath:      "/tmp/test-mirror/",
-		ConfigDir:       dir,
+		ConfigDir:       paths.StoreDir,
 		FilterMode:      DefaultFilterMode(),
-		IncludeFile:     includes,
+		IncludeFile:     paths.IncludeFile,
 		IncludePatterns: includePatterns,
-		ExcludesFile:    excludes,
+		ExcludesFile:    paths.ExcludeFile,
 		LogFile:         "/tmp/test.log",
 		LockDir:         "/tmp/test.lock",
 		MaxDelete:       1000,
 		Propagation:     DefaultPropagationPolicy(),
+		LocalPaths:      paths,
 	}
 }
 

@@ -55,22 +55,6 @@ func TestIsModuleEnabled(t *testing.T) {
 	}
 }
 
-func TestTemplateData_IncludesAgentsSSOTFlag(t *testing.T) {
-	cfg := &Config{
-		Modules: ModulesConfig{
-			AI: AIConfig{Enabled: true, AgentsSSOT: true},
-		},
-	}
-
-	data := cfg.TemplateData()
-	if data["EnableAI"] != true {
-		t.Fatalf("EnableAI = %v, want true", data["EnableAI"])
-	}
-	if data["EnableAgentsSSOT"] != true {
-		t.Fatalf("EnableAgentsSSOT = %v, want true", data["EnableAgentsSSOT"])
-	}
-}
-
 func TestAllPackages_Deduplication(t *testing.T) {
 	cfg := &Config{
 		Packages:      []string{"git", "curl", "fzf"},
@@ -197,11 +181,11 @@ func TestTemplateData_Keys(t *testing.T) {
 	requiredKeys := []string{
 		"Home",
 		"Name", "Email", "GithubUser", "Timezone",
-		"OS", "Arch", "Hostname",
-		"IsDarwin", "IsLinux", "Profile",
-		"EnableWorkspace", "EnableAI", "EnableWarp",
-		"WorkspacePath", "WorkspaceGdrive",
-		"SSHKeyName", "GitSigning", "FontFamily",
+		"Hostname", "IsDarwin",
+		"EnableWorkspace", "EnableAI",
+		"WorkspacePath", "GdriveSymlink",
+		"SSHKeyName", "CoauthorGuard",
+		"HasCUDA", "CUDAHome", "HasNVIDIAGPU",
 	}
 	for _, k := range requiredKeys {
 		if _, ok := data[k]; !ok {
@@ -216,17 +200,8 @@ func TestTemplateData_Keys(t *testing.T) {
 	if data["IsDarwin"] != true {
 		t.Errorf("TemplateData[IsDarwin] = %v, want true", data["IsDarwin"])
 	}
-	if data["IsLinux"] != false {
-		t.Errorf("TemplateData[IsLinux] = %v, want false", data["IsLinux"])
-	}
-	if data["OS"] != "darwin" {
-		t.Errorf("TemplateData[OS] = %v, want %q", data["OS"], "darwin")
-	}
 	if data["EnableWorkspace"] != true {
 		t.Errorf("TemplateData[EnableWorkspace] = %v, want true", data["EnableWorkspace"])
-	}
-	if data["GitSigning"] != true {
-		t.Errorf("TemplateData[GitSigning] = %v, want true", data["GitSigning"])
 	}
 }
 
@@ -234,10 +209,10 @@ func TestTemplateData_NilSystem(t *testing.T) {
 	cfg := &Config{}
 	data := cfg.TemplateData()
 
-	if data["OS"] != "" {
-		t.Errorf("TemplateData[OS] with nil System = %v, want empty string", data["OS"])
-	}
 	if data["IsDarwin"] != false {
 		t.Errorf("TemplateData[IsDarwin] with nil System = %v, want false", data["IsDarwin"])
+	}
+	if data["Hostname"] != "" {
+		t.Errorf("TemplateData[Hostname] with nil System = %v, want empty string", data["Hostname"])
 	}
 }

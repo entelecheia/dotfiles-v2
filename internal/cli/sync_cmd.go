@@ -120,7 +120,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
 		p.Line("  %s", lockErr)
-		return nil
+		return lockErr
 	}
 	defer release()
 
@@ -169,7 +169,7 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
 		p.Line("  %s", lockErr)
-		return nil
+		return lockErr
 	}
 	defer release()
 
@@ -209,7 +209,7 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
 		p.Line("  %s", lockErr)
-		return nil
+		return lockErr
 	}
 	defer release()
 

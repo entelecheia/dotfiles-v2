@@ -78,12 +78,22 @@ func runConfigExport(cmd *cobra.Command, args []string) error {
 func runConfig(cmd *cobra.Command, _ []string) error {
 	profileName, _ := cmd.Flags().GetString("profile")
 	configPath, _ := cmd.Flags().GetString("config")
+	homeOverride, _ := cmd.Flags().GetString("home")
 
 	if profileName == "" {
 		profileName = os.Getenv("DOTFILES_PROFILE")
 	}
+	if homeOverride == "" {
+		homeOverride = os.Getenv("DOTFILES_HOME")
+	}
 
-	state, err := config.LoadState()
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
@@ -112,7 +122,11 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 	p := printerFrom(cmd)
 	p.Header("dot Configuration")
 	p.KV("Profile", profileName)
-	p.KV("Config", config.StatePath())
+	if homeOverride != "" {
+		p.KV("Config", config.StatePathForHome(homeOverride))
+	} else {
+		p.KV("Config", config.StatePath())
+	}
 
 	p.Section("System")
 	p.KV("OS", sysInfo.OS+"/"+sysInfo.Arch)
@@ -141,10 +155,10 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		p.Section("Workspace")
 		p.KV("Path", cfg.Modules.Workspace.Path)
 		if cfg.Modules.Workspace.Gdrive != "" {
-			p.KV("GDrive", cfg.Modules.Workspace.Gdrive)
+			p.KV("Cloud root", cfg.Modules.Workspace.Gdrive)
 		}
 		if cfg.Modules.Workspace.GdriveSymlink != "" {
-			p.KV("GDrive link", cfg.Modules.Workspace.GdriveSymlink)
+			p.KV("Cloud link", cfg.Modules.Workspace.GdriveSymlink)
 		}
 		if cfg.Modules.Workspace.Symlink != "" {
 			p.KV("Symlink", cfg.Modules.Workspace.Symlink)
@@ -227,25 +241,14 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	if state.Modules.Sync.Remote != "" || state.Modules.Rsync.RemoteHost != "" {
+	if state.Modules.Rsync.RemoteHost != "" {
 		p.Section("Sync")
-		if state.Modules.Sync.Remote != "" {
-			p.KV("rclone", state.Modules.Sync.Remote)
-			if state.Modules.Sync.Path != "" {
-				p.KV("  path", state.Modules.Sync.Path)
-			}
-			if state.Modules.Sync.Interval > 0 {
-				p.KV("  interval", fmt.Sprintf("%ds", state.Modules.Sync.Interval))
-			}
+		p.KV("rsync", state.Modules.Rsync.RemoteHost)
+		if state.Modules.Rsync.RemotePath != "" {
+			p.KV("  path", state.Modules.Rsync.RemotePath)
 		}
-		if state.Modules.Rsync.RemoteHost != "" {
-			p.KV("rsync", state.Modules.Rsync.RemoteHost)
-			if state.Modules.Rsync.RemotePath != "" {
-				p.KV("  path", state.Modules.Rsync.RemotePath)
-			}
-			if state.Modules.Rsync.Interval > 0 {
-				p.KV("  interval", fmt.Sprintf("%ds", state.Modules.Rsync.Interval))
-			}
+		if state.Modules.Rsync.Interval > 0 {
+			p.KV("  interval", fmt.Sprintf("%ds", state.Modules.Rsync.Interval))
 		}
 	}
 

@@ -24,6 +24,10 @@ Use --from to import settings from another machine's exported config:
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
+	return runInitFlow(cmd, false)
+}
+
+func runInitFlow(cmd *cobra.Command, skipExistingGate bool) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	homeOverride, _ := cmd.Flags().GetString("home")
 	fromPath, _ := cmd.Flags().GetString("from")
@@ -57,7 +61,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	// If state already has data (not from --from), ask whether to reconfigure.
 	freshState := state.Name == "" && fromPath == ""
-	if state.Name != "" && !yes && fromPath == "" {
+	if state.Name != "" && !yes && fromPath == "" && !skipExistingGate {
 		p.Line("Current configuration:")
 		ui.PrintStateSummary(state)
 		p.Line("")

@@ -160,9 +160,10 @@ func (m *ShellModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, 
 	}
 
 	// Set default shell to zsh
-	if err := m.ensureZshDefault(ctx, rc); err != nil {
+	changed, err := m.ensureZshDefault(ctx, rc)
+	if err != nil {
 		rc.Runner.Logger.Warn("setting default shell failed", "err", err)
-	} else {
+	} else if changed {
 		messages = append(messages, "default shell set to zsh")
 	}
 
@@ -176,7 +177,7 @@ func (m *ShellModule) renderFile(rc *RunContext, f shellFile, data map[string]an
 	return rc.Template.ReadStatic(f.templatePath)
 }
 
-func (m *ShellModule) ensureZshDefault(ctx context.Context, rc *RunContext) error {
+func (m *ShellModule) ensureZshDefault(ctx context.Context, rc *RunContext) (bool, error) {
 	// Find zsh path
 	zshPath := ""
 	for _, candidate := range []string{"/usr/local/bin/zsh", "/opt/homebrew/bin/zsh", "/bin/zsh", "/usr/bin/zsh"} {
@@ -186,7 +187,7 @@ func (m *ShellModule) ensureZshDefault(ctx context.Context, rc *RunContext) erro
 		}
 	}
 	if zshPath == "" {
-		return fmt.Errorf("zsh not found")
+		return false, fmt.Errorf("zsh not found")
 	}
 
 	isLinux := rc.Config.System != nil && rc.Config.System.OS == "linux"
@@ -195,20 +196,20 @@ func (m *ShellModule) ensureZshDefault(ctx context.Context, rc *RunContext) erro
 		// On Linux, check /etc/passwd for current shell
 		result, err := rc.Runner.Run(ctx, "getent", "passwd", currentUser(rc))
 		if err == nil && strings.Contains(result.Stdout, zshPath) {
-			return nil // already zsh
+			return false, nil // already zsh
 		}
 		_, err = rc.Runner.Run(ctx, "chsh", "-s", zshPath)
-		return err
+		return err == nil, err
 	}
 
 	// macOS: use dscl
 	result, err := rc.Runner.Run(ctx, "dscl", ".", "-read", fmt.Sprintf("/Users/%s", currentUser(rc)), "UserShell")
 	if err == nil && strings.Contains(result.Stdout, zshPath) {
-		return nil // already zsh
+		return false, nil // already zsh
 	}
 
 	_, err = rc.Runner.Run(ctx, "chsh", "-s", zshPath)
-	return err
+	return err == nil, err
 }
 
 func currentUser(rc *RunContext) string {

@@ -44,7 +44,7 @@ commands (dot profile restore / dot ai restore) to mix versions.`,
 	}
 	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
 	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
-	c.Flags().String("version", "", "Snapshot version for profile and AI (default: latest)")
+	c.Flags().String("version", "", "Snapshot version for selected profile/AI domains (default: latest; must exist in each selected domain)")
 	c.Flags().String("scope", "", "Comma-separated domains to restore (profile,apps,ai,secrets)")
 	c.Flags().Bool("include-secrets", false, "Restore ~/.ssh/age_key* from the profile snapshot")
 	c.Flags().Bool("include-auth", false, "Restore AI auth tokens from the AI snapshot")
@@ -339,7 +339,34 @@ func (o *onestopCtx) pickVersions(selected map[string]bool) (profileVersion, aiV
 		}
 	}
 
-	if pinned != "" || o.yes {
+	if pinned != "" {
+		if selected["profile"] {
+			found := false
+			for _, s := range profSnaps {
+				if s.Version == pinned {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return "", "", fmt.Errorf("profile snapshot version %q not found for host %s", pinned, o.host)
+			}
+		}
+		if selected["ai"] {
+			found := false
+			for _, s := range aiSnaps {
+				if s.Version == pinned {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return "", "", fmt.Errorf("AI snapshot version %q not found for host %s", pinned, o.host)
+			}
+		}
+		return profileVersion, aiVersion, nil
+	}
+	if o.yes {
 		return profileVersion, aiVersion, nil
 	}
 	useLatest, err := ui.ConfirmBool("Restore the latest snapshots?", true, false)

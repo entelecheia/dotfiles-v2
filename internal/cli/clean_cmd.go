@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -16,7 +15,7 @@ func newCleanCmd() *cobra.Command {
 		Use:   "clean [path]",
 		Short: "Remove junk directories (node_modules, caches, venvs) from workspace",
 		Long: `Scan for and remove directories that waste disk space and cause
-problems with Google Drive sync: node_modules, __pycache__, .venv,
+cloud sync problems: node_modules, __pycache__, .venv,
 build caches, and .DS_Store files.
 
 Default: scan and show what would be removed (preview mode).
@@ -33,7 +32,7 @@ The _sys/ subtree is ALWAYS protected and will never be touched.`,
 }
 
 func runClean(cmd *cobra.Command, args []string) error {
-	root := filepath.Join(defaultDriveRoot(), "work")
+	root := defaultWorkspaceWorkRoot()
 	if len(args) > 0 {
 		root = absPath(args[0])
 	}

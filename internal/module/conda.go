@@ -14,7 +14,7 @@ channels:
   - defaults
 `
 
-// CondaModule detects conda/mamba and ensures shell integration and .condarc.
+// CondaModule detects conda/mamba and ensures .condarc.
 type CondaModule struct{}
 
 func (m *CondaModule) Name() string { return "conda" }
@@ -61,13 +61,6 @@ func (m *CondaModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, 
 			Changed:  false,
 			Messages: []string{"conda/mamba not found, skipping"},
 		}, nil
-	}
-
-	// Ensure shell integration
-	if _, err := rc.Runner.Run(ctx, cmd, "init", "zsh"); err != nil {
-		rc.Runner.Logger.Warn("conda init zsh failed", "cmd", cmd, "err", err)
-	} else {
-		messages = append(messages, fmt.Sprintf("ran %s init zsh", cmd))
 	}
 
 	// Ensure .condarc

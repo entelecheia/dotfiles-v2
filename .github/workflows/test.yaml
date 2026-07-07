@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
+    branches: [main]
     paths:
       - "cmd/**"
       - "internal/**"
@@ -13,16 +15,6 @@ on:
       - "tests/**"
       - ".github/workflows/**"
       - ".goreleaser.yaml"
-      - ".golangci.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
-      - "scripts/**"
-      - "tests/**"
       - ".golangci.yml"
 
 jobs:
@@ -73,7 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dockerfile: [ubuntu-22.04, ubuntu-24.04]
+        dockerfile: [ubuntu-24.04]
         profile: [minimal, full, server]
         include:
           # Minimal/server-stripped base image — only meaningful for server profile.
@@ -100,7 +92,7 @@ jobs:
     env:
       TAG: dotfiles-test:linux
       MODULES: "packages shell node git ssh terminal tmux ai conda"
-      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace drive-exclude sync install-script"
+      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -154,3 +146,5 @@ jobs:
         run: command -v jq >/dev/null || brew install jq
       - name: Install defaults and verify /Applications
         run: bash tests/scenarios/apps-install-macos.sh
+      - name: macapps module and command scenario
+        run: bash tests/scenarios/macapps.sh

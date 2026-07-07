@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // Paths holds well-known file locations for gsync artifacts.
@@ -90,26 +90,7 @@ func pathExists(path string) bool {
 // If the PID is dead (ESRCH), removes the stale lock and retries once.
 // Otherwise reports the lock is held by another running sync.
 func AcquireLock(lockDir string) (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(lockDir), 0755); err != nil {
-		return nil, fmt.Errorf("preparing lock parent: %w", err)
-	}
-	if err := os.Mkdir(lockDir, 0755); err != nil {
-		if !os.IsExist(err) {
-			return nil, fmt.Errorf("creating lock: %w", err)
-		}
-		if !lockIsStale(lockDir) {
-			return nil, fmt.Errorf("another sync is running (lock: %s)", lockDir)
-		}
-		_ = os.RemoveAll(lockDir)
-		if err := os.Mkdir(lockDir, 0755); err != nil {
-			return nil, fmt.Errorf("recreating lock after stale cleanup: %w", err)
-		}
-	}
-	if err := writeLockPID(lockDir); err != nil {
-		_ = os.RemoveAll(lockDir)
-		return nil, err
-	}
-	return func() { _ = os.RemoveAll(lockDir) }, nil
+	return fileutil.AcquirePIDLock(lockDir)
 }
 
 // lockIsStale returns true when the PID file inside lockDir points at a
@@ -117,31 +98,7 @@ func AcquireLock(lockDir string) (func(), error) {
 // treated as stale (defensive: better to break a held-but-corrupted lock
 // than block forever).
 func lockIsStale(lockDir string) bool {
-	data, err := os.ReadFile(filepath.Join(lockDir, "lock.pid"))
-	if err != nil {
-		return true
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return true
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return true
-	}
-	// Signal 0 probes existence without delivering; ESRCH = dead.
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		return true
-	}
-	return false
-}
-
-func writeLockPID(lockDir string) error {
-	pidFile := filepath.Join(lockDir, "lock.pid")
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
-		return fmt.Errorf("writing lock pid: %w", err)
-	}
-	return nil
+	return fileutil.PIDLockIsStale(lockDir)
 }
 
 // ensureLogDir creates the parent directory of logFile if needed.

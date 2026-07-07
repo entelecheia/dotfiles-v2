@@ -13,6 +13,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/gsync"
 	"github.com/entelecheia/dotfiles-v2/internal/module"
 	"github.com/entelecheia/dotfiles-v2/internal/rsync"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
@@ -77,6 +78,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 
 	// ── Sync ───────────────────────────────────────────────────────────
 	statusPrintSync(p, state)
+	statusPrintGsync(p, state)
 
 	// ── Workspace ──────────────────────────────────────────────────────
 	statusPrintWorkspace(p)
@@ -198,10 +200,16 @@ func statusPrintSecrets(p *Printer, state *config.UserState) {
 	p.KV("Encrypted", fmt.Sprintf("%d file(s)", ageCount))
 
 	if lb := state.Secrets.LastBackup; lb != nil && lb.Path != "" {
-		p.KV("Last backup", fmt.Sprintf("%s (%s ago, %d files)",
+		p.KV("Secrets last backup", fmt.Sprintf("%s (%s ago, %d files)",
 			lb.Path, humanDuration(time.Since(lb.Time)), lb.Files))
 	} else {
-		p.KV("Last backup", "(none)")
+		p.KV("Secrets last backup", "(none)")
+	}
+	if lb := state.Modules.MacApps.LastBackup; lb != nil && lb.Path != "" {
+		p.KV("Apps last backup", fmt.Sprintf("%s (%s ago, %d files)",
+			lb.Path, humanDuration(time.Since(lb.Time)), lb.Files))
+	} else {
+		p.KV("Apps last backup", "(none)")
 	}
 }
 
@@ -249,6 +257,40 @@ func statusPrintSync(p *Printer, state *config.UserState) {
 	if st.LastResult != "" {
 		p.KV("Last result", st.LastResult)
 	}
+}
+
+func statusPrintGsync(p *Printer, state *config.UserState) {
+	p.Section("Gsync")
+
+	cfg, err := gsync.ResolveConfigReadOnly(state)
+	if err != nil {
+		p.Line("  %s", ui.StyleHint.Render("(config error: "+err.Error()+")"))
+		return
+	}
+	paths, err := gsync.ResolvePaths()
+	if err != nil {
+		p.Line("  %s", ui.StyleHint.Render("(cannot resolve paths)"))
+		return
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	runner := exec.NewRunner(true, logger)
+	engine := template.NewEngine()
+	sched := gsync.NewScheduler(runner, paths, cfg, engine)
+	st, err := gsync.GetStatus(context.Background(), runner, cfg, state, sched)
+	if err != nil {
+		p.Line("  %s", ui.StyleHint.Render("(status unavailable: "+err.Error()+")"))
+		return
+	}
+
+	p.KV("Local", st.LocalPath)
+	p.KV("Mirror", st.MirrorPath)
+	if st.Paused {
+		p.KV("Paused", "yes")
+	} else {
+		p.KV("Paused", "no")
+	}
+	p.KV("Last push", formatLastSync(st.LastPush))
+	p.KV("Last pull", formatLastSync(st.LastPull))
 }
 
 // statusPrintWorkspace lists registered projects and active tmux sessions.

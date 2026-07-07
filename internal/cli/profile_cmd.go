@@ -51,12 +51,12 @@ func newProfileRootCmd() *cobra.Command {
 		Long: `Display or change the backup root directory.
 
 With no arguments, prints the current effective root (state → auto-detect → default).
-With a path argument, saves it to state. Use --detect to auto-discover a Google Drive
-secrets folder, or --reset to clear the saved value and fall back to auto-detection.`,
+With a path argument, saves it to state. Use --detect to auto-discover a Dropbox
+or Google Drive secrets folder, or --reset to clear the saved value and fall back to auto-detection.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runProfileRoot,
 	}
-	c.Flags().Bool("detect", false, "Auto-detect Google Drive secrets folder and save")
+	c.Flags().Bool("detect", false, "Auto-detect Dropbox/Google Drive secrets folder and save")
 	c.Flags().Bool("reset", false, "Clear saved root (revert to auto-detect / default)")
 	return c
 }

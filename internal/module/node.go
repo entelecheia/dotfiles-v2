@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
-	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // globalNpmPackages are installed globally when npm is available.
@@ -39,6 +38,15 @@ func legacyNpmrcPath(rc *RunContext) string {
 	return filepath.Join(rc.HomeDir, ".npmrc")
 }
 
+func pnpmNpmrcFile(rc *RunContext) templatedFile {
+	return templatedFile{
+		templatePath: "node/pnpm-npmrc.tmpl",
+		destPath:     pnpmNpmrcPath(rc),
+		isTemplate:   true,
+		perm:         0644,
+	}
+}
+
 // pnpmDirs returns the directories pnpm expects for its virtual-store/store/cache.
 func pnpmDirs(rc *RunContext) []string {
 	return []string{
@@ -50,19 +58,9 @@ func pnpmDirs(rc *RunContext) []string {
 }
 
 func (m *NodeModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
-	var changes []Change
-
-	npmrcDest := pnpmNpmrcPath(rc)
-
-	content, err := rc.Template.Render("node/pnpm-npmrc.tmpl", rc.Config.TemplateData())
+	changes, err := checkTemplatedFiles(rc, []templatedFile{pnpmNpmrcFile(rc)})
 	if err != nil {
-		return nil, fmt.Errorf("rendering node/pnpm-npmrc.tmpl: %w", err)
-	}
-	if fileutil.NeedsUpdate(rc.Runner, npmrcDest, content) {
-		changes = append(changes, Change{
-			Description: fmt.Sprintf("write %s", npmrcDest),
-			Command:     "render node/pnpm-npmrc.tmpl -> ~/.config/pnpm/npmrc",
-		})
+		return nil, err
 	}
 
 	for _, dir := range pnpmDirs(rc) {
@@ -187,18 +185,11 @@ func (m *NodeModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, e
 	}
 
 	// Render and write pnpm npmrc
-	npmrcDest := pnpmNpmrcPath(rc)
-	content, err := rc.Template.Render("node/pnpm-npmrc.tmpl", rc.Config.TemplateData())
+	fileMessages, err := applyTemplatedFiles(rc, []templatedFile{pnpmNpmrcFile(rc)})
 	if err != nil {
-		return nil, fmt.Errorf("rendering node/pnpm-npmrc.tmpl: %w", err)
+		return nil, err
 	}
-	written, err := fileutil.EnsureFile(rc.Runner, npmrcDest, content, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("writing %s: %w", npmrcDest, err)
-	}
-	if written {
-		messages = append(messages, fmt.Sprintf("wrote %s", npmrcDest))
-	}
+	messages = append(messages, fileMessages...)
 
 	// Scrub pnpm-only keys from legacy ~/.npmrc (removes the file if it becomes empty).
 	legacyPath := legacyNpmrcPath(rc)

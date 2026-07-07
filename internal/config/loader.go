@@ -115,6 +115,10 @@ func mergeConfigs(base, overlay *Config) *Config {
 
 func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	m := base
+	// Profile overlays are enable-only for module blocks: a child profile can
+	// replace an enabled module config, but `enabled: false` does not disable a
+	// module inherited from the base. Current built-in profiles rely on this
+	// simple rule and do not need tri-state override semantics.
 	if overlay.Packages.Enabled {
 		m.Packages = overlay.Packages
 	}

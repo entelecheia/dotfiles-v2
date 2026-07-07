@@ -281,5 +281,15 @@ func (o *onestopCtx) backupSecretsStep(storeDir string) onestopStep {
 	if err != nil {
 		return onestopStep{Name: "secrets", Err: err}
 	}
+	if !o.dryRun {
+		o.state.Secrets.LastBackup = &config.BackupRecord{
+			Path:  dest,
+			Time:  time.Now(),
+			Files: copied,
+		}
+		if err := persistUserState(o.cmd, o.state); err != nil {
+			o.runner.Logger.Warn("record secrets last backup", "err", err)
+		}
+	}
 	return onestopStep{Name: "secrets", Detail: fmt.Sprintf("%d archive(s) → %s", copied, dest)}
 }

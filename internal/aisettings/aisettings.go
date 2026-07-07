@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/snapstore"
 )
 
 const (
@@ -187,7 +188,10 @@ type RestoreOptions struct {
 // version directory is removed when any step before the metadata files
 // fails, so List/ResolveLatest never see orphan snapshots.
 func (e *Engine) Backup(opts BackupOptions) (*Summary, error) {
-	version := e.uniqueVersion(time.Now())
+	version, err := e.uniqueVersion(time.Now())
+	if err != nil {
+		return nil, err
+	}
 	dest := e.VersionPath(version)
 	if err := e.Runner.MkdirAll(filepath.Join(dest, homePrefix), 0o755); err != nil {
 		return nil, fmt.Errorf("create snapshot: %w", err)
@@ -391,23 +395,17 @@ func (e *Engine) list(withoutLatest bool) ([]Snapshot, error) {
 // existing snapshot — note the explicit empty check: VersionPath("") is
 // HostRoot() itself, which exists, so a stat alone would pass.
 func (e *Engine) ResolveLatest() (string, error) {
-	if latest, err := e.readLatestPointer(); err == nil {
-		if latest != "" {
-			if _, serr := os.Stat(e.VersionPath(latest)); serr == nil {
-				return latest, nil
-			}
+	return snapstore.ResolveLatest(e.LatestPointerPath(), e.HostRoot(), e.VersionPath, func() ([]string, error) {
+		all, err := e.list(true)
+		if err != nil {
+			return nil, err
 		}
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	all, lerr := e.list(true)
-	if lerr != nil {
-		return "", lerr
-	}
-	if len(all) == 0 {
-		return "", fmt.Errorf("no snapshots under %s", e.HostRoot())
-	}
-	return all[0].Version, nil
+		versions := make([]string, 0, len(all))
+		for _, s := range all {
+			versions = append(versions, s.Version)
+		}
+		return versions, nil
+	})
 }
 
 // Prune removes older snapshots, keeping the newest `keep` (including
@@ -424,44 +422,28 @@ func (e *Engine) Prune(keep int) ([]string, error) {
 		return nil, nil
 	}
 	latest, _ := e.ResolveLatest()
-	removed := make([]string, 0, len(all)-keep)
-	kept := 0
+	infos := make([]snapstore.SnapshotInfo, 0, len(all))
 	for _, s := range all {
-		if kept < keep || s.Version == latest {
-			kept++
-			continue
-		}
-		if err := e.Runner.RemoveAll(s.Path); err != nil {
-			return removed, err
-		}
-		removed = append(removed, s.Version)
+		infos = append(infos, snapstore.SnapshotInfo{Version: s.Version, Path: s.Path})
 	}
-	return removed, nil
+	return snapstore.Prune(e.Runner, keep, infos, latest)
 }
 
 func (e *Engine) readLatestPointer() (string, error) {
-	data, err := os.ReadFile(e.LatestPointerPath())
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
+	return snapstore.ReadLatestPointer(e.LatestPointerPath())
 }
 
 // NewVersion returns a UTC filesystem-safe version id.
 func NewVersion(t time.Time) string {
-	return t.UTC().Format("20060102T150405Z")
+	return snapstore.NewVersion(t)
 }
 
-func (e *Engine) uniqueVersion(t time.Time) string {
-	base := NewVersion(t)
-	candidate := base
-	for i := 2; i < 100; i++ {
-		if _, err := os.Stat(e.VersionPath(candidate)); err != nil && os.IsNotExist(err) {
-			return candidate
-		}
-		candidate = fmt.Sprintf("%s-%d", base, i)
+func (e *Engine) uniqueVersion(t time.Time) (string, error) {
+	version, err := snapstore.UniqueVersion(t, e.VersionPath)
+	if err != nil {
+		return "", fmt.Errorf("%w under %s", err, e.HostRoot())
 	}
-	return candidate
+	return version, nil
 }
 
 func (e *Engine) copyFromHome(destRoot string, includeAuth bool) (*Summary, error) {
@@ -585,14 +567,7 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 // preRestoreDir picks an unused timestamped directory under the documented
 // pre-restore location. Created lazily by backupExisting.
 func (e *Engine) preRestoreDir(t time.Time) string {
-	base := filepath.Join(e.HomeDir, ".local", "share", "dotfiles", "backup", "ai", NewVersion(t))
-	dir := base
-	for i := 2; ; i++ {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			return dir
-		}
-		dir = fmt.Sprintf("%s-%d", base, i)
-	}
+	return snapstore.PreRestoreDir(e.HomeDir, []string{"ai"}, t)
 }
 
 func (e *Engine) writeSnapshotMetadata(dest, version, tag string, includeAuth bool, sum *Summary) error {
@@ -787,37 +762,7 @@ func (e *Engine) copySymlink(src, dst string) (int, error) {
 }
 
 func copyFile(runner *exec.Runner, src, dst string, mode os.FileMode) (int64, error) {
-	if runner.DryRun {
-		runner.Logger.Info("dry-run: copy", "src", src, "dst", dst)
-		return 0, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return 0, err
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return 0, err
-	}
-	defer in.Close()
-	tmp := dst + ".tmp"
-	_ = os.Remove(tmp)
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode&0o777)
-	if err != nil {
-		return 0, err
-	}
-	n, err := io.Copy(out, in)
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		_ = os.Remove(tmp)
-		return 0, err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return 0, err
-	}
-	return n, nil
+	return snapstore.CopyFile(runner, src, dst, mode)
 }
 
 func countTree(src string, info os.FileInfo, relRoot string) (int, int64, error) {
@@ -974,26 +919,11 @@ func safeJoin(root, name string) (string, error) {
 }
 
 func writeYAML(runner *exec.Runner, path string, v any) error {
-	data, err := yaml.Marshal(v)
-	if err != nil {
-		return err
-	}
-	if err := runner.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return runner.WriteFile(path, data, 0o644)
+	return snapstore.WriteYAML(runner, path, v)
 }
 
 func readMeta(path string) (*Meta, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var meta Meta
-	if err := yaml.Unmarshal(data, &meta); err != nil {
-		return nil, err
-	}
-	return &meta, nil
+	return snapstore.ReadYAML[Meta](path)
 }
 
 func readArchiveManifest(path string) (*ArchiveManifest, error) {
@@ -1050,19 +980,5 @@ func isExcluded(rel string) bool {
 // ListHosts enumerates the hostnames that have AI config snapshots under
 // root, sorted. Returns (nil, nil) when the tree doesn't exist yet.
 func ListHosts(root string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(root, "ai-config"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []string
-	for _, en := range entries {
-		if en.IsDir() {
-			out = append(out, en.Name())
-		}
-	}
-	sort.Strings(out)
-	return out, nil
+	return snapstore.ListHosts(root, "ai-config")
 }

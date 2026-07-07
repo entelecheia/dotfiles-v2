@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/template"
@@ -20,68 +19,9 @@ const excludesTemplatePath = "gsync/excludes.txt"
 // includesTemplatePath is the path inside the embedded templates FS.
 const includesTemplatePath = "gsync/includes.txt"
 
-// excludesDiskName is the on-disk filename for the materialized excludes
-// file (rsync needs a real file path for --exclude-from).
+// excludesDiskName is kept for legacy global path reporting; runtime gsync
+// uses the workspace-local exclude file under .dotfiles/gdrive-sync/.
 const excludesDiskName = "gdrive-sync-excludes.conf"
-
-// includesDiskName is the on-disk filename for materialized default includes.
-const includesDiskName = "gdrive-sync-includes.conf"
-
-// MaterializeExcludesFile writes the embedded excludes to disk under the
-// dotfiles config dir and returns its path. Callers pass the path to
-// rsync via --exclude-from. Idempotent: overwrites if content differs.
-func MaterializeExcludesFile(configDir string) (string, error) {
-	engine := template.NewEngine()
-	content, err := engine.ReadStatic(excludesTemplatePath)
-	if err != nil {
-		return "", fmt.Errorf("reading embedded excludes: %w", err)
-	}
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return "", fmt.Errorf("creating config dir %q: %w", configDir, err)
-	}
-	path := filepath.Join(configDir, excludesDiskName)
-	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(content) {
-		return path, nil
-	}
-	if err := os.WriteFile(path, content, 0644); err != nil {
-		return "", fmt.Errorf("writing excludes file %q: %w", path, err)
-	}
-	return path, nil
-}
-
-// MaterializeIncludesFile writes the embedded default include list to disk.
-// It is mainly used by tests and callers that need a concrete include file
-// outside the per-workspace store.
-func MaterializeIncludesFile(configDir string) (string, error) {
-	engine := template.NewEngine()
-	content, err := engine.ReadStatic(includesTemplatePath)
-	if err != nil {
-		return "", fmt.Errorf("reading embedded includes: %w", err)
-	}
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return "", fmt.Errorf("creating config dir %q: %w", configDir, err)
-	}
-	path := filepath.Join(configDir, includesDiskName)
-	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(content) {
-		return path, nil
-	}
-	if err := os.WriteFile(path, content, 0644); err != nil {
-		return "", fmt.Errorf("writing includes file %q: %w", path, err)
-	}
-	return path, nil
-}
-
-// LoadExcludePatterns returns the parsed exclude patterns from the embedded
-// file (one per non-comment, non-blank line). Used by tests and callers
-// that need to introspect rules without going through rsync.
-func LoadExcludePatterns() ([]string, error) {
-	engine := template.NewEngine()
-	content, err := engine.ReadStatic(excludesTemplatePath)
-	if err != nil {
-		return nil, fmt.Errorf("reading embedded excludes: %w", err)
-	}
-	return parsePatternLines(content)
-}
 
 // LoadDefaultIncludePatterns returns the parsed default include patterns from
 // the embedded file.

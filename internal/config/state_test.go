@@ -72,29 +72,6 @@ func TestValidate_GithubUser(t *testing.T) {
 	}
 }
 
-func TestValidate_SyncInterval(t *testing.T) {
-	tests := []struct {
-		interval int
-		wantErr  bool
-	}{
-		{0, false},
-		{60, false},
-		{300, false},
-		{86400, false},
-		{59, true},
-		{86401, true},
-		{-1, true},
-	}
-	for _, tt := range tests {
-		s := &UserState{}
-		s.Modules.Sync.Interval = tt.interval
-		err := s.Validate()
-		if (err != nil) != tt.wantErr {
-			t.Errorf("Validate(interval=%d) err=%v, wantErr=%v", tt.interval, err, tt.wantErr)
-		}
-	}
-}
-
 func TestValidate_GsyncSharedExcludes(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -134,7 +111,6 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 	original.Modules.Workspace.Path = "~/workspace"
 	original.Modules.AI.Enabled = true
-	original.Modules.Sync.Interval = 600
 
 	if err := saveStateAt(path, original); err != nil {
 		t.Fatalf("saveStateAt: %v", err)
@@ -159,9 +135,6 @@ func TestSaveLoadRoundtrip(t *testing.T) {
 	}
 	if !loaded.Modules.AI.Enabled {
 		t.Error("AI.Enabled: expected true")
-	}
-	if loaded.Modules.Sync.Interval != 600 {
-		t.Errorf("Sync.Interval: got %d, want 600", loaded.Modules.Sync.Interval)
 	}
 }
 
