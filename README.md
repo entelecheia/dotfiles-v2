@@ -332,6 +332,36 @@ dot sync resume          # resume auto-sync scheduler
 
 > Auto-sync runs every 5 minutes via launchd (macOS) or systemd timer (Linux).
 
+### `dot tunnel`
+
+Configure SSH access to this Mac through a locally managed Cloudflare Tunnel.
+Server setup is macOS-only and installs a LaunchDaemon; client config is
+cross-platform and only writes `~/.ssh/config.d/dot-tunnel`.
+
+```bash
+dot tunnel setup          # guide-style server setup for this Mac
+dot tunnel setup --dry-run
+dot tunnel status         # daemon, config, port 22, connector status
+dot tunnel log [N]        # tail /Library/Logs/com.dotfiles.cloudflared.err.log
+dot tunnel uninstall      # remove daemon, optionally config/credentials/tunnel
+
+dot tunnel client add mac.example.com
+dot tunnel client list
+dot tunnel client remove mac.example.com
+ssh user@mac.example.com
+```
+
+`setup` uses a local Cloudflare Tunnel (`cloudflared tunnel create/list/route
+dns`) and renders its own plist at
+`/Library/LaunchDaemons/com.dotfiles.cloudflared.plist` with explicit
+`--config /etc/cloudflared/config.yml tunnel run` arguments. This avoids the
+macOS `cloudflared service install` local-tunnel issue where the service plist
+omits `tunnel run`.
+
+Cloudflare Access app creation stays manual: after setup, create a Self-hosted
+Access app for the SSH hostname in the Cloudflare dashboard, add an Allow
+policy, then run `dot tunnel client add <hostname>` on client machines.
+
 ### `dot gsync`
 
 > Legacy alias `dot gdrive-sync` continues to work — same command, shorter name.

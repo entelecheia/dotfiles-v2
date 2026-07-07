@@ -1,0 +1,8 @@
+# Managed by 'dot tunnel setup' - do not edit; re-run setup to regenerate.
+tunnel: {{ .TunnelID }}
+credentials-file: /etc/cloudflared/{{ .TunnelID }}.json
+
+ingress:
+  - hostname: {{ .Hostname }}
+    service: ssh://localhost:22
+  - service: http_status:404

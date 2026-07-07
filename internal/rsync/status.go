@@ -1,12 +1,13 @@
 package rsync
 
 import (
-	"bufio"
 	"context"
 	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // Status holds rsync sync status information.
@@ -52,22 +53,7 @@ func GetStatus(ctx context.Context, sched *Scheduler, cfg *Config) (*Status, err
 
 // TailLog returns the last n lines from the sync log file.
 func TailLog(logPath string, n int) (string, error) {
-	f, err := os.Open(logPath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n"), nil
+	return fileutil.TailLog(logPath, n)
 }
 
 // resultRegex matches log lines like: "2026-04-12 15:30:00 pull=0 push=0"

@@ -37,6 +37,7 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	printWelcomeCmd(p, "dot clean", "Remove junk directories (node_modules, caches)")
 	printWelcomeCmd(p, "dot sync", "Sync binaries with remote server via rsync")
 	printWelcomeCmd(p, "dot gsync", "Sync workspace artifacts with Drive mirror")
+	printWelcomeCmd(p, "dot tunnel", "Manage Cloudflare Tunnel SSH access")
 	printWelcomeCmd(p, "dot backup", "One-stop backup wizard (profile, apps, AI, secrets)")
 	printWelcomeCmd(p, "dot restore", "One-stop restore wizard (cross-host migration)")
 	printWelcomeCmd(p, "dot apps install", "Install macOS cask apps (interactive picker)")
@@ -189,7 +190,26 @@ func printUsecases(cmd *cobra.Command) {
 				"Manage manually curated shared-folder exclusions"},
 		})
 
-	section(p, "7. Secrets management (age encryption)",
+	section(p, "7. SSH over Cloudflare Tunnel",
+		"Expose this Mac's SSH service through a dot-managed local Cloudflare Tunnel.",
+		[]usecase{
+			{"dot tunnel setup",
+				"Configure cloudflared, Remote Login, DNS route, and LaunchDaemon"},
+			{"dot tunnel setup --dry-run",
+				"Preview the system commands without changing this Mac"},
+			{"dot tunnel status",
+				"Show cloudflared, daemon, port 22, config, and connector status"},
+			{"dot tunnel log 100",
+				"Tail the LaunchDaemon error log"},
+			{"dot tunnel client add mac.example.com",
+				"Add the SSH ProxyCommand block on a client machine"},
+			{"ssh user@mac.example.com",
+				"Connect through Cloudflare Access browser authentication"},
+			{"dot tunnel uninstall",
+				"Remove the daemon and optionally remove config/credentials/tunnel"},
+		})
+
+	section(p, "8. Secrets management (age encryption)",
 		"Encrypt SSH keys and shell secrets with age.",
 		[]usecase{
 			{"dot secrets init --scaffold",
@@ -204,7 +224,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Decrypt from backup on new machine"},
 		})
 
-	section(p, "8. macOS app management (cask install + settings backup)",
+	section(p, "9. macOS app management (cask install + settings backup)",
 		"Install apps from an embedded catalog; back up and restore per-app settings.",
 		[]usecase{
 			{"dot apps list",
@@ -225,7 +245,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Restore all backed-up settings (confirms first, flushes cfprefsd)"},
 		})
 
-	section(p, "9. Profile snapshots (versioned config backup)",
+	section(p, "10. Profile snapshots (versioned config backup)",
 		"Snapshot config.yaml, cask lists, and optional secrets into timestamped versions.",
 		[]usecase{
 			{"dot profile backup",
@@ -242,7 +262,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Delete snapshots older than the 5 most recent"},
 		})
 
-	section(p, "10. Cross-machine migration",
+	section(p, "11. Cross-machine migration",
 		"Move your full setup to a new Mac in minutes — one wizard per side.",
 		[]usecase{
 			{"dot backup",
@@ -259,7 +279,7 @@ func printUsecases(cmd *cobra.Command) {
 				"[new machine] Manual sequence equivalent to the wizard"},
 		})
 
-	section(p, "11. Prompt style",
+	section(p, "12. Prompt style",
 		"Switch between a minimal and a rich Starship prompt.",
 		[]usecase{
 			{"dot reconfigure",
@@ -268,7 +288,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Deploy the selected starship.toml immediately"},
 		})
 
-	section(p, "12. Updates and reconfiguration",
+	section(p, "13. Updates and reconfiguration",
 		"Keep the tool and config current.",
 		[]usecase{
 			{"dot update --check",
@@ -281,7 +301,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Show installed version and build info"},
 		})
 
-	section(p, "13. GPU server / DGX provisioning",
+	section(p, "14. GPU server / DGX provisioning",
 		"Deploy on a fresh GPU server — auto-detects NVIDIA + CUDA.",
 		[]usecase{
 			{"curl -fsSL .../install.sh | bash",
@@ -292,7 +312,7 @@ func printUsecases(cmd *cobra.Command) {
 				"Apply server profile (no workspace, fonts, gpg, secrets)"},
 		})
 
-	section(p, "14. Troubleshooting",
+	section(p, "15. Troubleshooting",
 		"Diagnose and recover from issues.",
 		[]usecase{
 			{"dot doctor",
