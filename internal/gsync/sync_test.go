@@ -15,13 +15,9 @@ import (
 func newTestConfig(t *testing.T) *Config {
 	t.Helper()
 	dir := t.TempDir()
-	excludes, err := MaterializeExcludesFile(dir)
-	if err != nil {
-		t.Fatalf("MaterializeExcludesFile: %v", err)
-	}
-	includes, err := MaterializeIncludesFile(dir)
-	if err != nil {
-		t.Fatalf("MaterializeIncludesFile: %v", err)
+	paths := ResolveLocalPaths(dir)
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("EnsureLocalLayout: %v", err)
 	}
 	includePatterns, err := LoadDefaultIncludePatterns()
 	if err != nil {
@@ -30,15 +26,16 @@ func newTestConfig(t *testing.T) *Config {
 	return &Config{
 		LocalPath:       "/tmp/test-local/",
 		MirrorPath:      "/tmp/test-mirror/",
-		ConfigDir:       dir,
+		ConfigDir:       paths.StoreDir,
 		FilterMode:      DefaultFilterMode(),
-		IncludeFile:     includes,
+		IncludeFile:     paths.IncludeFile,
 		IncludePatterns: includePatterns,
-		ExcludesFile:    excludes,
+		ExcludesFile:    paths.ExcludeFile,
 		LogFile:         "/tmp/test.log",
 		LockDir:         "/tmp/test.lock",
 		MaxDelete:       1000,
 		Propagation:     DefaultPropagationPolicy(),
+		LocalPaths:      paths,
 	}
 }
 
@@ -431,5 +428,47 @@ func TestResolveConfig_LocalMirrorWinsOverCloud(t *testing.T) {
 	}
 	if cfg.MirrorPath != "/explicit/mirror/" {
 		t.Errorf("MirrorPath = %q, want explicit /explicit/mirror/ (cloud must not override)", cfg.MirrorPath)
+	}
+}
+
+func TestResolveConfigReadOnlyForHome_UsesGivenHome(t *testing.T) {
+	// os.UserHomeDir() would resolve here — the --home override must not use it.
+	currentHome := t.TempDir()
+	t.Setenv("HOME", currentHome)
+
+	overrideHome := t.TempDir()
+	state := &config.UserState{}
+	state.Modules.Gsync.LocalPath = t.TempDir()
+	// MirrorPath empty → default is <home>/gdrive-workspace/work.
+
+	cfg, err := ResolveConfigReadOnlyForHome(state, overrideHome)
+	if err != nil {
+		t.Fatalf("ResolveConfigReadOnlyForHome: %v", err)
+	}
+	want := filepath.Join(overrideHome, "gdrive-workspace", "work") + "/"
+	if cfg.MirrorPath != want {
+		t.Errorf("MirrorPath = %q, want override-home default %q", cfg.MirrorPath, want)
+	}
+	if strings.HasPrefix(cfg.MirrorPath, currentHome) {
+		t.Errorf("MirrorPath must not resolve under the invoking user's home %q: got %q", currentHome, cfg.MirrorPath)
+	}
+}
+
+func TestResolveConfigReadOnlyForHome_ExpandsTildeAgainstHome(t *testing.T) {
+	currentHome := t.TempDir()
+	t.Setenv("HOME", currentHome)
+	overrideHome := t.TempDir()
+
+	state := &config.UserState{}
+	state.Modules.Gsync.LocalPath = t.TempDir()
+	state.Modules.Gsync.MirrorPath = "~/cloud/work"
+
+	cfg, err := ResolveConfigReadOnlyForHome(state, overrideHome)
+	if err != nil {
+		t.Fatalf("ResolveConfigReadOnlyForHome: %v", err)
+	}
+	want := filepath.Join(overrideHome, "cloud", "work") + "/"
+	if cfg.MirrorPath != want {
+		t.Errorf("MirrorPath = %q, want %q (~ expanded against override home)", cfg.MirrorPath, want)
 	}
 }

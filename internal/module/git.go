@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
-	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // GitModule manages git configuration files.
@@ -14,33 +13,29 @@ type GitModule struct{}
 
 func (m *GitModule) Name() string { return "git" }
 
+func (m *GitModule) files(rc *RunContext) []templatedFile {
+	return []templatedFile{
+		{
+			templatePath: "git/config.tmpl",
+			destPath:     filepath.Join(rc.HomeDir, ".config", "git", "config"),
+			isTemplate:   true,
+			perm:         0644,
+		},
+		{
+			templatePath: "git/ignore",
+			destPath:     filepath.Join(rc.HomeDir, ".config", "git", "ignore"),
+			isTemplate:   false,
+			perm:         0644,
+		},
+	}
+}
+
 func (m *GitModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
-	var changes []Change
-
-	configDest := filepath.Join(rc.HomeDir, ".config", "git", "config")
-	ignoreDest := filepath.Join(rc.HomeDir, ".config", "git", "ignore")
-
-	configContent, err := rc.Template.Render("git/config.tmpl", rc.Config.TemplateData())
+	changes, err := checkTemplatedFiles(rc, m.files(rc))
 	if err != nil {
-		return nil, fmt.Errorf("rendering git/config.tmpl: %w", err)
-	}
-	if fileutil.NeedsUpdate(rc.Runner, configDest, configContent) {
-		changes = append(changes, Change{
-			Description: fmt.Sprintf("write %s", configDest),
-			Command:     "render git/config.tmpl -> ~/.config/git/config",
-		})
+		return nil, err
 	}
 
-	ignoreContent, err := rc.Template.ReadStatic("git/ignore")
-	if err != nil {
-		return nil, fmt.Errorf("reading git/ignore: %w", err)
-	}
-	if fileutil.NeedsUpdate(rc.Runner, ignoreDest, ignoreContent) {
-		changes = append(changes, Change{
-			Description: fmt.Sprintf("write %s", ignoreDest),
-			Command:     "copy git/ignore -> ~/.config/git/ignore",
-		})
-	}
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
 		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
 		status, err := manager.Status(mode)
@@ -76,13 +71,6 @@ func (m *GitModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, er
 func (m *GitModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	var messages []string
 
-	configDest := filepath.Join(rc.HomeDir, ".config", "git", "config")
-	ignoreDest := filepath.Join(rc.HomeDir, ".config", "git", "ignore")
-
-	configContent, err := rc.Template.Render("git/config.tmpl", rc.Config.TemplateData())
-	if err != nil {
-		return nil, fmt.Errorf("rendering git/config.tmpl: %w", err)
-	}
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
 		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
 		status, err := manager.Status(mode)
@@ -93,25 +81,13 @@ func (m *GitModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, er
 			return nil, fmt.Errorf("%s", status.Conflict)
 		}
 	}
-	written, err := fileutil.EnsureFile(rc.Runner, configDest, configContent, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("writing %s: %w", configDest, err)
-	}
-	if written {
-		messages = append(messages, fmt.Sprintf("wrote %s", configDest))
-	}
 
-	ignoreContent, err := rc.Template.ReadStatic("git/ignore")
+	fileMessages, err := applyTemplatedFiles(rc, m.files(rc))
 	if err != nil {
-		return nil, fmt.Errorf("reading git/ignore: %w", err)
+		return nil, err
 	}
-	written, err = fileutil.EnsureFile(rc.Runner, ignoreDest, ignoreContent, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("writing %s: %w", ignoreDest, err)
-	}
-	if written {
-		messages = append(messages, fmt.Sprintf("wrote %s", ignoreDest))
-	}
+	messages = append(messages, fileMessages...)
+
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
 		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
 		result, err := manager.Apply(aisettings.CoauthorGuardOptions{Mode: mode, DryRun: rc.DryRun})

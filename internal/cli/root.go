@@ -56,17 +56,11 @@ Also available as 'dotfiles' for back-compat.`,
 	// Workspace cleanup
 	root.AddCommand(newCleanCmd())
 
-	// Drive management commands
-	root.AddCommand(newDriveExcludeCmd())
-
 	// Sync (rsync binary sync to remote server)
 	root.AddCommand(newSyncCmd())
 
 	// Gsync (local rsync mirror between workspace and gdrive-workspace)
 	root.AddCommand(newGsyncCmd())
-
-	// Clone (rclone Google Drive sync)
-	root.AddCommand(newCloneCmd())
 
 	// Workspace commands
 	root.AddCommand(newOpenCmd())
@@ -89,11 +83,6 @@ Also available as 'dotfiles' for back-compat.`,
 
 	// Dual-workspace ops
 	root.AddCommand(newWorkspaceDualCmd())
-	root.AddCommand(newWsMkdirAliasCmd())
-	root.AddCommand(newWsMvAliasCmd())
-	root.AddCommand(newWsRmAliasCmd())
-	root.AddCommand(newWsAuditAliasCmd())
-	root.AddCommand(newWsReconcileAliasCmd())
 
 	return root
 }

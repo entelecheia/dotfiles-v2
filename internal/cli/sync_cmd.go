@@ -119,8 +119,9 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	// Acquire lock
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
+		// Return without printing: cobra echoes the error once, and the
+		// non-zero exit lets schedulers see the contention.
+		return lockErr
 	}
 	defer release()
 
@@ -168,8 +169,9 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
+		// Return without printing: cobra echoes the error once, and the
+		// non-zero exit lets schedulers see the contention.
+		return lockErr
 	}
 	defer release()
 
@@ -208,8 +210,9 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 
 	release, lockErr := rsync.AcquireLock(cfg.LockDir)
 	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
+		// Return without printing: cobra echoes the error once, and the
+		// non-zero exit lets schedulers see the contention.
+		return lockErr
 	}
 	defer release()
 

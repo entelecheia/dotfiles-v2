@@ -8,7 +8,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/snapstore"
 )
 
 //go:embed manifest.yaml
@@ -461,14 +461,7 @@ func (e *Engine) Restore(ctx context.Context, tokens []string) (*Summary, error)
 // preRestoreDir picks an unused timestamped directory for pre-overwrite
 // copies, outside the archive tree. Created lazily by the first copy.
 func (e *Engine) preRestoreDir(t time.Time) string {
-	base := filepath.Join(e.HomeDir, ".local", "share", "dotfiles", "backup", "app-settings", t.UTC().Format("20060102T150405Z"))
-	dir := base
-	for i := 2; ; i++ {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			return dir
-		}
-		dir = fmt.Sprintf("%s-%d", base, i)
-	}
+	return snapstore.PreRestoreDir(e.HomeDir, []string{"app-settings"}, t)
 }
 
 // FlushCFPrefsd asks cfprefsd to release cached plists so the target apps
@@ -752,35 +745,7 @@ func (e *Engine) copyTree(src, dst string, fi os.FileInfo) (int, int64, error) {
 }
 
 func copyFile(runner *exec.Runner, src, dst string, mode os.FileMode) (int64, error) {
-	if runner.DryRun {
-		runner.Logger.Info("dry-run: copy", "src", src, "dst", dst)
-		return 0, nil
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return 0, err
-	}
-	defer in.Close()
-	// Atomic-ish write: write to tmp + rename.
-	tmp := dst + ".tmp"
-	_ = os.Remove(tmp)
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode&0o777)
-	if err != nil {
-		return 0, err
-	}
-	n, err := io.Copy(out, in)
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		_ = os.Remove(tmp)
-		return 0, err
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return 0, err
-	}
-	return n, nil
+	return snapstore.CopyFile(runner, src, dst, mode)
 }
 
 // --- BackupRoot resolution ---
@@ -873,19 +838,5 @@ func DetectDriveCandidate(home string) string {
 // ListHosts enumerates the hostnames that have app-settings archives under
 // root, sorted. Returns (nil, nil) when the tree doesn't exist yet.
 func ListHosts(root string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Join(root, "app-settings"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var out []string
-	for _, en := range entries {
-		if en.IsDir() {
-			out = append(out, en.Name())
-		}
-	}
-	sort.Strings(out)
-	return out, nil
+	return snapstore.ListHosts(root, "app-settings")
 }

@@ -2,24 +2,37 @@ package gsync
 
 import (
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
 
-func TestLoadExcludePatterns_ContainsCriticalRules(t *testing.T) {
-	patterns, err := LoadExcludePatterns()
-	if err != nil {
-		t.Fatalf("LoadExcludePatterns: %v", err)
+func loadTestExcludePatterns(t *testing.T) []string {
+	t.Helper()
+	paths := ResolveLocalPaths(t.TempDir())
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("EnsureLocalLayout: %v", err)
 	}
+	content, err := os.ReadFile(paths.ExcludeFile)
+	if err != nil {
+		t.Fatalf("read exclude file: %v", err)
+	}
+	patterns, err := parsePatternLines(content)
+	if err != nil {
+		t.Fatalf("parsePatternLines: %v", err)
+	}
+	return patterns
+}
+
+func TestExcludePatterns_ContainsCriticalRules(t *testing.T) {
+	patterns := loadTestExcludePatterns(t)
 	if len(patterns) == 0 {
-		t.Fatal("LoadExcludePatterns returned no patterns")
+		t.Fatal("exclude file returned no patterns")
 	}
 
 	// Critical rules — losing these would break correctness or sync the wrong things.
 	// Note: shared-folder exclusions are NOT name-based; they're handled by the
-	// dynamic excludes pipeline (DetectSharedEntry + manual list). Don't add
+	// dynamic excludes pipeline (manual list + Git-tracked paths). Don't add
 	// `shared/`, `_shared/`, etc. back here.
 	required := []string{
 		".git",             // submodule gitlink files
@@ -45,11 +58,8 @@ func TestLoadExcludePatterns_ContainsCriticalRules(t *testing.T) {
 	}
 }
 
-func TestLoadExcludePatterns_NoCommentsOrBlanks(t *testing.T) {
-	patterns, err := LoadExcludePatterns()
-	if err != nil {
-		t.Fatalf("LoadExcludePatterns: %v", err)
-	}
+func TestExcludePatterns_NoCommentsOrBlanks(t *testing.T) {
+	patterns := loadTestExcludePatterns(t)
 	for _, p := range patterns {
 		if p == "" {
 			t.Error("blank pattern leaked through filter")
@@ -72,59 +82,52 @@ func TestLoadDefaultIncludePatterns_ContainsBinaryPayloadRules(t *testing.T) {
 	}
 }
 
-func TestMaterializeExcludesFile_Idempotent(t *testing.T) {
-	dir := t.TempDir()
-
-	path1, err := MaterializeExcludesFile(dir)
+func TestEnsureLocalLayout_MaterializesExcludeFile(t *testing.T) {
+	paths := ResolveLocalPaths(t.TempDir())
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("EnsureLocalLayout: %v", err)
+	}
+	body, err := os.ReadFile(paths.ExcludeFile)
 	if err != nil {
-		t.Fatalf("first MaterializeExcludesFile: %v", err)
-	}
-	if path1 != filepath.Join(dir, excludesDiskName) {
-		t.Errorf("unexpected materialized path: %s", path1)
-	}
-	stat1, err := os.Stat(path1)
-	if err != nil {
-		t.Fatalf("stat materialized file: %v", err)
-	}
-	mtime1 := stat1.ModTime()
-
-	// Second call should not rewrite (content matches).
-	path2, err := MaterializeExcludesFile(dir)
-	if err != nil {
-		t.Fatalf("second MaterializeExcludesFile: %v", err)
-	}
-	if path2 != path1 {
-		t.Errorf("idempotent call returned different path: %s vs %s", path2, path1)
-	}
-	stat2, err := os.Stat(path2)
-	if err != nil {
-		t.Fatalf("stat after second call: %v", err)
-	}
-	if !stat2.ModTime().Equal(mtime1) {
-		t.Errorf("file mtime changed on idempotent call: %v -> %v", mtime1, stat2.ModTime())
-	}
-}
-
-func TestMaterializeExcludesFile_RewritesIfStale(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, excludesDiskName)
-	if err := os.WriteFile(path, []byte("# stale stub\n"), 0644); err != nil {
-		t.Fatalf("seed stale file: %v", err)
-	}
-
-	out, err := MaterializeExcludesFile(dir)
-	if err != nil {
-		t.Fatalf("MaterializeExcludesFile: %v", err)
-	}
-	body, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatalf("read materialized: %v", err)
-	}
-	if strings.Contains(string(body), "stale stub") {
-		t.Error("MaterializeExcludesFile failed to overwrite stale content")
+		t.Fatalf("read materialized exclude file: %v", err)
 	}
 	if !strings.Contains(string(body), ".git") {
 		t.Errorf("materialized content missing expected rules; got:\n%s", body)
+	}
+	stat1, err := os.Stat(paths.ExcludeFile)
+	if err != nil {
+		t.Fatalf("stat materialized file: %v", err)
+	}
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("second EnsureLocalLayout: %v", err)
+	}
+	stat2, err := os.Stat(paths.ExcludeFile)
+	if err != nil {
+		t.Fatalf("stat after second layout: %v", err)
+	}
+	if !stat2.ModTime().Equal(stat1.ModTime()) {
+		t.Errorf("exclude file mtime changed on idempotent layout: %v -> %v", stat1.ModTime(), stat2.ModTime())
+	}
+}
+
+func TestEnsureLocalLayout_PreservesExistingExcludeFile(t *testing.T) {
+	paths := ResolveLocalPaths(t.TempDir())
+	if err := os.MkdirAll(paths.StoreDir, 0755); err != nil {
+		t.Fatalf("mkdir store: %v", err)
+	}
+	const custom = "# operator override\n/custom-cache/\n"
+	if err := os.WriteFile(paths.ExcludeFile, []byte(custom), 0644); err != nil {
+		t.Fatalf("seed exclude file: %v", err)
+	}
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("EnsureLocalLayout: %v", err)
+	}
+	body, err := os.ReadFile(paths.ExcludeFile)
+	if err != nil {
+		t.Fatalf("read exclude file: %v", err)
+	}
+	if string(body) != custom {
+		t.Errorf("EnsureLocalLayout overwrote existing exclude file:\n%s", body)
 	}
 }
 

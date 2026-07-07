@@ -5,6 +5,7 @@ package rsync
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -60,8 +61,9 @@ func (s *Scheduler) State(ctx context.Context) SchedulerState {
 	if !s.Runner.FileExists(s.Paths.LaunchdPlist) {
 		return SchedulerNotInstalled
 	}
-	result, err := s.Runner.Run(ctx, "launchctl", "list", "com.dotfiles.workspace-sync")
-	if err != nil || result.ExitCode != 0 {
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), "com.dotfiles.workspace-sync")
+	result, err := s.Runner.RunQuery(ctx, "launchctl", "print", target)
+	if err != nil || result == nil || result.ExitCode != 0 {
 		return SchedulerStopped
 	}
 	return SchedulerRunning

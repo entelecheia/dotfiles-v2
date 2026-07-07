@@ -28,7 +28,7 @@ func newGsyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "gsync",
 		Aliases: []string{"gdrive-sync"},
-		Short:   "Push workspace to gdrive-workspace mirror via local rsync",
+		Short:   "Push workspace to cloud mirror via local rsync",
 		Args:    cobra.NoArgs,
 		Long: `Local-only rsync mirror between ~/workspace/work and the cloud-sync
 client's mirror tree (default ~/gdrive-workspace/work). No SSH; the cloud
@@ -36,9 +36,9 @@ client itself handles upload/download to/from Drive (or Dropbox, etc.).
 
 Workspace is authoritative for new local artifacts, while
 .dotfiles/gdrive-sync/baseline.manifest is the Git-shared index for
-Drive-backed payloads. Push sends local creates and updates to the mirror;
-pull restores or updates baseline-tracked payloads from Drive. New
-Drive-origin files still stage into inbox/gdrive for manual routing.
+cloud-backed payloads. Push sends local creates and updates to the mirror;
+pull restores or updates baseline-tracked payloads from the mirror. New
+mirror-origin files still stage into inbox/gdrive for manual routing.
 
 	Getting started:
 	  dot gsync setup       Check rsync and disable managed schedulers by default
@@ -338,7 +338,7 @@ func newGsyncSyncCmd() *cobra.Command {
 // prints a one-line deprecation hint so callers gradually migrate to
 // `push`. The bare `dot gsync` (no subcommand) prints help instead.
 func runGsync(cmd *cobra.Command, args []string) error {
-	printerFrom(cmd).Line("(note: `sync` is now an alias for `push`; use `dot gsync pull` for baseline-tracked Drive payloads)")
+	printerFrom(cmd).Line("(note: `sync` is now an alias for `push`; use `dot gsync pull` for baseline-tracked mirror payloads)")
 	return runGsyncPush(cmd, args)
 }
 
@@ -347,15 +347,15 @@ func runGsync(cmd *cobra.Command, args []string) error {
 func newGsyncPullCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pull",
-		Short: "Restore/update baseline-tracked Drive payloads into the workspace",
-		Long: `Pull applies Drive-side changes only for paths listed in
+		Short: "Restore/update baseline-tracked mirror payloads into the workspace",
+		Long: `Pull applies mirror-side changes only for paths listed in
 .dotfiles/gdrive-sync/baseline.manifest. Baseline is expected to be tracked in
 Git, so a second machine can git pull the index and then restore binary
-payloads from the Google Drive mirror.
+payloads from the cloud mirror.
 
 Files absent from baseline are not copied into the workspace by pull; run
-intake to stage new Drive-origin files under inbox/gdrive/<ts>/ for manual
-review. If local and Drive both changed a baseline-tracked file, manual mode
+intake to stage new mirror-origin files under inbox/gdrive/<ts>/ for manual
+review. If local and mirror both changed a baseline-tracked file, manual mode
 asks before applying, clean mode aborts, and force mode overwrites local after
 backing up the local version into .sync-conflicts/<ts>/from-workspace/.`,
 		RunE:         runGsyncPull,
@@ -430,9 +430,9 @@ func runGsyncPull(cmd *cobra.Command, _ []string) error {
 func newGsyncIntakeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "intake",
-		Short: "Stage new GDrive-origin files for manual routing",
+		Short: "Stage new mirror-origin files for manual routing",
 		Long: `Compares the mirror against baseline.manifest and imports.manifest to
-find new Drive-origin files. New candidates are copied into a timestamped
+find new mirror-origin files. New candidates are copied into a timestamped
 subdirectory of <local>/inbox/gdrive/<intake-ts>/ for the operator to review
 and route.
 
@@ -567,7 +567,7 @@ func printPullPlan(p *Printer, cfg *gsync.Config, res *gsync.PullResult) {
 func newGsyncInboxCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inbox",
-		Short: "Inspect and manage the GDrive intake staging area",
+		Short: "Inspect and manage the mirror intake staging area",
 		Long: `View what's staged + tracked under .dotfiles/gdrive-sync/, force a
 re-intake of one path, or clear the imports + tombstones manifests
 entirely.
@@ -996,7 +996,7 @@ func runGsyncStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p := printerFrom(cmd)
-	p.Header("Gdrive Sync Status")
+	p.Header("Gsync Status")
 
 	if st.RsyncVersion != "" {
 		p.KV("rsync", st.RsyncVersion)
@@ -1060,15 +1060,7 @@ func runGsyncStatus(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	if n := len(st.Shared); n > 0 {
-		auto, manual := 0, 0
-		for _, e := range st.Shared {
-			if e.Reason == gsync.SharedManual {
-				manual++
-			} else {
-				auto++
-			}
-		}
-		p.KV("Shared", fmt.Sprintf("%d entries (%d auto, %d manual) — see `dot gsync shared`", n, auto, manual))
+		p.KV("Shared", fmt.Sprintf("%d manual entries — see `dot gsync shared`", n))
 	}
 	p.Blank()
 	return nil
@@ -1609,18 +1601,14 @@ func setLocalPaused(cfg *gsync.Config, paused bool) error {
 func newGsyncSharedCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "shared",
-		Short: "Manage shared-folder exclusions (auto-detected + manual)",
+		Short: "Manage manual shared-folder exclusions",
 		Long: `View and manage which folders gsync skips because they are shared.
 
-Two layers feed this list:
-  - auto    — Drive shortcuts surfaced via .shortcut-targets-by-id/ or
-              the Shared drives/ root. Detected by filesystem property,
-              never by name.
-  - manual  — relative paths the operator added (state.modules.gdrive_sync
-              .shared_excludes). Use this for owned-but-shared-out folders
-              that have no filesystem signal.
+This list contains relative paths the operator added to the workspace-local
+gdrive-sync config. Use it for owned-but-shared-out folders that must never be
+propagated through the workspace-authoritative mirror flow.
 
-Both layers feed a per-run dynamic excludes file passed to rsync.
+The list feeds a per-run dynamic excludes file passed to rsync.
 
   dot gsync shared             # alias for list
   dot gsync shared list
@@ -1632,7 +1620,7 @@ Both layers feed a per-run dynamic excludes file passed to rsync.
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:   "list",
-			Short: "Show auto-detected + manual shared entries",
+			Short: "Show manual shared entries",
 			RunE:  runGsyncSharedList,
 		},
 		&cobra.Command{
@@ -1671,7 +1659,7 @@ func runGsyncSharedList(cmd *cobra.Command, _ []string) error {
 	}
 	p := printerFrom(cmd)
 	if len(entries) == 0 {
-		p.Line("No shared entries detected and no manual excludes configured.")
+		p.Line("No manual shared excludes configured.")
 		p.Line("Add owned-but-shared-out folders with: dot gsync shared add <path>")
 		return nil
 	}

@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"runtime"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // Paths holds well-known file locations for gsync artifacts.
@@ -58,14 +59,30 @@ func ResolvePaths() (*Paths, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolving home: %w", err)
 	}
-	configDir := filepath.Join(home, ".config", "dotfiles")
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		configDir = filepath.Join(xdg, "dotfiles")
-	}
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		// fall back to /tmp on platforms without UserCacheDir
 		cacheDir = "/tmp"
+	}
+	return pathsFor(home, cacheDir), nil
+}
+
+// ResolvePathsForHome resolves gsync artifact paths against an explicit home
+// directory. Commands that honor --home use it so per-user artifact and lock
+// paths follow the target home rather than the invoking user's. An empty home
+// falls back to ResolvePaths (current user).
+func ResolvePathsForHome(home string) (*Paths, error) {
+	if home == "" {
+		return ResolvePaths()
+	}
+	return pathsFor(home, cacheDirForHome(home)), nil
+}
+
+// pathsFor builds the artifact layout for a given home + cache dir.
+func pathsFor(home, cacheDir string) *Paths {
+	configDir := filepath.Join(home, ".config", "dotfiles")
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		configDir = filepath.Join(xdg, "dotfiles")
 	}
 	return &Paths{
 		ConfigDir:      configDir,
@@ -75,7 +92,19 @@ func ResolvePaths() (*Paths, error) {
 		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.gdrive-sync.plist"),
 		SystemdService: filepath.Join(home, ".config", "systemd", "user", "dotfiles-gdrive-sync.service"),
 		SystemdTimer:   filepath.Join(home, ".config", "systemd", "user", "dotfiles-gdrive-sync.timer"),
-	}, nil
+	}
+}
+
+// cacheDirForHome mirrors os.UserCacheDir's layout for an explicit home so a
+// --home target's lock lives under that home, not the invoking user's cache.
+func cacheDirForHome(home string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join(home, "Library", "Caches")
+	}
+	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
+		return xdg
+	}
+	return filepath.Join(home, ".cache")
 }
 
 func pathExists(path string) bool {
@@ -90,26 +119,7 @@ func pathExists(path string) bool {
 // If the PID is dead (ESRCH), removes the stale lock and retries once.
 // Otherwise reports the lock is held by another running sync.
 func AcquireLock(lockDir string) (func(), error) {
-	if err := os.MkdirAll(filepath.Dir(lockDir), 0755); err != nil {
-		return nil, fmt.Errorf("preparing lock parent: %w", err)
-	}
-	if err := os.Mkdir(lockDir, 0755); err != nil {
-		if !os.IsExist(err) {
-			return nil, fmt.Errorf("creating lock: %w", err)
-		}
-		if !lockIsStale(lockDir) {
-			return nil, fmt.Errorf("another sync is running (lock: %s)", lockDir)
-		}
-		_ = os.RemoveAll(lockDir)
-		if err := os.Mkdir(lockDir, 0755); err != nil {
-			return nil, fmt.Errorf("recreating lock after stale cleanup: %w", err)
-		}
-	}
-	if err := writeLockPID(lockDir); err != nil {
-		_ = os.RemoveAll(lockDir)
-		return nil, err
-	}
-	return func() { _ = os.RemoveAll(lockDir) }, nil
+	return fileutil.AcquirePIDLock(lockDir)
 }
 
 // lockIsStale returns true when the PID file inside lockDir points at a
@@ -117,31 +127,7 @@ func AcquireLock(lockDir string) (func(), error) {
 // treated as stale (defensive: better to break a held-but-corrupted lock
 // than block forever).
 func lockIsStale(lockDir string) bool {
-	data, err := os.ReadFile(filepath.Join(lockDir, "lock.pid"))
-	if err != nil {
-		return true
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return true
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return true
-	}
-	// Signal 0 probes existence without delivering; ESRCH = dead.
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		return true
-	}
-	return false
-}
-
-func writeLockPID(lockDir string) error {
-	pidFile := filepath.Join(lockDir, "lock.pid")
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
-		return fmt.Errorf("writing lock pid: %w", err)
-	}
-	return nil
+	return fileutil.PIDLockIsStale(lockDir)
 }
 
 // ensureLogDir creates the parent directory of logFile if needed.

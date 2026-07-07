@@ -19,7 +19,14 @@ func newReconfigureCmd() *cobra.Command {
 }
 
 func runReconfigure(cmd *cobra.Command, _ []string) error {
-	state, err := config.LoadState()
+	homeOverride, _ := cmd.Flags().GetString("home")
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
@@ -34,7 +41,7 @@ func runReconfigure(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Re-run the init flow — it uses existing state values as defaults.
-	if err := runInit(cmd, nil); err != nil {
+	if err := runInitFlow(cmd, true); err != nil {
 		return err
 	}
 

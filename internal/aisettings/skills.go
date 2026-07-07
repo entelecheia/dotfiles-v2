@@ -82,7 +82,7 @@ func DefaultSkillRoots(homeDir string, tools []string) ([]SkillRoot, error) {
 		{Tool: "claude", Path: filepath.Join(homeDir, ".claude", "skills")},
 		{Tool: "agents", Path: filepath.Join(homeDir, ".agents", "skills")},
 		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity", "skills")},
-		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "skills")},
+		{Tool: "gemini", Path: filepath.Join(homeDir, ".gemini", "skills")},
 		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "config", "plugins")},
 		{Tool: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity-cli", "plugins")},
 	}
@@ -91,10 +91,9 @@ func DefaultSkillRoots(homeDir string, tools []string) ([]SkillRoot, error) {
 	}
 	allow := map[string]bool{}
 	for _, tool := range selected {
-		canonical := canonicalSkillTool(tool)
-		switch canonical {
-		case "codex", "claude", "agents", "antigravity":
-			allow[canonical] = true
+		switch tool {
+		case "codex", "claude", "agents", "gemini", "antigravity":
+			allow[tool] = true
 		default:
 			return nil, fmt.Errorf("unknown skill tool %q", tool)
 		}
@@ -345,13 +344,6 @@ func normalizeSkillTools(tools []string) []string {
 		}
 	}
 	return out
-}
-
-func canonicalSkillTool(tool string) string {
-	if tool == "gemini" {
-		return "antigravity"
-	}
-	return tool
 }
 
 func canonicalSkillPath(path string) string {

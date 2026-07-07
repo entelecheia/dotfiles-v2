@@ -234,6 +234,21 @@ func TestAcquireLock_Lifecycle(t *testing.T) {
 	release2()
 }
 
+func TestAcquireLock_ReclaimsDeadPID(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "sync.lock")
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		t.Fatalf("mkdir lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "lock.pid"), []byte("99999999\n"), 0644); err != nil {
+		t.Fatalf("write lock pid: %v", err)
+	}
+	release, err := AcquireLock(lockDir)
+	if err != nil {
+		t.Fatalf("acquire stale lock: %v", err)
+	}
+	release()
+}
+
 // ── pull / push / sync (fake rsync on PATH) ──────────────────────────────
 
 // installFakeRsync puts an rsync stub on PATH that appends its argv to

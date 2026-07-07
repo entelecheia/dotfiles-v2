@@ -12,15 +12,34 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 0
 fi
 
+# Resolve the dot binary. The macOS CI job builds ./bin/dot without adding it
+# to PATH, while the Docker-based linux job installs dot on PATH — search both.
+DOT="${1:-}"
+if [[ -z "$DOT" || ! -x "$DOT" ]]; then
+  for candidate in ./bin/dot ./dot /usr/local/bin/dot "$(command -v dot 2>/dev/null)"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      DOT="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$DOT" || ! -x "$DOT" ]]; then
+  echo "  ✗ dot binary not found"
+  FAIL=$((FAIL + 1))
+  ERRORS+=("FAIL: dot binary not found")
+  report
+  exit 1
+fi
+
 # apps list always succeeds (static catalog)
-assert_exit_code 0 dot apps list
+assert_exit_code 0 "$DOT" apps list
 
 # apps status --from points at a throwaway dir; expected to enumerate tracked apps
 tmpbk=$(mktemp -d)
-assert_exit_code 0 dot apps status --from "$tmpbk"
+assert_exit_code 0 "$DOT" apps status --from "$tmpbk"
 
 # dry-run backup of a single known-safe app
-if dot apps backup --dry-run moom --to "$tmpbk" >/dev/null 2>&1; then
+if "$DOT" apps backup --dry-run moom --to "$tmpbk" >/dev/null 2>&1; then
   PASS=$((PASS + 1))
   echo "  ✓ apps backup --dry-run moom exits cleanly"
 else
@@ -39,7 +58,7 @@ else
 fi
 
 # macapps module: apply dry-run with profile=full, module=macapps
-assert_exit_code 0 dot apply --profile full --yes --dry-run --module macapps
+assert_exit_code 0 "$DOT" apply --profile full --yes --dry-run --module macapps
 
 rm -rf "$tmpbk"
 report

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAcquireLock_FailsWhenLiveLockHeld(t *testing.T) {
@@ -62,16 +63,28 @@ func TestAcquireLock_BreaksStaleLock(t *testing.T) {
 	}
 }
 
-func TestAcquireLock_BreaksLockWithMissingPIDFile(t *testing.T) {
-	// A lock dir with no lock.pid is treated as stale (corrupted state).
+func TestAcquireLock_MissingPIDFileGraceThenReclaim(t *testing.T) {
+	// A freshly created lock dir with no lock.pid is the TOCTOU window between
+	// Mkdir and the pid write in a live acquirer: it must be treated as held,
+	// not stale, so a concurrent caller cannot clobber an in-progress lock.
 	dir := filepath.Join(t.TempDir(), "noPID.lock")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("seed dir: %v", err)
 	}
+	if release, err := AcquireLock(dir); err == nil {
+		release()
+		t.Fatal("AcquireLock reclaimed a pid-less lock still within its grace window")
+	}
 
+	// Once the pid-less dir has outlived the grace window it is abandoned and
+	// may be reclaimed. Backdate its mtime well past the fileutil grace period.
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(dir, old, old); err != nil {
+		t.Fatalf("backdate lock dir: %v", err)
+	}
 	release, err := AcquireLock(dir)
 	if err != nil {
-		t.Fatalf("AcquireLock should treat missing PID as stale: %v", err)
+		t.Fatalf("AcquireLock should reclaim an abandoned pid-less lock: %v", err)
 	}
 	release()
 }

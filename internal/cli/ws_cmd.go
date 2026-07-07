@@ -13,17 +13,18 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
+	"github.com/entelecheia/dotfiles-v2/internal/gsync"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/ws"
 )
 
 // newWorkspaceDualCmd returns the `dot ws` command with subcommands for
-// dual-workspace (work + gdrive) folder operations.
+// dual-workspace (work + cloud mirror) folder operations.
 func newWorkspaceDualCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ws",
-		Short: "Dual-workspace (work + gdrive) folder operations",
-		Long: `Operate on both ~/workspace/work/ and ~/gdrive-workspace/work/ simultaneously.
+		Short: "Dual-workspace (work + cloud mirror) folder operations",
+		Long: `Operate on both the workspace root and the gsync mirror simultaneously.
 
 Subcommands keep the two trees in structural sync:
   init       Clone configured workspace repos (recursive)
@@ -130,8 +131,8 @@ func wsBootstrap(cmd *cobra.Command) (ws.Roots, *exec.Runner, bool, error) {
 		return ws.Roots{}, nil, false, fmt.Errorf("loading state: %w", err)
 	}
 
-	if state.Modules.Workspace.Path == "" || state.Modules.Workspace.GdriveSymlink == "" {
-		return ws.Roots{}, nil, false, fmt.Errorf("dual workspace not configured (Path + GdriveSymlink required); run 'dot reconfigure'")
+	if state.Modules.Workspace.Path == "" {
+		return ws.Roots{}, nil, false, fmt.Errorf("workspace.path not configured; run 'dot reconfigure'")
 	}
 
 	home, _ := os.UserHomeDir()
@@ -145,16 +146,29 @@ func wsBootstrap(cmd *cobra.Command) (ws.Roots, *exec.Runner, bool, error) {
 		return p
 	}
 
+	gsyncCfg, err := gsync.ResolveConfigReadOnlyForHome(state, home)
+	if err != nil {
+		return ws.Roots{}, nil, false, fmt.Errorf("resolving gsync mirror: %w", err)
+	}
+	mirrorRoot := strings.TrimRight(gsyncCfg.MirrorPath, "/")
+	// Legacy dual-workspace configs pointed the mirror at
+	// workspace.gdrive_symlink before gsync owned mirror resolution. Honor
+	// that key while no gsync mirror is explicitly configured, so existing
+	// setups keep targeting their real mirror instead of the gsync default.
+	if gsyncCfg.MirrorIsDefault && state.Modules.Workspace.GdriveSymlink != "" {
+		mirrorRoot = filepath.Join(expand(state.Modules.Workspace.GdriveSymlink), "work")
+	}
+
 	roots := ws.Roots{
 		Work:   filepath.Join(expand(state.Modules.Workspace.Path), "work"),
-		Gdrive: filepath.Join(expand(state.Modules.Workspace.GdriveSymlink), "work"),
+		Gdrive: mirrorRoot,
 	}
 
 	if fi, err := os.Stat(roots.Work); err != nil || !fi.IsDir() {
 		return ws.Roots{}, nil, false, fmt.Errorf("work root not accessible: %s", roots.Work)
 	}
 	if fi, err := os.Stat(roots.Gdrive); err != nil || !fi.IsDir() {
-		return ws.Roots{}, nil, false, fmt.Errorf("gdrive root not accessible: %s (is Drive mounted?)", roots.Gdrive)
+		return ws.Roots{}, nil, false, fmt.Errorf("mirror root not accessible: %s (is the cloud mirror mounted?)", roots.Gdrive)
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -275,7 +289,7 @@ func runWsAudit(cmd *cobra.Command, args []string) error {
 	p := printerFrom(cmd)
 	p.Header("Workspace Audit")
 	p.KV("Work", roots.Work)
-	p.KV("GDrive", roots.Gdrive)
+	p.KV("Mirror", roots.Gdrive)
 	if scope != "" {
 		p.KV("Scope", scope)
 	}
@@ -302,7 +316,7 @@ func runWsAudit(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if len(gdriveOnly) > 0 {
-		p.Section(fmt.Sprintf("Only on gdrive (%d)", len(gdriveOnly)))
+		p.Section(fmt.Sprintf("Only on mirror (%d)", len(gdriveOnly)))
 		for _, m := range gdriveOnly {
 			printMismatch(p, m)
 		}
@@ -438,37 +452,4 @@ func resolveSidePair(roots ws.Roots, rel string, srcSide ws.Side) (string, strin
 		return workAbs, gdriveAbs
 	}
 	return gdriveAbs, workAbs
-}
-
-// --- Alias top-level commands ---
-
-func newWsMkdirAliasCmd() *cobra.Command {
-	c := newWsMkdirCmd()
-	c.Use = "ws-mkdir <path>"
-	c.Short = "Alias for 'ws mkdir'"
-	return c
-}
-func newWsMvAliasCmd() *cobra.Command {
-	c := newWsMvCmd()
-	c.Use = "ws-mv <src> <dst>"
-	c.Short = "Alias for 'ws mv'"
-	return c
-}
-func newWsRmAliasCmd() *cobra.Command {
-	c := newWsRmCmd()
-	c.Use = "ws-rm <path>"
-	c.Short = "Alias for 'ws rm'"
-	return c
-}
-func newWsAuditAliasCmd() *cobra.Command {
-	c := newWsAuditCmd()
-	c.Use = "ws-audit [scope]"
-	c.Short = "Alias for 'ws audit'"
-	return c
-}
-func newWsReconcileAliasCmd() *cobra.Command {
-	c := newWsReconcileCmd()
-	c.Use = "ws-reconcile [scope]"
-	c.Short = "Alias for 'ws reconcile'"
-	return c
 }

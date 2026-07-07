@@ -236,66 +236,37 @@ func (c *Config) TemplateData() map[string]any {
 	home, _ := os.UserHomeDir()
 
 	isDarwin := false
-	isLinux := false
-	os := ""
-	arch := ""
 	hostname := ""
 	if c.System != nil {
 		isDarwin = c.System.OS == "darwin"
-		isLinux = c.System.OS == "linux"
-		os = c.System.OS
-		arch = c.System.Arch
 		hostname = c.System.Hostname
 	}
 
 	hasCUDA := false
 	cudaHome := ""
 	hasNVIDIAGPU := false
-	isDGX := false
-	gpuModel := ""
 	if c.System != nil {
 		hasCUDA = c.System.HasCUDA
 		cudaHome = c.System.CUDAHome
 		hasNVIDIAGPU = c.System.HasNVIDIAGPU
-		isDGX = c.System.IsDGX
-		gpuModel = c.System.GPUModel
 	}
 
 	return map[string]any{
-		"Home":             home,
-		"Name":             c.Name,
-		"Email":            c.Email,
-		"GithubUser":       c.GithubUser,
-		"Timezone":         c.Timezone,
-		"OS":               os,
-		"Arch":             arch,
-		"Hostname":         hostname,
-		"IsDarwin":         isDarwin,
-		"IsLinux":          isLinux,
-		"Profile":          "", // set by caller
-		"EnableWorkspace":  c.Modules.Workspace.Enabled,
-		"EnableAI":         c.Modules.AI.Enabled,
-		"EnableAgentsSSOT": c.Modules.AI.AgentsSSOT,
-		"EnableAIHUD":      c.Modules.AI.HUD,
-		"EnableAISkills":   c.Modules.AI.Skills.Enabled,
-		"AISkillsProvider": c.Modules.AI.Skills.Provider,
-		"AISkillsSSOTPath": c.Modules.AI.Skills.SSOTPath,
-		"AISkillsTools":    c.Modules.AI.Skills.Tools,
-		"EnableWarp":       c.Modules.Terminal.Warp,
-		"PromptStyle":      c.Modules.Terminal.PromptStyle,
-		"WorkspacePath":    c.Modules.Workspace.Path,
-		"WorkspaceGdrive":  c.Modules.Workspace.Gdrive,
-		"GdriveSymlink":    c.Modules.Workspace.GdriveSymlink,
-		"WorkRepos":        c.Modules.Workspace.Repos,
-		"SSHKeyName":       c.Modules.SSH.KeyName,
-		"GitSigning":       c.Modules.Git.Signing,
-		"CoauthorGuard":    c.Modules.Git.CoauthorGuard,
-		"FontFamily":       c.Modules.Fonts.Family,
-		// GPU/CUDA
-		"HasCUDA":      hasCUDA,
-		"CUDAHome":     cudaHome,
-		"HasNVIDIAGPU": hasNVIDIAGPU,
-		"IsDGX":        isDGX,
-		"GPUModel":     gpuModel,
+		"Home":            home,
+		"Name":            c.Name,
+		"Email":           c.Email,
+		"GithubUser":      c.GithubUser,
+		"Timezone":        c.Timezone,
+		"Hostname":        hostname,
+		"IsDarwin":        isDarwin,
+		"EnableWorkspace": c.Modules.Workspace.Enabled,
+		"EnableAI":        c.Modules.AI.Enabled,
+		"WorkspacePath":   c.Modules.Workspace.Path,
+		"GdriveSymlink":   c.Modules.Workspace.GdriveSymlink,
+		"SSHKeyName":      c.Modules.SSH.KeyName,
+		"CoauthorGuard":   c.Modules.Git.CoauthorGuard,
+		"HasCUDA":         hasCUDA,
+		"CUDAHome":        cudaHome,
+		"HasNVIDIAGPU":    hasNVIDIAGPU,
 	}
 }

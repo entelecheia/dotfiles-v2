@@ -32,7 +32,6 @@ type UserModulesState struct {
 	PromptStyle  string                `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
 	TerminalApps UserTerminalAppsState `yaml:"terminal_apps,omitempty"`
 	Fonts        UserFontsState        `yaml:"fonts,omitempty"`
-	Sync         UserSyncState         `yaml:"sync,omitempty"`
 	Rsync        UserRsyncState        `yaml:"rsync,omitempty"`
 	Gsync        UserGsyncState        `yaml:"gdrive_sync,omitempty"`
 	MacApps      UserMacAppsState      `yaml:"macapps,omitempty"`
@@ -138,13 +137,6 @@ type UserRsyncState struct {
 	Interval   int    `yaml:"interval,omitempty"`    // sync interval in seconds, default 300
 }
 
-// UserSyncState holds rclone bisync config from user state.
-type UserSyncState struct {
-	Remote   string `yaml:"remote,omitempty"`   // rclone remote name, default "gdrive"
-	Path     string `yaml:"path,omitempty"`     // remote path, default "work"
-	Interval int    `yaml:"interval,omitempty"` // sync interval in seconds, default 300
-}
-
 // UserGsyncState holds local↔local rsync mirror config from user state.
 //
 // `dot gsync` keeps ~/workspace/work and ~/gdrive-workspace/work in sync
@@ -158,7 +150,6 @@ type UserGsyncState struct {
 	MirrorPath     string    `yaml:"mirror_path,omitempty"` // mirror tree, default ~/gdrive-workspace/work
 	LastPull       time.Time `yaml:"last_pull,omitempty"`
 	LastPush       time.Time `yaml:"last_push,omitempty"`
-	LastSync       time.Time `yaml:"last_sync,omitempty"`
 	ConflictDir    string    `yaml:"conflict_dir,omitempty"`    // default <local>/.sync-conflicts
 	Paused         bool      `yaml:"paused,omitempty"`          // gates pull/push/sync; cleared by `resume`
 	MaxDelete      int       `yaml:"max_delete,omitempty"`      // safety cap for push --delete-after, default 1000
@@ -230,9 +221,6 @@ func (s *UserState) Validate() error {
 				return fmt.Errorf("invalid github_user %q (alphanumeric + hyphens only)", s.GithubUser)
 			}
 		}
-	}
-	if s.Modules.Sync.Interval != 0 && (s.Modules.Sync.Interval < 60 || s.Modules.Sync.Interval > 86400) {
-		return fmt.Errorf("sync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Sync.Interval)
 	}
 	if s.Modules.Rsync.Interval != 0 && (s.Modules.Rsync.Interval < 60 || s.Modules.Rsync.Interval > 86400) {
 		return fmt.Errorf("rsync.interval must be 0 or 60..86400 seconds (got %d)", s.Modules.Rsync.Interval)

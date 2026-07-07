@@ -47,14 +47,6 @@ func (m *FontsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, 
 			Description: fmt.Sprintf("download Nerd Font %s to %s", family, dir),
 			Command:     fmt.Sprintf("curl -L %s | unzip -d %s", url, dir),
 		})
-	} else {
-		// Verify at least one font file exists by checking refresh marker
-		if !rc.Runner.FileExists(filepath.Join(dir, ".dotfiles-refresh")) {
-			changes = append(changes, Change{
-				Description: fmt.Sprintf("font directory %s exists but appears empty", dir),
-				Command:     fmt.Sprintf("download %s fonts", family),
-			})
-		}
 	}
 
 	return &CheckResult{Satisfied: len(changes) == 0, Changes: changes}, nil

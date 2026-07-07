@@ -17,7 +17,8 @@ builds:
       - CGO_ENABLED=0
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "dot_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
