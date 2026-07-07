@@ -150,10 +150,18 @@ func wsBootstrap(cmd *cobra.Command) (ws.Roots, *exec.Runner, bool, error) {
 	if err != nil {
 		return ws.Roots{}, nil, false, fmt.Errorf("resolving gsync mirror: %w", err)
 	}
+	mirrorRoot := strings.TrimRight(gsyncCfg.MirrorPath, "/")
+	// Legacy dual-workspace configs pointed the mirror at
+	// workspace.gdrive_symlink before gsync owned mirror resolution. Honor
+	// that key while no gsync mirror is explicitly configured, so existing
+	// setups keep targeting their real mirror instead of the gsync default.
+	if gsyncCfg.MirrorIsDefault && state.Modules.Workspace.GdriveSymlink != "" {
+		mirrorRoot = filepath.Join(expand(state.Modules.Workspace.GdriveSymlink), "work")
+	}
 
 	roots := ws.Roots{
 		Work:   filepath.Join(expand(state.Modules.Workspace.Path), "work"),
-		Gdrive: strings.TrimRight(gsyncCfg.MirrorPath, "/"),
+		Gdrive: mirrorRoot,
 	}
 
 	if fi, err := os.Stat(roots.Work); err != nil || !fi.IsDir() {

@@ -93,7 +93,11 @@ func PreRestoreDir(homeDir string, parts []string, t time.Time) string {
 	base := filepath.Join(baseParts...)
 	dir := base
 	for i := 2; ; i++ {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
+		// Any stat error other than "exists" ends the probe: a persistent
+		// error (e.g. EACCES on an ancestor) would repeat for every suffix
+		// and loop forever — return the candidate and let the caller's
+		// mkdir/copy surface the real error.
+		if _, err := os.Stat(dir); err != nil {
 			return dir
 		}
 		dir = fmt.Sprintf("%s-%d", base, i)

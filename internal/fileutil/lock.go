@@ -11,13 +11,19 @@ import (
 	"time"
 )
 
-// pidWriteGrace bounds how long a freshly created lock directory may exist
-// without a readable lock.pid before it is considered abandoned. It covers
-// the brief window between os.Mkdir(lockDir) and writeLockPID in a live
-// acquirer, closing the TOCTOU race where a second process would otherwise
-// treat the pid-less directory as stale and reclaim a lock that is actively
-// being taken.
-const pidWriteGrace = 5 * time.Second
+// pidlessStaleAfter bounds how long a lock directory without a readable
+// lock.pid is honored before it is considered abandoned. It covers three
+// cases with one conservative horizon:
+//   - the brief window between os.Mkdir(lockDir) and writeLockPID in a live
+//     acquirer (TOCTOU during acquisition),
+//   - bare-directory locks created by pre-pid dot versions, which may belong
+//     to a still-running legacy sync (must not be reclaimed after seconds),
+//   - lock.pid files this user cannot read (e.g. left root-owned by a sudo
+//     run), which previously blocked every future sync forever.
+//
+// ponytail: syncs longer than this horizon can still be raced by a reclaim;
+// shrink only with a handshake that upgrades legacy locks in place.
+const pidlessStaleAfter = time.Hour
 
 // AcquirePIDLock creates a directory lock with a lock.pid file inside.
 //
@@ -37,11 +43,17 @@ func AcquirePIDLock(lockDir string) (func(), error) {
 		if !PIDLockIsStale(lockDir) {
 			return nil, fmt.Errorf("another sync is running (lock: %s)", lockDir)
 		}
-		_ = os.RemoveAll(lockDir)
+		// Reclaim by renaming the stale dir aside first: rename is atomic, so
+		// when several contenders judge the same lock stale only one rename
+		// succeeds. A plain RemoveAll here could delete a lock that a faster
+		// contender had already recreated and pid-stamped.
+		trash := fmt.Sprintf("%s.stale.%d", lockDir, os.Getpid())
+		if err := os.Rename(lockDir, trash); err == nil {
+			_ = os.RemoveAll(trash)
+		}
 		if err := os.Mkdir(lockDir, 0755); err != nil {
 			if os.IsExist(err) {
-				// Another process won the reclaim race between our RemoveAll
-				// and Mkdir — treat the lock as held rather than clobbering it.
+				// Another contender won the recreate race — the lock is held.
 				return nil, fmt.Errorf("another sync is running (lock: %s)", lockDir)
 			}
 			return nil, fmt.Errorf("recreating lock after stale cleanup: %w", err)
@@ -57,19 +69,14 @@ func AcquirePIDLock(lockDir string) (func(), error) {
 // PIDLockIsStale reports whether lockDir's lock.pid is malformed or points at
 // a process that no longer exists.
 //
-// A missing lock.pid is treated as held while the lock directory is younger
-// than pidWriteGrace (a live acquirer may be mid-write); only once the
-// directory has outlived the grace period without a pid is it considered
-// abandoned. A pid file that cannot be read for other reasons (e.g. a
-// permission error) is treated as held — we never reclaim a lock we cannot
-// inspect.
+// A lock whose pid cannot be read — file missing (mid-acquisition or a legacy
+// bare-directory lock) or unreadable (e.g. root-owned after a sudo run) — is
+// honored until the lock directory has outlived pidlessStaleAfter, then
+// treated as abandoned so it self-heals instead of blocking forever.
 func PIDLockIsStale(lockDir string) bool {
 	data, err := os.ReadFile(filepath.Join(lockDir, "lock.pid"))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return lockDirOlderThan(lockDir, pidWriteGrace)
-		}
-		return false
+		return lockDirOlderThan(lockDir, pidlessStaleAfter)
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil || pid <= 0 {

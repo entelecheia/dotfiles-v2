@@ -42,6 +42,7 @@ const (
 type Config struct {
 	LocalPath       string // workspace tree, with trailing slash
 	MirrorPath      string // gdrive tree, with trailing slash
+	MirrorIsDefault bool   // MirrorPath came from defaultMirrorPath, not explicit config
 	FilterMode      FilterMode
 	IncludeFile     string   // editable include list (under .dotfiles/gdrive-sync/)
 	IncludePatterns []string // parsed include list used by Go filters + rsync args
@@ -139,7 +140,8 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 	if mirrorPath == "" {
 		mirrorPath = gs.MirrorPath
 	}
-	if mirrorPath == "" {
+	mirrorIsDefault := mirrorPath == ""
+	if mirrorIsDefault {
 		mirrorPath = defaultMirrorPath(home)
 	}
 	mirrorPath = expandHome(mirrorPath, home)
@@ -170,6 +172,7 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 	return &Config{
 		LocalPath:       localPath,
 		MirrorPath:      mirrorPath,
+		MirrorIsDefault: mirrorIsDefault,
 		FilterMode:      filterMode,
 		IncludeFile:     localPaths.IncludeFile,
 		IncludePatterns: includePatterns,

@@ -96,7 +96,7 @@ func TestPIDLockIsStale_MissingPIDAfterGraceReclaimed(t *testing.T) {
 	if err := os.MkdirAll(lockDir, 0755); err != nil {
 		t.Fatalf("mkdir lock: %v", err)
 	}
-	old := time.Now().Add(-2 * pidWriteGrace)
+	old := time.Now().Add(-2 * pidlessStaleAfter)
 	if err := os.Chtimes(lockDir, old, old); err != nil {
 		t.Fatalf("backdate lock dir: %v", err)
 	}
@@ -114,5 +114,32 @@ func TestPIDLockIsStale_MissingPIDAfterGraceReclaimed(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != strconv.Itoa(os.Getpid()) {
 		t.Fatalf("lock pid was not written after reclaim: %q", data)
+	}
+}
+
+// An unreadable lock.pid (e.g. left root-owned by a sudo run) must be honored
+// while fresh but reclaimed once the lock outlives the pid-less horizon —
+// otherwise every future sync is blocked until manual cleanup.
+func TestPIDLockIsStale_UnreadablePIDAgesOut(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("file modes do not restrict root")
+	}
+	lockDir := filepath.Join(t.TempDir(), "sync.lock")
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		t.Fatalf("mkdir lock: %v", err)
+	}
+	pidFile := filepath.Join(lockDir, "lock.pid")
+	if err := os.WriteFile(pidFile, []byte("12345"), 0o000); err != nil {
+		t.Fatalf("write pid: %v", err)
+	}
+	if PIDLockIsStale(lockDir) {
+		t.Fatal("fresh unreadable-pid lock should be held")
+	}
+	old := time.Now().Add(-2 * pidlessStaleAfter)
+	if err := os.Chtimes(lockDir, old, old); err != nil {
+		t.Fatalf("backdate lock dir: %v", err)
+	}
+	if !PIDLockIsStale(lockDir) {
+		t.Fatal("aged unreadable-pid lock should be stale")
 	}
 }
