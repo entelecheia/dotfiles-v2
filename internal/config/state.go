@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
+	"github.com/entelecheia/dotfiles-v2/internal/tunnel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,6 +36,7 @@ type UserModulesState struct {
 	Rsync        UserRsyncState        `yaml:"rsync,omitempty"`
 	Gsync        UserGsyncState        `yaml:"gdrive_sync,omitempty"`
 	MacApps      UserMacAppsState      `yaml:"macapps,omitempty"`
+	Tunnel       UserTunnelState       `yaml:"tunnel,omitempty"`
 }
 
 // UserAIState holds user selections for AI CLI/config helpers.
@@ -157,6 +159,18 @@ type UserGsyncState struct {
 	SharedExcludes []string  `yaml:"shared_excludes,omitempty"` // operator-curated owned-but-shared-out folders, relative to mirror_path
 }
 
+// UserTunnelState holds the Cloudflare Tunnel values managed by `dot tunnel`.
+type UserTunnelState struct {
+	TunnelName string `yaml:"tunnel_name,omitempty"`
+	TunnelID   string `yaml:"tunnel_id,omitempty"`
+	Hostname   string `yaml:"hostname,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset tunnel block from user state.
+func (s UserTunnelState) IsZero() bool {
+	return s.TunnelName == "" && s.TunnelID == "" && s.Hostname == ""
+}
+
 // RepoConfig describes a git repository to clone into the workspace.
 type RepoConfig struct {
 	Name   string `yaml:"name"`             // subdirectory name: "work" or "vault"
@@ -238,6 +252,9 @@ func (s *UserState) Validate() error {
 			return fmt.Errorf("modules.git.coauthor_guard must be off, warn, or block (got %q)", s.Modules.Git.CoauthorGuard)
 		}
 	}
+	if err := validateTunnelState(s.Modules.Tunnel); err != nil {
+		return err
+	}
 	if err := validateAISkillsConfig(s.Modules.AI.Skills); err != nil {
 		return err
 	}
@@ -272,6 +289,28 @@ func (s *UserState) Validate() error {
 			return fmt.Errorf("duplicate workspace repo name %q", repo.Name)
 		}
 		seen[repo.Name] = true
+	}
+	return nil
+}
+
+// validateTunnelState delegates to the canonical validators in
+// internal/tunnel so `dot tunnel setup` and state validation can never
+// drift apart (a value accepted at setup must load on the next run).
+func validateTunnelState(t UserTunnelState) error {
+	if t.TunnelName != "" {
+		if err := tunnel.ValidateTunnelName(t.TunnelName); err != nil {
+			return fmt.Errorf("modules.tunnel.tunnel_name: %w", err)
+		}
+	}
+	if t.TunnelID != "" {
+		if err := tunnel.ValidateTunnelID(t.TunnelID); err != nil {
+			return fmt.Errorf("modules.tunnel.tunnel_id: %w", err)
+		}
+	}
+	if t.Hostname != "" {
+		if err := tunnel.ValidateHostname(t.Hostname); err != nil {
+			return fmt.Errorf("modules.tunnel.hostname: %w", err)
+		}
 	}
 	return nil
 }

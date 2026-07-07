@@ -62,6 +62,9 @@ Also available as 'dotfiles' for back-compat.`,
 	// Gsync (local rsync mirror between workspace and gdrive-workspace)
 	root.AddCommand(newGsyncCmd())
 
+	// Cloudflare Tunnel SSH access
+	root.AddCommand(newTunnelCmd())
+
 	// Workspace commands
 	root.AddCommand(newOpenCmd())
 	root.AddCommand(newStopCmd())

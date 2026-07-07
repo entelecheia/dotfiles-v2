@@ -98,6 +98,84 @@ func TestValidate_GsyncSharedExcludes(t *testing.T) {
 	}
 }
 
+func TestValidate_TunnelState(t *testing.T) {
+	validID := "123e4567-e89b-12d3-a456-426614174000"
+	tests := []struct {
+		name    string
+		tunnel  UserTunnelState
+		wantErr bool
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "valid",
+			tunnel: UserTunnelState{
+				TunnelName: "dot-macbook",
+				TunnelID:   validID,
+				Hostname:   "mac.example.com",
+			},
+		},
+		{
+			name:    "uppercase hostname rejected",
+			tunnel:  UserTunnelState{Hostname: "Mac.example.com"},
+			wantErr: true,
+		},
+		{
+			name:    "single label hostname rejected",
+			tunnel:  UserTunnelState{Hostname: "mac"},
+			wantErr: true,
+		},
+		{
+			name:    "bad uuid rejected",
+			tunnel:  UserTunnelState{TunnelID: "not-a-uuid"},
+			wantErr: true,
+		},
+		{
+			name:    "whitespace tunnel name rejected",
+			tunnel:  UserTunnelState{TunnelName: "dot mac"},
+			wantErr: true,
+		},
+		{
+			name:    "long tunnel name rejected",
+			tunnel:  UserTunnelState{TunnelName: strings.Repeat("a", 65)},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &UserState{}
+			state.Modules.Tunnel = tt.tunnel
+			err := state.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() err=%v, wantErr=%v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestTunnelStateSaveLoadRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := &UserState{}
+	original.Modules.Tunnel = UserTunnelState{
+		TunnelName: "dot-macbook",
+		TunnelID:   "123e4567-e89b-12d3-a456-426614174000",
+		Hostname:   "mac.example.com",
+	}
+
+	if err := saveStateAt(path, original); err != nil {
+		t.Fatalf("saveStateAt: %v", err)
+	}
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if loaded.Modules.Tunnel != original.Modules.Tunnel {
+		t.Fatalf("tunnel state = %#v, want %#v", loaded.Modules.Tunnel, original.Modules.Tunnel)
+	}
+}
+
 func TestSaveLoadRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

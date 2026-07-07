@@ -164,15 +164,7 @@ func RotateLog(logFile string, maxLines, keepLines int) {
 
 // TailLog returns the last n lines of logFile as a single string.
 func TailLog(logFile string, n int) (string, error) {
-	data, err := os.ReadFile(logFile)
-	if err != nil {
-		return "", err
-	}
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n"), nil
+	return fileutil.TailLog(logFile, n)
 }
 
 // newTimestamp returns a filesystem-safe RFC3339 timestamp suitable for
