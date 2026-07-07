@@ -88,7 +88,9 @@ assert_command_exists() {
 assert_exit_code() {
   local expected="$1"
   shift
-  local msg="${*@Q}"
+  # Plain $* (not ${*@Q}): the message is display-only, and @Q is a bash 4.4+
+  # transformation that breaks under macOS's system bash 3.2.
+  local msg="$*"
   local actual
   actual=0
   "$@" >/dev/null 2>&1 || actual=$?
