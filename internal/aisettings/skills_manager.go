@@ -2,21 +2,20 @@ package aisettings
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
-
-	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 const (
-	SkillsProviderAnchor = "anchor"
-	SkillsProviderPath   = "path"
+	SkillsProviderMaru = "maru"
+	SkillsProviderPath = "path"
 
-	DefaultAnchorSkillsRoot = "~/.anchor/skills"
+	// skillsProviderAnchorAlias is the legacy provider name; it resolves to maru.
+	skillsProviderAnchorAlias = "anchor"
+
+	DefaultMaruSkillsRoot = "~/.maru/skills"
 
 	SkillLinkStatusInSync        = "in-sync"
 	SkillLinkStatusMissing       = "missing"
@@ -24,11 +23,10 @@ const (
 	SkillLinkStatusSourceMissing = "source-missing"
 )
 
-// SkillsManager applies a configured skills SSOT to per-tool skill roots.
-// The SSOT itself remains external: Anchor or the configured path owns source
-// directories; dotfiles only deploys consumer-facing symlinks.
+// SkillsManager reports drift between a configured skills SSOT and per-tool
+// skill roots. It is read-only: the Maru app owns skill sources, the registry,
+// runtime symlinks, and tool federation; dotfiles only diagnoses.
 type SkillsManager struct {
-	Runner  *dotexec.Runner
 	HomeDir string
 	Tools   []SkillTool
 }
@@ -41,13 +39,11 @@ type SkillTool struct {
 	Aliases     []string `json:"aliases,omitempty"`
 }
 
-// SkillsOptions controls status and apply operations.
+// SkillsOptions controls status diagnostics.
 type SkillsOptions struct {
 	Provider string
 	SSOTPath string
 	Tools    []string
-	DryRun   bool
-	Force    bool
 }
 
 // SkillSourceItem is a single source skill directory under the SSOT root.
@@ -75,27 +71,6 @@ type SkillsStatusReport struct {
 	Sources  []SkillSourceItem   `json:"sources"`
 	Items    []SkillTargetStatus `json:"items"`
 	Warnings []string            `json:"warnings,omitempty"`
-}
-
-// SkillApplyItem captures one attempted target update.
-type SkillApplyItem struct {
-	ToolID     string `json:"tool_id"`
-	SkillName  string `json:"skill_name"`
-	SourcePath string `json:"source_path"`
-	TargetPath string `json:"target_path"`
-	Changed    bool   `json:"changed"`
-	Conflict   bool   `json:"conflict,omitempty"`
-	BackedUp   bool   `json:"backed_up,omitempty"`
-	BackupPath string `json:"backup_path,omitempty"`
-	Message    string `json:"message,omitempty"`
-}
-
-// SkillsApplyResult summarizes a skills apply operation.
-type SkillsApplyResult struct {
-	Status   *SkillsStatusReport `json:"status"`
-	Items    []SkillApplyItem    `json:"items"`
-	Warnings []string            `json:"warnings,omitempty"`
-	DryRun   bool                `json:"dry_run"`
 }
 
 // RegisteredSkillTools returns built-in skill target roots. Gemini and
@@ -132,17 +107,16 @@ func RegisteredSkillTools() []SkillTool {
 }
 
 // NewSkillsManager returns a skills manager rooted at homeDir.
-func NewSkillsManager(runner *dotexec.Runner, homeDir string) *SkillsManager {
+func NewSkillsManager(homeDir string) *SkillsManager {
 	return &SkillsManager{
-		Runner:  runner,
 		HomeDir: homeDir,
 		Tools:   RegisteredSkillTools(),
 	}
 }
 
-// DefaultAnchorSSOTPath returns Anchor's runtime skills root.
-func (m *SkillsManager) DefaultAnchorSSOTPath() string {
-	return expandHome(DefaultAnchorSkillsRoot, m.homeDir())
+// DefaultMaruSSOTPath returns Maru's runtime skills root.
+func (m *SkillsManager) DefaultMaruSSOTPath() string {
+	return expandHome(DefaultMaruSkillsRoot, m.homeDir())
 }
 
 // DefaultTools returns registered tools whose own skills root directory (e.g.
@@ -152,7 +126,7 @@ func (m *SkillsManager) DefaultAnchorSSOTPath() string {
 // directory independent (e.g. gemini at ~/.gemini/skills versus antigravity at
 // ~/.gemini/antigravity/skills). Falls back to every registered tool ID when
 // none is detected so informational output is never empty. It never mutates
-// anything; apply still requires explicit tools.
+// anything.
 func (m *SkillsManager) DefaultTools() []string {
 	var ids []string
 	seen := map[string]bool{}
@@ -248,73 +222,6 @@ func (m *SkillsManager) Status(opts SkillsOptions) (*SkillsStatusReport, error) 
 	return report, nil
 }
 
-// Apply creates or repairs selected tool symlinks. Conflicts are skipped unless
-// Force is set; forced replacements are backed up first.
-func (m *SkillsManager) Apply(opts SkillsOptions) (*SkillsApplyResult, error) {
-	status, err := m.Status(opts)
-	if err != nil {
-		return nil, err
-	}
-	effectiveDryRun := opts.DryRun || m.runner().DryRun
-	result := &SkillsApplyResult{
-		Status:   status,
-		Warnings: append([]string(nil), status.Warnings...),
-		DryRun:   effectiveDryRun,
-	}
-	for _, st := range status.Items {
-		if st.Status == SkillLinkStatusSourceMissing {
-			continue
-		}
-		item := SkillApplyItem{
-			ToolID:     st.ToolID,
-			SkillName:  st.SkillName,
-			SourcePath: st.SourcePath,
-			TargetPath: st.TargetPath,
-			Message:    st.Message,
-		}
-		switch st.Status {
-		case SkillLinkStatusInSync:
-			item.Message = "in sync"
-		case SkillLinkStatusMissing:
-			item.Changed = true
-			item.Message = "created symlink"
-			if !effectiveDryRun {
-				if err := m.createSymlink(st.SourcePath, st.TargetPath); err != nil {
-					return nil, err
-				}
-			}
-		case SkillLinkStatusConflict:
-			item.Conflict = true
-			if !opts.Force {
-				item.Message = "conflict skipped; rerun with --force to back up and replace"
-				result.Warnings = append(result.Warnings, fmt.Sprintf("%s:%s conflicts at %s; skipped", st.ToolID, st.SkillName, st.TargetPath))
-				break
-			}
-			item.Changed = true
-			item.Message = "replaced conflict with symlink"
-			if !effectiveDryRun {
-				backup, err := m.backupTarget(st.ToolID, st.SkillName, st.TargetPath)
-				if err != nil {
-					return nil, err
-				}
-				item.BackedUp = true
-				item.BackupPath = backup
-				if err := m.runner().RemoveAll(st.TargetPath); err != nil {
-					return nil, fmt.Errorf("remove conflict %s: %w", st.TargetPath, err)
-				}
-				if err := m.createSymlink(st.SourcePath, st.TargetPath); err != nil {
-					return nil, err
-				}
-				result.Warnings = append(result.Warnings, fmt.Sprintf("%s:%s was backed up to %s", st.ToolID, st.SkillName, backup))
-			}
-		default:
-			item.Message = st.Message
-		}
-		result.Items = append(result.Items, item)
-	}
-	return result, nil
-}
-
 func (m *SkillsManager) applyTargetStatus(status *SkillTargetStatus) {
 	info, err := os.Lstat(status.TargetPath)
 	if os.IsNotExist(err) {
@@ -351,12 +258,15 @@ func (m *SkillsManager) resolveOptions(opts SkillsOptions) (SkillsOptions, error
 		provider = SkillsProviderPath
 	}
 	if provider == "" {
-		return SkillsOptions{}, fmt.Errorf("skills provider is required (anchor or path)")
+		return SkillsOptions{}, fmt.Errorf("skills provider is required (maru or path)")
+	}
+	if provider == skillsProviderAnchorAlias {
+		provider = SkillsProviderMaru
 	}
 	switch provider {
-	case SkillsProviderAnchor:
+	case SkillsProviderMaru:
 		if ssot == "" {
-			ssot = DefaultAnchorSkillsRoot
+			ssot = DefaultMaruSkillsRoot
 		}
 	case SkillsProviderPath:
 		if ssot == "" {
@@ -373,8 +283,6 @@ func (m *SkillsManager) resolveOptions(opts SkillsOptions) (SkillsOptions, error
 		Provider: provider,
 		SSOTPath: filepath.Clean(expandHome(ssot, m.homeDir())),
 		Tools:    tools,
-		DryRun:   opts.DryRun,
-		Force:    opts.Force,
 	}, nil
 }
 
@@ -464,35 +372,6 @@ func (m *SkillsManager) symlinkPointsTo(link, desired string) bool {
 	return false
 }
 
-func (m *SkillsManager) createSymlink(source, target string) error {
-	if err := m.runner().MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("create skills target dir: %w", err)
-	}
-	if err := m.runner().Symlink(source, target); err != nil {
-		return fmt.Errorf("symlink %s -> %s: %w", target, source, err)
-	}
-	return nil
-}
-
-func (m *SkillsManager) backupTarget(toolID, skillName, path string) (string, error) {
-	dst := m.backupTargetPath(toolID, skillName)
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	eng := &Engine{Runner: m.runner(), HomeDir: m.homeDir()}
-	_, _, err = eng.copyTree(path, dst, info, filepath.Join("skills", toolID, skillName))
-	if err != nil {
-		return "", err
-	}
-	return dst, nil
-}
-
-func (m *SkillsManager) backupTargetPath(toolID, skillName string) string {
-	ts := time.Now().UTC().Format("20060102T150405Z")
-	return filepath.Join(m.homeDir(), ".local", "share", "dotfiles", "backup", "skills", ts, toolID, skillName)
-}
-
 func (m *SkillsManager) registry() []SkillTool {
 	if len(m.Tools) > 0 {
 		return m.Tools
@@ -514,13 +393,6 @@ func (m *SkillsManager) toolIDList() string {
 		ids = append(ids, tool.ID)
 	}
 	return strings.Join(ids, ", ")
-}
-
-func (m *SkillsManager) runner() *dotexec.Runner {
-	if m.Runner != nil {
-		return m.Runner
-	}
-	return dotexec.NewRunner(false, slog.Default())
 }
 
 func (m *SkillsManager) homeDir() string {

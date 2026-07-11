@@ -315,24 +315,20 @@ func validateTunnelState(t UserTunnelState) error {
 	return nil
 }
 
+// validateAISkillsConfig validates the diagnostics defaults. skills.Enabled is
+// deprecated and ignored (legacy configs with enabled: true must still load).
 func validateAISkillsConfig(skills AISkillsConfig) error {
 	if skills.IsZero() {
 		return nil
 	}
 	provider := strings.ToLower(strings.TrimSpace(skills.Provider))
-	if provider == "" {
-		return fmt.Errorf("modules.ai.skills.provider must be anchor or path")
-	}
 	switch provider {
-	case "anchor", "path":
+	case "", "maru", "anchor", "path": // anchor is a legacy alias for maru; empty falls back to CLI defaults
 	default:
-		return fmt.Errorf("modules.ai.skills.provider must be anchor or path (got %q)", skills.Provider)
+		return fmt.Errorf("modules.ai.skills.provider must be maru or path (got %q)", skills.Provider)
 	}
 	if provider == "path" && strings.TrimSpace(skills.SSOTPath) == "" {
 		return fmt.Errorf("modules.ai.skills.ssot_path is required when provider is path")
-	}
-	if skills.Enabled && len(skills.Tools) == 0 {
-		return fmt.Errorf("modules.ai.skills.tools must list explicit target tools when skills management is enabled")
 	}
 	seen := map[string]bool{}
 	for _, raw := range skills.Tools {
@@ -520,9 +516,7 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	if !state.Modules.AI.Skills.IsZero() {
 		cfg.Modules.AI.Enabled = true
 		cfg.Modules.AI.Skills = state.Modules.AI.Skills
-		if cfg.Modules.AI.Skills.Enabled {
-			cfg.Modules.AI.Skills.Tools = append([]string(nil), state.Modules.AI.Skills.Tools...)
-		}
+		cfg.Modules.AI.Skills.Tools = append([]string(nil), state.Modules.AI.Skills.Tools...)
 	}
 	if state.Modules.Git.CoauthorGuard != "" {
 		cfg.Modules.Git.Enabled = true

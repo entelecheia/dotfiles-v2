@@ -80,12 +80,14 @@ type AIConfig struct {
 	Skills     AISkillsConfig `yaml:"skills,omitempty"`
 }
 
-// AISkillsConfig controls symlink deployment from an external skills SSOT.
+// AISkillsConfig provides defaults for the read-only `dot ai skills`
+// diagnostics (status/path). Runtime skill symlinks are managed by the Maru
+// app; dot never writes them.
 type AISkillsConfig struct {
-	Enabled  bool     `yaml:"enabled,omitempty"`
-	Provider string   `yaml:"provider,omitempty"`  // anchor or path
-	SSOTPath string   `yaml:"ssot_path,omitempty"` // optional for provider=anchor
-	Tools    []string `yaml:"tools,omitempty"`     // explicit tool targets only
+	Enabled  bool     `yaml:"enabled,omitempty"`   // deprecated: ignored, kept so legacy configs still load
+	Provider string   `yaml:"provider,omitempty"`  // maru or path (anchor is a legacy alias for maru)
+	SSOTPath string   `yaml:"ssot_path,omitempty"` // optional for provider=maru
+	Tools    []string `yaml:"tools,omitempty"`     // default tool targets for diagnostics
 }
 
 // IsZero lets yaml.v3 omit an unset skills block from user state/config output.

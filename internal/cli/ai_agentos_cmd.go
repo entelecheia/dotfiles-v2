@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -11,20 +10,17 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
-	"github.com/entelecheia/dotfiles-v2/internal/config"
-	execrun "github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 func newAISkillsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "skills",
-		Short: "Inventory and validate AI Markdown skills",
+		Short: "Diagnose AI Markdown skills (read-only; the Maru app manages runtime symlinks)",
 	}
 	cmd.AddCommand(newAISkillsListCmd())
 	cmd.AddCommand(newAISkillsValidateCmd())
 	cmd.AddCommand(newAISkillsStatusCmd())
-	cmd.AddCommand(newAISkillsApplyCmd())
 	cmd.AddCommand(newAISkillsPathCmd())
 	return cmd
 }
@@ -105,7 +101,7 @@ func newAISkillsStatusCmd() *cobra.Command {
 		Short: "Show configured skills SSOT symlink status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts, err := skillsOptionsFromCmd(cmd, true)
+			opts, err := skillsOptionsFromCmd(cmd)
 			if err != nil {
 				return err
 			}
@@ -126,61 +122,13 @@ func newAISkillsStatusCmd() *cobra.Command {
 	return c
 }
 
-func newAISkillsApplyCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "apply",
-		Short: "Apply configured skills SSOT symlinks to selected tools",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts, err := skillsOptionsFromCmd(cmd, false)
-			if err != nil {
-				return err
-			}
-			force, _ := cmd.Flags().GetBool("force")
-			persist, _ := cmd.Flags().GetBool("persist")
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			opts.Force = force
-			opts.DryRun = dryRun
-			result, err := newSkillsManagerFromCmd(cmd).Apply(opts)
-			if err != nil {
-				return err
-			}
-			if persist && !dryRun {
-				if err := persistAISkills(cmd, result.Status); err != nil {
-					return err
-				}
-			}
-			if err := auditAIEvent(cmd, "ai.skills.apply", skillsApplyPayload(result, persist)); err != nil {
-				return err
-			}
-			asJSON, _ := cmd.Flags().GetBool("json")
-			if asJSON {
-				return printJSON(cmd, result)
-			}
-			p := printerFrom(cmd)
-			p.Header("AI Skills Apply")
-			printSkillsStatusSummary(p, result.Status)
-			printSkillsApplyResult(p, result)
-			if persist {
-				p.KV("Persist", fmt.Sprintf("%v", !dryRun))
-			}
-			return nil
-		},
-	}
-	addSkillManageFlags(c)
-	c.Flags().Bool("force", false, "Back up and replace conflicting target skill entries")
-	c.Flags().Bool("persist", false, "Persist modules.ai.skills for future dot apply runs")
-	c.Flags().Bool("json", false, "Print JSON")
-	return c
-}
-
 func newAISkillsPathCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "path",
 		Short: "Show skills SSOT and target skill roots",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts, err := skillsOptionsFromCmd(cmd, true)
+			opts, err := skillsOptionsFromCmd(cmd)
 			if err != nil {
 				return err
 			}
@@ -208,12 +156,12 @@ func newAISkillsPathCmd() *cobra.Command {
 }
 
 func addSkillManageFlags(c *cobra.Command) {
-	c.Flags().String("provider", "", "Skills SSOT provider: anchor or path (defaults to anchor)")
-	c.Flags().String("ssot", "", "Skills SSOT root path (defaults to ~/.anchor/skills for provider=anchor)")
-	c.Flags().String("tool", "", "Comma-separated target tools (claude,codex,agents,gemini,antigravity); required for apply, auto-detected for path/status")
+	c.Flags().String("provider", "", "Skills SSOT provider: maru or path (defaults to maru; anchor is a legacy alias)")
+	c.Flags().String("ssot", "", "Skills SSOT root path (defaults to ~/.maru/skills for provider=maru)")
+	c.Flags().String("tool", "", "Comma-separated target tools (claude,codex,agents,gemini,antigravity); auto-detected when omitted")
 }
 
-func skillsOptionsFromCmd(cmd *cobra.Command, allowToolDefault bool) (aisettings.SkillsOptions, error) {
+func skillsOptionsFromCmd(cmd *cobra.Command) (aisettings.SkillsOptions, error) {
 	provider, _ := cmd.Flags().GetString("provider")
 	ssot, _ := cmd.Flags().GetString("ssot")
 	toolFlag, _ := cmd.Flags().GetString("tool")
@@ -232,68 +180,36 @@ func skillsOptionsFromCmd(cmd *cobra.Command, allowToolDefault bool) (aisettings
 		}
 	}
 
-	// Provider defaults to anchor when neither a provider nor an ssot is given;
-	// anchor auto-defaults ssot to ~/.anchor/skills. Gated on both empty so a
+	// Provider defaults to maru when neither a provider nor an ssot is given;
+	// maru auto-defaults ssot to ~/.maru/skills. Gated on both empty so a
 	// lone --ssot still infers provider=path in resolveOptions.
 	if provider == "" && ssot == "" {
-		provider = aisettings.SkillsProviderAnchor
+		provider = aisettings.SkillsProviderMaru
 	}
 
 	// CLI-friendly remediation. The library (internal/aisettings) keeps its
 	// validation errors caller-neutral; flag/config guidance is added here,
 	// where --provider/--ssot/--tool actually exist.
 	if provider == aisettings.SkillsProviderPath && ssot == "" {
-		return aisettings.SkillsOptions{}, fmt.Errorf("skills provider %q requires --ssot <dir>; or use --provider anchor (defaults to %s)", aisettings.SkillsProviderPath, aisettings.DefaultAnchorSkillsRoot)
+		return aisettings.SkillsOptions{}, fmt.Errorf("skills provider %q requires --ssot <dir>; or use --provider maru (defaults to %s)", aisettings.SkillsProviderPath, aisettings.DefaultMaruSkillsRoot)
 	}
 
-	// Read-only path/status default the tool set to detected tools (fallback to
-	// all registered) so they never hard-fail. apply keeps tools explicit.
-	if allowToolDefault && len(tools) == 0 {
+	// The read-only diagnostics default the tool set to detected tools
+	// (fallback to all registered) so they never hard-fail.
+	if len(tools) == 0 {
 		tools = newSkillsManagerFromCmd(cmd).DefaultTools()
-	}
-	if !allowToolDefault && len(tools) == 0 {
-		return aisettings.SkillsOptions{}, fmt.Errorf("skills apply needs target tools: pass --tool claude,codex (valid: %s), or set modules.ai.skills.tools and rerun apply with --persist", skillToolIDList())
 	}
 
 	return aisettings.SkillsOptions{Provider: provider, SSOTPath: ssot, Tools: tools}, nil
 }
 
-// skillToolIDList returns the comma-joined registered skill tool IDs for
-// CLI error hints (the canonical set advertised by the --tool flag).
-func skillToolIDList() string {
-	tools := aisettings.RegisteredSkillTools()
-	ids := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		ids = append(ids, tool.ID)
-	}
-	return strings.Join(ids, ", ")
-}
-
 func newSkillsManagerFromCmd(cmd *cobra.Command) *aisettings.SkillsManager {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	return aisettings.NewSkillsManager(execrun.NewRunner(dryRun, slog.Default()), homeFromCmd(cmd))
-}
-
-func persistAISkills(cmd *cobra.Command, report *aisettings.SkillsStatusReport) error {
-	if report == nil {
-		return fmt.Errorf("skills status report is nil")
-	}
-	state, err := loadStateForCmd(cmd)
-	if err != nil {
-		return err
-	}
-	state.Modules.AI.Enabled = true
-	state.Modules.AI.Skills = config.AISkillsConfig{
-		Enabled:  true,
-		Provider: report.Provider,
-		SSOTPath: report.SSOTPath,
-		Tools:    append([]string(nil), report.Tools...),
-	}
-	return saveStateForCmd(cmd, state)
+	return aisettings.NewSkillsManager(homeFromCmd(cmd))
 }
 
 func printSkillsStatus(p *Printer, report *aisettings.SkillsStatusReport) {
 	p.Header("AI Skills Status")
+	p.Line("%s", ui.StyleHint.Render("read-only diagnosis; runtime symlinks are managed by the Maru app (sync via Maru)"))
 	printSkillsStatusSummary(p, report)
 	if len(report.Items) > 0 {
 		p.Section("Targets")
@@ -323,47 +239,6 @@ func printSkillsStatusSummary(p *Printer, report *aisettings.SkillsStatusReport)
 	p.KV("SSOT", report.SSOTPath)
 	p.KV("Tools", strings.Join(report.Tools, ","))
 	p.KV("Sources", fmt.Sprintf("%d", len(report.Sources)))
-}
-
-func printSkillsApplyResult(p *Printer, result *aisettings.SkillsApplyResult) {
-	if result == nil {
-		return
-	}
-	p.Section("Changes")
-	changed := 0
-	for _, item := range result.Items {
-		if item.Changed {
-			changed++
-		}
-		marker := ui.StyleHint.Render(ui.MarkPartial)
-		if item.Changed {
-			marker = ui.StyleSuccess.Render(ui.MarkPresent)
-		}
-		if item.Conflict && !item.Changed {
-			marker = ui.StyleWarning.Render(ui.MarkWarn)
-		}
-		p.Bullet(marker, fmt.Sprintf("%-12s %-24s %s", ui.StyleValue.Render(item.ToolID), item.SkillName, item.Message))
-		if item.BackupPath != "" {
-			p.Line("      backup: %s", item.BackupPath)
-		}
-	}
-	p.KV("Changed", fmt.Sprintf("%d", changed))
-	for _, warning := range result.Warnings {
-		p.Warn(warning)
-	}
-}
-
-func skillsApplyPayload(result *aisettings.SkillsApplyResult, persist bool) map[string]any {
-	payload := map[string]any{"persist": persist}
-	if result == nil || result.Status == nil {
-		return payload
-	}
-	payload["provider"] = result.Status.Provider
-	payload["ssot_path"] = result.Status.SSOTPath
-	payload["tools"] = result.Status.Tools
-	payload["items"] = len(result.Items)
-	payload["dry_run"] = result.DryRun
-	return payload
 }
 
 func skillLinkStatusMarker(status string) (string, interface{ Render(...string) string }) {

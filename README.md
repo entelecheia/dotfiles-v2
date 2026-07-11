@@ -599,8 +599,7 @@ dot ai coauthor-guard apply --mode warn --persist
 dot ai skills list                 # inventory Codex/Claude/shared/Antigravity skills
 dot ai skills validate --strict    # fail on invalid, duplicate, or legacy metadata
 dot ai skills path                 # show SSOT + detected target roots (no flags needed)
-dot ai skills status               # anchor SSOT + detected tools by default
-dot ai skills apply --provider anchor --tool claude,codex --persist
+dot ai skills status               # maru SSOT + detected tools by default (read-only)
 
 dot ai audit summary               # summarize append-only dot ai mutation events
 dot ai audit tail 20               # print recent events as JSONL
@@ -650,32 +649,31 @@ always exits 0 unless scanning itself fails. `validate` fails on invalid
 metadata or duplicate schema-valid names; add `--strict` when legacy skills
 without `schema_version: v1` should also fail.
 
-When `modules.ai.skills.enabled: true`, `dot apply` can also deploy skills from
-an explicit SSOT into selected tool roots. `provider: anchor` defaults to
-`~/.anchor/skills`; `provider: path` requires `ssot_path`. The read-only
-`dot ai skills path` and `dot ai skills status` commands default the provider to
-`anchor` and auto-detect target tools (any tool whose home dir such as
-`~/.claude` exists, falling back to all registered tools), so they run with no
-flags. Deployment — `dot ai skills apply` and config-driven `dot apply` — keeps
-target tools explicit, for example:
+`dot ai skills` is diagnose-only. Runtime skill symlinks and tool federation
+(`~/.claude/skills/**`, `~/.codex/skills/**`, …) are owned by the Maru app;
+dot never writes under any tool skill root or skill source directory. Fix
+drift by syncing via Maru, not via dot.
+
+The read-only `dot ai skills path` and `dot ai skills status` commands compare
+a skills SSOT against tool roots. `provider: maru` (default; `anchor` is
+accepted as a legacy alias) defaults the SSOT to `~/.maru/skills`;
+`provider: path` requires `ssot_path`. Target tools are auto-detected (any
+tool whose skills root such as `~/.claude/skills` exists, falling back to all
+registered tools), so both commands run with no flags. Defaults may also come
+from `modules.ai.skills` config:
 
 ```yaml
 modules:
   ai:
     enabled: true
     skills:
-      enabled: true
-      provider: anchor
+      provider: maru
       tools: [claude, codex, gemini, antigravity]
 ```
 
-`dot ai skills apply` creates only per-tool symlinks such as
-`~/.codex/skills/<name> -> ~/.anchor/skills/<name>`. Existing non-matching
-entries are skipped with warnings; rerun with `--force` to back them up under
-`~/.local/share/dotfiles/backup/skills/` and replace them.
-Anchor remains the skills registry/source control plane; when the `anchor`
-CLI exposes `doctor --quiet`, `dot apply` reports critical Anchor skill issues
-as a best-effort warning after Anchor-backed skills sync.
+`modules.ai.skills.enabled` is deprecated and ignored; legacy configs that
+still set it load fine, but `dot check`/`dot apply` no longer manage skill
+symlinks.
 
 Mutating `dot ai` subcommands append redacted events to
 `~/.local/share/dotfiles/ai/events.jsonl`. Events record command type, target

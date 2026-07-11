@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 )
@@ -80,26 +79,9 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			})
 		}
 	}
-	if rc.Config.Modules.AI.Skills.Enabled {
-		manager := aisettings.NewSkillsManager(rc.Runner, rc.HomeDir)
-		status, err := manager.Status(aisettings.SkillsOptions{
-			Provider: rc.Config.Modules.AI.Skills.Provider,
-			SSOTPath: rc.Config.Modules.AI.Skills.SSOTPath,
-			Tools:    rc.Config.Modules.AI.Skills.Tools,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("AI skills status: %w", err)
-		}
-		for _, item := range status.Items {
-			if item.Status == aisettings.SkillLinkStatusInSync || item.Status == aisettings.SkillLinkStatusSourceMissing {
-				continue
-			}
-			changes = append(changes, Change{
-				Description: fmt.Sprintf("apply skills SSOT to %s/%s (%s)", item.ToolID, item.SkillName, item.Status),
-				Command:     fmt.Sprintf("dot ai skills apply --tool %s", item.ToolID),
-			})
-		}
-	}
+	// modules.ai.skills is intentionally not checked: runtime skill symlinks
+	// are owned by the Maru app; dot only offers read-only diagnostics via
+	// `dot ai skills status`.
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
 		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
 		status, err := manager.Status(mode)
@@ -158,27 +140,6 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 			}
 		}
 	}
-	if rc.Config.Modules.AI.Skills.Enabled {
-		manager := aisettings.NewSkillsManager(rc.Runner, rc.HomeDir)
-		result, err := manager.Apply(aisettings.SkillsOptions{
-			Provider: rc.Config.Modules.AI.Skills.Provider,
-			SSOTPath: rc.Config.Modules.AI.Skills.SSOTPath,
-			Tools:    rc.Config.Modules.AI.Skills.Tools,
-			DryRun:   rc.DryRun,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("applying AI skills: %w", err)
-		}
-		for _, item := range result.Items {
-			if item.Changed {
-				messages = append(messages, fmt.Sprintf("applied skills SSOT to %s", item.TargetPath))
-			}
-		}
-		messages = append(messages, result.Warnings...)
-		if warning := m.anchorDoctorWarning(ctx, rc); warning != "" {
-			messages = append(messages, warning)
-		}
-	}
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
 		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
 		result, err := manager.Apply(aisettings.CoauthorGuardOptions{Mode: mode, DryRun: rc.DryRun, ApplyAgents: rc.Config.Modules.AI.AgentsSSOT})
@@ -194,33 +155,4 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 	}
 
 	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
-}
-
-func (m *AIModule) anchorDoctorWarning(ctx context.Context, rc *RunContext) string {
-	skills := rc.Config.Modules.AI.Skills
-	if !skills.Enabled || strings.ToLower(strings.TrimSpace(skills.Provider)) != aisettings.SkillsProviderAnchor {
-		return ""
-	}
-	if rc.Runner == nil || !rc.Runner.CommandExists("anchor") {
-		return ""
-	}
-	if _, err := rc.Runner.RunQuery(ctx, "anchor", "doctor", "--help"); err != nil {
-		return ""
-	}
-	result, err := rc.Runner.RunQuery(ctx, "anchor", "doctor", "--quiet")
-	if err == nil {
-		return ""
-	}
-	detail := strings.TrimSpace(result.Stderr)
-	if detail == "" {
-		detail = strings.TrimSpace(result.Stdout)
-	}
-	if detail == "" {
-		detail = "anchor doctor --quiet exited non-zero"
-	}
-	return "warning: anchor doctor reported critical skill issue(s): " + oneLine(detail)
-}
-
-func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }

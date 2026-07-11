@@ -1,109 +1,108 @@
 package aisettings
 
 import (
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
-func TestSkillsManagerApplyAnchorToExplicitTools(t *testing.T) {
+func TestSkillsManagerStatusClassifiesTargets(t *testing.T) {
 	home := t.TempDir()
-	writeSkillTestFile(t, filepath.Join(home, ".anchor", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
-	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
+	source := filepath.Join(home, ".maru", "skills")
+	writeSkillTestFile(t, filepath.Join(source, "in-sync-skill", "SKILL.md"), "# In Sync\n")
+	writeSkillTestFile(t, filepath.Join(source, "missing-skill", "SKILL.md"), "# Missing\n")
+	writeSkillTestFile(t, filepath.Join(source, "conflict-skill", "SKILL.md"), "# Conflict\n")
 
-	result, err := mgr.Apply(SkillsOptions{Provider: SkillsProviderAnchor, Tools: []string{"claude", "codex"}})
+	claudeRoot := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(claudeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// in-sync: symlink to the source
+	if err := os.Symlink(filepath.Join(source, "in-sync-skill"), filepath.Join(claudeRoot, "in-sync-skill")); err != nil {
+		t.Fatal(err)
+	}
+	// conflict: real directory instead of a symlink
+	writeSkillTestFile(t, filepath.Join(claudeRoot, "conflict-skill", "SKILL.md"), "# Hand Edit\n")
+
+	mgr := NewSkillsManager(home)
+	report, err := mgr.Status(SkillsOptions{Provider: SkillsProviderMaru, Tools: []string{"claude"}})
 	if err != nil {
-		t.Fatalf("Apply: %v", err)
+		t.Fatalf("Status: %v", err)
 	}
-	if len(result.Items) != 2 {
-		t.Fatalf("items = %d, want 2", len(result.Items))
+	got := map[string]string{}
+	for _, item := range report.Items {
+		got[item.SkillName] = item.Status
 	}
-	for _, target := range []string{
-		filepath.Join(home, ".claude", "skills", "vault-extract"),
-		filepath.Join(home, ".codex", "skills", "vault-extract"),
-	} {
-		got, err := os.Readlink(target)
-		if err != nil {
-			t.Fatalf("readlink %s: %v", target, err)
-		}
-		want := filepath.Join(home, ".anchor", "skills", "vault-extract")
-		if got != want {
-			t.Fatalf("link %s = %s, want %s", target, got, want)
+	want := map[string]string{
+		"in-sync-skill":  SkillLinkStatusInSync,
+		"missing-skill":  SkillLinkStatusMissing,
+		"conflict-skill": SkillLinkStatusConflict,
+	}
+	for name, status := range want {
+		if got[name] != status {
+			t.Errorf("skill %s status = %q, want %q (all: %v)", name, got[name], status, got)
 		}
 	}
-	if _, err := os.Lstat(filepath.Join(home, ".agents", "skills", "vault-extract")); !os.IsNotExist(err) {
-		t.Fatalf("explicit tools should not touch agents target, stat err=%v", err)
+	// Status must never create or repair anything.
+	if _, err := os.Lstat(filepath.Join(claudeRoot, "missing-skill")); !os.IsNotExist(err) {
+		t.Fatalf("status created missing target, stat err=%v", err)
 	}
 }
 
-func TestSkillsManagerConflictWarnSkipAndForceBackup(t *testing.T) {
+func TestSkillsManagerStatusSourceMissing(t *testing.T) {
+	home := t.TempDir() // no ~/.maru/skills at all
+	mgr := NewSkillsManager(home)
+
+	report, err := mgr.Status(SkillsOptions{Provider: SkillsProviderMaru, Tools: []string{"claude"}})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(report.Items) != 1 || report.Items[0].Status != SkillLinkStatusSourceMissing {
+		t.Fatalf("items = %#v, want single source-missing item", report.Items)
+	}
+	if len(report.Warnings) == 0 {
+		t.Fatal("missing SSOT root should produce a warning")
+	}
+}
+
+func TestSkillsManagerAnchorAliasResolvesToMaru(t *testing.T) {
 	home := t.TempDir()
-	source := filepath.Join(home, "ssot", "skill-one")
-	writeSkillTestFile(t, filepath.Join(source, "SKILL.md"), "# One\n")
-	target := filepath.Join(home, ".claude", "skills", "skill-one")
-	writeSkillTestFile(t, filepath.Join(target, "SKILL.md"), "# Hand Edit\n")
-	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
+	writeSkillTestFile(t, filepath.Join(home, ".maru", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+	mgr := NewSkillsManager(home)
 
-	result, err := mgr.Apply(SkillsOptions{Provider: SkillsProviderPath, SSOTPath: filepath.Join(home, "ssot"), Tools: []string{"claude"}})
+	report, err := mgr.Status(SkillsOptions{Provider: "anchor", Tools: []string{"claude"}})
 	if err != nil {
-		t.Fatalf("Apply: %v", err)
+		t.Fatalf("Status with legacy anchor provider: %v", err)
 	}
-	if len(result.Items) != 1 || !result.Items[0].Conflict || result.Items[0].Changed {
-		t.Fatalf("unforced conflict item = %#v", result.Items)
+	if report.Provider != SkillsProviderMaru {
+		t.Fatalf("provider = %q, want %q", report.Provider, SkillsProviderMaru)
 	}
-	if _, err := os.Readlink(target); err == nil {
-		t.Fatal("unforced conflict replaced target symlink")
+	if report.SSOTPath != filepath.Join(home, ".maru", "skills") {
+		t.Fatalf("ssot = %q, want maru default", report.SSOTPath)
 	}
-	data, err := os.ReadFile(filepath.Join(target, "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "# Hand Edit\n" {
-		t.Fatalf("unforced conflict modified target: %q", data)
-	}
-
-	forced, err := mgr.Apply(SkillsOptions{Provider: SkillsProviderPath, SSOTPath: filepath.Join(home, "ssot"), Tools: []string{"claude"}, Force: true})
-	if err != nil {
-		t.Fatalf("Apply force: %v", err)
-	}
-	if len(forced.Items) != 1 || !forced.Items[0].Changed || !forced.Items[0].BackedUp {
-		t.Fatalf("forced item = %#v", forced.Items)
-	}
-	got, err := os.Readlink(target)
-	if err != nil {
-		t.Fatalf("forced target readlink: %v", err)
-	}
-	if got != source {
-		t.Fatalf("forced target = %s, want %s", got, source)
-	}
-	backup, err := os.ReadFile(filepath.Join(forced.Items[0].BackupPath, "SKILL.md"))
-	if err != nil {
-		t.Fatalf("read backup: %v", err)
-	}
-	if string(backup) != "# Hand Edit\n" {
-		t.Fatalf("backup = %q", backup)
+	if len(report.Sources) != 1 || report.Sources[0].Name != "vault-extract" {
+		t.Fatalf("sources = %#v", report.Sources)
 	}
 }
 
 func TestSkillsManagerGeminiAndAntigravityRootsAreSeparate(t *testing.T) {
 	home := t.TempDir()
-	writeSkillTestFile(t, filepath.Join(home, ".anchor", "skills", "shared-skill", "SKILL.md"), "# Shared\n")
-	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
+	writeSkillTestFile(t, filepath.Join(home, ".maru", "skills", "shared-skill", "SKILL.md"), "# Shared\n")
+	mgr := NewSkillsManager(home)
 
-	if _, err := mgr.Apply(SkillsOptions{Provider: SkillsProviderAnchor, Tools: []string{"gemini", "antigravity"}}); err != nil {
-		t.Fatalf("Apply: %v", err)
+	report, err := mgr.Status(SkillsOptions{Provider: SkillsProviderMaru, Tools: []string{"gemini", "antigravity"}})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
 	}
-	for _, target := range []string{
-		filepath.Join(home, ".gemini", "skills", "shared-skill"),
-		filepath.Join(home, ".gemini", "antigravity", "skills", "shared-skill"),
-	} {
-		if got, err := os.Readlink(target); err != nil || !strings.HasSuffix(got, filepath.Join(".anchor", "skills", "shared-skill")) {
-			t.Fatalf("target %s readlink=%q err=%v", target, got, err)
-		}
+	roots := map[string]string{}
+	for _, item := range report.Items {
+		roots[item.ToolID] = item.ToolRoot
+	}
+	if roots["gemini"] != filepath.Join(home, ".gemini", "skills") {
+		t.Fatalf("gemini root = %q", roots["gemini"])
+	}
+	if roots["antigravity"] != filepath.Join(home, ".gemini", "antigravity", "skills") {
+		t.Fatalf("antigravity root = %q", roots["antigravity"])
 	}
 }
 
@@ -116,7 +115,7 @@ func TestSkillsManagerDefaultToolsDetectsPresentSkillRoots(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".gemini", "antigravity", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
+	mgr := NewSkillsManager(home)
 
 	got := mgr.DefaultTools()
 	if !defaultToolsHas(got, "claude") || !defaultToolsHas(got, "antigravity") {
@@ -134,7 +133,7 @@ func TestSkillsManagerDefaultToolsDetectsPresentSkillRoots(t *testing.T) {
 
 func TestSkillsManagerDefaultToolsFallsBackToAll(t *testing.T) {
 	home := t.TempDir() // no skills roots present
-	mgr := NewSkillsManager(dotexec.NewRunner(false, slog.Default()), home)
+	mgr := NewSkillsManager(home)
 
 	want := map[string]bool{}
 	for _, tool := range RegisteredSkillTools() {

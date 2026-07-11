@@ -105,9 +105,10 @@ type Engine struct {
 
 // Entries returns the static AI config manifest.
 func Entries(includeAuth bool) []Entry {
-	// Skill directories are intentionally absent. Anchor owns skill federation,
-	// runtime links, and source reconciliation; dotfiles only archives
-	// environment and agent settings around that boundary.
+	// Skill directories are intentionally absent. The Maru app (formerly
+	// Anchor) owns skill federation, runtime links, and source reconciliation;
+	// dotfiles only archives environment and agent settings around that
+	// boundary.
 	entries := []Entry{
 		{Tool: "claude", Path: ".config/claude/settings.json", Description: "dot-managed Claude settings"},
 		{Tool: "claude", Path: ".claude/settings.json", Description: "Claude Code settings"},

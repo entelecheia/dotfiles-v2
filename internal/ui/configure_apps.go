@@ -41,17 +41,15 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 	}
 
 	modeDefault := "none"
-	if state.Modules.AI.Skills.Enabled {
-		switch state.Modules.AI.Skills.Provider {
-		case "anchor":
-			modeDefault = "anchor"
-		case "path":
-			modeDefault = "custom path"
-		}
+	switch state.Modules.AI.Skills.Provider {
+	case "maru", "anchor": // anchor is a legacy alias for maru
+		modeDefault = "maru"
+	case "path":
+		modeDefault = "custom path"
 	}
-	fmt.Println(StyleHint.Render("  Skills can be symlinked from a configured SSOT into Claude, Codex, and other tool roots."))
+	fmt.Println(StyleHint.Render("  Skills SSOT is only used by the read-only `dot ai skills` diagnostics; the Maru app manages runtime symlinks."))
 	mode, err := Select("Skills SSOT",
-		[]string{"none", "anchor", "custom path"}, modeDefault, false)
+		[]string{"none", "maru", "custom path"}, modeDefault, false)
 	if err != nil {
 		return err
 	}
@@ -60,16 +58,16 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 		return nil
 	}
 
-	skills := config.AISkillsConfig{Enabled: true}
+	var skills config.AISkillsConfig
 	switch mode {
-	case "anchor":
-		skills.Provider = "anchor"
+	case "maru":
+		skills.Provider = "maru"
 		skills.SSOTPath = ""
 	case "custom path":
 		skills.Provider = "path"
 		defaultPath := state.Modules.AI.Skills.SSOTPath
 		if defaultPath == "" {
-			defaultPath = "~/.anchor/skills"
+			defaultPath = "~/.maru/skills"
 		}
 		skills.SSOTPath, err = Input("Skills SSOT path", defaultPath, false)
 		if err != nil {

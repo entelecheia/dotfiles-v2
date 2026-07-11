@@ -5,99 +5,57 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
 
-func TestAnchorDoctorWarning(t *testing.T) {
-	tests := []struct {
-		name       string
-		provider   string
-		script     string
-		wantSubstr string
-	}{
-		{
-			name:     "missing anchor cli",
-			provider: "anchor",
-		},
-		{
-			name:     "path provider skips anchor doctor",
-			provider: "path",
-			script:   anchorScript("critical duplicate_source", 1, true),
-		},
-		{
-			name:     "missing doctor subcommand skips",
-			provider: "anchor",
-			script: `#!/bin/sh
-echo "unknown command" >&2
-exit 1
-`,
-		},
-		{
-			name:     "clean doctor skips",
-			provider: "anchor",
-			script:   anchorScript("", 0, true),
-		},
-		{
-			name:       "critical doctor output warns",
-			provider:   "anchor",
-			script:     anchorScript("critical duplicate_source", 1, true),
-			wantSubstr: "critical duplicate_source",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			bin := t.TempDir()
-			if tt.script != "" {
-				writeExecutable(t, filepath.Join(bin, "anchor"), tt.script)
-			}
-			t.Setenv("PATH", bin)
-
-			rc := &RunContext{
-				Config: &config.Config{Modules: config.ModulesConfig{AI: config.AIConfig{
-					Skills: config.AISkillsConfig{
-						Enabled:  true,
-						Provider: tt.provider,
-						Tools:    []string{"claude"},
-					},
-				}}},
-				Runner:  dotexec.NewRunner(false, slog.Default()),
-				HomeDir: t.TempDir(),
-			}
-
-			got := (&AIModule{}).anchorDoctorWarning(context.Background(), rc)
-			if tt.wantSubstr == "" {
-				if got != "" {
-					t.Fatalf("anchorDoctorWarning = %q, want empty", got)
-				}
-				return
-			}
-			if !strings.Contains(got, tt.wantSubstr) {
-				t.Fatalf("anchorDoctorWarning = %q, want substring %q", got, tt.wantSubstr)
-			}
-		})
-	}
-}
-
-func anchorScript(quietStderr string, quietExit int, helpOK bool) string {
-	helpExit := 1
-	if helpOK {
-		helpExit = 0
-	}
-	return "#!/bin/sh\n" +
-		"if [ \"$1\" = \"doctor\" ] && [ \"$2\" = \"--help\" ]; then exit " + strconv.Itoa(helpExit) + "; fi\n" +
-		"if [ \"$1\" = \"doctor\" ] && [ \"$2\" = \"--quiet\" ]; then echo \"" + quietStderr + "\" >&2; exit " + strconv.Itoa(quietExit) + "; fi\n" +
-		"exit 2\n"
-}
-
-func writeExecutable(t *testing.T, path, body string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+// Legacy configs may still carry modules.ai.skills.enabled: true. The AI
+// module must ignore it: skill symlinks are owned by the Maru app, so neither
+// Check nor Apply may report or touch skill targets.
+func TestAIModuleIgnoresLegacySkillsConfig(t *testing.T) {
+	home := t.TempDir()
+	// A configured source skill with no target symlink — the old code would
+	// have reported a "apply skills SSOT" change and created the symlink.
+	ssot := filepath.Join(home, ".maru", "skills")
+	if err := os.MkdirAll(filepath.Join(ssot, "vault-extract"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ssot, "vault-extract", "SKILL.md"), []byte("# Vault Extract\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rc := &RunContext{
+		Config: &config.Config{Modules: config.ModulesConfig{AI: config.AIConfig{
+			Enabled: true,
+			Skills: config.AISkillsConfig{
+				Enabled:  true,
+				Provider: "maru",
+				Tools:    []string{"claude"},
+			},
+		}}},
+		Runner:   dotexec.NewRunner(false, slog.Default()),
+		Template: template.NewEngine(),
+		HomeDir:  home,
+	}
+
+	res, err := (&AIModule{}).Check(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	for _, c := range res.Changes {
+		if strings.Contains(c.Description, "skills") || strings.Contains(c.Command, "skills") {
+			t.Errorf("Check reported a skills change despite diagnose-only policy: %+v", c)
+		}
+	}
+
+	if _, err := (&AIModule{}).Apply(context.Background(), rc); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".claude", "skills", "vault-extract")); !os.IsNotExist(err) {
+		t.Fatalf("Apply created a skill symlink despite diagnose-only policy, stat err=%v", err)
 	}
 }

@@ -1,9 +1,9 @@
-# Anchor / dotfiles-v2 Boundary
+# Maru / dotfiles-v2 Boundary
 
-`dotfiles-v2` owns environment and AI tool settings. Anchor owns skill packages,
-skill runtime state, and the default skills SSOT. When explicitly configured,
-`dotfiles-v2` may deploy source-owned skills into tool-specific skill roots as
-symlinks.
+`dotfiles-v2` owns environment and AI tool settings. The Maru app (its
+`skill_host` module) owns skill sources, the skills registry, runtime symlinks,
+and tool federation. `dotfiles-v2` never deploys skills; it provides read-only
+diagnostics only (`dot ai skills list|validate|path|status`).
 
 ## dotfiles-v2 May Write
 
@@ -16,28 +16,26 @@ symlinks.
 - `~/.config/shell/30-ai.sh`
 - global AGENTS fan-out targets for Claude, Codex, Cursor, Antigravity,
   Copilot, and Aider
-- configured skill target symlinks under `~/.claude/skills/**`,
-  `~/.codex/skills/**`, `~/.agents/skills/**`, `~/.gemini/skills/**`, and
-  `~/.gemini/antigravity/skills/**` when `modules.ai.skills.enabled: true`
 
 ## dotfiles-v2 Must Not Write
 
-- skill source directories under `~/.anchor/skills/**` or any configured
+- anything under any tool skill root (`~/.claude/skills/**`,
+  `~/.codex/skills/**`, `~/.agents/skills/**`, `~/.gemini/skills/**`,
+  `~/.gemini/antigravity/skills/**`)
+- skill source directories under `~/.maru/skills/**` or any configured
   `modules.ai.skills.ssot_path`
-- non-symlink skill targets unless the user passes `dot ai skills apply --force`
-  to back up and replace a conflict
-- `~/.anchor/env/**`
+- `~/.maru/env/**`
 
 Skill directories may be scanned for diagnostics. Backups/restores do not copy
-skills; configured skills management only creates or repairs tool-facing
-symlinks from the configured SSOT.
+skills.
 
-## Anchor Owns
+## Maru Owns
 
-- `~/.anchor/**`
-- `~/.anchor/skills/registry.json`
-- `~/.anchor/skills/<name>` runtime symlinks
+- `~/.maru/**`
+- `~/.maru/skills/registry.json`
+- `~/.maru/skills/<name>` runtime symlinks
+- tool skill root federation (`~/.claude/skills/**`, `~/.codex/skills/**`, …)
 - source reconciliation, registry validation, and duplicate-tier policy
 
-If this boundary changes, update the matching Anchor boundary document and the
-workspace rule at `~/workspace/work/_sys/rules/skills-ssot.md`.
+If this boundary changes, update the matching Maru boundary document and the
+workspace rule at `~/workspace/work/_meta/rules/skills-ssot.md`.
