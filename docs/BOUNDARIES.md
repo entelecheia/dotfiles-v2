@@ -8,7 +8,8 @@ diagnostics only (`dot ai skills list|validate|path|status`).
 ## dotfiles-v2 May Write
 
 - `~/.claude/CLAUDE.md`
-- `~/.claude/settings.json`
+- `~/.claude/settings.json` (HUD statusLine block; `dot guard` PreToolUse hook
+  entries tagged `# dot-guard`; entries owned by other tools are never touched)
 - `~/.claude/settings.local.json` when explicitly included in auth/local flows
 - `~/.claude/hooks/**`
 - `~/.claude/keybindings.json`

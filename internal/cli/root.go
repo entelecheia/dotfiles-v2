@@ -65,6 +65,9 @@ Also available as 'dotfiles' for back-compat.`,
 	// Cloudflare Tunnel SSH access
 	root.AddCommand(newTunnelCmd())
 
+	// Claude Code safety hooks (careful + freeze)
+	root.AddCommand(newGuardCmd())
+
 	// Workspace commands
 	root.AddCommand(newOpenCmd())
 	root.AddCommand(newStopCmd())

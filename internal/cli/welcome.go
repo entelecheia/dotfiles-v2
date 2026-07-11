@@ -38,6 +38,7 @@ func printWelcome(cmd *cobra.Command, version, commit string) {
 	printWelcomeCmd(p, "dot sync", "Sync binaries with remote server via rsync")
 	printWelcomeCmd(p, "dot gsync", "Sync workspace artifacts with Drive mirror")
 	printWelcomeCmd(p, "dot tunnel", "Manage Cloudflare Tunnel SSH access")
+	printWelcomeCmd(p, "dot guard", "Claude Code safety hooks (careful + freeze)")
 	printWelcomeCmd(p, "dot backup", "One-stop backup wizard (profile, apps, AI, secrets)")
 	printWelcomeCmd(p, "dot restore", "One-stop restore wizard (cross-host migration)")
 	printWelcomeCmd(p, "dot apps install", "Install macOS cask apps (interactive picker)")
@@ -323,6 +324,21 @@ func printUsecases(cmd *cobra.Command) {
 				"Show loaded configuration and system info"},
 			{"dot sync log 100",
 				"View recent rsync sync log entries"},
+		})
+
+	section(p, "16. Claude Code safety hooks (guard)",
+		"Warn before destructive shell commands and fence file edits into one directory.",
+		[]usecase{
+			{"dot guard enable",
+				"Register careful warnings (rm -rf, DROP, force-push, ...; new sessions only)"},
+			{"dot guard freeze ./src",
+				"Deny Edit/Write outside ./src (takes effect immediately)"},
+			{"dot guard unfreeze",
+				"Clear the edit boundary"},
+			{"dot guard status",
+				"Show hook registration and binary health"},
+			{"dot guard disable",
+				"Remove guard hook entries; other hooks untouched"},
 		})
 
 	p.Section("Global flags (work with most commands)")
