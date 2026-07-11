@@ -37,6 +37,7 @@ type UserModulesState struct {
 	Gsync        UserGsyncState        `yaml:"gdrive_sync,omitempty"`
 	MacApps      UserMacAppsState      `yaml:"macapps,omitempty"`
 	Tunnel       UserTunnelState       `yaml:"tunnel,omitempty"`
+	Guard        UserGuardState        `yaml:"guard,omitempty"`
 }
 
 // UserAIState holds user selections for AI CLI/config helpers.
@@ -171,6 +172,21 @@ func (s UserTunnelState) IsZero() bool {
 	return s.TunnelName == "" && s.TunnelID == "" && s.Hostname == ""
 }
 
+// UserGuardState holds the Claude Code safety-hook values managed by
+// `dot guard`. The hook hot path reads Careful/FreezeDir live on every
+// tool call, so freeze/unfreeze take effect mid-session. The registered
+// hook command itself is not mirrored here: settings.json is the single
+// source of truth (status reads it live via InspectHookEntries).
+type UserGuardState struct {
+	Careful   bool   `yaml:"careful,omitempty"`
+	FreezeDir string `yaml:"freeze_dir,omitempty"` // absolute path; edits outside it are denied
+}
+
+// IsZero lets yaml.v3 omit an unset guard block from user state.
+func (s UserGuardState) IsZero() bool {
+	return !s.Careful && s.FreezeDir == ""
+}
+
 // RepoConfig describes a git repository to clone into the workspace.
 type RepoConfig struct {
 	Name   string `yaml:"name"`             // subdirectory name: "work" or "vault"
@@ -254,6 +270,9 @@ func (s *UserState) Validate() error {
 	}
 	if err := validateTunnelState(s.Modules.Tunnel); err != nil {
 		return err
+	}
+	if s.Modules.Guard.FreezeDir != "" && !filepath.IsAbs(s.Modules.Guard.FreezeDir) {
+		return fmt.Errorf("modules.guard.freeze_dir must be an absolute path (got %q)", s.Modules.Guard.FreezeDir)
 	}
 	if err := validateAISkillsConfig(s.Modules.AI.Skills); err != nil {
 		return err

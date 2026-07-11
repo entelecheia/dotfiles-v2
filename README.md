@@ -362,6 +362,46 @@ Cloudflare Access app creation stays manual: after setup, create a Self-hosted
 Access app for the SSH hostname in the Cloudflare dashboard, add an Allow
 policy, then run `dot tunnel client add <hostname>` on client machines.
 
+### `dot guard`
+
+Claude Code safety hooks, ported from gstack's careful/freeze skills. Two
+protections run as a single PreToolUse hook backed by the dot binary itself:
+
+- **careful**: warns (permission prompt) before destructive shell commands:
+  `rm -rf`, SQL `DROP`/`TRUNCATE`, `git push --force`, `git reset --hard`,
+  `git checkout/restore .`, `kubectl delete`, `docker rm -f`/`system prune`.
+  Recursive deletes of pure build artifacts (`node_modules`, `dist`, `.next`,
+  `__pycache__`, `.cache`, `build`, `.turbo`, `coverage`) pass without a prompt.
+- **freeze**: denies `Edit`/`Write`/`NotebookEdit` outside a chosen directory.
+  Temp dirs and `~/.claude/plans` stay writable so planning and scratch work
+  survive a frozen session.
+
+```bash
+dot guard enable          # register hooks in ~/.claude/settings.json + careful on
+dot guard freeze ./src    # deny file edits outside ./src (immediate)
+dot guard unfreeze        # clear the boundary (hooks stay registered)
+dot guard status          # registration, careful/freeze state, binary health
+dot guard disable         # remove dot-guard entries; other hooks untouched
+```
+
+Mechanics and honesty notes:
+
+- Hook entries are tagged with a trailing `# dot-guard` marker, so enable/
+  disable only ever touch dot's own entries; hooks owned by other tools are
+  preserved semantically (a rewrite sorts JSON keys alphabetically, same as
+  `dot ai hud apply`; values are never altered).
+- `enable`/`disable` edit `settings.json`, which Claude Code snapshots at
+  session start: they affect **new** sessions only. `freeze`/`unfreeze` write
+  dot state that the hook reads live, so they apply **immediately**.
+- The hook fails open by construction: if the dot binary is missing or moved,
+  Claude Code treats the hook error as non-blocking and tool calls proceed
+  unprotected. `dot guard status` flags this. Rerun `dot guard enable` after
+  moving the binary.
+- Guard is a guardrail, not a sandbox: careful only inspects the Bash tool
+  (an agent can still write files via `sed`/`tee`), and freeze does not
+  constrain shell commands. Fire logging records the matched pattern name
+  only, never command content.
+
 ### `dot gsync`
 
 > Legacy alias `dot gdrive-sync` continues to work — same command, shorter name.
