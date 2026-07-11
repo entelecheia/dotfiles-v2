@@ -61,40 +61,39 @@ schema_version: v1
 	}
 }
 
-func TestAISkillsApplyPersistsConfiguredSSOT(t *testing.T) {
+func TestAISkillsApplySubcommandRemoved(t *testing.T) {
 	home := t.TempDir()
-	ssot := filepath.Join(home, "anchor-skills")
-	writeCLITestFile(t, filepath.Join(ssot, "vault-extract", "SKILL.md"), "# Vault Extract\n")
 
-	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "anchor", "--ssot", ssot, "--tool", "claude", "--persist", "--json")
+	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "--help")
 	if err != nil {
-		t.Fatalf("skills apply: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+		t.Fatalf("skills help: %v\nstderr=%s", err, errOut)
 	}
-	target := filepath.Join(home, ".claude", "skills", "vault-extract")
-	got, err := os.Readlink(target)
-	if err != nil {
-		t.Fatalf("readlink %s: %v", target, err)
+	if strings.Contains(out, "apply") {
+		t.Fatalf("skills help still advertises apply (Maru owns symlinks):\n%s", out)
 	}
-	if got != filepath.Join(ssot, "vault-extract") {
-		t.Fatalf("target link = %s", got)
+	if !strings.Contains(out, "read-only") {
+		t.Fatalf("skills help missing read-only wording:\n%s", out)
 	}
-	stateData, err := os.ReadFile(filepath.Join(home, ".config", "dotfiles", "config.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := string(stateData)
-	for _, want := range []string{"skills:", "enabled: true", "provider: anchor", "ssot_path: " + ssot, "- claude"} {
-		if !strings.Contains(state, want) {
-			t.Fatalf("persisted state missing %q:\n%s", want, state)
-		}
-	}
+}
+
+func TestAISkillsStatusUsesLegacyEnabledConfigWithoutActingOnIt(t *testing.T) {
+	home := t.TempDir()
+	ssot := filepath.Join(home, "maru-skills")
+	writeCLITestFile(t, filepath.Join(ssot, "vault-extract", "SKILL.md"), "# Vault Extract\n")
+	// Legacy config: modules.ai.skills.enabled is deprecated but must still load.
+	writeCLITestFile(t, filepath.Join(home, ".config", "dotfiles", "config.yaml"),
+		"name: Test\nprofile: full\nmodules:\n  ai:\n    enabled: true\n    skills:\n      enabled: true\n      provider: maru\n      ssot_path: "+ssot+"\n      tools: [claude]\n")
 
 	status, errOut, err := runDotForTest("--home", home, "ai", "skills", "status", "--json")
 	if err != nil {
-		t.Fatalf("skills status from persisted config: %v\nstderr=%s", err, errOut)
+		t.Fatalf("skills status from legacy config: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(status, `"status": "in-sync"`) {
-		t.Fatalf("status did not use persisted skills config:\n%s", status)
+	if !strings.Contains(status, `"status": "missing"`) {
+		t.Fatalf("status did not diagnose configured skills:\n%s", status)
+	}
+	// Diagnose-only: the missing target must not have been created.
+	if _, err := os.Lstat(filepath.Join(home, ".claude", "skills", "vault-extract")); !os.IsNotExist(err) {
+		t.Fatalf("status created a symlink, stat err=%v", err)
 	}
 }
 
@@ -172,17 +171,17 @@ func TestAIAgentsApplyForceWritesAndAudits(t *testing.T) {
 func TestAISkillsPathDefaultsWithNoFlags(t *testing.T) {
 	home := t.TempDir()
 	writeCLITestFile(t, filepath.Join(home, ".claude", "skills", ".keep"), "")
-	writeCLITestFile(t, filepath.Join(home, ".anchor", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+	writeCLITestFile(t, filepath.Join(home, ".maru", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
 
 	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "path")
 	if err != nil {
 		t.Fatalf("skills path with no flags should succeed: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, "anchor") {
-		t.Fatalf("path output missing provider anchor:\n%s", out)
+	if !strings.Contains(out, "maru") {
+		t.Fatalf("path output missing provider maru:\n%s", out)
 	}
-	if !strings.Contains(out, filepath.Join(home, ".anchor", "skills")) {
-		t.Fatalf("path output missing anchor SSOT root:\n%s", out)
+	if !strings.Contains(out, filepath.Join(home, ".maru", "skills")) {
+		t.Fatalf("path output missing maru SSOT root:\n%s", out)
 	}
 	if !strings.Contains(out, "Target Roots") || !strings.Contains(out, filepath.Join(home, ".claude", "skills")) {
 		t.Fatalf("path output missing detected target root:\n%s", out)
@@ -192,23 +191,37 @@ func TestAISkillsPathDefaultsWithNoFlags(t *testing.T) {
 func TestAISkillsStatusDefaultsWithNoFlags(t *testing.T) {
 	home := t.TempDir()
 	writeCLITestFile(t, filepath.Join(home, ".claude", "skills", ".keep"), "")
-	writeCLITestFile(t, filepath.Join(home, ".anchor", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+	writeCLITestFile(t, filepath.Join(home, ".maru", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
 
 	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "status", "--json")
 	if err != nil {
 		t.Fatalf("skills status with no flags should succeed: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, `"provider": "anchor"`) {
-		t.Fatalf("status json missing provider anchor:\n%s", out)
+	if !strings.Contains(out, `"provider": "maru"`) {
+		t.Fatalf("status json missing provider maru:\n%s", out)
 	}
 	if !strings.Contains(out, `"claude"`) {
 		t.Fatalf("status json missing detected tool:\n%s", out)
 	}
 }
 
+func TestAISkillsStatusAcceptsLegacyAnchorProvider(t *testing.T) {
+	home := t.TempDir()
+	writeCLITestFile(t, filepath.Join(home, ".claude", "skills", ".keep"), "")
+	writeCLITestFile(t, filepath.Join(home, ".maru", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+
+	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "status", "--provider", "anchor", "--json")
+	if err != nil {
+		t.Fatalf("skills status with legacy anchor provider should succeed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, `"provider": "maru"`) {
+		t.Fatalf("legacy anchor provider should resolve to maru:\n%s", out)
+	}
+}
+
 func TestAISkillsPathFallsBackToAllToolsWhenNoneDetected(t *testing.T) {
 	home := t.TempDir() // no ~/.claude, ~/.codex, ~/.gemini etc.
-	writeCLITestFile(t, filepath.Join(home, ".anchor", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
+	writeCLITestFile(t, filepath.Join(home, ".maru", "skills", "vault-extract", "SKILL.md"), "# Vault Extract\n")
 
 	out, errOut, err := runDotForTest("--home", home, "ai", "skills", "path")
 	if err != nil {
@@ -221,44 +234,26 @@ func TestAISkillsPathFallsBackToAllToolsWhenNoneDetected(t *testing.T) {
 	}
 }
 
-func TestAISkillsApplyNoToolsReturnsActionableError(t *testing.T) {
-	home := t.TempDir()
-	ssot := filepath.Join(home, "anchor-skills")
-	writeCLITestFile(t, filepath.Join(ssot, "vault-extract", "SKILL.md"), "# Vault Extract\n")
-
-	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "anchor", "--ssot", ssot)
-	if err == nil {
-		t.Fatal("apply with no tools and no config should error")
-	}
-	msg := err.Error() + errOut
-	for _, want := range []string{"--tool", "claude", "modules.ai.skills.tools"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("apply error not actionable, missing %q: %v\nstderr=%s", want, err, errOut)
-		}
-	}
-}
-
-func TestAISkillsApplyProviderPathRequiresSSOT(t *testing.T) {
+func TestAISkillsStatusProviderPathRequiresSSOT(t *testing.T) {
 	home := t.TempDir()
 
-	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "path", "--tool", "claude")
+	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "status", "--provider", "path", "--tool", "claude")
 	if err == nil {
-		t.Fatal("apply with provider=path and no --ssot should error")
+		t.Fatal("status with provider=path and no --ssot should error")
 	}
 	msg := err.Error() + errOut
-	if !strings.Contains(msg, "--ssot") || !strings.Contains(msg, "anchor") {
+	if !strings.Contains(msg, "--ssot") || !strings.Contains(msg, "maru") {
 		t.Fatalf("provider=path error not actionable: %v\nstderr=%s", err, errOut)
 	}
 }
 
-func TestAISkillsApplyUnknownToolListsValid(t *testing.T) {
+func TestAISkillsStatusUnknownToolListsValid(t *testing.T) {
 	home := t.TempDir()
-	ssot := filepath.Join(home, "anchor-skills")
-	writeCLITestFile(t, filepath.Join(ssot, "demo", "SKILL.md"), "# Demo\n")
+	writeCLITestFile(t, filepath.Join(home, ".maru", "skills", "demo", "SKILL.md"), "# Demo\n")
 
-	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "apply", "--provider", "anchor", "--ssot", ssot, "--tool", "bogus")
+	_, errOut, err := runDotForTest("--home", home, "ai", "skills", "status", "--tool", "bogus")
 	if err == nil {
-		t.Fatal("apply with an unknown tool should error")
+		t.Fatal("status with an unknown tool should error")
 	}
 	msg := err.Error() + errOut
 	if !strings.Contains(msg, "bogus") || !strings.Contains(msg, "valid:") {

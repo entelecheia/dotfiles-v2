@@ -341,6 +341,9 @@ func TestLoadState_AIHUDPersistEnablesAI(t *testing.T) {
 	}
 }
 
+// Legacy configs carrying the deprecated modules.ai.skills.enabled flag and
+// the legacy anchor provider must still load without error; the values remain
+// available as diagnostics defaults but nothing acts on Enabled.
 func TestLoadState_AISkillsPersistsAndEnablesAI(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -353,7 +356,7 @@ func TestLoadState_AISkillsPersistsAndEnablesAI(t *testing.T) {
 	}
 	cfg := &Config{}
 	ApplyStateToConfig(cfg, loaded)
-	if !cfg.Modules.AI.Enabled || !cfg.Modules.AI.Skills.Enabled {
+	if !cfg.Modules.AI.Enabled {
 		t.Fatalf("AI skills should enable AI module, got enabled=%v skills=%#v", cfg.Modules.AI.Enabled, cfg.Modules.AI.Skills)
 	}
 	if cfg.Modules.AI.Skills.Provider != "anchor" || strings.Join(cfg.Modules.AI.Skills.Tools, ",") != "claude,codex" {
@@ -368,12 +371,13 @@ func TestValidate_AISkillsConfig(t *testing.T) {
 		errSub string
 	}{
 		{name: "empty"},
-		{name: "anchor ok", skills: AISkillsConfig{Enabled: true, Provider: "anchor", Tools: []string{"claude"}}},
-		{name: "path ok", skills: AISkillsConfig{Enabled: true, Provider: "path", SSOTPath: "~/skills", Tools: []string{"antigravity"}}},
-		{name: "missing provider", skills: AISkillsConfig{Enabled: true, Tools: []string{"claude"}}, errSub: "provider"},
-		{name: "path missing ssot", skills: AISkillsConfig{Enabled: true, Provider: "path", Tools: []string{"claude"}}, errSub: "ssot_path"},
-		{name: "enabled needs tools", skills: AISkillsConfig{Enabled: true, Provider: "anchor"}, errSub: "tools"},
-		{name: "bad tool", skills: AISkillsConfig{Enabled: true, Provider: "anchor", Tools: []string{"cursor"}}, errSub: "tools entry"},
+		{name: "maru ok", skills: AISkillsConfig{Provider: "maru", Tools: []string{"claude"}}},
+		{name: "legacy anchor ok", skills: AISkillsConfig{Enabled: true, Provider: "anchor", Tools: []string{"claude"}}},
+		{name: "path ok", skills: AISkillsConfig{Provider: "path", SSOTPath: "~/skills", Tools: []string{"antigravity"}}},
+		{name: "legacy enabled without tools ok", skills: AISkillsConfig{Enabled: true, Provider: "maru"}},
+		{name: "unknown provider", skills: AISkillsConfig{Provider: "bogus", Tools: []string{"claude"}}, errSub: "provider"},
+		{name: "path missing ssot", skills: AISkillsConfig{Provider: "path", Tools: []string{"claude"}}, errSub: "ssot_path"},
+		{name: "bad tool", skills: AISkillsConfig{Provider: "maru", Tools: []string{"cursor"}}, errSub: "tools entry"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
