@@ -7,14 +7,18 @@ package aisettings
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -25,7 +29,16 @@ import (
 const (
 	archiveVersion = 1
 	homePrefix     = "home"
+	maxSecretScan  = 4 << 20
 )
+
+var (
+	assignmentPattern     = regexp.MustCompile(`(?i)["']?([a-z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,#}\]\r\n]+))`)
+	positionalFlagPattern = regexp.MustCompile(`(?i)["'](--?[a-z0-9_-]+)["']\s*,\s*["']([^"']+)["']`)
+	shellFlagPattern      = regexp.MustCompile(`(?i)(?:^|\s)(--?[a-z0-9_-]+)(?:=|\s+)["']?([^\s"']+)`)
+)
+
+const claudeStateRelPath = ".claude.json"
 
 // Entry describes one home-relative path managed by the AI config archive.
 type Entry struct {
@@ -116,7 +129,7 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "claude", Path: ".claude/agents", Description: "Claude agents"},
 		{Tool: "claude", Path: ".claude/commands", Description: "Claude commands"},
 		{Tool: "claude", Path: ".claude/hooks", Description: "Claude hooks"},
-		{Tool: "claude", Path: ".claude/mcp.json", Description: "Claude MCP config"},
+		{Tool: "claude", Path: ".claude.json", Description: "Claude Code state and MCP config"},
 		{Tool: "codex", Path: ".codex/AGENTS.md", Description: "Codex global instructions"},
 		{Tool: "codex", Path: ".codex/config.toml", Description: "Codex config and MCP servers"},
 		{Tool: "codex", Path: ".codex/prompts", Description: "Codex prompts"},
@@ -135,10 +148,10 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/plugins", Description: "Antigravity CLI plugins"},
 		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md", Description: "GitHub Copilot global instructions"},
 		{Tool: "aider", Path: ".aider.conf.md", Description: "Aider global instructions"},
-		// Anchor settings files only — skills/_sources/env are Anchor-managed
-		// git repos and venvs that Anchor restores itself.
-		{Tool: "anchor", Path: ".anchor/settings.json", Description: "Anchor app settings"},
-		{Tool: "anchor", Path: ".anchor/sites.json", Description: "Anchor sites registry"},
+		// Maru settings files only — skills/_sources/env are Maru-managed git
+		// repos and venvs that Maru restores itself.
+		{Tool: "maru", Path: ".maru/settings.json", Description: "Maru app settings"},
+		{Tool: "maru", Path: ".maru/sites.json", Description: "Maru sites registry"},
 	}
 	authEntries := []Entry{
 		{Tool: "claude", Path: ".claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},
@@ -189,6 +202,9 @@ type RestoreOptions struct {
 // version directory is removed when any step before the metadata files
 // fails, so List/ResolveLatest never see orphan snapshots.
 func (e *Engine) Backup(opts BackupOptions) (*Summary, error) {
+	if err := e.validatePortableEntries(opts.IncludeAuth); err != nil {
+		return nil, err
+	}
 	version, err := e.uniqueVersion(time.Now())
 	if err != nil {
 		return nil, err
@@ -248,6 +264,12 @@ func (e *Engine) Restore(opts RestoreOptions) (*Summary, error) {
 // 0600: with IncludeAuth it contains OAuth/API credentials in plaintext,
 // and nothing depends on it being group/world-readable otherwise.
 func (e *Engine) Export(path string, opts BackupOptions) (*Summary, error) {
+	if err := e.validatePortableEntries(opts.IncludeAuth); err != nil {
+		return nil, err
+	}
+	if err := e.validatePortableArchiveLinks(opts.IncludeAuth); err != nil {
+		return nil, err
+	}
 	if e.Runner.DryRun {
 		e.Runner.Logger.Info("dry-run: export AI config", "path", path)
 		sum, err := e.copyFromHome("", opts.IncludeAuth)
@@ -260,45 +282,502 @@ func (e *Engine) Export(path string, opts BackupOptions) (*Summary, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create export dir: %w", err)
 	}
-	out, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	dir := filepath.Dir(path)
+	out, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return nil, fmt.Errorf("create archive: %w", err)
+		return nil, fmt.Errorf("create temporary archive: %w", err)
 	}
-	defer out.Close()
-	// O_CREATE's mode is ignored when the file already existed — heal it.
+	tmpPath := out.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = out.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
 	if err := out.Chmod(0o600); err != nil {
 		return nil, fmt.Errorf("chmod archive: %w", err)
 	}
-	gw := gzip.NewWriter(out)
-	defer gw.Close()
-	tw := tar.NewWriter(gw)
-	defer tw.Close()
 
 	version := NewVersion(time.Now())
-	sum, err := e.addHomeToTar(tw, opts.IncludeAuth)
+	var sum *Summary
+	err = writeCompressedTar(out, func(tw *tar.Writer) error {
+		var writeErr error
+		sum, writeErr = e.addHomeToTar(tw, opts.IncludeAuth)
+		if writeErr != nil {
+			return writeErr
+		}
+		sum.Version = version
+		sum.Path = path
+		if writeErr := addYAMLToTar(tw, "meta.yaml", Meta{
+			Version: version, Tag: opts.Tag, Hostname: e.Hostname,
+			CreatedAt: time.Now().UTC(), IncludeAuth: opts.IncludeAuth, User: e.User,
+		}); writeErr != nil {
+			return writeErr
+		}
+		return addYAMLToTar(tw, "manifest.yaml", ArchiveManifest{
+			Schema: archiveVersion, IncludeAuth: opts.IncludeAuth, Entries: sum.Entries,
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("write archive: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		return nil, fmt.Errorf("sync archive: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return nil, fmt.Errorf("close archive: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return nil, fmt.Errorf("publish archive: %w", err)
+	}
+	committed = true
+	if dirHandle, openErr := os.Open(dir); openErr == nil {
+		syncErr := dirHandle.Sync()
+		closeErr := dirHandle.Close()
+		if syncErr != nil {
+			return nil, fmt.Errorf("sync archive directory: %w", syncErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close archive directory: %w", closeErr)
+		}
+	} else {
+		return nil, fmt.Errorf("open archive directory for sync: %w", openErr)
+	}
+	return sum, nil
+}
+
+func writeCompressedTar(out io.Writer, write func(*tar.Writer) error) error {
+	gw := gzip.NewWriter(out)
+	tw := tar.NewWriter(gw)
+	if err := write(tw); err != nil {
+		_ = tw.Close()
+		_ = gw.Close()
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		_ = gw.Close()
+		return err
+	}
+	return gw.Close()
+}
+
+// validatePortableEntries fails before writing a snapshot/archive when a
+// portable configuration file contains an inline credential. Auth entries are
+// already opt-in via --include-auth; ordinary settings must reference the
+// environment or keychain instead of silently leaking into a plaintext backup.
+func (e *Engine) validatePortableEntries(includeAuth bool) error {
+	for _, entry := range Entries(includeAuth) {
+		if entry.Auth {
+			continue
+		}
+		src := filepath.Join(e.HomeDir, entry.Path)
+		info, err := os.Lstat(src)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect %s for secrets: %w", entry.Path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("inspect %s for secrets: top-level managed entry may not be a symlink", entry.Path)
+		}
+		canonicalRoot, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return err
+		}
+		root := portableArchiveRoot{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}
+		err = scanMaterializedSecrets(src, entry.Path, root, map[string]bool{})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func scanMaterializedSecrets(src, logicalRel string, root portableArchiveRoot, stack map[string]bool) error {
+	if isExcluded(logicalRel) {
+		return nil
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	actual := src
+	if info.Mode()&os.ModeSymlink != 0 {
+		actual, err = filepath.EvalSymlinks(src)
+		if err != nil {
+			return err
+		}
+		if !pathWithinPortableRoots(actual, []portableArchiveRoot{root}) {
+			return fmt.Errorf("symlink %s resolves outside its canonical managed root", src)
+		}
+		info, err = os.Stat(actual)
+		if err != nil {
+			return err
+		}
+	}
+	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported special file %s", src)
+		}
+		data, candidate, err := readSecretScanCandidate(logicalRel, actual, info.Size())
+		if err != nil {
+			return fmt.Errorf("read %s for inline credential scan: %w", logicalRel, err)
+		}
+		if !candidate {
+			return nil
+		}
+		if logicalRel == claudeStateRelPath {
+			data, err = claudeMCPProjection(data)
+			if err != nil {
+				return fmt.Errorf("parse %s MCP state: %w", logicalRel, err)
+			}
+		}
+		field, scanned, err := inlineSecretField(logicalRel, data, int64(len(data)))
+		if err != nil {
+			return fmt.Errorf("scan %s for inline credentials: %w", logicalRel, err)
+		}
+		if scanned && field != "" {
+			return fmt.Errorf("refusing portable AI backup: secret-like value in %s (%s); move it to an environment variable or keychain", logicalRel, field)
+		}
+		return nil
+	}
+	realDir, err := filepath.EvalSymlinks(actual)
+	if err != nil {
+		return err
+	}
+	if stack[realDir] {
+		return fmt.Errorf("symlink directory cycle at %s", src)
+	}
+	stack[realDir] = true
+	defer delete(stack, realDir)
+	children, err := os.ReadDir(actual)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := scanMaterializedSecrets(filepath.Join(actual, child.Name()), filepath.Join(logicalRel, child.Name()), root, stack); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func inlineSecretField(path string, data []byte, size int64) (string, bool, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	// Extensionless executables and opaque helper files are common in hook
+	// directories. All regular files are classified by content before scanning;
+	// arbitrary binaries are never parsed as configuration.
+	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
+		if isStructuredTextExtension(ext) {
+			return "", true, fmt.Errorf("structured text file is not valid UTF-8")
+		}
+		return "", false, nil
+	}
+	if size > maxSecretScan || len(data) > maxSecretScan {
+		return "", true, fmt.Errorf("managed text file is too large to scan safely")
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return "", true, nil
+	}
+
+	switch ext {
+	case ".json":
+		var value any
+		dec := json.NewDecoder(bytes.NewReader(data))
+		if err := dec.Decode(&value); err != nil {
+			return "", true, err
+		}
+		var extra any
+		if err := dec.Decode(&extra); err != io.EOF {
+			if err == nil {
+				return "", true, fmt.Errorf("multiple JSON values")
+			}
+			return "", true, err
+		}
+		if field := structuredSecretField(value); field != "" {
+			return field, true, nil
+		}
+	case ".yaml", ".yml":
+		var value any
+		if err := yaml.Unmarshal(data, &value); err != nil {
+			return "", true, err
+		}
+		if field := structuredSecretField(value); field != "" {
+			return field, true, nil
+		}
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		for _, match := range assignmentPattern.FindAllStringSubmatch(line, -1) {
+			if !isSecretName(match[1]) {
+				continue
+			}
+			value := firstNonEmpty(match[2:]...)
+			if !isSecretPlaceholder(value) {
+				return match[1], true, nil
+			}
+		}
+		for _, pattern := range []*regexp.Regexp{positionalFlagPattern, shellFlagPattern} {
+			for _, match := range pattern.FindAllStringSubmatch(line, -1) {
+				if isSecretName(match[1]) && !isSecretPlaceholder(match[2]) {
+					return match[1], true, nil
+				}
+			}
+		}
+	}
+	return "", true, nil
+}
+
+func isStructuredTextExtension(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".json", ".yaml", ".yml":
+		return true
+	default:
+		return false
+	}
+}
+
+func readSecretScanCandidate(rel, path string, size int64) ([]byte, bool, error) {
+	structured := isStructuredTextExtension(filepath.Ext(rel))
+	if size > maxSecretScan {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, true, err
+		}
+		defer file.Close()
+		prefix, err := io.ReadAll(io.LimitReader(file, 8192))
+		if err != nil {
+			return nil, true, err
+		}
+		if bytes.IndexByte(prefix, 0) >= 0 || !utf8.Valid(prefix) {
+			if structured {
+				return nil, true, fmt.Errorf("structured text file is not valid UTF-8")
+			}
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("managed text file is too large to scan safely")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, true, err
+	}
+	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
+		if structured {
+			return nil, true, fmt.Errorf("structured text file is not valid UTF-8")
+		}
+		return nil, false, nil
+	}
+	return data, true, nil
+}
+
+func structuredSecretField(value any) string {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, item := range v {
+			if isSecretName(key) {
+				if text, ok := item.(string); ok && !isSecretPlaceholder(text) {
+					return key
+				}
+			}
+			if field := structuredSecretField(item); field != "" {
+				return field
+			}
+		}
+	case map[any]any:
+		for key, item := range v {
+			name, ok := key.(string)
+			if ok && isSecretName(name) {
+				if text, ok := item.(string); ok && !isSecretPlaceholder(text) {
+					return name
+				}
+			}
+			if field := structuredSecretField(item); field != "" {
+				return field
+			}
+		}
+	case []any:
+		for i, item := range v {
+			if flag, ok := item.(string); ok && isSecretName(flag) && i+1 < len(v) {
+				if text, ok := v[i+1].(string); ok && !isSecretPlaceholder(text) {
+					return flag
+				}
+			}
+			if field := structuredSecretField(item); field != "" {
+				return field
+			}
+		}
+	}
+	return ""
+}
+
+func isSecretName(name string) bool {
+	name = strings.TrimLeft(strings.TrimSpace(name), "-")
+	var normalized strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			normalized.WriteRune(r)
+		}
+	}
+	n := normalized.String()
+	if n == "authorization" || n == "bearer" {
+		return true
+	}
+	for _, suffix := range []string{"apikey", "accesstoken", "authtoken", "bearertoken", "clientsecret", "privatekey", "password"} {
+		if strings.HasSuffix(n, suffix) {
+			return true
+		}
+	}
+	return n == "token" || n == "secret"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func isSecretPlaceholder(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "$") || strings.HasPrefix(strings.ToLower(value), "env:") {
+		return true
+	}
+	normalized := strings.ToLower(strings.Trim(value, "<>[]{}"))
+	switch normalized {
+	case "redacted", "placeholder", "changeme", "none", "null", "***", "xxxxx":
+		return true
+	default:
+		return false
+	}
+}
+
+func readClaudeMCPProjection(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	sum.Version = version
-	sum.Path = path
-	if err := addYAMLToTar(tw, "meta.yaml", Meta{
-		Version:     version,
-		Tag:         opts.Tag,
-		Hostname:    e.Hostname,
-		CreatedAt:   time.Now().UTC(),
-		IncludeAuth: opts.IncludeAuth,
-		User:        e.User,
-	}); err != nil {
+	return claudeMCPProjection(data)
+}
+
+// claudeMCPProjection deliberately archives only the portable MCP portion of
+// ~/.claude.json. Claude also stores project trust, session, telemetry, and
+// other machine-local runtime state in this file; that state must not travel
+// between machines or be replaced during restore.
+func claudeMCPProjection(data []byte) ([]byte, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return []byte("{}\n"), nil
+	}
+	state, err := decodeJSONObject(data)
+	if err != nil {
 		return nil, err
 	}
-	if err := addYAMLToTar(tw, "manifest.yaml", ArchiveManifest{
-		Schema:      archiveVersion,
-		IncludeAuth: opts.IncludeAuth,
-		Entries:     sum.Entries,
-	}); err != nil {
+	projection := map[string]json.RawMessage{}
+	if servers, ok := state["mcpServers"]; ok {
+		projection["mcpServers"] = servers
+	}
+	out, err := json.MarshalIndent(projection, "", "  ")
+	if err != nil {
 		return nil, err
 	}
-	return sum, nil
+	return append(out, '\n'), nil
+}
+
+func decodeJSONObject(data []byte) (map[string]json.RawMessage, error) {
+	var state map[string]json.RawMessage
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&state); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple JSON values")
+		}
+		return nil, err
+	}
+	if state == nil {
+		return nil, fmt.Errorf("expected JSON object")
+	}
+	return state, nil
+}
+
+func (e *Engine) restoreClaudeMCPState(src, dst, rel, preRoot string) (int, int64, bool, error) {
+	projectedData, err := os.ReadFile(src)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("read %s MCP projection: %w", rel, err)
+	}
+	return e.restoreClaudeMCPProjectionData(projectedData, dst, rel, preRoot)
+}
+
+func (e *Engine) restoreLegacyClaudeMCPState(src, dst, rel, preRoot string) (int, int64, bool, error) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("read legacy Claude MCP config: %w", err)
+	}
+	legacy, err := decodeJSONObject(data)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("parse legacy Claude MCP config: %w", err)
+	}
+	projection := map[string]json.RawMessage{}
+	if servers, ok := legacy["mcpServers"]; ok {
+		projection["mcpServers"] = servers
+	} else {
+		servers, marshalErr := json.Marshal(legacy)
+		if marshalErr != nil {
+			return 0, 0, false, marshalErr
+		}
+		projection["mcpServers"] = servers
+	}
+	projectedData, err := json.Marshal(projection)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return e.restoreClaudeMCPProjectionData(projectedData, dst, rel, preRoot)
+}
+
+func (e *Engine) restoreClaudeMCPProjectionData(projectedData []byte, dst, rel, preRoot string) (int, int64, bool, error) {
+	projection, err := decodeJSONObject(projectedData)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("parse %s MCP projection: %w", rel, err)
+	}
+	live := map[string]json.RawMessage{}
+	if data, readErr := os.ReadFile(dst); readErr == nil {
+		live, err = decodeJSONObject(data)
+		if err != nil {
+			return 0, 0, false, fmt.Errorf("parse live %s before MCP merge: %w", rel, err)
+		}
+	} else if !os.IsNotExist(readErr) {
+		return 0, 0, false, fmt.Errorf("read live %s before MCP merge: %w", rel, readErr)
+	}
+	if servers, ok := projection["mcpServers"]; ok {
+		live["mcpServers"] = servers
+	} else {
+		delete(live, "mcpServers")
+	}
+	merged, err := json.MarshalIndent(live, "", "  ")
+	if err != nil {
+		return 0, 0, false, err
+	}
+	merged = append(merged, '\n')
+	moved, err := e.backupExisting(dst, rel, preRoot)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if err := e.Runner.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return 0, 0, moved, err
+	}
+	if err := e.Runner.WriteFile(dst, merged, 0o600); err != nil {
+		return 0, 0, moved, err
+	}
+	return 1, int64(len(merged)), moved, nil
 }
 
 // Import restores a portable tar.gz archive into HomeDir.
@@ -458,6 +937,26 @@ func (e *Engine) copyFromHome(destRoot string, includeAuth bool) (*Summary, erro
 			sum.Entries = append(sum.Entries, es)
 			continue
 		}
+		if entry.Path == claudeStateRelPath {
+			data, err := readClaudeMCPProjection(src)
+			if err != nil {
+				return nil, fmt.Errorf("project %s MCP state: %w", entry.Path, err)
+			}
+			if destRoot != "" {
+				dst := filepath.Join(destRoot, entry.Path)
+				if err := e.Runner.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+					return nil, err
+				}
+				if err := e.Runner.WriteFile(dst, data, 0o600); err != nil {
+					return nil, err
+				}
+			}
+			es.Copied, es.Files, es.Bytes = 1, 1, int64(len(data))
+			sum.Files++
+			sum.Bytes += int64(len(data))
+			sum.Entries = append(sum.Entries, es)
+			continue
+		}
 		if destRoot == "" {
 			files, bytes, err := countTree(src, info, entry.Path)
 			if err != nil {
@@ -467,7 +966,12 @@ func (e *Engine) copyFromHome(destRoot string, includeAuth bool) (*Summary, erro
 			es.Files = files
 			es.Bytes = bytes
 		} else {
-			files, bytes, err := e.copyTree(src, filepath.Join(destRoot, entry.Path), info, entry.Path)
+			canonicalRoot, err := filepath.EvalSymlinks(src)
+			if err != nil {
+				return nil, fmt.Errorf("resolve %s: %w", entry.Path, err)
+			}
+			root := portableArchiveRoot{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}
+			files, bytes, err := e.copyMaterializedPath(src, filepath.Join(destRoot, entry.Path), entry.Path, root, map[string]bool{})
 			if err != nil {
 				return nil, fmt.Errorf("copy %s: %w", entry.Path, err)
 			}
@@ -493,7 +997,29 @@ func (e *Engine) addHomeToTar(tw *tar.Writer, includeAuth bool) (*Summary, error
 			sum.Entries = append(sum.Entries, es)
 			continue
 		}
-		files, bytes, err := addPathToTar(tw, src, filepath.Join(homePrefix, entry.Path), info, entry.Path)
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("archive %s: top-level managed entry may not be a symlink", entry.Path)
+		}
+		if entry.Path == claudeStateRelPath {
+			data, err := readClaudeMCPProjection(src)
+			if err != nil {
+				return nil, fmt.Errorf("project %s MCP state: %w", entry.Path, err)
+			}
+			if err := addBytesToTar(tw, filepath.ToSlash(filepath.Join(homePrefix, entry.Path)), data, 0o600); err != nil {
+				return nil, err
+			}
+			es.Copied, es.Files, es.Bytes = 1, 1, int64(len(data))
+			sum.Files++
+			sum.Bytes += int64(len(data))
+			sum.Entries = append(sum.Entries, es)
+			continue
+		}
+		canonicalRoot, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return nil, err
+		}
+		allowed := []portableArchiveRoot{{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}}
+		files, bytes, err := addMaterializedPathToTar(tw, src, filepath.Join(homePrefix, entry.Path), entry.Path, allowed, map[string]bool{})
 		if err != nil {
 			return nil, fmt.Errorf("archive %s: %w", entry.Path, err)
 		}
@@ -508,37 +1034,69 @@ func (e *Engine) addHomeToTar(tw *tar.Writer, includeAuth bool) (*Summary, error
 }
 
 func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summary, error) {
-	manifest, _ := readArchiveManifest(filepath.Join(root, "manifest.yaml"))
-	var entries []EntrySummary
-	if manifest != nil {
-		entries = manifest.Entries
-	} else {
-		for _, entry := range Entries(includeAuth) {
-			entries = append(entries, EntrySummary{Tool: entry.Tool, Path: entry.Path, Auth: entry.Auth})
-		}
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectSnapshotSymlinks(root, rootInfo); err != nil {
+		return nil, err
+	}
+	entries, err := validatedRestoreEntries(root, includeAuth)
+	if err != nil {
+		return nil, err
 	}
 	// One pre-restore dir per restore run, so the user gets a single
 	// "previous files" location instead of one fragment per entry.
 	preRoot := e.preRestoreDir(time.Now())
 	preUsed := false
 	sum := &Summary{}
-	for _, entry := range entries {
-		if entry.Auth && !includeAuth {
+	for _, restore := range entries {
+		if restore.target.Auth && !includeAuth {
 			continue
 		}
-		if !isSafeRel(entry.Path) {
-			return nil, fmt.Errorf("unsafe archive path %q", entry.Path)
-		}
-		src := filepath.Join(root, homePrefix, entry.Path)
-		dst := filepath.Join(e.HomeDir, entry.Path)
-		es := EntrySummary{Tool: entry.Tool, Path: entry.Path, Auth: entry.Auth}
+		src := filepath.Join(root, homePrefix, restore.sourcePath)
+		dst := filepath.Join(e.HomeDir, restore.target.Path)
+		es := EntrySummary{Tool: restore.target.Tool, Path: restore.target.Path, Auth: restore.target.Auth}
 		info, err := os.Lstat(src)
 		if err != nil {
 			es.Missing = 1
 			sum.Entries = append(sum.Entries, es)
 			continue
 		}
-		moved, err := e.backupExisting(dst, entry.Path, preRoot)
+		if err := rejectSnapshotSymlinks(src, info); err != nil {
+			return nil, fmt.Errorf("restore %s: %w", restore.sourcePath, err)
+		}
+		if restore.target.Path == claudeStateRelPath {
+			if restore.legacyClaudeMCP {
+				files, bytes, moved, err := e.restoreLegacyClaudeMCPState(src, dst, restore.target.Path, preRoot)
+				if err != nil {
+					return nil, err
+				}
+				if moved {
+					preUsed = true
+				}
+				es.Copied, es.Files, es.Bytes = 1, files, bytes
+				sum.Files += files
+				sum.Bytes += bytes
+				sum.Entries = append(sum.Entries, es)
+				continue
+			}
+			files, bytes, moved, err := e.restoreClaudeMCPState(src, dst, restore.target.Path, preRoot)
+			if err != nil {
+				return nil, err
+			}
+			if moved {
+				preUsed = true
+			}
+			es.Copied = 1
+			es.Files = files
+			es.Bytes = bytes
+			sum.Files += files
+			sum.Bytes += bytes
+			sum.Entries = append(sum.Entries, es)
+			continue
+		}
+		moved, err := e.backupExisting(dst, restore.target.Path, preRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -548,9 +1106,9 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 		if !e.Runner.DryRun {
 			_ = os.RemoveAll(dst)
 		}
-		files, bytes, err := e.copyTree(src, dst, info, entry.Path)
+		files, bytes, err := e.copyTree(src, dst, info, restore.target.Path)
 		if err != nil {
-			return nil, fmt.Errorf("restore %s: %w", entry.Path, err)
+			return nil, fmt.Errorf("restore %s: %w", restore.target.Path, err)
 		}
 		es.Copied = 1
 		es.Files = files
@@ -563,6 +1121,88 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 		sum.PreBackupPath = preRoot
 	}
 	return sum, nil
+}
+
+func rejectSnapshotSymlinks(src string, info os.FileInfo) error {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("snapshot symlink is not allowed: %s", src)
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("snapshot symlink is not allowed: %s", path)
+		}
+		return nil
+	})
+}
+
+type validatedRestoreEntry struct {
+	sourcePath      string
+	target          Entry
+	legacyClaudeMCP bool
+}
+
+func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreEntry, error) {
+	manifestPath := filepath.Join(root, "manifest.yaml")
+	manifest, err := readArchiveManifest(manifestPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read archive manifest: %w", err)
+		}
+		var fallback []validatedRestoreEntry
+		for _, entry := range Entries(includeAuth) {
+			fallback = append(fallback, validatedRestoreEntry{
+				sourcePath: entry.Path,
+				target:     entry,
+			})
+		}
+		return fallback, nil
+	}
+	if manifest.Schema != archiveVersion {
+		return nil, fmt.Errorf("unsupported AI archive manifest schema %d", manifest.Schema)
+	}
+	known := map[string]Entry{}
+	for _, entry := range Entries(true) {
+		known[entry.Path] = entry
+	}
+	const legacyClaudeMCPPath = ".claude/mcp.json"
+	legacyTarget := known[claudeStateRelPath]
+	seenSource := map[string]bool{}
+	seenTarget := map[string]bool{}
+	validated := make([]validatedRestoreEntry, 0, len(manifest.Entries))
+	for _, summary := range manifest.Entries {
+		if !isSafeRel(summary.Path) || filepath.Clean(summary.Path) != summary.Path {
+			return nil, fmt.Errorf("unsafe archive manifest path %q", summary.Path)
+		}
+		if seenSource[summary.Path] {
+			return nil, fmt.Errorf("duplicate archive manifest entry %q", summary.Path)
+		}
+		seenSource[summary.Path] = true
+		target, ok := known[summary.Path]
+		legacy := false
+		if summary.Path == legacyClaudeMCPPath {
+			target, ok, legacy = legacyTarget, true, true
+		}
+		if !ok {
+			return nil, fmt.Errorf("unknown archive manifest entry %q", summary.Path)
+		}
+		if summary.Tool != target.Tool || summary.Auth != target.Auth {
+			return nil, fmt.Errorf("archive manifest metadata mismatch for %q", summary.Path)
+		}
+		if seenTarget[target.Path] {
+			return nil, fmt.Errorf("duplicate archive target %q", target.Path)
+		}
+		seenTarget[target.Path] = true
+		validated = append(validated, validatedRestoreEntry{
+			sourcePath: summary.Path, target: target, legacyClaudeMCP: legacy,
+		})
+	}
+	return validated, nil
 }
 
 // preRestoreDir picks an unused timestamped directory under the documented
@@ -747,6 +1387,68 @@ func (e *Engine) copyTree(src, dst string, info os.FileInfo, relRoot string) (in
 	return files, bytes, err
 }
 
+// copyMaterializedPath follows a portable nested symlink only when its
+// canonical target remains below the original managed entry root. Snapshots
+// contain regular files/directories only, so restore never needs to trust a
+// filesystem link supplied by snapshot data.
+func (e *Engine) copyMaterializedPath(src, dst, logicalRel string, root portableArchiveRoot, stack map[string]bool) (int, int64, error) {
+	if isExcluded(logicalRel) {
+		return 0, 0, nil
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return 0, 0, err
+	}
+	actual := src
+	if info.Mode()&os.ModeSymlink != 0 {
+		actual, err = filepath.EvalSymlinks(src)
+		if err != nil {
+			return 0, 0, err
+		}
+		if !pathWithinPortableRoots(actual, []portableArchiveRoot{root}) {
+			return 0, 0, fmt.Errorf("symlink %s resolves outside its canonical managed root", src)
+		}
+		info, err = os.Stat(actual)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return 0, 0, fmt.Errorf("unsupported special file %s", src)
+		}
+		n, err := copyFile(e.Runner, actual, dst, info.Mode())
+		return 1, n, err
+	}
+	realDir, err := filepath.EvalSymlinks(actual)
+	if err != nil {
+		return 0, 0, err
+	}
+	if stack[realDir] {
+		return 0, 0, fmt.Errorf("symlink directory cycle at %s", src)
+	}
+	stack[realDir] = true
+	defer delete(stack, realDir)
+	if err := e.Runner.MkdirAll(dst, info.Mode()&0o777); err != nil {
+		return 0, 0, err
+	}
+	children, err := os.ReadDir(actual)
+	if err != nil {
+		return 0, 0, err
+	}
+	var files int
+	var size int64
+	for _, child := range children {
+		f, b, err := e.copyMaterializedPath(filepath.Join(actual, child.Name()), filepath.Join(dst, child.Name()), filepath.Join(logicalRel, child.Name()), root, stack)
+		files += f
+		size += b
+		if err != nil {
+			return files, size, err
+		}
+	}
+	return files, size, nil
+}
+
 func (e *Engine) copySymlink(src, dst string) (int, error) {
 	target, err := os.Readlink(src)
 	if err != nil {
@@ -782,20 +1484,142 @@ func countTree(src string, info os.FileInfo, relRoot string) (int, int64, error)
 	return files, bytes, err
 }
 
-func addPathToTar(tw *tar.Writer, src, name string, info os.FileInfo, relRoot string) (int, int64, error) {
-	var files int
-	var bytes int64
-	err := walkManagedTree(src, info, relRoot, func(item managedTreeItem) error {
-		archiveName := filepath.ToSlash(name)
-		if item.sub != "." {
-			archiveName = filepath.ToSlash(filepath.Join(name, item.sub))
+type portableArchiveRoot struct {
+	path  string
+	isDir bool
+}
+
+func pathWithinPortableRoots(path string, roots []portableArchiveRoot) bool {
+	path = filepath.Clean(path)
+	for _, root := range roots {
+		if path == root.path || root.isDir && strings.HasPrefix(path, root.path+string(os.PathSeparator)) {
+			return true
 		}
-		f, b, err := addOneToTar(tw, item.src, archiveName, item.info)
-		files += f
-		bytes += b
+	}
+	return false
+}
+
+func (e *Engine) validatePortableArchiveLinks(includeAuth bool) error {
+	for _, entry := range Entries(includeAuth) {
+		src := filepath.Join(e.HomeDir, entry.Path)
+		info, err := os.Lstat(src)
+		if os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("portable archive entry %s: top-level managed entry may not be a symlink", entry.Path)
+		}
+		canonicalRoot, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return err
+		}
+		roots := []portableArchiveRoot{{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}}
+		if err := validateMaterializedPath(src, entry.Path, roots, map[string]bool{}); err != nil {
+			return fmt.Errorf("portable archive entry %s: %w", entry.Path, err)
+		}
+	}
+	return nil
+}
+
+func validateMaterializedPath(src, logicalRel string, roots []portableArchiveRoot, stack map[string]bool) error {
+	if isExcluded(logicalRel) {
+		return nil
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
 		return err
-	})
-	return files, bytes, err
+	}
+	actual := src
+	if info.Mode()&os.ModeSymlink != 0 {
+		actual, err = filepath.EvalSymlinks(src)
+		if err != nil {
+			return fmt.Errorf("resolve symlink %s: %w", src, err)
+		}
+		if !pathWithinPortableRoots(actual, roots) {
+			return fmt.Errorf("symlink %s resolves outside managed portable roots", src)
+		}
+		info, err = os.Stat(actual)
+		if err != nil {
+			return err
+		}
+	}
+	if !info.IsDir() {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported special file %s", src)
+		}
+		return nil
+	}
+	realDir, err := filepath.EvalSymlinks(actual)
+	if err != nil {
+		return err
+	}
+	if stack[realDir] {
+		return fmt.Errorf("symlink directory cycle at %s", src)
+	}
+	stack[realDir] = true
+	defer delete(stack, realDir)
+	children, err := os.ReadDir(actual)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if err := validateMaterializedPath(filepath.Join(actual, child.Name()), filepath.Join(logicalRel, child.Name()), roots, stack); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func addMaterializedPathToTar(tw *tar.Writer, src, archiveName, logicalRel string, roots []portableArchiveRoot, stack map[string]bool) (int, int64, error) {
+	if isExcluded(logicalRel) {
+		return 0, 0, nil
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return 0, 0, err
+	}
+	actual := src
+	if info.Mode()&os.ModeSymlink != 0 {
+		actual, err = filepath.EvalSymlinks(src)
+		if err != nil {
+			return 0, 0, err
+		}
+		if !pathWithinPortableRoots(actual, roots) {
+			return 0, 0, fmt.Errorf("symlink %s resolves outside managed portable roots", src)
+		}
+		info, err = os.Stat(actual)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	files, size, err := addOneToTar(tw, actual, filepath.ToSlash(archiveName), info)
+	if err != nil || !info.IsDir() {
+		return files, size, err
+	}
+	realDir, err := filepath.EvalSymlinks(actual)
+	if err != nil {
+		return files, size, err
+	}
+	if stack[realDir] {
+		return files, size, fmt.Errorf("symlink directory cycle at %s", src)
+	}
+	stack[realDir] = true
+	defer delete(stack, realDir)
+	children, err := os.ReadDir(actual)
+	if err != nil {
+		return files, size, err
+	}
+	for _, child := range children {
+		f, b, err := addMaterializedPathToTar(tw, filepath.Join(actual, child.Name()), filepath.Join(archiveName, child.Name()), filepath.Join(logicalRel, child.Name()), roots, stack)
+		files += f
+		size += b
+		if err != nil {
+			return files, size, err
+		}
+	}
+	return files, size, nil
 }
 
 func addOneToTar(tw *tar.Writer, src, name string, info os.FileInfo) (int, int64, error) {
@@ -847,6 +1671,15 @@ func addYAMLToTar(tw *tar.Writer, name string, v any) error {
 	return err
 }
 
+func addBytesToTar(tw *tar.Writer, name string, data []byte, mode int64) error {
+	header := &tar.Header{Name: name, Mode: mode, Size: int64(len(data))}
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+	_, err := tw.Write(data)
+	return err
+}
+
 func extractTarGz(path, dest string) error {
 	in, err := os.Open(path)
 	if err != nil {
@@ -873,18 +1706,26 @@ func extractTarGz(path, dest string) error {
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
+			if err := ensureRealArchiveParents(dest, target); err != nil {
+				return err
+			}
+			if info, err := os.Lstat(target); err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+				return fmt.Errorf("unsafe archive directory %q: target is not a real directory", header.Name)
+			} else if err != nil && !os.IsNotExist(err) {
+				return err
+			}
 			if err := os.MkdirAll(target, os.FileMode(header.Mode)&0o777); err != nil {
 				return err
 			}
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		case tar.TypeReg, byte(0): // byte(0) is the legacy regular-file encoding.
+			if err := ensureRealArchiveParents(dest, target); err != nil {
 				return err
 			}
-			_ = os.Remove(target)
-			if err := os.Symlink(header.Linkname, target); err != nil {
+			if info, err := os.Lstat(target); err == nil && (info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+				return fmt.Errorf("unsafe archive file %q: target is not a regular file", header.Name)
+			} else if err != nil && !os.IsNotExist(err) {
 				return err
 			}
-		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -899,8 +1740,44 @@ func extractTarGz(path, dest string) error {
 			if err := out.Close(); err != nil {
 				return err
 			}
+		default:
+			return fmt.Errorf("unsafe archive entry %q: type %d is not allowed", header.Name, header.Typeflag)
 		}
 	}
+}
+
+// ensureRealArchiveParents prevents an archive entry from pivoting through a
+// symlink or non-directory that already exists below the extraction root.
+func ensureRealArchiveParents(root, target string) error {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Dir(filepath.Clean(target)))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("unsafe archive target %q", target)
+	}
+	current := filepath.Clean(root)
+	if info, err := os.Lstat(current); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe archive root %q: not a real directory", root)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe archive parent %q: not a real directory", current)
+		}
+	}
+	return nil
 }
 
 func safeJoin(root, name string) (string, error) {

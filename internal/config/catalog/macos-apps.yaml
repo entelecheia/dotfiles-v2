@@ -60,7 +60,7 @@ groups:
   - name: "AI"
     apps:
       - {token: antigravity,       name: "Antigravity"}
-      - {token: anchor,            name: "Anchor", tap: "staixbwlb/cask"}
+      - {token: anchor,            name: "Maru", tap: "staixbwlb/cask"}
       - {token: chatgpt,           name: "ChatGPT"}
       - {token: chatgpt-atlas,     name: "ChatGPT Atlas"}
       - {token: claude,            name: "Claude"}

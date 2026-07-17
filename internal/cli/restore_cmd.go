@@ -158,7 +158,7 @@ func runOnestopRestore(cmd *cobra.Command, _ []string) error {
 	if o.dryRun {
 		p.KV("Mode", "dry-run")
 	}
-	p.Warn("  This overwrites local settings. Quit target apps, AI CLIs, and Anchor first.")
+	p.Warn("  This overwrites local settings. Quit target apps, AI CLIs, and Maru first.")
 	p.Line("  %s", ui.StyleHint.Render("(existing files are preserved in pre-restore backups reported per step)"))
 	ok, err := ui.Confirm("Proceed with restore?", o.yes)
 	if err != nil {
@@ -304,7 +304,7 @@ func (o *onestopCtx) scanRestoreAvailability() ([]string, map[string]string) {
 	}
 	if snaps, err := o.aiEngine().List(); err == nil && len(snaps) > 0 {
 		available = append(available, "ai")
-		labels["ai"] = fmt.Sprintf("ai — AI CLI/agent + Anchor settings (%d snapshot(s))", len(snaps))
+		labels["ai"] = fmt.Sprintf("ai — AI CLI/agent + Maru settings (%d snapshot(s))", len(snaps))
 	}
 	if hasAgeArchives(o.secretsArchiveDir()) {
 		available = append(available, "secrets")

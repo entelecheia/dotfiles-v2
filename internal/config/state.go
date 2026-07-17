@@ -218,9 +218,9 @@ var validProfiles = []string{"minimal", "full", "server"}
 var validAISkillsTools = map[string]bool{
 	"claude":      true,
 	"codex":       true,
-	"agents":      true,
-	"gemini":      true,
-	"antigravity": true,
+	"agents":      true, // legacy inventory-only value, normalized by diagnostics
+	"gemini":      true, // legacy inventory-only value, normalized by diagnostics
+	"antigravity": true, // legacy inventory-only value, normalized by diagnostics
 }
 
 // Validate performs lightweight sanity checks on critical fields.

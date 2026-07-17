@@ -17,6 +17,9 @@ func TestPatchAgentsCoauthorInstruction(t *testing.T) {
 	if !strings.Contains(got, coauthorGuardStart) || !strings.Contains(got, "Co-authored-by") {
 		t.Fatalf("guard block missing:\n%s", got)
 	}
+	if !strings.Contains(got, "commit messages in English") {
+		t.Fatalf("English commit policy missing:\n%s", got)
+	}
 	if !strings.Contains(got, "Keep me.") {
 		t.Fatalf("existing section content removed:\n%s", got)
 	}

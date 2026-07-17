@@ -267,7 +267,7 @@ func printUsecases(cmd *cobra.Command) {
 		"Move your full setup to a new Mac in minutes — one wizard per side.",
 		[]usecase{
 			{"dot backup",
-				"[old machine] One-stop wizard: profile + apps + AI/Anchor + secrets"},
+				"[old machine] One-stop wizard: profile + apps + AI/Maru + secrets"},
 			{"dot restore",
 				"[new machine] Pick source host, restore in safe order, optional dot apply"},
 			{"dot backup --yes --scope profile,ai,secrets",

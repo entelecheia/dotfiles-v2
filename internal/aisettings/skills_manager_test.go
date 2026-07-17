@@ -85,24 +85,20 @@ func TestSkillsManagerAnchorAliasResolvesToMaru(t *testing.T) {
 	}
 }
 
-func TestSkillsManagerGeminiAndAntigravityRootsAreSeparate(t *testing.T) {
+func TestSkillsManagerNormalizesLegacyInventoryOnlyTargets(t *testing.T) {
 	home := t.TempDir()
 	writeSkillTestFile(t, filepath.Join(home, ".maru", "skills", "shared-skill", "SKILL.md"), "# Shared\n")
 	mgr := NewSkillsManager(home)
 
-	report, err := mgr.Status(SkillsOptions{Provider: SkillsProviderMaru, Tools: []string{"gemini", "antigravity"}})
+	report, err := mgr.Status(SkillsOptions{Provider: SkillsProviderMaru, Tools: []string{"agents", "gemini", "antigravity"}})
 	if err != nil {
-		t.Fatalf("Status: %v", err)
+		t.Fatalf("legacy inventory-only targets must not reject config: %v", err)
 	}
-	roots := map[string]string{}
-	for _, item := range report.Items {
-		roots[item.ToolID] = item.ToolRoot
+	if len(report.Warnings) != 3 {
+		t.Fatalf("migration warnings = %v, want one per legacy target", report.Warnings)
 	}
-	if roots["gemini"] != filepath.Join(home, ".gemini", "skills") {
-		t.Fatalf("gemini root = %q", roots["gemini"])
-	}
-	if roots["antigravity"] != filepath.Join(home, ".gemini", "antigravity", "skills") {
-		t.Fatalf("antigravity root = %q", roots["antigravity"])
+	if !defaultToolsHas(report.Tools, "claude") || !defaultToolsHas(report.Tools, "codex") {
+		t.Fatalf("legacy-only targets should normalize to managed defaults, got %v", report.Tools)
 	}
 }
 
@@ -118,13 +114,11 @@ func TestSkillsManagerDefaultToolsDetectsPresentSkillRoots(t *testing.T) {
 	mgr := NewSkillsManager(home)
 
 	got := mgr.DefaultTools()
-	if !defaultToolsHas(got, "claude") || !defaultToolsHas(got, "antigravity") {
-		t.Fatalf("DefaultTools = %v, want claude + antigravity", got)
+	if !defaultToolsHas(got, "claude") {
+		t.Fatalf("DefaultTools = %v, want claude", got)
 	}
-	// ~/.gemini exists (it is the parent of antigravity's root) but gemini's own
-	// skills root ~/.gemini/skills does not, so gemini must NOT be detected.
-	if defaultToolsHas(got, "gemini") {
-		t.Fatalf("DefaultTools falsely detected gemini from the shared ~/.gemini parent: %v", got)
+	if defaultToolsHas(got, "antigravity") {
+		t.Fatalf("DefaultTools treated unsupported Antigravity as managed: %v", got)
 	}
 	if defaultToolsHas(got, "codex") {
 		t.Fatalf("DefaultTools detected codex without ~/.codex/skills: %v", got)

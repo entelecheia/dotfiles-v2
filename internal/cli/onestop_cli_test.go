@@ -9,7 +9,7 @@ import (
 )
 
 // onestopFixture sandboxes HOME/XDG and seeds the state file, an age key,
-// AI/Anchor settings, and a secrets store so every wizard domain has
+// AI/Maru settings, and a secrets store so every wizard domain has
 // something to work on.
 type onestopFixture struct {
 	home string
@@ -30,7 +30,7 @@ func newOnestopFixture(t *testing.T) *onestopFixture {
 		t.Fatal(err)
 	}
 	writeCLITestFile(t, filepath.Join(home, ".claude", "settings.json"), `{"model":"opus"}`)
-	writeCLITestFile(t, filepath.Join(home, ".anchor", "settings.json"), `{"theme":"dark"}`)
+	writeCLITestFile(t, filepath.Join(home, ".maru", "settings.json"), `{"theme":"dark"}`)
 	writeCLITestFile(t, filepath.Join(home, ".ssh", "id_ed25519"), "identity-material")
 	writeCLITestFile(t, filepath.Join(home, ".local", "share", "dotfiles-secrets", "90-secrets.sh.age"), "export SECRET=1\n")
 
@@ -92,7 +92,7 @@ func TestOnestopBackupAllDomains(t *testing.T) {
 
 	aiHost := filepath.Join(f.root, "ai-config", f.host)
 	aiVer := latestVersion(t, aiHost)
-	for _, rel := range []string{"home/.claude/settings.json", "home/.anchor/settings.json"} {
+	for _, rel := range []string{"home/.claude/settings.json", "home/.maru/settings.json"} {
 		if _, err := os.Stat(filepath.Join(aiHost, aiVer, rel)); err != nil {
 			t.Errorf("ai snapshot missing %s: %v", rel, err)
 		}

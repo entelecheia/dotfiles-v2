@@ -158,7 +158,7 @@ func newAISkillsPathCmd() *cobra.Command {
 func addSkillManageFlags(c *cobra.Command) {
 	c.Flags().String("provider", "", "Skills SSOT provider: maru or path (defaults to maru; anchor is a legacy alias)")
 	c.Flags().String("ssot", "", "Skills SSOT root path (defaults to ~/.maru/skills for provider=maru)")
-	c.Flags().String("tool", "", "Comma-separated target tools (claude,codex,agents,gemini,antigravity); auto-detected when omitted")
+	c.Flags().String("tool", "", "Comma-separated managed targets (claude,codex); auto-detected when omitted")
 }
 
 func skillsOptionsFromCmd(cmd *cobra.Command) (aisettings.SkillsOptions, error) {

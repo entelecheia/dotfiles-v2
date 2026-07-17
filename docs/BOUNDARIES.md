@@ -4,6 +4,8 @@
 `skill_host` module) owns skill sources, the skills registry, runtime symlinks,
 and tool federation. `dotfiles-v2` never deploys skills; it provides read-only
 diagnostics only (`dot ai skills list|validate|path|status`).
+Maru-managed status/path diagnostics target Claude Code and Codex. Broader
+agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 
 ## dotfiles-v2 May Write
 
@@ -15,6 +17,8 @@ diagnostics only (`dot ai skills list|validate|path|status`).
 - `~/.claude/keybindings.json`
 - `~/.config/claude/**`
 - `~/.config/shell/30-ai.sh`
+- `~/.maru/settings.json` and `~/.maru/sites.json` only during explicit AI
+  backup/restore operations
 - global AGENTS fan-out targets for Claude, Codex, Cursor, Antigravity,
   Copilot, and Aider
 
@@ -32,7 +36,7 @@ skills.
 
 ## Maru Owns
 
-- `~/.maru/**`
+- `~/.maru/**` except the two portable settings files above
 - `~/.maru/skills/registry.json`
 - `~/.maru/skills/<name>` runtime symlinks
 - tool skill root federation (`~/.claude/skills/**`, `~/.codex/skills/**`, …)
