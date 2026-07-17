@@ -18,3 +18,8 @@ elif command -v mamba &>/dev/null; then
   __dot_mamba_hook="$(mamba shell hook --shell zsh 2>/dev/null)" && eval "$__dot_mamba_hook"
   unset __dot_mamba_hook
 fi
+
+# AI CLI tools (installer bin dirs; managed here so PATH survives zshrc regeneration)
+[ -d "$HOME/.opencode/bin" ] && export PATH="$HOME/.opencode/bin:$PATH"
+[ -d "$HOME/.kilo/bin" ] && export PATH="$HOME/.kilo/bin:$PATH"
+[ -d "$HOME/.kimi-code/bin" ] && export PATH="$HOME/.kimi-code/bin:$PATH"
