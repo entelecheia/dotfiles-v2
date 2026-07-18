@@ -197,7 +197,7 @@ type RepoConfig struct {
 type UserWorkspaceState struct {
 	Path          string       `yaml:"path,omitempty"`
 	Gdrive        string       `yaml:"gdrive,omitempty"`
-	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for Drive (e.g. ~/gdrive-workspace)
+	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for the cloud root (e.g. ~/gdrive-workspace, ~/Dropbox)
 	Symlink       string       `yaml:"symlink,omitempty"`        // explicit symlink target for Path
 	Repos         []RepoConfig `yaml:"repos,omitempty"`          // git repos to clone into workspace
 }

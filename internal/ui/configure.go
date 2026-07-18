@@ -28,10 +28,10 @@ func PrintStateSummary(state *config.UserState) {
 	if state.Modules.Workspace.Path != "" {
 		printKV("Workspace", state.Modules.Workspace.Path)
 		if state.Modules.Workspace.Gdrive != "" {
-			printKV("GDrive", state.Modules.Workspace.Gdrive)
+			printKV("Cloud", state.Modules.Workspace.Gdrive)
 		}
 		if state.Modules.Workspace.GdriveSymlink != "" {
-			printKV("GDrive link", state.Modules.Workspace.GdriveSymlink+" → "+state.Modules.Workspace.Gdrive)
+			printKV("Cloud link", state.Modules.Workspace.GdriveSymlink+" → "+state.Modules.Workspace.Gdrive)
 		}
 		if state.Modules.Workspace.Symlink != "" {
 			printKV("Symlink", state.Modules.Workspace.Path+" → "+state.Modules.Workspace.Symlink)

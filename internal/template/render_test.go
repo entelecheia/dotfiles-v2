@@ -163,6 +163,26 @@ func TestRender_ToolsInitAIToolPaths(t *testing.T) {
 	}
 }
 
+func TestRender_WorkspaceCloudVars(t *testing.T) {
+	e := NewEngine()
+
+	out, err := e.Render("shell/40-workspace.sh.tmpl", map[string]any{
+		"EnableWorkspace": true,
+		"WorkspacePath":   "~/workspace",
+		"CloudSymlink":    "~/Dropbox",
+	})
+	if err != nil {
+		t.Fatalf("Render shell/40-workspace.sh.tmpl: %v", err)
+	}
+
+	content := string(out)
+	for _, want := range []string{`export CLOUD_WORKSPACE="$HOME/Dropbox"`, `export CLOUD_WORK="$CLOUD_WORKSPACE/work"`, `alias cwork=`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Render 40-workspace: expected %q in output, got:\n%s", want, content)
+		}
+	}
+}
+
 func TestRender_WithTemplateData(t *testing.T) {
 	e := NewEngine()
 

@@ -2,7 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"slices"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
@@ -49,27 +51,56 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 	}
 
 	if runtime.GOOS == "darwin" {
-		// Google Drive path: state → detected
-		gdDefault, gdDetected := state.Modules.Workspace.Gdrive, false
-		if gdDefault == "" {
-			if v := detectGoogleDrivePath(); v != "" {
-				gdDefault, gdDetected = v, true
+		// Cloud mirror: detected mounts (Dropbox first, then Drive accounts)
+		// plus the current state value, an "other" escape, and skip.
+		const optOther = "other (enter path)"
+		const optSkip = "skip cloud mirror"
+		home, _ := os.UserHomeDir()
+		mounts := detectCloudMounts(home)
+		previous := state.Modules.Workspace.Gdrive
+		opts := mounts
+		if previous != "" && !slices.Contains(opts, previous) {
+			opts = append([]string{previous}, opts...)
+		}
+		opts = append(opts, optOther, optSkip)
+		def := previous
+		if def == "" {
+			if len(mounts) > 0 {
+				def = mounts[0]
+			} else {
+				def = optSkip
 			}
 		}
-		state.Modules.Workspace.Gdrive, err = InputWithDetected("Google Drive path (blank to skip)", gdDefault, gdDetected, yes)
+		choice, err := Select("Cloud storage for workspace mirror", opts, def, yes)
 		if err != nil {
 			return err
 		}
-
-		// GDrive symlink: convenience symlink for the Drive path
-		if state.Modules.Workspace.Gdrive != "" {
-			gsDefault := state.Modules.Workspace.GdriveSymlink
-			if gsDefault == "" {
-				gsDefault = "~/gdrive-workspace"
-			}
-			state.Modules.Workspace.GdriveSymlink, err = Input("GDrive symlink name (blank to skip)", gsDefault, yes)
+		switch choice {
+		case optSkip:
+			state.Modules.Workspace.Gdrive = ""
+		case optOther:
+			state.Modules.Workspace.Gdrive, err = Input("Cloud storage path (blank to skip)", previous, yes)
 			if err != nil {
 				return err
+			}
+		default:
+			state.Modules.Workspace.Gdrive = choice
+		}
+
+		// Cloud symlink: convenience symlink for the chosen cloud root
+		if state.Modules.Workspace.Gdrive != "" {
+			gsDefault := state.Modules.Workspace.GdriveSymlink
+			if gsDefault == "" || state.Modules.Workspace.Gdrive != previous {
+				gsDefault = defaultCloudSymlink(state.Modules.Workspace.Gdrive)
+			}
+			state.Modules.Workspace.GdriveSymlink, err = Input("Cloud symlink name (blank to skip)", gsDefault, yes)
+			if err != nil {
+				return err
+			}
+			if previous != "" && state.Modules.Workspace.Gdrive != previous {
+				fmt.Println(StyleHint.Render(
+					"  Cloud changed: symlinks pointing at the previous cloud (old link, <workspace>/work/.gdrive)\n" +
+						"  are left in place; remove them manually so the next `dot apply` can repoint them."))
 			}
 		} else {
 			state.Modules.Workspace.GdriveSymlink = ""

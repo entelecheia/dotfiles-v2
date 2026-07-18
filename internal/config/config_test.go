@@ -183,7 +183,7 @@ func TestTemplateData_Keys(t *testing.T) {
 		"Name", "Email", "GithubUser", "Timezone",
 		"Hostname", "IsDarwin",
 		"EnableWorkspace", "EnableAI",
-		"WorkspacePath", "GdriveSymlink",
+		"WorkspacePath", "CloudSymlink",
 		"SSHKeyName", "CoauthorGuard",
 		"HasCUDA", "CUDAHome", "HasNVIDIAGPU",
 	}
