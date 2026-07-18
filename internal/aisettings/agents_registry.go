@@ -35,6 +35,19 @@ func RegisteredAgentTools() []AgentTool {
 			OverlayFile: "cursor.md",
 		},
 		{
+			ID:          "kiro",
+			DisplayName: "Kiro CLI",
+			TargetPath:  "~/.kiro/steering/AGENTS.md",
+			OverlayFile: "kiro.md",
+		},
+		{
+			ID:          "kimi",
+			DisplayName: "Kimi Code CLI",
+			TargetPath:  "~/.kimi-code/AGENTS.md",
+			OverlayFile: "kimi.md",
+			Optional:    true,
+		},
+		{
 			ID:          "antigravity",
 			DisplayName: "Antigravity CLI",
 			TargetPath:  "~/.gemini/GEMINI.md",
