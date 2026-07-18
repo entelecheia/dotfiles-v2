@@ -51,62 +51,80 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 	}
 
 	if runtime.GOOS == "darwin" {
-		// Cloud mirror: detected mounts (Dropbox first, then Drive accounts)
-		// plus the current state value, an "other" escape, and skip.
-		const optOther = "other (enter path)"
-		const optSkip = "skip cloud mirror"
-		home, _ := os.UserHomeDir()
-		mounts := detectCloudMounts(home)
-		previous := state.Modules.Workspace.Gdrive
-		opts := mounts
-		if previous != "" && !slices.Contains(opts, previous) {
-			opts = append([]string{previous}, opts...)
-		}
-		opts = append(opts, optOther, optSkip)
-		def := previous
-		if def == "" {
-			if len(mounts) > 0 {
-				def = mounts[0]
-			} else {
-				def = optSkip
-			}
-		}
-		choice, err := Select("Cloud storage for workspace mirror", opts, def, yes)
-		if err != nil {
+		if err := configureCloudMirror(state, yes); err != nil {
 			return err
-		}
-		switch choice {
-		case optSkip:
-			state.Modules.Workspace.Gdrive = ""
-		case optOther:
-			state.Modules.Workspace.Gdrive, err = Input("Cloud storage path (blank to skip)", previous, yes)
-			if err != nil {
-				return err
-			}
-		default:
-			state.Modules.Workspace.Gdrive = choice
-		}
-
-		// Cloud symlink: convenience symlink for the chosen cloud root
-		if state.Modules.Workspace.Gdrive != "" {
-			gsDefault := state.Modules.Workspace.GdriveSymlink
-			if gsDefault == "" || state.Modules.Workspace.Gdrive != previous {
-				gsDefault = defaultCloudSymlink(state.Modules.Workspace.Gdrive)
-			}
-			state.Modules.Workspace.GdriveSymlink, err = Input("Cloud symlink name (blank to skip)", gsDefault, yes)
-			if err != nil {
-				return err
-			}
-			if previous != "" && state.Modules.Workspace.Gdrive != previous {
-				fmt.Println(StyleHint.Render(
-					"  Cloud changed: symlinks pointing at the previous cloud (old link, <workspace>/work/.gdrive)\n" +
-						"  are left in place; remove them manually so the next `dot apply` can repoint them."))
-			}
-		} else {
-			state.Modules.Workspace.GdriveSymlink = ""
 		}
 	}
 
+	if err := configureWorkspaceSymlinkAndRepos(state, yes); err != nil {
+		return err
+	}
+	return nil
+}
+
+// configureCloudMirror selects the cloud storage backing the dual-workspace
+// mirror from detected mounts (Dropbox first, then Drive accounts), plus the
+// current state value, an "other" escape, and skip.
+func configureCloudMirror(state *config.UserState, yes bool) error {
+	const optOther = "other (enter path)"
+	const optSkip = "skip cloud mirror"
+	home, _ := os.UserHomeDir()
+	mounts := detectCloudMounts(home)
+	previous := state.Modules.Workspace.Gdrive
+	opts := mounts
+	if previous != "" && !slices.Contains(opts, previous) {
+		opts = append([]string{previous}, opts...)
+	}
+	opts = append(opts, optOther, optSkip)
+	def := previous
+	if def == "" {
+		if len(mounts) > 0 {
+			def = mounts[0]
+		} else {
+			def = optSkip
+		}
+	}
+	choice, err := Select("Cloud storage for workspace mirror", opts, def, yes)
+	if err != nil {
+		return err
+	}
+	switch choice {
+	case optSkip:
+		state.Modules.Workspace.Gdrive = ""
+	case optOther:
+		state.Modules.Workspace.Gdrive, err = Input("Cloud storage path (blank to skip)", previous, yes)
+		if err != nil {
+			return err
+		}
+	default:
+		state.Modules.Workspace.Gdrive = choice
+	}
+
+	// Cloud symlink: convenience symlink for the chosen cloud root
+	if state.Modules.Workspace.Gdrive == "" {
+		state.Modules.Workspace.GdriveSymlink = ""
+		return nil
+	}
+	gsDefault := state.Modules.Workspace.GdriveSymlink
+	if gsDefault == "" || state.Modules.Workspace.Gdrive != previous {
+		gsDefault = defaultCloudSymlink(state.Modules.Workspace.Gdrive)
+	}
+	state.Modules.Workspace.GdriveSymlink, err = Input("Cloud symlink name (blank to skip)", gsDefault, yes)
+	if err != nil {
+		return err
+	}
+	if previous != "" && state.Modules.Workspace.Gdrive != previous {
+		fmt.Println(StyleHint.Render(
+			"  Cloud changed: symlinks pointing at the previous cloud (old link, <workspace>/work/.gdrive)\n" +
+				"  are left in place; remove them manually so the next `dot apply` can repoint them."))
+	}
+	return nil
+}
+
+// configureWorkspaceSymlinkAndRepos handles the generic workspace-path symlink
+// prompt and the optional workspace git repo configuration.
+func configureWorkspaceSymlinkAndRepos(state *config.UserState, yes bool) error {
+	var err error
 	expandedPath := fileutil.ExpandHome(state.Modules.Workspace.Path)
 	if !yes {
 		keepCurrent := false

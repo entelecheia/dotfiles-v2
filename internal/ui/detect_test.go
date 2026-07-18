@@ -27,7 +27,7 @@ func TestDetectCloudMountsDropboxBeforeDrive(t *testing.T) {
 		filepath.Join(cloud, "GoogleDrive-b@y.com"),
 	)
 
-	got := detectCloudMounts(home)
+	got := detectCloudMountsIn(home, t.TempDir())
 	want := []string{
 		filepath.Join(cloud, "Dropbox"),
 		filepath.Join(cloud, "GoogleDrive-a@x.com", "My Drive"),
@@ -52,9 +52,37 @@ func TestDetectCloudMountsDedupsHomeSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := detectCloudMounts(home)
+	got := detectCloudMountsIn(home, t.TempDir())
 	if len(got) != 1 || got[0] != filepath.Join(cloud, "Dropbox") {
 		t.Fatalf("expected single canonical Dropbox mount, got %v", got)
+	}
+}
+
+func TestDetectCloudMountsSkipsBrokenSymlinkAndFiles(t *testing.T) {
+	home := t.TempDir()
+	cloud := filepath.Join(home, "Library", "CloudStorage")
+	mkdirs(t, cloud)
+	// Broken symlink left behind by an uninstalled Dropbox app.
+	if err := os.Symlink(filepath.Join(cloud, "Dropbox"), filepath.Join(home, "Dropbox")); err != nil {
+		t.Fatal(err)
+	}
+	// Stray metadata file that matches the Drive prefix.
+	if err := os.WriteFile(filepath.Join(cloud, "GoogleDrive-a@x.com"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := detectCloudMountsIn(home, t.TempDir()); len(got) != 0 {
+		t.Fatalf("broken symlink / file candidates should be skipped, got %v", got)
+	}
+}
+
+func TestDetectCloudMountsVolumesDrive(t *testing.T) {
+	volumes := t.TempDir()
+	mkdirs(t, filepath.Join(volumes, "GoogleDrive"))
+
+	got := detectCloudMountsIn(t.TempDir(), volumes)
+	if len(got) != 1 || got[0] != filepath.Join(volumes, "GoogleDrive") {
+		t.Fatalf("expected /Volumes-style Drive mount, got %v", got)
 	}
 }
 
@@ -62,14 +90,14 @@ func TestDetectCloudMountsLegacyHomeDrive(t *testing.T) {
 	home := t.TempDir()
 	mkdirs(t, filepath.Join(home, "My Drive (a@x.com)"))
 
-	got := detectCloudMounts(home)
+	got := detectCloudMountsIn(home, t.TempDir())
 	if len(got) != 1 || got[0] != filepath.Join(home, "My Drive (a@x.com)") {
 		t.Fatalf("expected legacy home Drive mount, got %v", got)
 	}
 }
 
 func TestDetectCloudMountsEmptyHome(t *testing.T) {
-	if got := detectCloudMounts(t.TempDir()); len(got) != 0 {
+	if got := detectCloudMountsIn(t.TempDir(), t.TempDir()); len(got) != 0 {
 		t.Fatalf("expected no mounts, got %v", got)
 	}
 }
