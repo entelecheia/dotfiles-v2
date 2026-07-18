@@ -169,6 +169,7 @@ func TestRender_WorkspaceCloudVars(t *testing.T) {
 	out, err := e.Render("shell/40-workspace.sh.tmpl", map[string]any{
 		"EnableWorkspace": true,
 		"WorkspacePath":   "~/workspace",
+		"VaultPath":       "~/workspace/work/vault",
 		"CloudSymlink":    "~/Dropbox",
 	})
 	if err != nil {
@@ -176,7 +177,7 @@ func TestRender_WorkspaceCloudVars(t *testing.T) {
 	}
 
 	content := string(out)
-	for _, want := range []string{`export CLOUD_WORKSPACE="$HOME/Dropbox"`, `export CLOUD_WORK="$CLOUD_WORKSPACE/work"`, `alias cwork=`} {
+	for _, want := range []string{`export VAULT="$HOME/workspace/work/vault"`, `export CLOUD_WORKSPACE="$HOME/Dropbox"`, `export CLOUD_WORK="$CLOUD_WORKSPACE/work"`, `alias cwork=`} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Render 40-workspace: expected %q in output, got:\n%s", want, content)
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 	"github.com/entelecheia/dotfiles-v2/internal/ghauth"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
@@ -17,6 +18,10 @@ import (
 type InitOptions struct {
 	Force bool // re-clone over populated targets
 	Yes   bool // skip interactive confirmations (destructive re-clone, gh auth login)
+	// VaultPath redirects the clone target of the repo named "vault" (the
+	// vault often arrives as a work submodule, e.g. <workspace>/work/vault).
+	// ~-form allowed; empty means <workspacePath>/vault.
+	VaultPath string
 }
 
 // targetState classifies the current state of a clone target.
@@ -52,7 +57,7 @@ func Init(ctx context.Context, runner *exec.Runner, workspacePath string,
 		if repo.Name == "" || repo.Remote == "" {
 			continue
 		}
-		target := filepath.Join(workspacePath, repo.Name)
+		target := RepoTarget(workspacePath, repo.Name, opts.VaultPath)
 		state, _, err := classifyTarget(target)
 		if err != nil {
 			continue
@@ -89,7 +94,7 @@ func Init(ctx context.Context, runner *exec.Runner, workspacePath string,
 			errs = append(errs, fmt.Errorf("invalid repo entry: name=%q remote=%q", repo.Name, repo.Remote))
 			continue
 		}
-		target := filepath.Join(workspacePath, repo.Name)
+		target := RepoTarget(workspacePath, repo.Name, opts.VaultPath)
 
 		state, gdriveTarget, err := classifyTarget(target)
 		if err != nil {
@@ -148,6 +153,17 @@ func Init(ctx context.Context, runner *exec.Runner, workspacePath string,
 		return msgs, errors.Join(errs...)
 	}
 	return msgs, nil
+}
+
+// RepoTarget resolves the clone target for a repo. The repo named "vault"
+// honors the configured vault path (the vault commonly lives inside the work
+// tree as a submodule, e.g. <workspace>/work/vault); every other repo clones
+// into <workspacePath>/<name>.
+func RepoTarget(workspacePath, name, vaultPath string) string {
+	if name == "vault" && vaultPath != "" {
+		return fileutil.ExpandHome(vaultPath)
+	}
+	return filepath.Join(workspacePath, name)
 }
 
 // classifyTarget inspects the target path and returns its state plus, if

@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
@@ -14,6 +15,7 @@ import (
 func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error {
 	if profile == "server" {
 		state.Modules.Workspace.Path = ""
+		state.Modules.Workspace.Vault = ""
 		state.Modules.Workspace.Gdrive = ""
 		state.Modules.Workspace.GdriveSymlink = ""
 		state.Modules.Workspace.Symlink = ""
@@ -29,6 +31,7 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 	}
 	if !enableWorkspace {
 		state.Modules.Workspace.Path = ""
+		state.Modules.Workspace.Vault = ""
 		state.Modules.Workspace.Gdrive = ""
 		state.Modules.Workspace.GdriveSymlink = ""
 		state.Modules.Workspace.Symlink = ""
@@ -50,6 +53,10 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 		return err
 	}
 
+	if err := configureVaultPath(state, yes); err != nil {
+		return err
+	}
+
 	if runtime.GOOS == "darwin" {
 		if err := configureCloudMirror(state, yes); err != nil {
 			return err
@@ -59,6 +66,50 @@ func ConfigureWorkspace(state *config.UserState, profile string, yes bool) error
 	if err := configureWorkspaceSymlinkAndRepos(state, yes); err != nil {
 		return err
 	}
+	return nil
+}
+
+// configureVaultPath selects the vault directory. Options come from the
+// current state value, detected existing directories under the workspace,
+// and the fresh default (<workspace>/work/vault), plus an "other" escape.
+// Unattended runs take the default as-is: an existing state choice is
+// preserved, a fresh machine picks the detected location.
+func configureVaultPath(state *config.UserState, yes bool) error {
+	const optOther = "other (enter path)"
+	wsPath := state.Modules.Workspace.Path
+	freshDefault := strings.TrimSuffix(wsPath, "/") + "/work/vault"
+
+	candidates := detectVaultCandidates(wsPath)
+	previous := state.Modules.Workspace.Vault
+	opts := candidates
+	if previous != "" && !slices.Contains(opts, previous) {
+		opts = append([]string{previous}, opts...)
+	}
+	if !slices.Contains(opts, freshDefault) {
+		opts = append(opts, freshDefault)
+	}
+	opts = append(opts, optOther)
+
+	def := previous
+	if def == "" && len(candidates) > 0 {
+		def = candidates[0]
+	}
+	if def == "" {
+		def = freshDefault
+	}
+
+	choice, err := Select("Vault location", opts, def, yes)
+	if err != nil {
+		return err
+	}
+	if choice == optOther {
+		state.Modules.Workspace.Vault, err = Input("Vault path", previous, yes)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	state.Modules.Workspace.Vault = choice
 	return nil
 }
 
@@ -167,7 +218,15 @@ func configureWorkspaceSymlinkAndRepos(state *config.UserState, yes bool) error 
 		if configureRepos {
 			oldRepos := state.Modules.Workspace.Repos
 			state.Modules.Workspace.Repos = nil
+			topLevelVault := strings.TrimSuffix(state.Modules.Workspace.Path, "/") + "/vault"
 			for _, name := range []string{"work", "vault"} {
+				if name == "vault" && state.Modules.Workspace.Vault != "" && state.Modules.Workspace.Vault != topLevelVault {
+					fmt.Println(StyleHint.Render(fmt.Sprintf(
+						"  Vault location is %s — skipping the separate vault repo\n"+
+							"  (the vault is expected to arrive with work, e.g. as a submodule).",
+						state.Modules.Workspace.Vault)))
+					continue
+				}
 				existingRemote := ""
 				for _, r := range oldRepos {
 					if r.Name == name {

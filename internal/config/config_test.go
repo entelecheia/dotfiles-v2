@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -183,7 +185,7 @@ func TestTemplateData_Keys(t *testing.T) {
 		"Name", "Email", "GithubUser", "Timezone",
 		"Hostname", "IsDarwin",
 		"EnableWorkspace", "EnableAI",
-		"WorkspacePath", "CloudSymlink",
+		"WorkspacePath", "VaultPath", "CloudSymlink",
 		"SSHKeyName", "CoauthorGuard",
 		"HasCUDA", "CUDAHome", "HasNVIDIAGPU",
 	}
@@ -214,5 +216,58 @@ func TestTemplateData_NilSystem(t *testing.T) {
 	}
 	if data["Hostname"] != "" {
 		t.Errorf("TemplateData[Hostname] with nil System = %v, want empty string", data["Hostname"])
+	}
+}
+
+func TestVaultPath_Explicit(t *testing.T) {
+	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{
+		Path:  "~/workspace",
+		Vault: "~/custom/vault",
+	}}}
+	if got, want := cfg.VaultPath(), "~/custom/vault"; got != want {
+		t.Errorf("VaultPath() = %q, want %q", got, want)
+	}
+}
+
+func TestVaultPath_DetectsWorkVault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "workspace", "work", "vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
+	if got, want := cfg.VaultPath(), "~/workspace/work/vault"; got != want {
+		t.Errorf("VaultPath() = %q, want %q", got, want)
+	}
+}
+
+func TestVaultPath_DetectsTopLevelVault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "workspace", "vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
+	if got, want := cfg.VaultPath(), "~/workspace/vault"; got != want {
+		t.Errorf("VaultPath() = %q, want %q", got, want)
+	}
+}
+
+func TestVaultPath_FreshDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
+	if got, want := cfg.VaultPath(), "~/workspace/work/vault"; got != want {
+		t.Errorf("VaultPath() = %q, want %q", got, want)
+	}
+}
+
+func TestVaultPath_EmptyWorkspacePath(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.VaultPath(); got != "" {
+		t.Errorf("VaultPath() with empty workspace path = %q, want empty", got)
 	}
 }

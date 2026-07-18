@@ -5,8 +5,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
@@ -242,5 +244,76 @@ func TestAuditScopeLimitsSearch(t *testing.T) {
 	}
 	if len(mismatches) != 1 || mismatches[0].RelPath != "a/only" {
 		t.Fatalf("scope should limit to a/, got: %v", mismatches)
+	}
+}
+
+func TestRepoTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	tests := []struct {
+		name      string
+		repo      string
+		vaultPath string
+		want      string
+	}{
+		{"work unaffected by vault path", "work", "/elsewhere/vault", "/ws/work"},
+		{"vault default", "vault", "", "/ws/vault"},
+		{"vault redirect absolute", "vault", "/custom/vault", "/custom/vault"},
+		{"vault redirect tilde", "vault", "~/workspace/work/vault", filepath.Join(home, "workspace", "work", "vault")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RepoTarget("/ws", tc.repo, tc.vaultPath); got != tc.want {
+				t.Fatalf("RepoTarget(%q, %q) = %q, want %q", tc.repo, tc.vaultPath, got, tc.want)
+			}
+		})
+	}
+}
+
+// A stale vault repo entry must not re-clone when the configured vault
+// location (e.g. the work submodule) is already populated.
+func TestInitSkipsVaultRedirectedToPopulatedTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	wsDir := filepath.Join(home, "workspace")
+	vaultDir := filepath.Join(wsDir, "work", "vault")
+	if err := os.MkdirAll(filepath.Join(vaultDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	msgs, err := Init(context.Background(), runner, wsDir,
+		[]config.RepoConfig{{Name: "vault", Remote: "git@github.com:u/vault.git"}},
+		InitOptions{Yes: true, VaultPath: "~/workspace/work/vault"})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if len(msgs) != 1 || !strings.Contains(msgs[0], "skip "+vaultDir) {
+		t.Fatalf("expected skip of populated %s, got %v", vaultDir, msgs)
+	}
+}
+
+// Without the redirect the same entry would plan a duplicate clone into
+// <workspace>/vault; with it the clone targets the configured vault path.
+func TestInitWouldCloneVaultToRedirectedTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	wsDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	vaultDir := filepath.Join(wsDir, "work", "vault")
+
+	msgs, err := Init(context.Background(), runner, wsDir,
+		[]config.RepoConfig{{Name: "vault", Remote: "git@github.com:u/vault.git"}},
+		InitOptions{Yes: true, VaultPath: "~/workspace/work/vault"})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	want := "would clone git@github.com:u/vault.git -> " + vaultDir
+	if len(msgs) != 1 || !strings.Contains(msgs[0], want) {
+		t.Fatalf("expected %q, got %v", want, msgs)
 	}
 }
