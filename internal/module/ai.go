@@ -117,16 +117,30 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
-		result, err := manager.Apply(aisettings.ApplyOptions{Tools: manager.DefaultApplyTools(), DryRun: rc.DryRun})
-		if err != nil {
-			return nil, fmt.Errorf("applying agents SSOT: %w", err)
-		}
-		for _, item := range result.Items {
-			if item.Changed {
-				messages = append(messages, fmt.Sprintf("applied agents SSOT to %s", item.TargetPath))
+		ssotMissing := !rc.Runner.FileExists(manager.SSOTPath())
+		if ssotMissing {
+			// Fresh machines enable agents_ssot by default, so the first apply
+			// must scaffold the SSOT before rendering it to tool targets.
+			if _, err := manager.Init(aisettings.InitOptions{}); err != nil {
+				return nil, fmt.Errorf("scaffolding agents SSOT: %w", err)
 			}
+			messages = append(messages, fmt.Sprintf("scaffolded agents SSOT %s", manager.SSOTPath()))
 		}
-		messages = append(messages, result.Warnings...)
+		if ssotMissing && rc.DryRun {
+			// Dry-run writes nothing, so there is no SSOT to render yet.
+			messages = append(messages, "dry-run: agents SSOT apply deferred until the SSOT is scaffolded")
+		} else {
+			result, err := manager.Apply(aisettings.ApplyOptions{Tools: manager.DefaultApplyTools(), DryRun: rc.DryRun})
+			if err != nil {
+				return nil, fmt.Errorf("applying agents SSOT: %w", err)
+			}
+			for _, item := range result.Items {
+				if item.Changed {
+					messages = append(messages, fmt.Sprintf("applied agents SSOT to %s", item.TargetPath))
+				}
+			}
+			messages = append(messages, result.Warnings...)
+		}
 	}
 	if rc.Config.Modules.AI.HUD {
 		manager := aisettings.NewHUDManager(rc.Runner, rc.HomeDir)

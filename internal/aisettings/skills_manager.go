@@ -44,6 +44,7 @@ type SkillsOptions struct {
 	Provider string
 	SSOTPath string
 	Tools    []string
+	Warnings []string
 }
 
 // SkillSourceItem is a single source skill directory under the SSOT root.
@@ -73,8 +74,10 @@ type SkillsStatusReport struct {
 	Warnings []string            `json:"warnings,omitempty"`
 }
 
-// RegisteredSkillTools returns built-in skill target roots. Gemini and
-// Antigravity are intentionally separate because they use separate skills dirs.
+// RegisteredSkillTools returns provider-managed runtime targets. Maru
+// currently federates skills to Claude Code and Codex only. Broader skill
+// inventories (agents, Gemini, Antigravity) remain available through
+// `dot ai skills list|validate`, but are not treated as managed sync targets.
 func RegisteredSkillTools() []SkillTool {
 	return []SkillTool{
 		{
@@ -86,22 +89,6 @@ func RegisteredSkillTools() []SkillTool {
 			ID:          "codex",
 			DisplayName: "Codex CLI",
 			RootPath:    "~/.codex/skills",
-		},
-		{
-			ID:          "agents",
-			DisplayName: "Agents",
-			RootPath:    "~/.agents/skills",
-		},
-		{
-			ID:          "gemini",
-			DisplayName: "Gemini CLI",
-			RootPath:    "~/.gemini/skills",
-		},
-		{
-			ID:          "antigravity",
-			DisplayName: "Antigravity",
-			RootPath:    "~/.gemini/antigravity/skills",
-			Aliases:     []string{"agy"},
 		},
 	}
 }
@@ -192,7 +179,7 @@ func (m *SkillsManager) Status(opts SkillsOptions) (*SkillsStatusReport, error) 
 		SSOTPath: resolved.SSOTPath,
 		Tools:    append([]string(nil), resolved.Tools...),
 		Sources:  sources,
-		Warnings: warnings,
+		Warnings: append(append([]string(nil), resolved.Warnings...), warnings...),
 	}
 	if len(sources) == 0 && len(warnings) > 0 {
 		report.Items = append(report.Items, SkillTargetStatus{
@@ -275,20 +262,25 @@ func (m *SkillsManager) resolveOptions(opts SkillsOptions) (SkillsOptions, error
 	default:
 		return SkillsOptions{}, fmt.Errorf("unknown skills provider %q", opts.Provider)
 	}
-	tools, err := m.resolveToolIDs(opts.Tools)
+	tools, migrationWarnings, err := m.resolveToolIDs(opts.Tools)
 	if err != nil {
 		return SkillsOptions{}, err
+	}
+	if len(tools) == 0 {
+		tools = m.DefaultTools()
 	}
 	return SkillsOptions{
 		Provider: provider,
 		SSOTPath: filepath.Clean(expandHome(ssot, m.homeDir())),
 		Tools:    tools,
+		Warnings: append(append([]string(nil), opts.Warnings...), migrationWarnings...),
 	}, nil
 }
 
-func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
+func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, []string, error) {
 	seen := map[string]bool{}
 	var out []string
+	var warnings []string
 	for _, id := range ids {
 		for _, part := range strings.Split(id, ",") {
 			part = strings.ToLower(strings.TrimSpace(part))
@@ -297,7 +289,11 @@ func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
 			}
 			tool, ok := m.Tool(part)
 			if !ok {
-				return nil, fmt.Errorf("unknown skills tool %q (valid: %s)", part, m.toolIDList())
+				if isInventoryOnlySkillTool(part) {
+					warnings = append(warnings, fmt.Sprintf("legacy skills tool %q is inventory-only and was removed from managed targets; Maru manages claude and codex", part))
+					continue
+				}
+				return nil, nil, fmt.Errorf("unknown skills tool %q (valid: %s)", part, m.toolIDList())
 			}
 			if seen[tool.ID] {
 				continue
@@ -306,10 +302,16 @@ func (m *SkillsManager) resolveToolIDs(ids []string) ([]string, error) {
 			out = append(out, tool.ID)
 		}
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("at least one target tool is required (valid: %s)", m.toolIDList())
+	return out, warnings, nil
+}
+
+func isInventoryOnlySkillTool(id string) bool {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "agents", "gemini", "antigravity", "agy":
+		return true
+	default:
+		return false
 	}
-	return out, nil
 }
 
 func (m *SkillsManager) listSources(root string) ([]SkillSourceItem, []string, error) {

@@ -59,3 +59,55 @@ func TestAIModuleIgnoresLegacySkillsConfig(t *testing.T) {
 		t.Fatalf("Apply created a skill symlink despite diagnose-only policy, stat err=%v", err)
 	}
 }
+
+// Fresh machines enable modules.ai.agents_ssot by default, so the first
+// `dot apply` must scaffold the SSOT instead of failing on a missing file.
+func TestAIModuleScaffoldsAgentsSSOTOnFreshApply(t *testing.T) {
+	home := t.TempDir()
+	rc := &RunContext{
+		Config: &config.Config{Modules: config.ModulesConfig{AI: config.AIConfig{
+			Enabled:    true,
+			AgentsSSOT: true,
+		}}},
+		Runner:   dotexec.NewRunner(false, slog.Default()),
+		Template: template.NewEngine(),
+		HomeDir:  home,
+	}
+
+	if _, err := (&AIModule{}).Apply(context.Background(), rc); err != nil {
+		t.Fatalf("Apply on fresh home: %v", err)
+	}
+	ssot := filepath.Join(home, ".config", "dotfiles", "agents", "AGENTS.md")
+	if _, err := os.Stat(ssot); err != nil {
+		t.Fatalf("Apply did not scaffold agents SSOT: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); err != nil {
+		t.Fatalf("Apply did not render scaffolded SSOT to claude target: %v", err)
+	}
+}
+
+// Dry-run writes nothing, so a fresh home must complete without error and
+// without creating the SSOT or any tool target.
+func TestAIModuleFreshDryRunSkipsAgentsSSOT(t *testing.T) {
+	home := t.TempDir()
+	rc := &RunContext{
+		Config: &config.Config{Modules: config.ModulesConfig{AI: config.AIConfig{
+			Enabled:    true,
+			AgentsSSOT: true,
+		}}},
+		Runner:   dotexec.NewRunner(true, slog.Default()),
+		Template: template.NewEngine(),
+		HomeDir:  home,
+		DryRun:   true,
+	}
+
+	if _, err := (&AIModule{}).Apply(context.Background(), rc); err != nil {
+		t.Fatalf("dry-run Apply on fresh home: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "dotfiles", "agents", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created agents SSOT, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created claude target, stat err=%v", err)
+	}
+}

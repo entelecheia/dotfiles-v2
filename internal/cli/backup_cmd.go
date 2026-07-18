@@ -20,7 +20,7 @@ import (
 
 // newBackupCmd returns the top-level `dot backup` one-stop wizard: an
 // interactive Q&A that backs up everything dot manages — profile state,
-// macOS app settings, AI/Anchor settings, and encrypted secrets — into the
+// macOS app settings, AI/Maru settings, and encrypted secrets — into the
 // shared backup root in one run.
 func newBackupCmd() *cobra.Command {
 	c := &cobra.Command{
@@ -33,7 +33,7 @@ Domains:
            → <root>/profiles/<host>/<version>/
   apps     macOS app settings (plists, Application Support, containers)
            → <root>/app-settings/<host>/<token>/
-  ai       AI CLI/agent settings + Anchor settings
+  ai       AI CLI/agent settings + Maru settings
            → <root>/ai-config/<host>/<version>/
   secrets  encrypted .age archives from the local secrets store
            → <root>/secrets-age/<host>/
@@ -79,7 +79,7 @@ func runOnestopBackup(cmd *cobra.Command, _ []string) error {
 		labels["apps"] = "apps — macOS app settings (plists, Application Support)"
 	}
 	available = append(available, "ai")
-	labels["ai"] = "ai — AI CLI/agent settings + Anchor settings"
+	labels["ai"] = "ai — AI CLI/agent settings + Maru settings"
 	storeDir := o.secretsStoreDir()
 	if hasAgeArchives(storeDir) {
 		available = append(available, "secrets")

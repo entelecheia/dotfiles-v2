@@ -33,8 +33,17 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 		return err
 	}
 	if !state.Modules.AI.Enabled {
+		state.Modules.AI.AgentsSSOT = false
 		state.Modules.AI.Skills = config.AISkillsConfig{}
 		return nil
+	}
+	agentsDefault := state.Modules.AI.AgentsSSOT
+	if freshDefault {
+		agentsDefault = true
+	}
+	state.Modules.AI.AgentsSSOT, err = ConfirmBool("Keep global agent instructions in sync?", agentsDefault, yes)
+	if err != nil {
+		return err
 	}
 	if yes {
 		return nil
@@ -75,6 +84,13 @@ func ConfigureAI(state *config.UserState, yes bool, freshDefault bool) error {
 		}
 	}
 	toolDefault := state.Modules.AI.Skills.Tools
+	var managedDefaults []string
+	for _, tool := range toolDefault {
+		if tool == "claude" || tool == "codex" {
+			managedDefaults = append(managedDefaults, tool)
+		}
+	}
+	toolDefault = managedDefaults
 	if len(toolDefault) == 0 {
 		toolDefault = []string{"claude", "codex"}
 	}
@@ -90,9 +106,6 @@ func skillToolSelectOptions() []SelectOption {
 	return []SelectOption{
 		{Label: "claude - Claude Code", Value: "claude"},
 		{Label: "codex - Codex CLI", Value: "codex"},
-		{Label: "agents - shared agents skill root", Value: "agents"},
-		{Label: "gemini - Gemini CLI", Value: "gemini"},
-		{Label: "antigravity - Antigravity", Value: "antigravity"},
 	}
 }
 

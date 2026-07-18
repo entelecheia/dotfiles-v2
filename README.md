@@ -45,7 +45,7 @@ dot usecase    # detailed workflow examples
 
 ```bash
 # On the existing machine — one interactive run backs up everything:
-# profile state, macOS app settings, AI/Anchor settings, encrypted secrets
+# profile state, macOS app settings, AI/Maru settings, encrypted secrets
 dot backup
 
 # On the new machine (Drive already mounted)
@@ -66,7 +66,7 @@ overwritten local file in per-step pre-restore backups. Unattended:
 # On the existing machine
 dot profile backup --tag "pre-migration" --include-secrets
 dot apps backup                       # also snapshot per-app settings
-dot ai backup                         # portable Claude/Codex/Antigravity/MCP settings
+dot ai backup                         # portable Claude/Codex/Antigravity/Maru/MCP settings
 
 # On the new machine (Drive already mounted)
 dot profile restore --include-secrets # restores ~/.config/dotfiles + ~/.ssh/age_key*
@@ -668,14 +668,26 @@ a global Git `commit-msg` hook that warns when a commit message contains
 want the hook to reject the commit. `--persist` records
 `modules.git.coauthor_guard: warn|block` for future `dot apply` runs. Add
 `--apply-agents` when you also want to render the updated agents SSOT to live
-agent targets immediately.
+agent targets immediately. The managed AGENTS block also preserves the global
+English-only git commit message policy; an explicit user request can still
+allow a coauthor trailer.
 
-Portable backup includes Claude/Codex/Antigravity settings, MCP config, agents,
+Portable backup includes Claude/Codex/Antigravity/Maru settings, MCP config
+(Claude MCP state comes from `~/.claude.json`), agents,
 hooks, prompts, rules, and plugins. It excludes skill directories, auth tokens,
 local overrides, caches, logs, sessions, histories, telemetry, sqlite DBs,
 plugin caches, generated/system skill bundles, and Antigravity conversation and
-brain state by default. Use `--include-auth` only when you explicitly want known
-auth/local-secret files included.
+brain state by default. Portable settings containing inline credential-like
+values fail closed before a snapshot/archive is created; move those values to
+an environment variable or keychain. Use `--include-auth` only when you
+explicitly want known auth/local-secret files included.
+Portable archive imports accept only regular files and directories; symlinks,
+hardlinks, devices, and link-based path pivots are rejected. Export materializes
+nested symlinks whose resolved target stays inside a managed portable root;
+dangling links and links into machine-local paths (plugin caches and the like)
+are skipped, since that wiring is rebuilt per machine. Import manifests are restricted to the built-in entry allowlist;
+legacy v1 `.claude/mcp.json` snapshots migrate into `~/.claude.json` MCP state,
+and pre-rename `.anchor/*` snapshot entries restore into their `.maru/*` targets.
 
 `dot ai skills` scans Markdown `SKILL.md` packages without executing them.
 Default roots are `~/.codex/skills`, `~/.claude/skills`, and
@@ -695,20 +707,26 @@ dot never writes under any tool skill root or skill source directory. Fix
 drift by syncing via Maru, not via dot.
 
 The read-only `dot ai skills path` and `dot ai skills status` commands compare
-a skills SSOT against tool roots. `provider: maru` (default; `anchor` is
+a skills SSOT against Maru's managed Claude Code and Codex roots. Inventory
+commands can still scan agents, Gemini, and Antigravity roots. `provider: maru`
+(default; `anchor` is
 accepted as a legacy alias) defaults the SSOT to `~/.maru/skills`;
 `provider: path` requires `ssot_path`. Target tools are auto-detected (any
-tool whose skills root such as `~/.claude/skills` exists, falling back to all
-registered tools), so both commands run with no flags. Defaults may also come
+managed tool whose skills root such as `~/.claude/skills` exists, falling back
+to Claude Code and Codex), so both commands run with no flags. Defaults may also come
 from `modules.ai.skills` config:
+
+Legacy `tools` entries for `agents`, `gemini`, and `antigravity` remain
+loadable; diagnostics warn and normalize them out of Maru-managed targets.
 
 ```yaml
 modules:
   ai:
     enabled: true
+    agents_ssot: true
     skills:
       provider: maru
-      tools: [claude, codex, gemini, antigravity]
+      tools: [claude, codex]
 ```
 
 `modules.ai.skills.enabled` is deprecated and ignored; legacy configs that
@@ -771,7 +789,8 @@ and the rendered tool targets. `dot ai restore --reapply-agents` restores the
 snapshot and then reapplies the restored SSOT to selected tool targets.
 Automatic deployment during `dot apply` is off by default; enable
 `modules.ai.agents_ssot: true` only when you want `dot apply` to re-render
-agent targets.
+agent targets. Fresh interactive and unattended `dot init` configurations
+enable this explicitly; reconfiguration preserves the existing choice.
 
 ### `dot ws` — Dual-Workspace Folder Ops
 

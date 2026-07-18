@@ -219,7 +219,8 @@ func (m *CoauthorGuardManager) agentsInstructionDrift() string {
 		return "error"
 	}
 	if strings.Contains(string(data), coauthorGuardStart) &&
-		strings.Contains(string(data), "Co-authored-by") {
+		strings.Contains(string(data), "Co-authored-by") &&
+		strings.Contains(string(data), "commit messages in English") {
 		return "in-sync"
 	}
 	return "out-of-sync"
@@ -248,6 +249,7 @@ func (m *CoauthorGuardManager) ensureAgentsInstruction() error {
 func patchAgentsCoauthorInstruction(content string) string {
 	block := coauthorGuardStart + "\n" +
 		"- Do not add `Co-authored by` or `Co-authored-by:` commit trailers unless the user explicitly requests them. If another hook or tool proposes one, surface it before committing.\n" +
+		"- Always write git commit messages in English, regardless of the conversation language.\n" +
 		coauthorGuardEnd
 	content = strings.TrimRight(content, "\r\n")
 	start := strings.Index(content, coauthorGuardStart)

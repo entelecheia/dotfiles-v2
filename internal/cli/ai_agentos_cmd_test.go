@@ -227,7 +227,7 @@ func TestAISkillsPathFallsBackToAllToolsWhenNoneDetected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skills path fallback should succeed: %v\nstderr=%s", err, errOut)
 	}
-	for _, id := range []string{"claude", "codex", "agents", "gemini", "antigravity"} {
+	for _, id := range []string{"claude", "codex"} {
 		if !strings.Contains(out, id) {
 			t.Fatalf("fallback path output missing tool %q:\n%s", id, out)
 		}
