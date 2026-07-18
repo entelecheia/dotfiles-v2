@@ -367,35 +367,54 @@ func writeCompressedTar(out io.Writer, write func(*tar.Writer) error) error {
 // already opt-in via --include-auth; ordinary settings must reference the
 // environment or keychain instead of silently leaking into a plaintext backup.
 func (e *Engine) validatePortableEntries(includeAuth bool) error {
+	roots, err := e.portableArchiveRoots(includeAuth)
+	if err != nil {
+		return err
+	}
 	for _, entry := range Entries(includeAuth) {
 		if entry.Auth {
 			continue
 		}
 		src := filepath.Join(e.HomeDir, entry.Path)
-		info, err := os.Lstat(src)
-		if os.IsNotExist(err) {
+		if _, err := os.Lstat(src); os.IsNotExist(err) {
 			continue
-		}
-		if err != nil {
+		} else if err != nil {
 			return fmt.Errorf("inspect %s for secrets: %w", entry.Path, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("inspect %s for secrets: top-level managed entry may not be a symlink", entry.Path)
-		}
-		canonicalRoot, err := filepath.EvalSymlinks(src)
-		if err != nil {
-			return err
-		}
-		root := portableArchiveRoot{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}
-		err = scanMaterializedSecrets(src, entry.Path, root, map[string]bool{})
-		if err != nil {
+		if err := scanMaterializedSecrets(src, entry.Path, roots, map[string]bool{}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func scanMaterializedSecrets(src, logicalRel string, root portableArchiveRoot, stack map[string]bool) error {
+// portableArchiveRoots returns the canonical roots of every managed entry that
+// exists, so nested symlinks may be materialized when they resolve into any
+// managed portable root (not only their own entry's root).
+func (e *Engine) portableArchiveRoots(includeAuth bool) ([]portableArchiveRoot, error) {
+	var roots []portableArchiveRoot
+	for _, entry := range Entries(includeAuth) {
+		src := filepath.Join(e.HomeDir, entry.Path)
+		info, err := os.Lstat(src)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("portable archive entry %s: top-level managed entry may not be a symlink", entry.Path)
+		}
+		canonical, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s: %w", entry.Path, err)
+		}
+		roots = append(roots, portableArchiveRoot{path: filepath.Clean(canonical), isDir: info.IsDir()})
+	}
+	return roots, nil
+}
+
+func scanMaterializedSecrets(src, logicalRel string, roots []portableArchiveRoot, stack map[string]bool) error {
 	if isExcluded(logicalRel) {
 		return nil
 	}
@@ -405,33 +424,36 @@ func scanMaterializedSecrets(src, logicalRel string, root portableArchiveRoot, s
 	}
 	actual := src
 	if info.Mode()&os.ModeSymlink != 0 {
-		actual, err = filepath.EvalSymlinks(src)
+		resolved, resolvedInfo, portable, err := resolveMaterializedSymlink(src, roots)
 		if err != nil {
 			return err
 		}
-		if !pathWithinPortableRoots(actual, []portableArchiveRoot{root}) {
-			return fmt.Errorf("symlink %s resolves outside its canonical managed root", src)
+		if !portable {
+			return nil
 		}
-		info, err = os.Stat(actual)
-		if err != nil {
-			return err
-		}
+		actual, info = resolved, resolvedInfo
 	}
 	if !info.IsDir() {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported special file %s", src)
 		}
-		data, candidate, err := readSecretScanCandidate(logicalRel, actual, info.Size())
-		if err != nil {
-			return fmt.Errorf("read %s for inline credential scan: %w", logicalRel, err)
-		}
-		if !candidate {
-			return nil
-		}
+		var data []byte
 		if logicalRel == claudeStateRelPath {
-			data, err = claudeMCPProjection(data)
+			// Only the mcpServers projection is archived, so project before
+			// the size-capped scan: a large machine-local Claude state file
+			// must not block backup of its small portable slice.
+			data, err = readClaudeMCPProjection(actual)
 			if err != nil {
 				return fmt.Errorf("parse %s MCP state: %w", logicalRel, err)
+			}
+		} else {
+			var candidate bool
+			data, candidate, err = readSecretScanCandidate(logicalRel, actual, info.Size())
+			if err != nil {
+				return fmt.Errorf("read %s for inline credential scan: %w", logicalRel, err)
+			}
+			if !candidate {
+				return nil
 			}
 		}
 		field, scanned, err := inlineSecretField(logicalRel, data, int64(len(data)))
@@ -457,7 +479,7 @@ func scanMaterializedSecrets(src, logicalRel string, root portableArchiveRoot, s
 		return err
 	}
 	for _, child := range children {
-		if err := scanMaterializedSecrets(filepath.Join(actual, child.Name()), filepath.Join(logicalRel, child.Name()), root, stack); err != nil {
+		if err := scanMaterializedSecrets(filepath.Join(actual, child.Name()), filepath.Join(logicalRel, child.Name()), roots, stack); err != nil {
 			return err
 		}
 	}
@@ -518,10 +540,18 @@ func inlineSecretField(path string, data []byte, size int64) (string, bool, erro
 			if !isSecretName(match[1]) {
 				continue
 			}
-			value := firstNonEmpty(match[2:]...)
-			if !isSecretPlaceholder(value) {
-				return match[1], true, nil
+			value := firstNonEmpty(match[2], match[3])
+			quoted := value != ""
+			if !quoted {
+				value = match[4]
 			}
+			if isSecretPlaceholder(value) {
+				continue
+			}
+			if !quoted && isCodeExpressionValue(match[1], value) {
+				continue
+			}
+			return match[1], true, nil
 		}
 		for _, pattern := range []*regexp.Regexp{positionalFlagPattern, shellFlagPattern} {
 			for _, match := range pattern.FindAllStringSubmatch(line, -1) {
@@ -634,6 +664,16 @@ func isSecretName(name string) bool {
 		}
 	}
 	return n == "token" || n == "secret"
+}
+
+// isCodeExpressionValue reports whether an unquoted matched value is a code
+// expression or a self-reference (`api_key=api_key`) rather than a credential
+// literal; hook and vendored plugin scripts are full of both.
+func isCodeExpressionValue(name, value string) bool {
+	if strings.ContainsAny(value, "()'\"`{}") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimLeft(name, "-"), value)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -928,6 +968,14 @@ func (e *Engine) uniqueVersion(t time.Time) (string, error) {
 
 func (e *Engine) copyFromHome(destRoot string, includeAuth bool) (*Summary, error) {
 	sum := &Summary{}
+	var roots []portableArchiveRoot
+	if destRoot != "" {
+		var err error
+		roots, err = e.portableArchiveRoots(includeAuth)
+		if err != nil {
+			return nil, err
+		}
+	}
 	for _, entry := range Entries(includeAuth) {
 		src := filepath.Join(e.HomeDir, entry.Path)
 		es := EntrySummary{Tool: entry.Tool, Path: entry.Path, Auth: entry.Auth}
@@ -966,12 +1014,7 @@ func (e *Engine) copyFromHome(destRoot string, includeAuth bool) (*Summary, erro
 			es.Files = files
 			es.Bytes = bytes
 		} else {
-			canonicalRoot, err := filepath.EvalSymlinks(src)
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s: %w", entry.Path, err)
-			}
-			root := portableArchiveRoot{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}
-			files, bytes, err := e.copyMaterializedPath(src, filepath.Join(destRoot, entry.Path), entry.Path, root, map[string]bool{})
+			files, bytes, err := e.copyMaterializedPath(src, filepath.Join(destRoot, entry.Path), entry.Path, roots, map[string]bool{})
 			if err != nil {
 				return nil, fmt.Errorf("copy %s: %w", entry.Path, err)
 			}
@@ -988,6 +1031,10 @@ func (e *Engine) copyFromHome(destRoot string, includeAuth bool) (*Summary, erro
 
 func (e *Engine) addHomeToTar(tw *tar.Writer, includeAuth bool) (*Summary, error) {
 	sum := &Summary{}
+	roots, err := e.portableArchiveRoots(includeAuth)
+	if err != nil {
+		return nil, err
+	}
 	for _, entry := range Entries(includeAuth) {
 		src := filepath.Join(e.HomeDir, entry.Path)
 		es := EntrySummary{Tool: entry.Tool, Path: entry.Path, Auth: entry.Auth}
@@ -1014,12 +1061,7 @@ func (e *Engine) addHomeToTar(tw *tar.Writer, includeAuth bool) (*Summary, error
 			sum.Entries = append(sum.Entries, es)
 			continue
 		}
-		canonicalRoot, err := filepath.EvalSymlinks(src)
-		if err != nil {
-			return nil, err
-		}
-		allowed := []portableArchiveRoot{{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}}
-		files, bytes, err := addMaterializedPathToTar(tw, src, filepath.Join(homePrefix, entry.Path), entry.Path, allowed, map[string]bool{})
+		files, bytes, err := addMaterializedPathToTar(tw, src, filepath.Join(homePrefix, entry.Path), entry.Path, roots, map[string]bool{})
 		if err != nil {
 			return nil, fmt.Errorf("archive %s: %w", entry.Path, err)
 		}
@@ -1171,7 +1213,14 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 		known[entry.Path] = entry
 	}
 	const legacyClaudeMCPPath = ".claude/mcp.json"
-	legacyTarget := known[claudeStateRelPath]
+	// Snapshots written before the Claude MCP move and the Anchor -> Maru
+	// rename carry these manifest paths; map them onto their current targets
+	// so old archives stay restorable.
+	legacySources := map[string]string{
+		legacyClaudeMCPPath:     claudeStateRelPath,
+		".anchor/settings.json": ".maru/settings.json",
+		".anchor/sites.json":    ".maru/sites.json",
+	}
 	seenSource := map[string]bool{}
 	seenTarget := map[string]bool{}
 	validated := make([]validatedRestoreEntry, 0, len(manifest.Entries))
@@ -1185,13 +1234,17 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 		seenSource[summary.Path] = true
 		target, ok := known[summary.Path]
 		legacy := false
-		if summary.Path == legacyClaudeMCPPath {
-			target, ok, legacy = legacyTarget, true, true
+		if mapped, isLegacy := legacySources[summary.Path]; isLegacy {
+			if mappedTarget, exists := known[mapped]; exists {
+				target, ok, legacy = mappedTarget, true, true
+			}
 		}
 		if !ok {
 			return nil, fmt.Errorf("unknown archive manifest entry %q", summary.Path)
 		}
-		if summary.Tool != target.Tool || summary.Auth != target.Auth {
+		// Legacy sources keep their original tool label (e.g. anchor -> maru),
+		// so only the auth flag must match for them.
+		if summary.Auth != target.Auth || (!legacy && summary.Tool != target.Tool) {
 			return nil, fmt.Errorf("archive manifest metadata mismatch for %q", summary.Path)
 		}
 		if seenTarget[target.Path] {
@@ -1199,7 +1252,9 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 		}
 		seenTarget[target.Path] = true
 		validated = append(validated, validatedRestoreEntry{
-			sourcePath: summary.Path, target: target, legacyClaudeMCP: legacy,
+			sourcePath:      summary.Path,
+			target:          target,
+			legacyClaudeMCP: summary.Path == legacyClaudeMCPPath,
 		})
 	}
 	return validated, nil
@@ -1388,10 +1443,10 @@ func (e *Engine) copyTree(src, dst string, info os.FileInfo, relRoot string) (in
 }
 
 // copyMaterializedPath follows a portable nested symlink only when its
-// canonical target remains below the original managed entry root. Snapshots
-// contain regular files/directories only, so restore never needs to trust a
+// canonical target remains inside a managed portable root. Snapshots contain
+// regular files/directories only, so restore never needs to trust a
 // filesystem link supplied by snapshot data.
-func (e *Engine) copyMaterializedPath(src, dst, logicalRel string, root portableArchiveRoot, stack map[string]bool) (int, int64, error) {
+func (e *Engine) copyMaterializedPath(src, dst, logicalRel string, roots []portableArchiveRoot, stack map[string]bool) (int, int64, error) {
 	if isExcluded(logicalRel) {
 		return 0, 0, nil
 	}
@@ -1401,17 +1456,14 @@ func (e *Engine) copyMaterializedPath(src, dst, logicalRel string, root portable
 	}
 	actual := src
 	if info.Mode()&os.ModeSymlink != 0 {
-		actual, err = filepath.EvalSymlinks(src)
+		resolved, resolvedInfo, portable, err := resolveMaterializedSymlink(src, roots)
 		if err != nil {
 			return 0, 0, err
 		}
-		if !pathWithinPortableRoots(actual, []portableArchiveRoot{root}) {
-			return 0, 0, fmt.Errorf("symlink %s resolves outside its canonical managed root", src)
+		if !portable {
+			return 0, 0, nil
 		}
-		info, err = os.Stat(actual)
-		if err != nil {
-			return 0, 0, err
-		}
+		actual, info = resolved, resolvedInfo
 	}
 	if !info.IsDir() {
 		if !info.Mode().IsRegular() {
@@ -1439,7 +1491,7 @@ func (e *Engine) copyMaterializedPath(src, dst, logicalRel string, root portable
 	var files int
 	var size int64
 	for _, child := range children {
-		f, b, err := e.copyMaterializedPath(filepath.Join(actual, child.Name()), filepath.Join(dst, child.Name()), filepath.Join(logicalRel, child.Name()), root, stack)
+		f, b, err := e.copyMaterializedPath(filepath.Join(actual, child.Name()), filepath.Join(dst, child.Name()), filepath.Join(logicalRel, child.Name()), roots, stack)
 		files += f
 		size += b
 		if err != nil {
@@ -1499,23 +1551,40 @@ func pathWithinPortableRoots(path string, roots []portableArchiveRoot) bool {
 	return false
 }
 
+// resolveMaterializedSymlink resolves a nested symlink for materialization.
+// Dangling links and links resolving outside every managed portable root are
+// machine-local wiring (plugin caches and the like); they carry no portable
+// content, so traversal skips them instead of aborting the whole backup.
+func resolveMaterializedSymlink(src string, roots []portableArchiveRoot) (string, os.FileInfo, bool, error) {
+	actual, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, false, nil
+		}
+		return "", nil, false, err
+	}
+	if !pathWithinPortableRoots(actual, roots) {
+		return "", nil, false, nil
+	}
+	info, err := os.Stat(actual)
+	if err != nil {
+		return "", nil, false, err
+	}
+	return actual, info, true, nil
+}
+
 func (e *Engine) validatePortableArchiveLinks(includeAuth bool) error {
+	roots, err := e.portableArchiveRoots(includeAuth)
+	if err != nil {
+		return err
+	}
 	for _, entry := range Entries(includeAuth) {
 		src := filepath.Join(e.HomeDir, entry.Path)
-		info, err := os.Lstat(src)
-		if os.IsNotExist(err) {
+		if _, err := os.Lstat(src); os.IsNotExist(err) {
 			continue
 		} else if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("portable archive entry %s: top-level managed entry may not be a symlink", entry.Path)
-		}
-		canonicalRoot, err := filepath.EvalSymlinks(src)
-		if err != nil {
-			return err
-		}
-		roots := []portableArchiveRoot{{path: filepath.Clean(canonicalRoot), isDir: info.IsDir()}}
 		if err := validateMaterializedPath(src, entry.Path, roots, map[string]bool{}); err != nil {
 			return fmt.Errorf("portable archive entry %s: %w", entry.Path, err)
 		}
@@ -1533,17 +1602,14 @@ func validateMaterializedPath(src, logicalRel string, roots []portableArchiveRoo
 	}
 	actual := src
 	if info.Mode()&os.ModeSymlink != 0 {
-		actual, err = filepath.EvalSymlinks(src)
+		resolved, resolvedInfo, portable, err := resolveMaterializedSymlink(src, roots)
 		if err != nil {
 			return fmt.Errorf("resolve symlink %s: %w", src, err)
 		}
-		if !pathWithinPortableRoots(actual, roots) {
-			return fmt.Errorf("symlink %s resolves outside managed portable roots", src)
+		if !portable {
+			return nil
 		}
-		info, err = os.Stat(actual)
-		if err != nil {
-			return err
-		}
+		actual, info = resolved, resolvedInfo
 	}
 	if !info.IsDir() {
 		if !info.Mode().IsRegular() {
@@ -1582,17 +1648,14 @@ func addMaterializedPathToTar(tw *tar.Writer, src, archiveName, logicalRel strin
 	}
 	actual := src
 	if info.Mode()&os.ModeSymlink != 0 {
-		actual, err = filepath.EvalSymlinks(src)
+		resolved, resolvedInfo, portable, err := resolveMaterializedSymlink(src, roots)
 		if err != nil {
 			return 0, 0, err
 		}
-		if !pathWithinPortableRoots(actual, roots) {
-			return 0, 0, fmt.Errorf("symlink %s resolves outside managed portable roots", src)
+		if !portable {
+			return 0, 0, nil
 		}
-		info, err = os.Stat(actual)
-		if err != nil {
-			return 0, 0, err
-		}
+		actual, info = resolved, resolvedInfo
 	}
 	files, size, err := addOneToTar(tw, actual, filepath.ToSlash(archiveName), info)
 	if err != nil || !info.IsDir() {
@@ -1833,7 +1896,10 @@ func isExcluded(rel string) bool {
 		lower := strings.ToLower(part)
 		switch lower {
 		case ".ds_store", ".system", ".tmp", "tmp", "cache", "caches", "logs", "log",
-			"sessions", "session-env", "projects", "file-history", "telemetry", "statsig":
+			"sessions", "session-env", "projects", "file-history", "telemetry", "statsig",
+			// Skill bundles are Maru/vendor-managed (plugin packages ship
+			// their own); they never travel in the portable settings archive.
+			"skills":
 			return true
 		}
 		if strings.Contains(lower, "cache") {

@@ -354,26 +354,86 @@ func TestBackupMaterializesInScopeSymlinkForSafeRestore(t *testing.T) {
 	}
 }
 
-func TestExportRejectsSymlinkOutsideManagedRootsBeforePublish(t *testing.T) {
+// Plugin managers wire hook files through symlinks into machine-local caches
+// outside every managed root; those links (and dangling leftovers) carry no
+// portable content, so backup/export skip them instead of aborting.
+func TestExportSkipsSymlinkOutsideManagedRoots(t *testing.T) {
 	eng, home, _ := testEngine(t)
 	outside := t.TempDir()
-	mustWrite(t, filepath.Join(outside, "secret.txt"), []byte("not portable"))
+	mustWrite(t, filepath.Join(outside, "secret.txt"), []byte("api_key = \"not-portable\"\n"))
 	hooks := filepath.Join(home, ".claude", "hooks")
-	if err := os.MkdirAll(hooks, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	mustWrite(t, filepath.Join(hooks, "keep.sh"), []byte("#!/bin/sh\necho keep\n"))
 	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(hooks, "escape.txt")); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "must-not-exist.tar.gz")
+	archive := filepath.Join(t.TempDir(), "portable.tar.gz")
+	if _, err := eng.Export(archive, BackupOptions{}); err != nil {
+		t.Fatalf("export with out-of-root symlink: %v", err)
+	}
+	names := tarEntryNames(t, archive)
+	if names[homePrefix+"/.claude/hooks/escape.txt"] {
+		t.Fatal("out-of-root symlink content must not be archived")
+	}
+	if !names[homePrefix+"/.claude/hooks/keep.sh"] {
+		t.Fatal("regular sibling file should be archived")
+	}
+}
+
+func TestBackupSkipsDanglingSymlink(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	hooks := filepath.Join(home, ".claude", "hooks")
+	mustWrite(t, filepath.Join(hooks, "keep.sh"), []byte("#!/bin/sh\necho keep\n"))
+	if err := os.Symlink(filepath.Join(home, ".claude", "plugins", "cache", "gone.mjs"), filepath.Join(hooks, "gone.mjs")); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatalf("backup with dangling symlink: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snap.Path, homePrefix, ".claude", "hooks", "gone.mjs")); !os.IsNotExist(err) {
+		t.Fatalf("dangling symlink should be skipped, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snap.Path, homePrefix, ".claude", "hooks", "keep.sh")); err != nil {
+		t.Fatalf("regular sibling file should be snapshotted: %v", err)
+	}
+}
+
+func TestFailedExportPreservesPreviousArchive(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("OBSIDIAN_API_KEY = \"live-value\"\n"))
+	archive := filepath.Join(t.TempDir(), "portable.tar.gz")
 	mustWrite(t, archive, []byte("previous-archive"))
 	if _, err := eng.Export(archive, BackupOptions{}); err == nil {
-		t.Fatal("escaping symlink should reject export")
+		t.Fatal("inline secret should reject export")
 	}
 	got, err := os.ReadFile(archive)
 	if err != nil || string(got) != "previous-archive" {
 		t.Fatalf("failed export replaced previous archive: %q err=%v", got, err)
 	}
+}
+
+func tarEntryNames(t *testing.T, archive string) map[string]bool {
+	t.Helper()
+	f, err := os.Open(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	names := map[string]bool{}
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		names[hdr.Name] = true
+	}
+	return names
 }
 
 func TestPortableEntryRejectsTopLevelSymlink(t *testing.T) {
@@ -523,6 +583,82 @@ func TestRestoreMigratesLegacyClaudeMCPPath(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "mcp.json")); !os.IsNotExist(err) {
 		t.Fatalf("legacy MCP path should not be restored: %v", err)
+	}
+}
+
+// Snapshots written before the Anchor -> Maru rename carry .anchor/* manifest
+// entries; they must restore into the current .maru/* targets.
+func TestRestoreMigratesLegacyAnchorPaths(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	version := "legacy-anchor"
+	root := eng.VersionPath(version)
+	mustWrite(t, filepath.Join(root, homePrefix, ".anchor", "settings.json"), []byte(`{"theme":"legacy"}`))
+	manifest, err := yaml.Marshal(ArchiveManifest{Schema: archiveVersion, Entries: []EntrySummary{
+		{Tool: "anchor", Path: ".anchor/settings.json"},
+		{Tool: "anchor", Path: ".anchor/sites.json", Missing: 1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, "manifest.yaml"), manifest)
+	if _, err := eng.Restore(RestoreOptions{Version: version}); err != nil {
+		t.Fatalf("restore legacy anchor snapshot: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".maru", "settings.json"))
+	if err != nil {
+		t.Fatalf("legacy anchor settings were not restored to maru path: %v", err)
+	}
+	if string(got) != `{"theme":"legacy"}` {
+		t.Fatalf("restored maru settings = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".anchor", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("legacy anchor path should not be restored: %v", err)
+	}
+}
+
+// Claude keeps large machine-local state in ~/.claude.json; only the small
+// mcpServers projection is archived, so state size must not block backup.
+func TestBackupAllowsLargeClaudeState(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	padding := strings.Repeat("a", maxSecretScan+1)
+	state := `{"mcpServers":{"vault":{"command":"mcpvault"}},"history":"` + padding + `"}`
+	mustWrite(t, filepath.Join(home, ".claude.json"), []byte(state))
+	snap, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatalf("backup with large Claude state: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(snap.Path, homePrefix, ".claude.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "mcpvault") || strings.Contains(string(got), "history") {
+		t.Fatalf("snapshot should hold only the MCP projection: %d bytes", len(got))
+	}
+}
+
+// A nested symlink resolving into a different managed portable root is still
+// portable: its content travels in the archive either way.
+func TestBackupMaterializesCrossRootSymlink(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "prompts", "shared.md"), []byte("# shared prompt\n"))
+	hooks := filepath.Join(home, ".claude", "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, ".codex", "prompts", "shared.md"), filepath.Join(hooks, "shared.md")); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatalf("backup cross-root symlink: %v", err)
+	}
+	materialized := filepath.Join(snap.Path, homePrefix, ".claude", "hooks", "shared.md")
+	info, err := os.Lstat(materialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		t.Fatalf("cross-root link was not materialized: mode=%v", info.Mode())
 	}
 }
 

@@ -683,9 +683,11 @@ an environment variable or keychain. Use `--include-auth` only when you
 explicitly want known auth/local-secret files included.
 Portable archive imports accept only regular files and directories; symlinks,
 hardlinks, devices, and link-based path pivots are rejected. Export materializes
-symlinks only when their resolved target remains inside another managed
-portable root. Import manifests are restricted to the built-in entry allowlist;
-legacy v1 `.claude/mcp.json` snapshots migrate into `~/.claude.json` MCP state.
+nested symlinks whose resolved target stays inside a managed portable root;
+dangling links and links into machine-local paths (plugin caches and the like)
+are skipped, since that wiring is rebuilt per machine. Import manifests are restricted to the built-in entry allowlist;
+legacy v1 `.claude/mcp.json` snapshots migrate into `~/.claude.json` MCP state,
+and pre-rename `.anchor/*` snapshot entries restore into their `.maru/*` targets.
 
 `dot ai skills` scans Markdown `SKILL.md` packages without executing them.
 Default roots are `~/.codex/skills`, `~/.claude/skills`, and
