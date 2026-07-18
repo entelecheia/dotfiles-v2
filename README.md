@@ -957,7 +957,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **ssh** | minimal | SSH config, config.d includes |
 | **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
-| **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (Drive, vault, inbox) |
+| **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (cloud mirror, vault, inbox). Cloud mirror is selected at init from detected mounts (Dropbox preferred, Google Drive accounts are listed); shell exports `CLOUD_WORKSPACE`/`CLOUD_WORK`, alias `cwork`, and the `ws()` jumper (formerly `GDRIVE_*`/`gwork`) |
 | **ai** | full | AI CLI/config helpers, Claude/Codex/Antigravity settings backup, optional HUD |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |

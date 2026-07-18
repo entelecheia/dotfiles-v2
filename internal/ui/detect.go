@@ -6,7 +6,6 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -79,30 +78,80 @@ func detectWorkspacePath() string {
 	return ""
 }
 
-// detectGoogleDrivePath finds a Google Drive mount on macOS.
-func detectGoogleDrivePath() string {
-	if runtime.GOOS != "darwin" {
-		return ""
+// detectCloudMounts lists cloud storage roots usable as the workspace mirror,
+// Dropbox candidates first (same precedence as the secrets backup detector).
+// Duplicates reached through home symlinks resolve to one canonical entry.
+func detectCloudMounts(home string) []string {
+	return detectCloudMountsIn(home, "/Volumes")
+}
+
+// detectCloudMountsIn is the testable core; volumesDir is injectable so unit
+// tests stay hermetic on hosts with real /Volumes cloud mounts.
+func detectCloudMountsIn(home, volumesDir string) []string {
+	var dropbox, drive []string
+	seen := map[string]bool{}
+	add := func(list *[]string, path string) {
+		// Only offer candidates that resolve to an existing directory —
+		// broken symlinks or stray files would fail later at apply time.
+		if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+			return
+		}
+		key := path
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			key = resolved
+		}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		*list = append(*list, path)
 	}
-	home, _ := os.UserHomeDir()
-	// Check common Drive paths
+	// Canonical macOS location first, so it wins dedup over home symlinks.
+	cloudRoot := filepath.Join(home, "Library", "CloudStorage")
+	if entries, err := os.ReadDir(cloudRoot); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			switch {
+			case strings.HasPrefix(name, "Dropbox"):
+				add(&dropbox, filepath.Join(cloudRoot, name))
+			case strings.HasPrefix(name, "GoogleDrive"):
+				path := filepath.Join(cloudRoot, name)
+				if fi, err := os.Stat(filepath.Join(path, "My Drive")); err == nil && fi.IsDir() {
+					path = filepath.Join(path, "My Drive")
+				}
+				add(&drive, path)
+			}
+		}
+	}
+	// Legacy home-dir mounts and symlinks (DriveFS "My Drive (...)" dirs).
 	if entries, err := os.ReadDir(home); err == nil {
 		for _, e := range entries {
 			name := e.Name()
-			if strings.HasPrefix(name, "My Drive") || strings.Contains(name, "GoogleDrive") {
-				return filepath.Join(home, name)
+			switch {
+			case strings.HasPrefix(name, "Dropbox"):
+				add(&dropbox, filepath.Join(home, name))
+			case strings.HasPrefix(name, "My Drive") || strings.Contains(name, "GoogleDrive"):
+				add(&drive, filepath.Join(home, name))
 			}
 		}
 	}
-	// Check /Volumes for mounted Drives
-	if entries, err := os.ReadDir("/Volumes"); err == nil {
+	// Old-style /Volumes Drive mounts.
+	if entries, err := os.ReadDir(volumesDir); err == nil {
 		for _, e := range entries {
 			if strings.Contains(e.Name(), "GoogleDrive") || strings.Contains(e.Name(), "Google Drive") {
-				return filepath.Join("/Volumes", e.Name())
+				add(&drive, filepath.Join(volumesDir, e.Name()))
 			}
 		}
 	}
-	return ""
+	return append(dropbox, drive...)
+}
+
+// defaultCloudSymlink picks the conventional symlink name for a cloud root.
+func defaultCloudSymlink(cloudPath string) string {
+	if strings.Contains(cloudPath, "Dropbox") {
+		return "~/Dropbox"
+	}
+	return "~/gdrive-workspace"
 }
 
 // detectSSHKeys finds existing SSH key names in ~/.ssh/.

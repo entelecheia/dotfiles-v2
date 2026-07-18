@@ -125,8 +125,8 @@ type TermConfig struct {
 type WorkConfig struct {
 	Enabled       bool         `yaml:"enabled"`
 	Path          string       `yaml:"path,omitempty"`           // workspace root (e.g. ~/workspace)
-	Gdrive        string       `yaml:"gdrive,omitempty"`         // Google Drive physical path
-	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for Drive (e.g. ~/gdrive-workspace)
+	Gdrive        string       `yaml:"gdrive,omitempty"`         // cloud storage root (Google Drive or Dropbox); key kept for compat
+	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for the cloud root (e.g. ~/gdrive-workspace, ~/Dropbox)
 	Symlink       string       `yaml:"symlink,omitempty"`        // explicit symlink target for Path (if set, Path → Symlink)
 	Repos         []RepoConfig `yaml:"repos,omitempty"`          // git repos to clone into workspace
 }
@@ -264,7 +264,7 @@ func (c *Config) TemplateData() map[string]any {
 		"EnableWorkspace": c.Modules.Workspace.Enabled,
 		"EnableAI":        c.Modules.AI.Enabled,
 		"WorkspacePath":   c.Modules.Workspace.Path,
-		"GdriveSymlink":   c.Modules.Workspace.GdriveSymlink,
+		"CloudSymlink":    c.Modules.Workspace.GdriveSymlink,
 		"SSHKeyName":      c.Modules.SSH.KeyName,
 		"CoauthorGuard":   c.Modules.Git.CoauthorGuard,
 		"HasCUDA":         hasCUDA,
