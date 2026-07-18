@@ -20,7 +20,9 @@ type InitOptions struct {
 	Yes   bool // skip interactive confirmations (destructive re-clone, gh auth login)
 	// VaultPath redirects the clone target of the repo named "vault" (the
 	// vault often arrives as a work submodule, e.g. <workspace>/work/vault).
-	// ~-form allowed; empty means <workspacePath>/vault.
+	// Pass an explicit-or-detected location (config.ResolveVaultCloneTarget);
+	// empty means the legacy <workspacePath>/vault. ~-form is expanded
+	// against the process home — callers honoring --home must pre-expand.
 	VaultPath string
 }
 
@@ -123,6 +125,16 @@ func Init(ctx context.Context, runner *exec.Runner, workspacePath string,
 		if err := prepareTarget(runner, target); err != nil {
 			errs = append(errs, fmt.Errorf("preparing %s: %w", target, err))
 			continue
+		}
+
+		// The vault redirect may target a nested path (e.g. <ws>/work/vault)
+		// whose parent does not exist yet (standalone vault repo, work not
+		// cloned first). git clone refuses a missing parent chain.
+		if parent := filepath.Dir(target); parent != "" && !runner.IsDir(parent) {
+			if err := runner.MkdirAll(parent, 0755); err != nil {
+				errs = append(errs, fmt.Errorf("creating parent of %s: %w", target, err))
+				continue
+			}
 		}
 
 		prefix := "cloning"

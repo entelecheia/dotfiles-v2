@@ -220,7 +220,7 @@ func configureWorkspaceSymlinkAndRepos(state *config.UserState, yes bool) error 
 			state.Modules.Workspace.Repos = nil
 			topLevelVault := strings.TrimSuffix(state.Modules.Workspace.Path, "/") + "/vault"
 			for _, name := range []string{"work", "vault"} {
-				if name == "vault" && state.Modules.Workspace.Vault != "" && state.Modules.Workspace.Vault != topLevelVault {
+				if name == "vault" && config.ResolveVaultPath(state.Modules.Workspace.Vault, state.Modules.Workspace.Path) != topLevelVault {
 					fmt.Println(StyleHint.Render(fmt.Sprintf(
 						"  Vault location is %s — skipping the separate vault repo\n"+
 							"  (the vault is expected to arrive with work, e.g. as a submodule).",

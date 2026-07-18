@@ -155,7 +155,7 @@ Prompts for:
 - Module opt-ins: workspace, AI CLI/config helpers, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
-- Vault location: selectable, auto-detected from existing `<workspace>/work/vault` (e.g. a work submodule) or `<workspace>/vault`; fresh default `<workspace>/work/vault`. When the vault is not at `<workspace>/vault`, the separate vault repo entry is skipped (it arrives with work)
+- Vault location: selectable, auto-detected from existing `<workspace>/work/vault` (e.g. a work submodule) or `<workspace>/vault`, with a fresh default of `<workspace>/work/vault`. When the vault is not at `<workspace>/vault`, the separate vault repo entry is skipped (it arrives with work)
 - GitHub authentication via `gh auth login` with broad scopes (optional, for private repos)
 
 ### `dot apply`
@@ -1112,12 +1112,12 @@ profile: "full"
 modules:
   workspace:
     path: "~/workspace"
-    vault: "~/workspace/work/vault"  # optional; auto-detected when omitted (default <path>/work/vault)
+    # vault: "~/workspace/work/vault"  # optional; auto-detected when omitted (default <path>/work/vault)
     repos:
       - name: work
         remote: "git@github.com:user/work.git"
-      # vault repo entry only needed when vault lives OUTSIDE work (at <path>/vault);
-      # when vault is a work submodule it is skipped automatically
+      # vault repo entry only when the vault is a STANDALONE repo at <path>/vault;
+      # skipped automatically when the vault lives inside work (e.g. a submodule)
       - name: vault
         remote: "git@github.com:user/vault.git"
   ai:

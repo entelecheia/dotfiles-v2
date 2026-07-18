@@ -317,3 +317,26 @@ func TestInitWouldCloneVaultToRedirectedTarget(t *testing.T) {
 		t.Fatalf("expected %q, got %v", want, msgs)
 	}
 }
+
+// A nested vault target (e.g. <ws>/work/vault for a standalone vault repo
+// cloned before work) needs its parent chain created before git runs.
+// The bogus remote makes the clone itself fail fast and offline; the
+// assertion is on the parent directory the run must leave behind.
+func TestInitCreatesVaultTargetParent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	wsDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := exec.NewRunner(false, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	vaultDir := filepath.Join(wsDir, "work", "vault")
+
+	_, _ = Init(context.Background(), runner, wsDir,
+		[]config.RepoConfig{{Name: "vault", Remote: "bogus-remote"}},
+		InitOptions{Yes: true, VaultPath: "~/workspace/work/vault"})
+
+	if !fileutil.IsDir(filepath.Dir(vaultDir)) {
+		t.Fatalf("expected parent of vault target to be created: %s", filepath.Dir(vaultDir))
+	}
+}

@@ -271,3 +271,47 @@ func TestVaultPath_EmptyWorkspacePath(t *testing.T) {
 		t.Errorf("VaultPath() with empty workspace path = %q, want empty", got)
 	}
 }
+
+func TestVaultPath_RelativeAnchoredUnderWorkspace(t *testing.T) {
+	for vault, want := range map[string]string{
+		"work/vault": "~/workspace/work/vault",
+		"vault":      "~/workspace/vault",
+	} {
+		cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace", Vault: vault}}}
+		if got := cfg.VaultPath(); got != want {
+			t.Errorf("VaultPath() with vault=%q = %q, want %q", vault, got, want)
+		}
+	}
+}
+
+func TestVaultCloneTarget_Explicit(t *testing.T) {
+	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace", Vault: "work/vault"}}}
+	if got, want := cfg.VaultCloneTarget(), "~/workspace/work/vault"; got != want {
+		t.Errorf("VaultCloneTarget() = %q, want %q", got, want)
+	}
+}
+
+func TestVaultCloneTarget_Detected(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, "workspace", "work", "vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
+	if got, want := cfg.VaultCloneTarget(), "~/workspace/work/vault"; got != want {
+		t.Errorf("VaultCloneTarget() = %q, want %q", got, want)
+	}
+}
+
+// Legacy setups (separate vault repo, no workspace.vault key) on a fresh
+// machine must keep the legacy <ws>/vault target: no fresh-default redirect.
+func TestVaultCloneTarget_LegacyFallthrough(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
+	if got := cfg.VaultCloneTarget(); got != "" {
+		t.Errorf("VaultCloneTarget() with nothing on disk = %q, want empty (legacy <ws>/vault)", got)
+	}
+}

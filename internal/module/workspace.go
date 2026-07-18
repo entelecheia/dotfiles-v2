@@ -48,7 +48,7 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 	gdriveSymlink := m.expandHome(rc, cfg.GdriveSymlink)
 
 	// Git repo cloning: check if configured repos need cloning
-	vaultPath := rc.Config.VaultPath()
+	vaultPath := m.expandHome(rc, rc.Config.VaultCloneTarget())
 	for _, repo := range cfg.Repos {
 		repoPath := ws.RepoTarget(workspacePath, repo.Name, vaultPath)
 		if !rc.Runner.IsDir(repoPath) {
@@ -144,7 +144,7 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		initMsgs, err := ws.Init(ctx, rc.Runner, workspacePath, cfg.Repos, ws.InitOptions{
 			Force:     false,
 			Yes:       rc.Yes,
-			VaultPath: rc.Config.VaultPath(),
+			VaultPath: m.expandHome(rc, rc.Config.VaultCloneTarget()),
 		})
 		messages = append(messages, initMsgs...)
 		if err != nil {
