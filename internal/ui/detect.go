@@ -78,6 +78,30 @@ func detectWorkspacePath() string {
 	return ""
 }
 
+// detectVaultCandidates returns existing vault directories under the
+// workspace root, most preferred first, each rendered in ~-form when it
+// lives under the user's home.
+func detectVaultCandidates(workspacePath string) []string {
+	home, _ := os.UserHomeDir()
+	expanded := fileutil.ExpandHome(workspacePath)
+	var out []string
+	for _, rel := range []string{"work/vault", "vault"} {
+		p := filepath.Join(expanded, rel)
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			out = append(out, tildePath(home, p))
+		}
+	}
+	return out
+}
+
+// tildePath renders p in ~-form when it lives under home.
+func tildePath(home, p string) string {
+	if rel, err := filepath.Rel(home, p); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		return "~/" + rel
+	}
+	return p
+}
+
 // detectCloudMounts lists cloud storage roots usable as the workspace mirror,
 // Dropbox candidates first (same precedence as the secrets backup detector).
 // Duplicates reached through home symlinks resolve to one canonical entry.

@@ -155,6 +155,7 @@ Prompts for:
 - Module opt-ins: workspace, AI CLI/config helpers, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
+- Vault location: selectable, auto-detected from existing `<workspace>/work/vault` (e.g. a work submodule) or `<workspace>/vault`, with a fresh default of `<workspace>/work/vault`. When the vault is not at `<workspace>/vault`, the separate vault repo entry is skipped (it arrives with work)
 - GitHub authentication via `gh auth login` with broad scopes (optional, for private repos)
 
 ### `dot apply`
@@ -797,7 +798,7 @@ enable this explicitly; reconfiguration preserves the existing choice.
 Operate on both `~/workspace/work/` (git-tracked text) and the resolved gsync mirror (cloud-backed binaries) simultaneously to keep their folder structures in sync.
 
 ```bash
-dot ws init                          # clone configured repos (work, vault) recursively
+dot ws init                          # clone configured repos (work, vault) recursively — vault targets the configured/detected vault location
 dot ws init --force                  # re-clone over populated targets (destructive; prompts)
 dot ws mkdir projects/rise-y2        # create on both sides
 dot ws mv projects/rise projects/rise-y1  # rename on both sides
@@ -957,7 +958,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **ssh** | minimal | SSH config, config.d includes |
 | **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
-| **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (cloud mirror, vault, inbox). Cloud mirror is selected at init from detected mounts (Dropbox preferred, Google Drive accounts are listed); shell exports `CLOUD_WORKSPACE`/`CLOUD_WORK`, alias `cwork`, and the `ws()` jumper (formerly `GDRIVE_*`/`gwork`) |
+| **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (cloud mirror, vault, inbox). Vault location is selectable at init and auto-detected from existing `<workspace>/work/vault` or `<workspace>/vault`; the separate vault repo entry is skipped when the vault lives inside work (e.g. as a submodule). Cloud mirror is selected at init from detected mounts (Dropbox preferred, Google Drive accounts are listed); shell exports `CLOUD_WORKSPACE`/`CLOUD_WORK`, alias `cwork`, and the `ws()` jumper (formerly `GDRIVE_*`/`gwork`) |
 | **ai** | full | AI CLI/config helpers, Claude/Codex/Antigravity settings backup, optional HUD |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |
@@ -1111,9 +1112,12 @@ profile: "full"
 modules:
   workspace:
     path: "~/workspace"
+    # vault: "~/workspace/work/vault"  # optional; auto-detected when omitted (default <path>/work/vault)
     repos:
       - name: work
         remote: "git@github.com:user/work.git"
+      # vault repo entry only when the vault is a STANDALONE repo at <path>/vault;
+      # skipped automatically when the vault lives inside work (e.g. a submodule)
       - name: vault
         remote: "git@github.com:user/vault.git"
   ai:

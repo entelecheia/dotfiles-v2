@@ -102,6 +102,92 @@ func TestDetectCloudMountsEmptyHome(t *testing.T) {
 	}
 }
 
+func TestDetectVaultCandidatesPrefersWorkVault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	ws := filepath.Join(home, "workspace")
+	mkdirs(t, filepath.Join(ws, "work", "vault"), filepath.Join(ws, "vault"))
+
+	got := detectVaultCandidates("~/workspace")
+	want := []string{"~/workspace/work/vault", "~/workspace/vault"}
+	if len(got) != len(want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("candidates[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestDetectVaultCandidatesFallsBackToTopLevel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mkdirs(t, filepath.Join(home, "workspace", "vault"))
+
+	got := detectVaultCandidates("~/workspace")
+	if len(got) != 1 || got[0] != "~/workspace/vault" {
+		t.Fatalf("candidates = %v, want [~/workspace/vault]", got)
+	}
+}
+
+func TestDetectVaultCandidatesNone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mkdirs(t, filepath.Join(home, "workspace"))
+
+	if got := detectVaultCandidates("~/workspace"); len(got) != 0 {
+		t.Fatalf("expected no candidates, got %v", got)
+	}
+}
+
+// Fresh unattended init picks the detected vault location (work/vault first).
+func TestConfigureWorkspaceUnattendedFreshPicksDetectedVault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mkdirs(t, filepath.Join(home, "workspace", "work", "vault"))
+
+	state := &config.UserState{}
+	state.Modules.Workspace.Path = "~/workspace"
+	if err := ConfigureWorkspace(state, "full", true); err != nil {
+		t.Fatalf("ConfigureWorkspace unattended fresh: %v", err)
+	}
+	if got, want := state.Modules.Workspace.Vault, "~/workspace/work/vault"; got != want {
+		t.Fatalf("vault = %q, want %q", got, want)
+	}
+}
+
+// Fresh unattended init with only a top-level vault picks that one.
+func TestConfigureWorkspaceUnattendedFreshPicksTopLevelVault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	mkdirs(t, filepath.Join(home, "workspace", "vault"))
+
+	state := &config.UserState{}
+	state.Modules.Workspace.Path = "~/workspace"
+	if err := ConfigureWorkspace(state, "full", true); err != nil {
+		t.Fatalf("ConfigureWorkspace unattended fresh: %v", err)
+	}
+	if got, want := state.Modules.Workspace.Vault, "~/workspace/vault"; got != want {
+		t.Fatalf("vault = %q, want %q", got, want)
+	}
+}
+
+// Unattended reconfigure must preserve an existing vault choice exactly,
+// regardless of what detection would pick.
+func TestConfigureWorkspaceUnattendedPreservesVaultState(t *testing.T) {
+	state := &config.UserState{}
+	state.Modules.Workspace.Path = "~/workspace"
+	state.Modules.Workspace.Vault = "~/elsewhere/vault"
+
+	if err := ConfigureWorkspace(state, "full", true); err != nil {
+		t.Fatalf("ConfigureWorkspace unattended: %v", err)
+	}
+	if state.Modules.Workspace.Vault != "~/elsewhere/vault" {
+		t.Fatalf("vault changed: %q", state.Modules.Workspace.Vault)
+	}
+}
+
 func TestDefaultCloudSymlink(t *testing.T) {
 	for path, want := range map[string]string{
 		"/Users/u/Library/CloudStorage/Dropbox":                  "~/Dropbox",

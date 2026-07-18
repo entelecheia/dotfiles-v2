@@ -196,6 +196,7 @@ type RepoConfig struct {
 // UserWorkspaceState holds workspace config from user state.
 type UserWorkspaceState struct {
 	Path          string       `yaml:"path,omitempty"`
+	Vault         string       `yaml:"vault,omitempty"` // vault directory (~-form allowed); empty → detected, default <Path>/work/vault
 	Gdrive        string       `yaml:"gdrive,omitempty"`
 	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for the cloud root (e.g. ~/gdrive-workspace, ~/Dropbox)
 	Symlink       string       `yaml:"symlink,omitempty"`        // explicit symlink target for Path
@@ -516,6 +517,7 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	if state.Modules.Workspace.Path != "" {
 		cfg.Modules.Workspace.Enabled = true
 		cfg.Modules.Workspace.Path = state.Modules.Workspace.Path
+		cfg.Modules.Workspace.Vault = state.Modules.Workspace.Vault
 		cfg.Modules.Workspace.Gdrive = state.Modules.Workspace.Gdrive
 		cfg.Modules.Workspace.GdriveSymlink = state.Modules.Workspace.GdriveSymlink
 		cfg.Modules.Workspace.Symlink = state.Modules.Workspace.Symlink

@@ -2,9 +2,13 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // Config is the root configuration struct, mapped from profile YAML + user state.
@@ -125,6 +129,7 @@ type TermConfig struct {
 type WorkConfig struct {
 	Enabled       bool         `yaml:"enabled"`
 	Path          string       `yaml:"path,omitempty"`           // workspace root (e.g. ~/workspace)
+	Vault         string       `yaml:"vault,omitempty"`          // vault directory (~-form allowed); empty → detected, default <Path>/work/vault
 	Gdrive        string       `yaml:"gdrive,omitempty"`         // cloud storage root (Google Drive or Dropbox); key kept for compat
 	GdriveSymlink string       `yaml:"gdrive_symlink,omitempty"` // symlink name for the cloud root (e.g. ~/gdrive-workspace, ~/Dropbox)
 	Symlink       string       `yaml:"symlink,omitempty"`        // explicit symlink target for Path (if set, Path → Symlink)
@@ -233,6 +238,80 @@ func (c *Config) AllCasks() []string {
 	return result
 }
 
+// VaultPath returns the vault directory in ~-form, resolved from the
+// workspace module config. See ResolveVaultPath.
+func (c *Config) VaultPath() string {
+	return ResolveVaultPath(c.Modules.Workspace.Vault, c.Modules.Workspace.Path)
+}
+
+// VaultCloneTarget returns the clone target for a standalone vault repo in
+// ~-form, or "" when no vault location is configured or detectable. See
+// ResolveVaultCloneTarget.
+func (c *Config) VaultCloneTarget() string {
+	return ResolveVaultCloneTarget(c.Modules.Workspace.Vault, c.Modules.Workspace.Path)
+}
+
+// ResolveVaultPath returns the vault directory in ~-form. Resolution order:
+// explicit vault value → detected existing directory (<ws>/work/vault first,
+// then <ws>/vault) → default <ws>/work/vault. Render-time detection lets
+// VAULT track the real location without a reconfigure. A relative explicit
+// value (no ~ or / prefix) is anchored under the workspace path.
+func ResolveVaultPath(vault, wsPath string) string {
+	if vault != "" {
+		return anchorVaultPath(vault, wsPath)
+	}
+	if wsPath == "" {
+		return ""
+	}
+	if detected := detectVaultDir(wsPath); detected != "" {
+		return detected
+	}
+	return joinPathTilde(wsPath, "work/vault")
+}
+
+// ResolveVaultCloneTarget resolves where a standalone vault repo entry would
+// clone to. Unlike ResolveVaultPath it never invents the fresh default: when
+// the vault location is neither configured nor present on disk it returns "",
+// so legacy setups (separate vault repo, no workspace.vault key) keep cloning
+// into <ws>/vault instead of being redirected into the work tree.
+func ResolveVaultCloneTarget(vault, wsPath string) string {
+	if vault != "" {
+		return anchorVaultPath(vault, wsPath)
+	}
+	if wsPath == "" {
+		return ""
+	}
+	return detectVaultDir(wsPath)
+}
+
+// anchorVaultPath returns vault unchanged when it is ~-form or absolute;
+// a relative vault is anchored under the workspace path.
+func anchorVaultPath(vault, wsPath string) string {
+	if strings.HasPrefix(vault, "/") || strings.HasPrefix(vault, "~") || wsPath == "" {
+		return vault
+	}
+	return joinPathTilde(wsPath, vault)
+}
+
+// detectVaultDir returns the first existing vault directory under the
+// workspace path in ~-form (<ws>/work/vault preferred, then <ws>/vault),
+// or "" when neither exists.
+func detectVaultDir(wsPath string) string {
+	expanded := fileutil.ExpandHome(wsPath)
+	for _, rel := range []string{"work/vault", "vault"} {
+		if fi, err := os.Stat(filepath.Join(expanded, rel)); err == nil && fi.IsDir() {
+			return joinPathTilde(wsPath, rel)
+		}
+	}
+	return ""
+}
+
+// joinPathTilde joins a relative path onto a base that may be in ~-form,
+// preserving the ~ prefix.
+func joinPathTilde(base, rel string) string {
+	return strings.TrimSuffix(base, "/") + "/" + rel
+}
+
 // TemplateData returns a map suitable for Go template rendering.
 func (c *Config) TemplateData() map[string]any {
 	home, _ := os.UserHomeDir()
@@ -264,6 +343,7 @@ func (c *Config) TemplateData() map[string]any {
 		"EnableWorkspace": c.Modules.Workspace.Enabled,
 		"EnableAI":        c.Modules.AI.Enabled,
 		"WorkspacePath":   c.Modules.Workspace.Path,
+		"VaultPath":       c.VaultPath(),
 		"CloudSymlink":    c.Modules.Workspace.GdriveSymlink,
 		"SSHKeyName":      c.Modules.SSH.KeyName,
 		"CoauthorGuard":   c.Modules.Git.CoauthorGuard,

@@ -45,7 +45,7 @@ Subcommands keep the two trees in structural sync:
 
 // wsInitBootstrap loads state for `ws init`. Unlike wsBootstrap it does not
 // require the dual-workspace roots to exist — init may need to create them.
-func wsInitBootstrap(cmd *cobra.Command) (workspacePath string, repos []config.RepoConfig, runner *exec.Runner, yes bool, err error) {
+func wsInitBootstrap(cmd *cobra.Command) (workspacePath string, repos []config.RepoConfig, runner *exec.Runner, yes bool, vaultPath string, err error) {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	yes, _ = cmd.Flags().GetBool("yes")
 	homeOverride, _ := cmd.Flags().GetString("home")
@@ -57,13 +57,14 @@ func wsInitBootstrap(cmd *cobra.Command) (workspacePath string, repos []config.R
 		state, err = config.LoadState()
 	}
 	if err != nil {
-		return "", nil, nil, false, fmt.Errorf("loading state: %w", err)
+		return "", nil, nil, false, "", fmt.Errorf("loading state: %w", err)
 	}
 
 	cfgPath := state.Modules.Workspace.Path
 	if cfgPath == "" {
-		return "", nil, nil, false, fmt.Errorf("workspace.path not configured; run 'dot reconfigure'")
+		return "", nil, nil, false, "", fmt.Errorf("workspace.path not configured; run 'dot reconfigure'")
 	}
+	vaultPath = config.ResolveVaultCloneTarget(state.Modules.Workspace.Vault, cfgPath)
 
 	home, _ := os.UserHomeDir()
 	if homeOverride != "" {
@@ -72,10 +73,13 @@ func wsInitBootstrap(cmd *cobra.Command) (workspacePath string, repos []config.R
 	if strings.HasPrefix(cfgPath, "~/") {
 		cfgPath = filepath.Join(home, cfgPath[2:])
 	}
+	if strings.HasPrefix(vaultPath, "~/") {
+		vaultPath = filepath.Join(home, vaultPath[2:])
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	runner = exec.NewRunner(dryRun, logger)
-	return cfgPath, state.Modules.Workspace.Repos, runner, yes, nil
+	return cfgPath, state.Modules.Workspace.Repos, runner, yes, vaultPath, nil
 }
 
 func newWsInitCmd() *cobra.Command {
@@ -83,7 +87,9 @@ func newWsInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Clone configured workspace repos recursively",
 		Long: `Clone each configured workspace repo (e.g. work, vault) into <workspace.path>/<name>
-with --recurse-submodules.
+with --recurse-submodules. The repo named "vault" clones into the configured
+vault location instead (workspace.vault; detected as <workspace.path>/work/vault
+or <workspace.path>/vault when unset).
 
 Targets that are missing, empty, or contain only a .gdrive symlink are cloned
 without --force (the .gdrive symlink is preserved). Populated targets are
@@ -97,15 +103,16 @@ repo is re-cloned.`,
 }
 
 func runWsInit(cmd *cobra.Command, args []string) error {
-	workspacePath, repos, runner, yes, err := wsInitBootstrap(cmd)
+	workspacePath, repos, runner, yes, vaultPath, err := wsInitBootstrap(cmd)
 	if err != nil {
 		return err
 	}
 	force, _ := cmd.Flags().GetBool("force")
 
 	msgs, err := ws.Init(context.Background(), runner, workspacePath, repos, ws.InitOptions{
-		Force: force,
-		Yes:   yes,
+		Force:     force,
+		Yes:       yes,
+		VaultPath: vaultPath,
 	})
 	p := printerFrom(cmd)
 	for _, m := range msgs {

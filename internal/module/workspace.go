@@ -48,8 +48,9 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 	gdriveSymlink := m.expandHome(rc, cfg.GdriveSymlink)
 
 	// Git repo cloning: check if configured repos need cloning
+	vaultPath := m.expandHome(rc, rc.Config.VaultCloneTarget())
 	for _, repo := range cfg.Repos {
-		repoPath := filepath.Join(workspacePath, repo.Name)
+		repoPath := ws.RepoTarget(workspacePath, repo.Name, vaultPath)
 		if !rc.Runner.IsDir(repoPath) {
 			changes = append(changes, Change{
 				Description: fmt.Sprintf("clone %s into %s/%s", repo.Remote, cfg.Path, repo.Name),
@@ -141,8 +142,9 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 	// populated detection. Non-fatal: errors here don't block symlink setup.
 	if len(cfg.Repos) > 0 {
 		initMsgs, err := ws.Init(ctx, rc.Runner, workspacePath, cfg.Repos, ws.InitOptions{
-			Force: false,
-			Yes:   rc.Yes,
+			Force:     false,
+			Yes:       rc.Yes,
+			VaultPath: m.expandHome(rc, rc.Config.VaultCloneTarget()),
 		})
 		messages = append(messages, initMsgs...)
 		if err != nil {
