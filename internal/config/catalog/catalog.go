@@ -71,6 +71,30 @@ func (c *MacApps) DisplayName(token string) string {
 	return token
 }
 
+// legacyCaskAliases renames cask tokens whose upstream was renamed, so stale
+// state files still resolve to the current cask (Anchor -> Maru).
+var legacyCaskAliases = map[string]string{
+	"anchor": "maru-workspace",
+}
+
+// NormalizeCaskTokens rewrites legacy cask tokens to their current names and
+// de-duplicates, preserving order.
+func NormalizeCaskTokens(tokens []string) []string {
+	seen := make(map[string]bool, len(tokens))
+	var out []string
+	for _, token := range tokens {
+		if alias := legacyCaskAliases[token]; alias != "" {
+			token = alias
+		}
+		if token == "" || seen[token] {
+			continue
+		}
+		seen[token] = true
+		out = append(out, token)
+	}
+	return out
+}
+
 // TapsForTokens returns the de-duplicated Homebrew taps required by the given
 // cask tokens, preserving the input token order.
 func (c *MacApps) TapsForTokens(tokens []string) []string {

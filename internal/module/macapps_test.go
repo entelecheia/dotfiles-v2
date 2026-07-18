@@ -44,6 +44,29 @@ func TestMacAppsResolveCasks_ConfiguredCasksWin(t *testing.T) {
 	}
 }
 
+// State files written before the Anchor -> Maru rename may still list the
+// anchor cask; it must resolve to maru-workspace (deduped) instead of
+// failing brew with an unknown cask.
+func TestMacAppsResolveCasks_RewritesLegacyAnchor(t *testing.T) {
+	m := &MacAppsModule{}
+	rc := &RunContext{
+		Config: &config.Config{
+			Casks: []string{"anchor", "raycast", "maru-workspace"},
+		},
+	}
+
+	got := m.resolveCasks(rc)
+	want := []string{"maru-workspace", "raycast"}
+	if len(got) != len(want) {
+		t.Fatalf("resolveCasks = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("resolveCasks[%d] = %q, want %q (all: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestMacAppsResolveCasks_IncludesTerminalApps(t *testing.T) {
 	m := &MacAppsModule{}
 	rc := &RunContext{

@@ -30,10 +30,10 @@ modules:
     # Override casks / casks_extra at the Config level to install a custom set.
 
 casks_extra:
-  - anchor
+  - maru-workspace
 
 packages_extra:
-  - anchor-cli
+  - maru-cli
   - btop
   - lazygit
   - yazi

@@ -92,7 +92,7 @@ func TestLoad_FullProfile(t *testing.T) {
 	}
 
 	// Full profile adds extra packages
-	extraPkgs := []string{"anchor-cli", "btop", "lazygit", "tmux", "gnupg"}
+	extraPkgs := []string{"maru-cli", "btop", "lazygit", "tmux", "gnupg"}
 	for _, p := range extraPkgs {
 		found := false
 		for _, a := range all {
@@ -122,8 +122,8 @@ func TestLoad_FullProfile(t *testing.T) {
 	if !cfg.Modules.Secrets.Enabled {
 		t.Error("full profile: secrets should be enabled")
 	}
-	if len(cfg.CasksExtra) != 1 || cfg.CasksExtra[0] != "anchor" {
-		t.Errorf("full profile: expected casks_extra [anchor], got %v", cfg.CasksExtra)
+	if len(cfg.CasksExtra) != 1 || cfg.CasksExtra[0] != "maru-workspace" {
+		t.Errorf("full profile: expected casks_extra [maru-workspace], got %v", cfg.CasksExtra)
 	}
 
 	// Extends field is cleared after resolution

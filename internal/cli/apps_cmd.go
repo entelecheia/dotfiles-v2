@@ -240,6 +240,10 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("nothing to install")
 	}
 
+	// Rewrite legacy tokens from pre-rename state (anchor -> maru-workspace)
+	// before any brew call, same as the macapps module does.
+	want = catalog.NormalizeCaskTokens(want)
+
 	missing := brew.MissingCasks(want)
 	if len(missing) == 0 {
 		p.Line("%s", ui.StyleSuccess.Render("✓ all selected casks already installed"))

@@ -17,10 +17,11 @@ func (m *MacAppsModule) Name() string { return "macapps" }
 
 // resolveCasks returns the de-duplicated cask list the module should ensure.
 // Config.Casks wins; when empty we fall back to the embedded catalog defaults
-// so a profile can opt in without repeating the list.
+// so a profile can opt in without repeating the list. Legacy tokens from
+// pre-rename state files are normalized to their current cask names.
 func (m *MacAppsModule) resolveCasks(rc *RunContext) []string {
 	if len(rc.Config.Casks) > 0 {
-		return rc.Config.AllCasks()
+		return catalog.NormalizeCaskTokens(rc.Config.AllCasks())
 	}
 	cat, err := catalog.LoadMacApps()
 	if err != nil {
@@ -29,7 +30,7 @@ func (m *MacAppsModule) resolveCasks(rc *RunContext) []string {
 	}
 	cfg := *rc.Config
 	cfg.Casks = cat.Defaults
-	return cfg.AllCasks()
+	return catalog.NormalizeCaskTokens(cfg.AllCasks())
 }
 
 func (m *MacAppsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
