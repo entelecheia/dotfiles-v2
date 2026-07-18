@@ -141,6 +141,28 @@ func TestRenderString_InvalidSyntax(t *testing.T) {
 	}
 }
 
+func TestRender_ToolsInitAIToolPaths(t *testing.T) {
+	e := NewEngine()
+
+	out, err := e.Render("shell/50-tools-init.sh.tmpl", nil)
+	if err != nil {
+		t.Fatalf("Render shell/50-tools-init.sh.tmpl: %v", err)
+	}
+
+	content := string(out)
+	// AI CLI installers append these PATH lines to ~/.zshrc, which dot
+	// regenerates; the managed fragment must provide them instead.
+	for _, line := range []string{
+		`[ -d "$HOME/.opencode/bin" ] && export PATH="$HOME/.opencode/bin:$PATH"`,
+		`[ -d "$HOME/.kilo/bin" ] && export PATH="$HOME/.kilo/bin:$PATH"`,
+		`[ -d "$HOME/.kimi-code/bin" ] && export PATH="$HOME/.kimi-code/bin:$PATH"`,
+	} {
+		if !strings.Contains(content, line) {
+			t.Errorf("Render shell/50-tools-init.sh.tmpl: expected guard line %q in output", line)
+		}
+	}
+}
+
 func TestRender_WithTemplateData(t *testing.T) {
 	e := NewEngine()
 
