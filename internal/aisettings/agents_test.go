@@ -540,3 +540,21 @@ func TestAgentsRegistryFiltersOptional(t *testing.T) {
 		t.Fatalf("gemini alias target = %q, err=%v", target, err)
 	}
 }
+
+func TestAgentsRegistryIncludesKiroAndKimi(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	kiro, ok := mgr.Tool("kiro")
+	if !ok || kiro.Optional {
+		t.Fatalf("kiro tool = %+v, ok=%v; want non-optional entry", kiro, ok)
+	}
+	if target, err := mgr.TargetPath("kiro"); err != nil || !strings.HasSuffix(target, filepath.Join(".kiro", "steering", "AGENTS.md")) {
+		t.Fatalf("kiro target = %q, err=%v", target, err)
+	}
+	kimi, ok := mgr.Tool("kimi")
+	if !ok || !kimi.Optional {
+		t.Fatalf("kimi tool = %+v, ok=%v; want optional entry", kimi, ok)
+	}
+	if target, err := mgr.TargetPath("kimi"); err != nil || !strings.HasSuffix(target, filepath.Join(".kimi-code", "AGENTS.md")) {
+		t.Fatalf("kimi target = %q, err=%v", target, err)
+	}
+}
