@@ -46,10 +46,10 @@ func TestLoadMacApps(t *testing.T) {
 			t.Errorf("default %q missing from recommended (defaults must be a subset)", d)
 		}
 	}
-	if !recommended["anchor"] {
-		t.Error("anchor should be a recommended app")
+	if !recommended["maru-workspace"] {
+		t.Error("maru-workspace should be a recommended app")
 	}
-	taps := c.TapsForTokens([]string{"cmux", "anchor", "wave", "cmux", "anchor"})
+	taps := c.TapsForTokens([]string{"cmux", "maru-workspace", "wave", "cmux", "maru-workspace"})
 	wantTaps := []string{"manaflow-ai/cmux", "staixbwlb/cask"}
 	if len(taps) != len(wantTaps) {
 		t.Fatalf("tap metadata = %v, want %v", taps, wantTaps)
@@ -71,5 +71,18 @@ func TestLoadMacApps(t *testing.T) {
 	// DisplayName fallback
 	if got := c.DisplayName("__not-a-real-token__"); got != "__not-a-real-token__" {
 		t.Errorf("DisplayName fallback: got %q", got)
+	}
+}
+
+func TestNormalizeCaskTokens(t *testing.T) {
+	got := NormalizeCaskTokens([]string{"raycast", "anchor", "maru-workspace", "raycast"})
+	want := []string{"raycast", "maru-workspace"}
+	if len(got) != len(want) {
+		t.Fatalf("NormalizeCaskTokens = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("token %d = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

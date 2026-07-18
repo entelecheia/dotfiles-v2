@@ -41,12 +41,12 @@ func TestIsFormulaInstalledAcceptsTapQualifiedFormula(t *testing.T) {
 	}
 }
 
-func TestTapsForFormulasIncludesAnchorCLI(t *testing.T) {
+func TestTapsForFormulasIncludesMaruCLI(t *testing.T) {
 	got := TapsForFormulas([]string{
 		"git",
-		"anchor-cli",
-		"staixbwlb/cask/anchor-cli",
-		"anchor-cli",
+		"maru-cli",
+		"staixbwlb/cask/maru-cli",
+		"maru-cli",
 	})
 	want := []string{"staixbwlb/cask"}
 
@@ -61,7 +61,7 @@ func TestTapsForFormulasIncludesAnchorCLI(t *testing.T) {
 }
 
 func TestInstallableFormulasForGOOSSkipsDarwinOnlyFormulasOnLinux(t *testing.T) {
-	formulas := []string{"git", "anchor-cli", "staixbwlb/cask/anchor-cli", "tmux"}
+	formulas := []string{"git", "maru-cli", "staixbwlb/cask/maru-cli", "anchor-cli", "tmux"}
 
 	linux := installableFormulasForGOOS(formulas, "linux")
 	wantLinux := []string{"git", "tmux"}
@@ -74,9 +74,16 @@ func TestInstallableFormulasForGOOSSkipsDarwinOnlyFormulasOnLinux(t *testing.T) 
 		}
 	}
 
+	// The legacy anchor-cli alias resolves to maru-cli on darwin.
 	darwin := installableFormulasForGOOS(formulas, "darwin")
-	if len(darwin) != len(formulas) {
-		t.Fatalf("darwin formulas = %#v, want %#v", darwin, formulas)
+	wantDarwin := []string{"git", "maru-cli", "staixbwlb/cask/maru-cli", "maru-cli", "tmux"}
+	if len(darwin) != len(wantDarwin) {
+		t.Fatalf("darwin formulas = %#v, want %#v", darwin, wantDarwin)
+	}
+	for i := range wantDarwin {
+		if darwin[i] != wantDarwin[i] {
+			t.Fatalf("darwin formula %d: expected %q, got %q", i, wantDarwin[i], darwin[i])
+		}
 	}
 }
 

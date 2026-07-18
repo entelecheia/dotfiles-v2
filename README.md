@@ -855,8 +855,8 @@ apps across Security, Knowledge, Browsers, Terminal & Editor, AI, Communication,
 Productivity utilities, Capture & Dictation, Files, Media, Dev, System, Writing.
 The `defaults:` section defines the preselected bootstrap set. Catalog entries
 can declare required Homebrew taps; `cmux` runs `brew tap manaflow-ai/cmux`
-before `brew install --cask cmux`, and `anchor` runs
-`brew tap staixbwlb/cask` before `brew install --cask anchor`.
+before `brew install --cask cmux`, and `maru-workspace` runs
+`brew tap staixbwlb/cask` before `brew install --cask maru-workspace`.
 
 ### `dot profile` — Versioned Profile Snapshots
 
@@ -996,7 +996,7 @@ Selecting `warp` also enables the managed Warp theme file.
 `git`, `git-lfs`, `gh`, `age`, `rsync`, `fzf`, `ripgrep`, `fd`, `bat`, `jq`, `yq`, `direnv`, `zoxide`, `eza`, `starship`, `curl`, `fnm`
 
 **full** adds (+11 unique):
-`anchor-cli`, `btop`, `lazygit`, `yazi`, `glow`, `csvlens`, `chafa`, `uv`, `pipx`, `tmux`, `gnupg`
+`maru-cli`, `btop`, `lazygit`, `yazi`, `glow`, `csvlens`, `chafa`, `uv`, `pipx`, `tmux`, `gnupg`
 
 **server** adds (+4):
 `btop`, `tmux`, `uv`, `pipx`
