@@ -152,9 +152,13 @@ func TestRender_ToolsInitAIToolPaths(t *testing.T) {
 	content := string(out)
 	// AI CLI installers append these PATH lines to ~/.zshrc, which dot
 	// regenerates; the managed fragment must provide them instead.
-	for _, dir := range []string{".opencode/bin", ".kilo/bin", ".kimi-code/bin"} {
-		if !strings.Contains(content, dir) {
-			t.Errorf("Render shell/50-tools-init.sh.tmpl: expected %q PATH guard in output", dir)
+	for _, line := range []string{
+		`[ -d "$HOME/.opencode/bin" ] && export PATH="$HOME/.opencode/bin:$PATH"`,
+		`[ -d "$HOME/.kilo/bin" ] && export PATH="$HOME/.kilo/bin:$PATH"`,
+		`[ -d "$HOME/.kimi-code/bin" ] && export PATH="$HOME/.kimi-code/bin:$PATH"`,
+	} {
+		if !strings.Contains(content, line) {
+			t.Errorf("Render shell/50-tools-init.sh.tmpl: expected guard line %q in output", line)
 		}
 	}
 }
