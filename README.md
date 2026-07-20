@@ -642,6 +642,9 @@ dot ai skills validate --strict    # fail on invalid, duplicate, or legacy metad
 dot ai skills path                 # show SSOT + detected target roots (no flags needed)
 dot ai skills status               # maru SSOT + detected tools by default (read-only)
 
+dot ai memory install              # share claude-mem across Codex, Kimi, and Kiro
+dot ai memory status               # verify hooks, MCP recall, and transcript capture
+
 dot ai audit summary               # summarize append-only dot ai mutation events
 dot ai audit tail 20               # print recent events as JSONL
 ```
@@ -689,6 +692,19 @@ dangling links and links into machine-local paths (plugin caches and the like)
 are skipped, since that wiring is rebuilt per machine. Import manifests are restricted to the built-in entry allowlist;
 legacy v1 `.claude/mcp.json` snapshots migrate into `~/.claude.json` MCP state,
 and pre-rename `.anchor/*` snapshot entries restore into their `.maru/*` targets.
+
+`dot ai memory install` keeps claude-mem's existing Codex plugin hooks and
+configures Kimi Code and Kiro CLI to use the same MCP recall server. A macOS
+LaunchAgent runs a workspace-aware transcript bridge for Kimi `wire.jsonl` and
+Kiro `messages.jsonl` sessions, so activity from all three CLIs reaches the same
+`~/.claude-mem` store. Existing transcript offsets are seeded at installation;
+new sessions are discovered and captured automatically without replaying old
+history. The command also adds an idempotent persistent-memory policy to the
+agents SSOT and renders it to Codex, Kimi, and Kiro. Re-run `install` after
+moving the `dot` binary; use `dot ai memory status` to verify the LaunchAgent,
+MCP entries, native Codex hooks, and discovered session counts.
+The bridge requires both Node.js (MCP server) and Bun (transcript watcher), as
+does the upstream claude-mem runtime.
 
 `dot ai skills` scans Markdown `SKILL.md` packages without executing them.
 Default roots are `~/.codex/skills`, `~/.claude/skills`, and
@@ -750,6 +766,8 @@ tool's expected global path:
 | Claude Code | `~/.claude/CLAUDE.md` |
 | Codex CLI | `~/.codex/AGENTS.md` |
 | Cursor | `~/.cursor/AGENTS.md` |
+| Kiro CLI | `~/.kiro/steering/AGENTS.md` |
+| Kimi Code CLI | `~/.kimi-code/AGENTS.md` |
 | Antigravity CLI (`gemini` alias) | `~/.gemini/GEMINI.md` |
 | GitHub Copilot | `~/.config/github-copilot/AGENTS.md` |
 | Aider | `~/.aider.conf.md` |

@@ -129,6 +129,31 @@ func TestAIAuditTailAndSummary(t *testing.T) {
 	}
 }
 
+func TestAIMemoryStatusAndDryRunAreReadOnly(t *testing.T) {
+	home := t.TempDir()
+	ssot := filepath.Join(home, ".config", "dotfiles", "agents", "AGENTS.md")
+	writeCLITestFile(t, ssot, "# AI Agents\n")
+
+	status, errOut, err := runDotForTest("--home", home, "ai", "memory", "status")
+	if err != nil {
+		t.Fatalf("memory status: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(status, "Claude-mem Status") || !strings.Contains(status, "codex") || !strings.Contains(status, "kimi") || !strings.Contains(status, "kiro") {
+		t.Fatalf("memory status missing tool coverage:\n%s", status)
+	}
+
+	dryRun, errOut, err := runDotForTest("--home", home, "--dry-run", "ai", "memory", "install")
+	if err != nil {
+		t.Fatalf("memory install --dry-run: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(dryRun, "would merge MCP config") {
+		t.Fatalf("memory dry-run missing plan:\n%s", dryRun)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".kimi-code", "mcp.json")); !os.IsNotExist(err) {
+		t.Fatalf("memory dry-run wrote Kimi config, stat err=%v", err)
+	}
+}
+
 func TestAIAgentsApplyForceWritesAndAudits(t *testing.T) {
 	home := t.TempDir()
 	ssot := filepath.Join(home, ".config", "dotfiles", "agents", "AGENTS.md")

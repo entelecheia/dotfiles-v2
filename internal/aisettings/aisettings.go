@@ -137,6 +137,7 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "agents", Path: AgentsSSOTRelPath, Description: "AI agents SSOT"},
 		{Tool: "cursor", Path: ".cursor/AGENTS.md", Description: "Cursor global instructions"},
 		{Tool: "kiro", Path: ".kiro/steering/AGENTS.md", Description: "Kiro global steering instructions"},
+		{Tool: "kiro", Path: ".kiro/settings/mcp.json", Description: "Kiro CLI MCP servers"},
 		{Tool: "kimi", Path: ".kimi-code/AGENTS.md", Description: "Kimi Code global instructions"},
 		{Tool: "kimi", Path: ".kimi-code/mcp.json", Description: "Kimi Code MCP servers"},
 		{Tool: "antigravity", Path: ".gemini/GEMINI.md", Description: "Antigravity/Gemini global instructions"},

@@ -19,5 +19,6 @@ clean:
 
 install: build
 	@mkdir -p $(HOME)/.local/bin
-	cp $(BIN) $(HOME)/.local/bin/dot
+	install -m 0755 $(BIN) $(HOME)/.local/bin/.dot.new
+	mv $(HOME)/.local/bin/.dot.new $(HOME)/.local/bin/dot
 	ln -sf $(HOME)/.local/bin/dot $(HOME)/.local/bin/dotfiles
