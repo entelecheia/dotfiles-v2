@@ -192,7 +192,7 @@ func EnsureMemoryInstructions(ssotPath string) (bool, error) {
 	text := string(raw)
 	start := strings.Index(text, memoryBlockStart)
 	end := strings.Index(text, memoryBlockEnd)
-	next := text
+	var next string
 	if start >= 0 && end >= start {
 		end += len(memoryBlockEnd)
 		next = text[:start] + memoryInstructions + text[end:]
@@ -301,7 +301,7 @@ func kimiTranscriptSchema() transcriptSchema {
 			{Name: "assistant-text", Match: equals("event.part.type", "text"), Action: "assistant_message", Fields: map[string]any{"message": "event.part.text"}},
 			{Name: "tool-call", Match: equals("event.type", "tool.call"), Action: "tool_use", Fields: map[string]any{"toolId": "event.toolCallId", "toolName": "event.name", "toolInput": "event.args"}},
 			{Name: "tool-result", Match: equals("event.type", "tool.result"), Action: "tool_result", Fields: map[string]any{"toolId": "event.toolCallId", "toolResponse": map[string]any{"coalesce": []any{"event.result.output", "event.result"}}}},
-			{Name: "cancelled-turn", Match: equals("type", "turn.cancel"), Action: "session_end"},
+			{Name: "canceled-turn", Match: equals("type", "turn.cancel"), Action: "session_end"},
 		},
 	}
 }
@@ -359,7 +359,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 		return ClaudeMemInstallResult{}, err
 	}
 	if !codexClaudeMemEnabled(filepath.Join(m.HomeDir, ".codex", "config.toml")) {
-		return ClaudeMemInstallResult{}, errors.New("Codex claude-mem plugin is not enabled; run `codex plugin add claude-mem@claude-mem-local` first")
+		return ClaudeMemInstallResult{}, errors.New("codex claude-mem plugin is not enabled; run `codex plugin add claude-mem@claude-mem-local` first")
 	}
 	if m.DotPath == "" || !filepath.IsAbs(m.DotPath) {
 		return ClaudeMemInstallResult{}, errors.New("dot executable path must be absolute")
