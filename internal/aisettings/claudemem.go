@@ -488,7 +488,16 @@ func (m *ClaudeMemManager) installLaunchAgent(ctx context.Context) error {
 	}
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	target := domain + "/" + ClaudeMemLaunchdLabel
+	printTarget := func() error {
+		return exec.CommandContext(ctx, "launchctl", "print", target).Run()
+	}
 	_ = exec.CommandContext(ctx, "launchctl", "bootout", target).Run()
+	// bootout is asynchronous: wait until the old service has actually left
+	// the domain, otherwise bootstrap/print below can observe the dying
+	// instance and kickstart then fails with "Could not find service".
+	for attempt := 0; attempt < 20 && printTarget() == nil; attempt++ {
+		time.Sleep(100 * time.Millisecond)
+	}
 	var bootstrapErr error
 	var bootstrapOut []byte
 	for attempt := 0; attempt < 5; attempt++ {
@@ -496,7 +505,7 @@ func (m *ClaudeMemManager) installLaunchAgent(ctx context.Context) error {
 			time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
 		}
 		bootstrapOut, bootstrapErr = exec.CommandContext(ctx, "launchctl", "bootstrap", domain, m.LaunchdPlistPath()).CombinedOutput()
-		if bootstrapErr == nil || exec.CommandContext(ctx, "launchctl", "print", target).Run() == nil {
+		if bootstrapErr == nil || printTarget() == nil {
 			bootstrapErr = nil
 			break
 		}
@@ -504,10 +513,18 @@ func (m *ClaudeMemManager) installLaunchAgent(ctx context.Context) error {
 	if bootstrapErr != nil {
 		return fmt.Errorf("bootstrap claude-mem bridge: %w: %s", bootstrapErr, strings.TrimSpace(string(bootstrapOut)))
 	}
-	if out, err := exec.CommandContext(ctx, "launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
-		return fmt.Errorf("start claude-mem bridge: %w: %s", err, strings.TrimSpace(string(out)))
+	var kickstartErr error
+	var kickstartOut []byte
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
+		}
+		kickstartOut, kickstartErr = exec.CommandContext(ctx, "launchctl", "kickstart", "-k", target).CombinedOutput()
+		if kickstartErr == nil {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("start claude-mem bridge: %w: %s", kickstartErr, strings.TrimSpace(string(kickstartOut)))
 }
 
 func xmlEscape(value string) string {
