@@ -3,6 +3,9 @@
 export WORKSPACE="{{ replace .WorkspacePath "~" "$HOME" }}"
 export WORK="$WORKSPACE/work"
 export VAULT="{{ replace .VaultPath "~" "$HOME" }}"
+export MARU_SCRATCHPAD="$WORK/scratchpad"
+export MARU_TEMP="$MARU_SCRATCHPAD/temp"
+export CLAUDE_CODE_TMPDIR="$MARU_TEMP/runtime/claude"
 {{ if .CloudSymlink -}}
 export CLOUD_WORKSPACE="{{ replace .CloudSymlink "~" "$HOME" }}"
 export CLOUD_WORK="$CLOUD_WORKSPACE/work"

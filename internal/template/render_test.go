@@ -177,7 +177,15 @@ func TestRender_WorkspaceCloudVars(t *testing.T) {
 	}
 
 	content := string(out)
-	for _, want := range []string{`export VAULT="$HOME/workspace/work/vault"`, `export CLOUD_WORKSPACE="$HOME/Dropbox"`, `export CLOUD_WORK="$CLOUD_WORKSPACE/work"`, `alias cwork=`} {
+	for _, want := range []string{
+		`export VAULT="$HOME/workspace/work/vault"`,
+		`export MARU_SCRATCHPAD="$WORK/scratchpad"`,
+		`export MARU_TEMP="$MARU_SCRATCHPAD/temp"`,
+		`export CLAUDE_CODE_TMPDIR="$MARU_TEMP/runtime/claude"`,
+		`export CLOUD_WORKSPACE="$HOME/Dropbox"`,
+		`export CLOUD_WORK="$CLOUD_WORKSPACE/work"`,
+		`alias cwork=`,
+	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Render 40-workspace: expected %q in output, got:\n%s", want, content)
 		}
