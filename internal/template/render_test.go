@@ -192,6 +192,34 @@ func TestRender_WorkspaceCloudVars(t *testing.T) {
 	}
 }
 
+func TestRender_WorkspaceScratchpadVarsWithoutCloud(t *testing.T) {
+	e := NewEngine()
+
+	out, err := e.Render("shell/40-workspace.sh.tmpl", map[string]any{
+		"EnableWorkspace": true,
+		"WorkspacePath":   "~/workspace",
+		"VaultPath":       "~/workspace/work/vault",
+	})
+	if err != nil {
+		t.Fatalf("Render shell/40-workspace.sh.tmpl: %v", err)
+	}
+
+	content := string(out)
+	// scratchpad contract must not depend on cloud sync being configured
+	for _, want := range []string{
+		`export MARU_SCRATCHPAD="$WORK/scratchpad"`,
+		`export MARU_TEMP="$MARU_SCRATCHPAD/temp"`,
+		`export CLAUDE_CODE_TMPDIR="$MARU_TEMP/runtime/claude"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Render 40-workspace (no cloud): expected %q in output, got:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "CLOUD_WORKSPACE") {
+		t.Errorf("Render 40-workspace (no cloud): unexpected CLOUD_WORKSPACE in output:\n%s", content)
+	}
+}
+
 func TestRender_WithTemplateData(t *testing.T) {
 	e := NewEngine()
 
