@@ -106,6 +106,17 @@ dot open myproject   # launch or resume a multi-panel tmux workspace
 dot open myproject   # SSH dropped? just run it again — resumes exactly
 ```
 
+When the workspace module is enabled, the rendered shell environment also
+exports the shared AI scratch contract:
+
+```bash
+MARU_SCRATCHPAD="$WORK/scratchpad"
+MARU_TEMP="$MARU_SCRATCHPAD/temp"
+CLAUDE_CODE_TMPDIR="$MARU_TEMP/runtime/claude"
+```
+
+Maru and external AI CLIs therefore resolve the same temporary-artifact root.
+
 ### Build from source
 
 ```bash
