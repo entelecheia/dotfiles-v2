@@ -101,7 +101,37 @@ func (c AISkillsConfig) IsZero() bool {
 
 // ShellConfig configures the shell module.
 type ShellConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled bool   `yaml:"enabled"`
+	Editor  string `yaml:"editor,omitempty"` // zed, code, or vi; empty → platform default
+}
+
+// EditorCommand returns the $EDITOR value for an editor choice.
+// Empty choice falls back to the platform default.
+func EditorCommand(editor string, isDarwin bool) string {
+	switch editor {
+	case "zed":
+		return "zed --wait"
+	case "code":
+		return "code --wait"
+	case "vi":
+		return "vi"
+	}
+	if isDarwin {
+		return "zed --wait"
+	}
+	return "nano"
+}
+
+// EditorCask returns the Homebrew cask providing the editor, or "" when the
+// editor needs no install (vi) or no editor is selected.
+func EditorCask(editor string) string {
+	switch editor {
+	case "zed":
+		return "zed"
+	case "code":
+		return "visual-studio-code"
+	}
+	return ""
 }
 
 // GitConfig configures the git module.
@@ -235,6 +265,9 @@ func (c *Config) AllCasks() []string {
 			result = append(result, p)
 		}
 	}
+	if cask := EditorCask(c.Modules.Shell.Editor); cask != "" && !seen[cask] {
+		result = append(result, cask)
+	}
 	return result
 }
 
@@ -340,6 +373,7 @@ func (c *Config) TemplateData() map[string]any {
 		"Timezone":        c.Timezone,
 		"Hostname":        hostname,
 		"IsDarwin":        isDarwin,
+		"Editor":          EditorCommand(c.Modules.Shell.Editor, isDarwin),
 		"EnableWorkspace": c.Modules.Workspace.Enabled,
 		"EnableAI":        c.Modules.AI.Enabled,
 		"WorkspacePath":   c.Modules.Workspace.Path,
