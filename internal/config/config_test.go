@@ -149,6 +149,67 @@ func TestAllCasks_IncludesTerminalAppsWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestEditorMapping(t *testing.T) {
+	cases := []struct {
+		editor, cmdDarwin, cmdLinux, cask string
+	}{
+		{"zed", "zed --wait", "zed --wait", "zed"},
+		{"code", "code --wait", "code --wait", "visual-studio-code"},
+		{"vi", "vi", "vi", ""},
+		{"", "zed --wait", "nano", ""},
+	}
+	for _, c := range cases {
+		if got := EditorCommand(c.editor, true); got != c.cmdDarwin {
+			t.Errorf("EditorCommand(%q, darwin) = %q, want %q", c.editor, got, c.cmdDarwin)
+		}
+		if got := EditorCommand(c.editor, false); got != c.cmdLinux {
+			t.Errorf("EditorCommand(%q, linux) = %q, want %q", c.editor, got, c.cmdLinux)
+		}
+		if got := EditorCask(c.editor); got != c.cask {
+			t.Errorf("EditorCask(%q) = %q, want %q", c.editor, got, c.cask)
+		}
+	}
+}
+
+func TestAllCasks_IncludesEditorCask(t *testing.T) {
+	cfg := &Config{
+		Casks:   []string{"raycast"},
+		Modules: ModulesConfig{Shell: ShellConfig{Editor: "code"}},
+	}
+	all := cfg.AllCasks()
+	if all[len(all)-1] != "visual-studio-code" {
+		t.Fatalf("AllCasks missing editor cask: %v", all)
+	}
+
+	// Already-listed editor cask is not duplicated.
+	cfg = &Config{
+		Casks:   []string{"zed"},
+		Modules: ModulesConfig{Shell: ShellConfig{Editor: "zed"}},
+	}
+	if all := cfg.AllCasks(); len(all) != 1 {
+		t.Fatalf("AllCasks duplicated editor cask: %v", all)
+	}
+
+	// vi needs no install.
+	cfg = &Config{Modules: ModulesConfig{Shell: ShellConfig{Editor: "vi"}}}
+	if all := cfg.AllCasks(); len(all) != 0 {
+		t.Fatalf("AllCasks should be empty for vi: %v", all)
+	}
+}
+
+func TestValidate_Editor(t *testing.T) {
+	for _, v := range []string{"", "zed", "code", "vi"} {
+		s := &UserState{Modules: UserModulesState{Editor: v}}
+		if err := s.Validate(); err != nil {
+			t.Errorf("Validate(editor=%q) unexpected error: %v", v, err)
+		}
+	}
+	s := &UserState{Modules: UserModulesState{Editor: "emacs"}}
+	if err := s.Validate(); err == nil {
+		t.Error("Validate(editor=emacs) expected error, got nil")
+	}
+}
+
 func TestTerminalCatalogIncludesRequestedOptions(t *testing.T) {
 	for _, token := range []string{"warp", "wave", "cmux", "iterm2"} {
 		if !IsTerminalAppToken(token) {

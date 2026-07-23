@@ -19,6 +19,7 @@ func PrintStateSummary(state *config.UserState) {
 	printKV("GitHub", state.GithubUser)
 	printKV("Timezone", state.Timezone)
 	printKV("SSH key", state.SSH.KeyName)
+	printKV("Editor", state.Modules.Editor)
 	printKV("AI", formatBool(state.Modules.AI.Enabled))
 	if state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0 {
 		printKV("Terminal apps", strings.Join(state.Modules.TerminalApps.Casks, ", "))

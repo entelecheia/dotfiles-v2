@@ -31,6 +31,7 @@ type UserModulesState struct {
 	Git          UserGitState          `yaml:"git,omitempty"`
 	Warp         bool                  `yaml:"-"`
 	PromptStyle  string                `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
+	Editor       string                `yaml:"editor,omitempty"`       // "zed", "code", or "vi"
 	TerminalApps UserTerminalAppsState `yaml:"terminal_apps,omitempty"`
 	Fonts        UserFontsState        `yaml:"fonts,omitempty"`
 	Rsync        UserRsyncState        `yaml:"rsync,omitempty"`
@@ -268,6 +269,11 @@ func (s *UserState) Validate() error {
 		default:
 			return fmt.Errorf("modules.git.coauthor_guard must be off, warn, or block (got %q)", s.Modules.Git.CoauthorGuard)
 		}
+	}
+	switch s.Modules.Editor {
+	case "", "zed", "code", "vi":
+	default:
+		return fmt.Errorf("modules.editor must be zed, code, or vi (got %q)", s.Modules.Editor)
 	}
 	if err := validateTunnelState(s.Modules.Tunnel); err != nil {
 		return err
@@ -553,6 +559,9 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	}
 	if state.Modules.PromptStyle != "" {
 		cfg.Modules.Terminal.PromptStyle = state.Modules.PromptStyle
+	}
+	if state.Modules.Editor != "" {
+		cfg.Modules.Shell.Editor = state.Modules.Editor
 	}
 	if state.Modules.Fonts.Family != "" {
 		cfg.Modules.Fonts.Family = state.Modules.Fonts.Family

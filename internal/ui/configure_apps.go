@@ -130,6 +130,23 @@ func ConfigureTerminal(state *config.UserState, profile string, yes bool) error 
 		return err
 	}
 
+	editorDefault := state.Modules.Editor
+	if editorDefault == "" {
+		if runtime.GOOS == "darwin" && profile != "server" {
+			editorDefault = "zed"
+		} else {
+			editorDefault = "vi"
+		}
+	}
+	if !yes {
+		fmt.Println(StyleHint.Render("  Sets $EDITOR; zed/code are installed as casks on macOS via `dot apps`."))
+	}
+	state.Modules.Editor, err = Select("Default editor",
+		[]string{"zed", "code", "vi"}, editorDefault, yes)
+	if err != nil {
+		return err
+	}
+
 	if profile == "server" {
 		state.Modules.Warp = false
 		state.Modules.TerminalApps = config.UserTerminalAppsState{}
