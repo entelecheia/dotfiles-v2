@@ -1,7 +1,7 @@
 # 기본 환경변수
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
-export EDITOR="{{ if .IsDarwin }}code --wait{{ else }}nano{{ end }}"
+export EDITOR="{{ if .IsDarwin }}zed --wait{{ else }}nano{{ end }}"
 export TZ="{{ .Timezone }}"
 
 # PATH
