@@ -2,6 +2,21 @@
 # ── Claude Code ──
 export ENABLE_LSP_TOOLS=1
 
+# Codex full-access mode (no approval prompts or sandbox)
+codex-yolo() {
+  command codex --dangerously-bypass-approvals-and-sandbox "$@"
+}
+
+# Claude Code full-access mode (no permission prompts)
+claude-yolo() {
+  command claude --dangerously-skip-permissions "$@"
+}
+
+# Kiro full-access mode (all tools trusted, no approval prompts)
+kiro-yolo() {
+  command kiro-cli chat --trust-all-tools "$@"
+}
+
 # ── GitHub Models ──
 command -v gh &>/dev/null && {
   alias g4="gh models run gpt-4o"

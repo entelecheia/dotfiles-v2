@@ -163,6 +163,32 @@ func TestRender_ToolsInitAIToolPaths(t *testing.T) {
 	}
 }
 
+func TestRender_AIYoloHelpers(t *testing.T) {
+	e := NewEngine()
+
+	out, err := e.Render("shell/30-ai.sh.tmpl", map[string]any{
+		"EnableAI":     true,
+		"HasNVIDIAGPU": false,
+	})
+	if err != nil {
+		t.Fatalf("Render shell/30-ai.sh.tmpl: %v", err)
+	}
+
+	content := string(out)
+	for _, want := range []string{
+		"codex-yolo() {",
+		`command codex --dangerously-bypass-approvals-and-sandbox "$@"`,
+		"claude-yolo() {",
+		`command claude --dangerously-skip-permissions "$@"`,
+		"kiro-yolo() {",
+		`command kiro-cli chat --trust-all-tools "$@"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Render shell/30-ai.sh.tmpl: expected %q in output, got:\n%s", want, content)
+		}
+	}
+}
+
 func TestRender_WorkspaceCloudVars(t *testing.T) {
 	e := NewEngine()
 
