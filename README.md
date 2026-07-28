@@ -658,14 +658,37 @@ dot ai memory status               # verify hooks, MCP recall, and transcript ca
 
 dot ai audit summary               # summarize append-only dot ai mutation events
 dot ai audit tail 20               # print recent events as JSONL
+
+codex-yolo                         # run Codex without approval prompts or sandboxing
+claude-yolo                        # run Claude Code without permission prompts
+kiro-yolo                          # run Kiro chat with all tools trusted
 ```
 
 The `ai` module writes shell/config helper files:
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/shell/30-ai.sh` | Claude Code env, GitHub Models aliases, Fabric alias, GPU helper aliases |
+| `~/.config/shell/30-ai.sh` | Claude Code env, yolo helpers (Codex/Claude/Kiro), GitHub Models aliases, Fabric alias, GPU helper aliases |
 | `~/.config/claude/settings.json` | Minimal dot-managed Claude settings |
+
+The yolo helpers are thin wrappers that forward all arguments to the underlying
+CLI with its full-access flag:
+
+| Helper | Runs |
+|--------|------|
+| `codex-yolo [args...]` | `codex --dangerously-bypass-approvals-and-sandbox` |
+| `claude-yolo [args...]` | `claude --dangerously-skip-permissions` |
+| `kiro-yolo [args...]` | `kiro-cli chat --trust-all-tools` |
+
+They run with the current user's full host permissions and skip every approval
+prompt, so use them only in trusted workspaces.
+
+Kiro CLI asks for confirmation per tool call by default, so `kiro-yolo` is the
+only opt-in needed for a full-access session. Note that Kiro CLI does not read
+`~/.kiro/settings/permissions.yaml` — that path is not one of its config
+surfaces, and a file placed there has no effect. Persistent Kiro tool policy
+lives in agent configs (`~/.kiro/agents/*.json`, `.kiro/agents/*.json`) under
+`permissions.rules` / `allowedTools`; dot does not manage those.
 
 `dot ai hud apply` installs dot-native status lines:
 
