@@ -683,6 +683,13 @@ CLI with its full-access flag:
 They run with the current user's full host permissions and skip every approval
 prompt, so use them only in trusted workspaces.
 
+Kiro CLI asks for confirmation per tool call by default, so `kiro-yolo` is the
+only opt-in needed for a full-access session. Note that Kiro CLI does not read
+`~/.kiro/settings/permissions.yaml` — that path is not one of its config
+surfaces, and a file placed there has no effect. Persistent Kiro tool policy
+lives in agent configs (`~/.kiro/agents/*.json`, `.kiro/agents/*.json`) under
+`permissions.rules` / `allowedTools`; dot does not manage those.
+
 `dot ai hud apply` installs dot-native status lines:
 
 - Codex: updates `~/.codex/config.toml` `[tui].status_line` with model,
