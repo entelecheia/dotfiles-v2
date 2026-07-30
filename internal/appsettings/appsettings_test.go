@@ -52,7 +52,8 @@ func TestIsExcluded(t *testing.T) {
 		{"Application Support/Foo/log.log", true},
 		{"Application Support/Foo/.DS_Store", true},
 		{"Application Support/Foo/Code Cache/file", true},
-		{"Containers/a.b.c/.com.apple.containermanagerd.metadata.plist", false},
+		{"Containers/a.b.c/.com.apple.containermanagerd.metadata.plist", true},
+		{".com.apple.containermanagerd.metadata.plist", true},
 	}
 	for _, c := range cases {
 		got := isExcluded(c.path)
