@@ -13,11 +13,13 @@ import (
 
 // SystemInfo holds detected system information.
 type SystemInfo struct {
-	OS       string `json:"os"`
-	Arch     string `json:"arch"`
-	Hostname string `json:"hostname"`
-	HasBrew  bool   `json:"has_brew"`
-	BrewPath string `json:"brew_path"`
+	OS         string   `json:"os"`
+	Arch       string   `json:"arch"`
+	Hostname   string   `json:"hostname"`
+	DistroID   string   `json:"distro_id,omitempty"`
+	DistroLike []string `json:"distro_like,omitempty"`
+	HasBrew    bool     `json:"has_brew"`
+	BrewPath   string   `json:"brew_path"`
 	// GPU/CUDA detection
 	HasNVIDIAGPU bool   `json:"has_nvidia_gpu"`
 	GPUModel     string `json:"gpu_model"`
@@ -38,6 +40,7 @@ func DetectSystem() (*SystemInfo, error) {
 	}
 
 	detectHostname(info)
+	detectDistribution(info)
 	detectShell(info)
 	detectGit(info)
 	detectBrew(info)
@@ -46,6 +49,23 @@ func DetectSystem() (*SystemInfo, error) {
 	detectDGX(info)
 
 	return info, nil
+}
+
+// IsArchLinux reports whether the detected Linux distribution is Arch or an
+// Arch-derived distribution.
+func (s *SystemInfo) IsArchLinux() bool {
+	if s == nil || s.OS != "linux" {
+		return false
+	}
+	if s.DistroID == "arch" {
+		return true
+	}
+	for _, id := range s.DistroLike {
+		if id == "arch" {
+			return true
+		}
+	}
+	return false
 }
 
 // SuggestProfile returns a profile name based on detected system.
@@ -63,6 +83,46 @@ func detectHostname(info *SystemInfo) {
 		return
 	}
 	info.Hostname = strings.TrimSpace(res.Stdout)
+}
+
+func detectDistribution(info *SystemInfo) {
+	if info.OS != "linux" {
+		return
+	}
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return
+	}
+	values := parseOSRelease(string(data))
+	info.DistroID = strings.ToLower(values["ID"])
+	info.DistroLike = append(info.DistroLike, strings.Fields(strings.ToLower(values["ID_LIKE"]))...)
+}
+
+func parseOSRelease(data string) map[string]string {
+	values := make(map[string]string)
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') ||
+				(value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+		values[key] = value
+	}
+	return values
 }
 
 func detectBrew(info *SystemInfo) {

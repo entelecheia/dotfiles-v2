@@ -109,9 +109,10 @@ func skillToolSelectOptions() []SelectOption {
 	}
 }
 
-// ConfigureTerminal prompts for prompt style and GUI terminal apps.
-// Prompt style applies on all platforms; GUI apps are macOS-only.
-func ConfigureTerminal(state *config.UserState, profile string, yes bool) error {
+// ConfigureTerminal prompts for prompt style and supported GUI terminal apps.
+// Prompt style applies on all platforms; app installation is supported on
+// macOS and Arch Linux desktops.
+func ConfigureTerminal(state *config.UserState, profile string, system *config.SystemInfo, yes bool) error {
 	printSection("Terminal")
 
 	// Prompt style — useful on every platform including servers.
@@ -152,30 +153,49 @@ func ConfigureTerminal(state *config.UserState, profile string, yes bool) error 
 		state.Modules.TerminalApps = config.UserTerminalAppsState{}
 		return nil
 	}
-	if runtime.GOOS != "darwin" {
+
+	availableApps := config.TerminalAppOptionsForSystem(system)
+	if len(availableApps) == 0 {
 		return nil
 	}
 
-	appDefault := state.Modules.TerminalApps.Casks
-	if !state.Modules.TerminalApps.Enabled && len(appDefault) == 0 {
-		if state.Modules.Warp {
-			appDefault = []string{"warp"}
-		} else {
-			appDefault = config.DefaultTerminalApps(profile)
+	supported := make(map[string]bool, len(availableApps))
+	for _, app := range availableApps {
+		supported[app.Token] = true
+	}
+	rawDefault := state.Modules.TerminalApps.Apps
+	appDefault := make([]string, 0, len(rawDefault))
+	for _, app := range rawDefault {
+		if supported[app] {
+			appDefault = append(appDefault, app)
 		}
 	}
-	selectedApps, err := MultiSelectLabeled("Terminal apps to install", terminalAppSelectOptions(), appDefault, yes)
+	if len(appDefault) == 0 && (!state.Modules.TerminalApps.Enabled || len(rawDefault) > 0) {
+		if state.Modules.Warp {
+			if supported["warp"] {
+				appDefault = []string{"warp"}
+			}
+		}
+		if len(appDefault) == 0 {
+			appDefault = config.DefaultTerminalApps(profile, system)
+		}
+	}
+	selectedApps, err := MultiSelectLabeled(
+		"Terminal apps to install",
+		terminalAppSelectOptions(availableApps),
+		appDefault,
+		yes,
+	)
 	if err != nil {
 		return err
 	}
 	state.Modules.TerminalApps.Enabled = true
-	state.Modules.TerminalApps.Casks = selectedApps
+	state.Modules.TerminalApps.Apps = selectedApps
 	state.Modules.Warp = sliceutil.Contains(selectedApps, "warp")
 	return nil
 }
 
-func terminalAppSelectOptions() []SelectOption {
-	apps := config.TerminalAppOptions()
+func terminalAppSelectOptions(apps []config.TerminalAppOption) []SelectOption {
 	options := make([]SelectOption, len(apps))
 	for i, app := range apps {
 		options[i] = SelectOption{

@@ -106,7 +106,7 @@ func runInitFlow(cmd *cobra.Command, skipExistingGate bool) error {
 	}
 
 	// --- Terminal ---
-	if err := ui.ConfigureTerminal(state, state.Profile, yes); err != nil {
+	if err := ui.ConfigureTerminal(state, state.Profile, sysInfo, yes); err != nil {
 		return err
 	}
 

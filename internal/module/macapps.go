@@ -3,6 +3,7 @@ package module
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -129,6 +130,14 @@ func (m *MacAppsModule) splitExistingCaskTargets(rc *RunContext, casks []string)
 		return casks, nil
 	}
 	existing := rc.Brew.ExistingCaskTargets(casks)
+	if cat, err := catalog.LoadMacApps(); err == nil {
+		for _, cask := range casks {
+			if app := cat.AppBundle(cask); app != "" &&
+				rc.Runner.FileExists(filepath.Join("/Applications", app)) {
+				existing[cask] = true
+			}
+		}
+	}
 	if len(existing) == 0 {
 		return casks, nil
 	}

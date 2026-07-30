@@ -81,7 +81,7 @@ func (a *UserAIState) UnmarshalYAML(value *yaml.Node) error {
 
 // UnmarshalYAML accepts legacy read-only input:
 //   - modules.ai_tools -> modules.ai.enabled
-//   - modules.warp -> modules.terminal_apps.casks: [warp]
+//   - modules.warp -> modules.terminal_apps.apps: [warp]
 func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
 	type raw UserModulesState
 	aux := struct {
@@ -99,23 +99,55 @@ func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
 	}
 	if aux.LegacyWarp {
 		s.Warp = true
-		if !s.TerminalApps.Enabled && len(s.TerminalApps.Casks) == 0 {
+		if !s.TerminalApps.Enabled && len(s.TerminalApps.Apps) == 0 {
 			s.TerminalApps.Enabled = true
-			s.TerminalApps.Casks = []string{"warp"}
+			s.TerminalApps.Apps = []string{"warp"}
 		}
 	}
 	return nil
 }
 
-// UserTerminalAppsState holds GUI terminal cask selections.
+// UserTerminalAppsState holds cross-platform GUI terminal app selections.
 type UserTerminalAppsState struct {
 	Enabled bool     `yaml:"enabled,omitempty"`
-	Casks   []string `yaml:"casks,omitempty"`
+	Apps    []string `yaml:"apps,omitempty"`
+}
+
+// UnmarshalYAML accepts the legacy `casks` key as read-only input. When both
+// keys are present, the canonical `apps` key wins, including an explicit empty
+// list.
+func (s *UserTerminalAppsState) UnmarshalYAML(value *yaml.Node) error {
+	var raw struct {
+		Enabled bool     `yaml:"enabled"`
+		Apps    []string `yaml:"apps"`
+		Casks   []string `yaml:"casks"`
+	}
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+
+	appsSet := false
+	if value.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			if value.Content[i].Value == "apps" {
+				appsSet = true
+				break
+			}
+		}
+	}
+
+	s.Enabled = raw.Enabled
+	if appsSet {
+		s.Apps = append([]string(nil), raw.Apps...)
+	} else {
+		s.Apps = append([]string(nil), raw.Casks...)
+	}
+	return nil
 }
 
 // IsZero lets yaml.v3 omit an unset terminal_apps block from user state.
 func (s UserTerminalAppsState) IsZero() bool {
-	return !s.Enabled && len(s.Casks) == 0
+	return !s.Enabled && len(s.Apps) == 0
 }
 
 // UserMacAppsState holds user selections for the macapps module.
@@ -284,9 +316,9 @@ func (s *UserState) Validate() error {
 	if err := validateAISkillsConfig(s.Modules.AI.Skills); err != nil {
 		return err
 	}
-	for _, cask := range s.Modules.TerminalApps.Casks {
-		if !IsTerminalAppToken(cask) {
-			return fmt.Errorf("terminal_apps.casks entry %q must be one of the curated terminal apps", cask)
+	for _, app := range s.Modules.TerminalApps.Apps {
+		if !IsTerminalAppToken(app) {
+			return fmt.Errorf("terminal_apps.apps entry %q must be one of the curated terminal apps", app)
 		}
 	}
 	for _, p := range s.Modules.Gsync.SharedExcludes {
@@ -549,9 +581,9 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 		cfg.Modules.Git.Enabled = true
 		cfg.Modules.Git.CoauthorGuard = state.Modules.Git.CoauthorGuard
 	}
-	terminalAppsSet := state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0
+	terminalAppsSet := state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Apps) > 0
 	if terminalAppsSet {
-		cfg.Modules.Terminal.Apps = append([]string(nil), state.Modules.TerminalApps.Casks...)
+		cfg.Modules.Terminal.Apps = append([]string(nil), state.Modules.TerminalApps.Apps...)
 		cfg.Modules.Terminal.Warp = sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp")
 	} else if state.Modules.Warp && !sliceutil.Contains(cfg.Modules.Terminal.Apps, "warp") {
 		cfg.Modules.Terminal.Apps = append(cfg.Modules.Terminal.Apps, "warp")

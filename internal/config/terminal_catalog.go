@@ -2,10 +2,12 @@ package config
 
 import "strings"
 
-// TerminalAppOption describes a GUI terminal app backed by a Homebrew cask.
+// TerminalAppOption describes a supported GUI terminal app.
 type TerminalAppOption struct {
-	Token string
-	Name  string
+	Token  string
+	Name   string
+	Darwin bool
+	Arch   bool
 }
 
 // TerminalToolOption describes a CLI tool backed by a Homebrew formula.
@@ -15,10 +17,11 @@ type TerminalToolOption struct {
 }
 
 var terminalAppOptions = []TerminalAppOption{
-	{Token: "warp", Name: "Warp"},
-	{Token: "wave", Name: "Wave"},
-	{Token: "cmux", Name: "cmux"},
-	{Token: "iterm2", Name: "iTerm2"},
+	{Token: "orca", Name: "Orca", Darwin: true, Arch: true},
+	{Token: "warp", Name: "Warp", Darwin: true},
+	{Token: "wave", Name: "Wave", Darwin: true},
+	{Token: "cmux", Name: "cmux", Darwin: true},
+	{Token: "iterm2", Name: "iTerm2", Darwin: true},
 }
 
 var terminalToolOptions = []TerminalToolOption{
@@ -54,15 +57,32 @@ func TerminalAppOptions() []TerminalAppOption {
 	return append([]TerminalAppOption(nil), terminalAppOptions...)
 }
 
+// TerminalAppOptionsForSystem returns terminal apps supported by the detected
+// desktop platform. Other Linux distributions keep existing selections but do
+// not offer an unsupported automatic installer.
+func TerminalAppOptionsForSystem(system *SystemInfo) []TerminalAppOption {
+	var options []TerminalAppOption
+	for _, app := range terminalAppOptions {
+		switch {
+		case system != nil && system.OS == "darwin" && app.Darwin:
+			options = append(options, app)
+		case system != nil && system.IsArchLinux() && app.Arch:
+			options = append(options, app)
+		}
+	}
+	return options
+}
+
 // TerminalToolOptions returns the curated CLI terminal tool catalog.
 func TerminalToolOptions() []TerminalToolOption {
 	return append([]TerminalToolOption(nil), terminalToolOptions...)
 }
 
-// DefaultTerminalApps returns the profile's default GUI terminal app selection.
-func DefaultTerminalApps(profile string) []string {
-	if profile == "full" {
-		return []string{"warp"}
+// DefaultTerminalApps returns the profile's platform-supported default GUI
+// terminal app selection.
+func DefaultTerminalApps(profile string, system *SystemInfo) []string {
+	if profile == "full" && len(TerminalAppOptionsForSystem(system)) > 0 {
+		return []string{"orca"}
 	}
 	return nil
 }

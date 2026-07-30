@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -195,7 +196,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		if len(want) == 0 {
 			want = cat.Recommended
 		}
-		want = append(want, state.Modules.TerminalApps.Casks...)
+		want = append(want, state.Modules.TerminalApps.Apps...)
 		want = append(want, state.Modules.MacApps.CasksExtra...)
 		want = sliceutil.Dedupe(want)
 	}
@@ -207,7 +208,7 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		if len(preselect) == 0 {
 			preselect = cat.Recommended
 		}
-		preselect = sliceutil.Dedupe(append(preselect, state.Modules.TerminalApps.Casks...))
+		preselect = sliceutil.Dedupe(append(preselect, state.Modules.TerminalApps.Apps...))
 		p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
 			"  Catalog: %d apps across %d groups  (★ defaults, ✓ installed)", len(tokens), len(cat.Groups))))
 		selected, err := ui.MultiSelect("Pick apps to install", tokens, preselect, false)
@@ -258,6 +259,13 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 	// on the first conflict. --force bypasses the skip and reinstalls.
 	if !force {
 		existing := brew.ExistingCaskTargets(missing)
+		for _, cask := range missing {
+			if app := cat.AppBundle(cask); app != "" {
+				if _, err := os.Stat(filepath.Join("/Applications", app)); err == nil {
+					existing[cask] = true
+				}
+			}
+		}
 		if len(existing) > 0 {
 			var toInstall, skipped []string
 			for _, c := range missing {
