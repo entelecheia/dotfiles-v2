@@ -110,10 +110,25 @@ func runOnestopBackup(cmd *cobra.Command, _ []string) error {
 	for _, s := range scopes {
 		selected[s] = true
 	}
+	canBackup := make(map[string]bool, len(available))
+	for _, s := range available {
+		canBackup[s] = true
+	}
 
 	// 3. Per-domain follow-ups.
 	includeSecrets, _ := cmd.Flags().GetBool("include-secrets")
-	if selected["profile"] && !o.yes {
+	plan := planAgeIdentity(scopes, selected, canBackup, includeSecrets, o.yes)
+	scopes, includeSecrets = plan.Scopes, plan.IncludeSecrets
+	if plan.AddedProfile {
+		p.Line("  Added profile domain — it carries the age identity for the .age archives.")
+	}
+	if plan.ForcedAgeKeys {
+		p.Line("  Including age keys — the .age archives cannot be decrypted without them.")
+	}
+	if plan.Orphaned {
+		p.Warn("  No profile snapshot available to carry the age identity — the .age archives will NOT be decryptable on another machine.")
+	}
+	if plan.AskAgeKeys {
 		includeSecrets, err = ui.ConfirmBool("Include age keys (~/.ssh/age_key*) in the profile snapshot?", true, false)
 		if err != nil {
 			return err
@@ -203,6 +218,47 @@ func hasAgeArchives(dir string) bool {
 		}
 	}
 	return false
+}
+
+// ageIdentityPlan is how one backup run captures the age identity, plus the
+// notices the caller should print for it.
+type ageIdentityPlan struct {
+	Scopes         []string
+	IncludeSecrets bool
+	AddedProfile   bool // profile was pulled in to carry the age identity
+	ForcedAgeKeys  bool // age keys were turned on because secrets is selected
+	Orphaned       bool // secrets selected but nothing can carry the identity
+	AskAgeKeys     bool // profile alone, interactive: ask the user
+}
+
+// planAgeIdentity couples the secrets domain to the profile snapshot that
+// carries its age identity.
+//
+// The secrets domain archives .age files, but the identity that decrypts them
+// ships in the profile snapshot. Capturing one without the other leaves the
+// new machine holding archives nothing can open — while the backup still
+// reports success — so selecting secrets pulls in the profile snapshot and
+// its age keys rather than leaving that to an independent opt-in that
+// defaults to false under --yes. selected gains "profile" when it is added.
+func planAgeIdentity(scopes []string, selected, canBackup map[string]bool, includeSecrets, unattended bool) ageIdentityPlan {
+	plan := ageIdentityPlan{Scopes: scopes, IncludeSecrets: includeSecrets}
+	switch {
+	case selected["secrets"] && canBackup["profile"]:
+		if !selected["profile"] {
+			selected["profile"] = true
+			plan.Scopes = append([]string{"profile"}, scopes...)
+			plan.AddedProfile = true
+		}
+		if !includeSecrets {
+			plan.IncludeSecrets = true
+			plan.ForcedAgeKeys = true
+		}
+	case selected["secrets"]:
+		plan.Orphaned = true
+	case selected["profile"] && !unattended:
+		plan.AskAgeKeys = true
+	}
+	return plan
 }
 
 func (o *onestopCtx) backupProfileStep(tag string, includeSecrets bool) onestopStep {
