@@ -157,6 +157,11 @@ var excludedSuffixes = []string{
 
 var excludedExact = []string{
 	".DS_Store",
+	// macOS keeps this container-manager bookkeeping file unreadable even with
+	// Full Disk Access, so including it fails the whole Containers copy. It is
+	// regenerated on app launch and its contents are host-specific, so it is
+	// nothing a restore should carry to another machine.
+	".com.apple.containermanagerd.metadata.plist",
 }
 
 func isExcluded(rel string) bool {
