@@ -152,7 +152,7 @@ type TermConfig struct {
 	Enabled     bool     `yaml:"enabled"`
 	Warp        bool     `yaml:"warp"`
 	PromptStyle string   `yaml:"prompt_style,omitempty"` // "minimal" or "rich"
-	Apps        []string `yaml:"apps,omitempty"`         // GUI terminal casks: warp, wave, cmux, iterm2
+	Apps        []string `yaml:"apps,omitempty"`         // GUI terminal apps: orca, warp, wave, cmux, iterm2
 }
 
 // WorkConfig configures the workspace module.

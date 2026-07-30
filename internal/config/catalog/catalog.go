@@ -17,6 +17,7 @@ type MacApp struct {
 	Token string `yaml:"token"`
 	Name  string `yaml:"name"`
 	Tap   string `yaml:"tap,omitempty"`
+	App   string `yaml:"app,omitempty"`
 }
 
 // MacAppGroup groups related casks under a human-readable label.
@@ -69,6 +70,19 @@ func (c *MacApps) DisplayName(token string) string {
 		}
 	}
 	return token
+}
+
+// AppBundle returns the application bundle installed under /Applications for
+// casks that need an explicit external-install check.
+func (c *MacApps) AppBundle(token string) string {
+	for _, g := range c.Groups {
+		for _, a := range g.Apps {
+			if a.Token == token {
+				return a.App
+			}
+		}
+	}
+	return ""
 }
 
 // legacyCaskAliases renames cask tokens whose upstream was renamed, so stale

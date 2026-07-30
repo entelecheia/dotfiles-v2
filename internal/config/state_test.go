@@ -251,7 +251,7 @@ func TestLoadState_LegacyWarpMigratesToTerminalApps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadStateAt: %v", err)
 	}
-	if !loaded.Modules.TerminalApps.Enabled || len(loaded.Modules.TerminalApps.Casks) != 1 || loaded.Modules.TerminalApps.Casks[0] != "warp" {
+	if !loaded.Modules.TerminalApps.Enabled || len(loaded.Modules.TerminalApps.Apps) != 1 || loaded.Modules.TerminalApps.Apps[0] != "warp" {
 		t.Fatalf("legacy warp did not migrate to terminal_apps: %#v", loaded.Modules.TerminalApps)
 	}
 	cfg := &Config{Modules: ModulesConfig{Terminal: TermConfig{Enabled: true}}}
@@ -280,7 +280,7 @@ func TestLoadState_LegacyWarpMigratesToTerminalApps(t *testing.T) {
 func TestTerminalAppsStateAppliesAndValidates(t *testing.T) {
 	state := &UserState{}
 	state.Modules.TerminalApps.Enabled = true
-	state.Modules.TerminalApps.Casks = []string{"wave", "cmux"}
+	state.Modules.TerminalApps.Apps = []string{"wave", "cmux"}
 	cfg := &Config{Modules: ModulesConfig{Terminal: TermConfig{Enabled: true, Warp: true, Apps: []string{"warp"}}}}
 
 	if err := state.Validate(); err != nil {
@@ -294,9 +294,57 @@ func TestTerminalAppsStateAppliesAndValidates(t *testing.T) {
 		t.Fatalf("Terminal.Apps = %q, want wave,cmux", got)
 	}
 
-	state.Modules.TerminalApps.Casks = []string{"not-a-terminal"}
+	state.Modules.TerminalApps.Apps = []string{"not-a-terminal"}
 	if err := state.Validate(); err == nil {
 		t.Fatal("expected invalid terminal app token to fail validation")
+	}
+}
+
+func TestLoadState_LegacyTerminalCasksMigratesToApps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	input := "name: Test\nprofile: full\nmodules:\n  terminal_apps:\n    enabled: true\n    casks: [warp, wave]\n"
+	if err := os.WriteFile(path, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if got := strings.Join(loaded.Modules.TerminalApps.Apps, ","); got != "warp,wave" {
+		t.Fatalf("terminal apps = %q, want warp,wave", got)
+	}
+
+	if err := saveStateAt(path, loaded); err != nil {
+		t.Fatalf("saveStateAt: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "casks:") {
+		t.Fatalf("legacy terminal casks key was persisted: %s", data)
+	}
+	if !strings.Contains(string(data), "apps:") {
+		t.Fatalf("canonical terminal apps key missing: %s", data)
+	}
+}
+
+func TestLoadState_TerminalAppsWinsOverLegacyCasks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	input := "name: Test\nprofile: full\nmodules:\n  terminal_apps:\n    enabled: true\n    apps: [orca]\n    casks: [warp]\n"
+	if err := os.WriteFile(path, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if got := strings.Join(loaded.Modules.TerminalApps.Apps, ","); got != "orca" {
+		t.Fatalf("terminal apps = %q, want orca", got)
 	}
 }
 

@@ -21,8 +21,8 @@ func PrintStateSummary(state *config.UserState) {
 	printKV("SSH key", state.SSH.KeyName)
 	printKV("Editor", state.Modules.Editor)
 	printKV("AI", formatBool(state.Modules.AI.Enabled))
-	if state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Casks) > 0 {
-		printKV("Terminal apps", strings.Join(state.Modules.TerminalApps.Casks, ", "))
+	if state.Modules.TerminalApps.Enabled || len(state.Modules.TerminalApps.Apps) > 0 {
+		printKV("Terminal apps", strings.Join(state.Modules.TerminalApps.Apps, ", "))
 	} else if state.Modules.Warp {
 		printKV("Warp", formatBool(state.Modules.Warp))
 	}

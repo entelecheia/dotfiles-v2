@@ -21,12 +21,12 @@ recommended:
   - hazel
   - keyboard-maestro
   - obsidian
+  - orca
   - popclip
   - raycast
   - shottr
   - slack
   - termius
-  - warp
   - yoink
 
 groups:
@@ -52,6 +52,7 @@ groups:
       - {token: cmux,              name: "cmux", tap: "manaflow-ai/cmux"}
       - {token: cursor,            name: "Cursor"}
       - {token: ghostty,           name: "Ghostty"}
+      - {token: orca,              name: "Orca", tap: "stablyai/orca", app: "Orca.app"}
       - {token: sublime-text,      name: "Sublime Text"}
       - {token: visual-studio-code, name: "Visual Studio Code"}
       - {token: warp,              name: "Warp"}

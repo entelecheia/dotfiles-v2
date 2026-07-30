@@ -125,6 +125,12 @@ func TestLoad_FullProfile(t *testing.T) {
 	if len(cfg.CasksExtra) != 1 || cfg.CasksExtra[0] != "maru-workspace" {
 		t.Errorf("full profile: expected casks_extra [maru-workspace], got %v", cfg.CasksExtra)
 	}
+	if cfg.Modules.Terminal.Warp {
+		t.Error("full profile: Warp theme should not be enabled by default")
+	}
+	if len(cfg.Modules.Terminal.Apps) != 1 || cfg.Modules.Terminal.Apps[0] != "orca" {
+		t.Errorf("full profile: expected terminal apps [orca], got %v", cfg.Modules.Terminal.Apps)
+	}
 
 	// Extends field is cleared after resolution
 	if cfg.Extends != "" {

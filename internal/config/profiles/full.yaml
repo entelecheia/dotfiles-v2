@@ -20,10 +20,10 @@ modules:
     enabled: true
   terminal:
     enabled: true
-    warp: true
+    warp: false
     prompt_style: rich
     apps:
-      - warp
+      - orca
   macapps:
     enabled: true
     # Cask list is pulled from the embedded catalog (internal/config/catalog/macos-apps.yaml).

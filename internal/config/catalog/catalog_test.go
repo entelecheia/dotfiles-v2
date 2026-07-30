@@ -49,8 +49,14 @@ func TestLoadMacApps(t *testing.T) {
 	if !recommended["maru-workspace"] {
 		t.Error("maru-workspace should be a recommended app")
 	}
-	taps := c.TapsForTokens([]string{"cmux", "maru-workspace", "wave", "cmux", "maru-workspace"})
-	wantTaps := []string{"manaflow-ai/cmux", "staixbwlb/cask"}
+	if !recommended["orca"] {
+		t.Error("orca should be a recommended app")
+	}
+	if recommended["warp"] {
+		t.Error("warp should remain selectable but should not be recommended by default")
+	}
+	taps := c.TapsForTokens([]string{"cmux", "maru-workspace", "orca", "wave", "cmux", "orca"})
+	wantTaps := []string{"manaflow-ai/cmux", "staixbwlb/cask", "stablyai/orca"}
 	if len(taps) != len(wantTaps) {
 		t.Fatalf("tap metadata = %v, want %v", taps, wantTaps)
 	}
@@ -71,6 +77,9 @@ func TestLoadMacApps(t *testing.T) {
 	// DisplayName fallback
 	if got := c.DisplayName("__not-a-real-token__"); got != "__not-a-real-token__" {
 		t.Errorf("DisplayName fallback: got %q", got)
+	}
+	if got := c.AppBundle("orca"); got != "Orca.app" {
+		t.Errorf("AppBundle(orca) = %q, want Orca.app", got)
 	}
 }
 

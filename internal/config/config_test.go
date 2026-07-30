@@ -211,10 +211,31 @@ func TestValidate_Editor(t *testing.T) {
 }
 
 func TestTerminalCatalogIncludesRequestedOptions(t *testing.T) {
-	for _, token := range []string{"warp", "wave", "cmux", "iterm2"} {
+	for _, token := range []string{"orca", "warp", "wave", "cmux", "iterm2"} {
 		if !IsTerminalAppToken(token) {
 			t.Fatalf("terminal app catalog missing %q", token)
 		}
+	}
+}
+
+func TestDefaultTerminalAppsByPlatform(t *testing.T) {
+	mac := &SystemInfo{OS: "darwin"}
+	arch := &SystemInfo{OS: "linux", DistroID: "arch"}
+	ubuntu := &SystemInfo{OS: "linux", DistroID: "ubuntu"}
+
+	for name, system := range map[string]*SystemInfo{"mac": mac, "arch": arch} {
+		t.Run(name, func(t *testing.T) {
+			got := DefaultTerminalApps("full", system)
+			if len(got) != 1 || got[0] != "orca" {
+				t.Fatalf("DefaultTerminalApps(full) = %v, want [orca]", got)
+			}
+		})
+	}
+	if got := DefaultTerminalApps("minimal", mac); len(got) != 0 {
+		t.Fatalf("DefaultTerminalApps(minimal) = %v, want empty", got)
+	}
+	if got := DefaultTerminalApps("full", ubuntu); len(got) != 0 {
+		t.Fatalf("DefaultTerminalApps(full, ubuntu) = %v, want empty", got)
 	}
 }
 

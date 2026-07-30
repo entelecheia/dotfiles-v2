@@ -99,7 +99,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	// Interactive configuration
 	p := printerFrom(cmd)
 	state.Profile = profileName
-	if err := configureInteractive(p, state, profileName, yes); err != nil {
+	if err := configureInteractive(p, state, profileName, sysInfo, yes); err != nil {
 		if errors.Is(err, errAborted) {
 			p.Line("Aborted.")
 			return nil
@@ -211,7 +211,13 @@ func runApply(cmd *cobra.Command, _ []string) error {
 
 // configureInteractive walks through each configuration section interactively.
 // Skipped entirely when --yes is set.
-func configureInteractive(p *Printer, state *config.UserState, profile string, yes bool) error {
+func configureInteractive(
+	p *Printer,
+	state *config.UserState,
+	profile string,
+	system *config.SystemInfo,
+	yes bool,
+) error {
 	if yes {
 		return nil
 	}
@@ -235,7 +241,7 @@ func configureInteractive(p *Printer, state *config.UserState, profile string, y
 		return err
 	}
 
-	if err := ui.ConfigureTerminal(state, profile, false); err != nil {
+	if err := ui.ConfigureTerminal(state, profile, system, false); err != nil {
 		return err
 	}
 

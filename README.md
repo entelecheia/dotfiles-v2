@@ -162,7 +162,8 @@ Prompts for:
 - Profile (`minimal` / `full` / `server`)
 - GPU/CUDA auto-detection (suggests `server` when NVIDIA GPU detected)
 - Prompt style (`minimal` / `rich`) — see below
-- Terminal app choices (`warp`, `wave`, `cmux`, `iterm2`) on macOS
+- Terminal app choices (`orca`, `warp`, `wave`, `cmux`, `iterm2`) on macOS;
+  Orca selection on Arch Linux
 - Module opt-ins: workspace, AI CLI/config helpers, fonts
 - SSH key name (auto-derived from GitHub username)
 - Workspace git repos: remote URLs for `work` and `vault` directories (optional)
@@ -885,7 +886,7 @@ dot apps restore --from <root> moom
 **Two independent lists** on the user state:
 
 - **Install list** (`modules.macapps.casks` + `casks_extra`) — drives `dot apps install`.
-  Terminal app choices from `modules.terminal_apps.casks` are merged into this
+  Terminal app choices from `modules.terminal_apps.apps` are merged into this
   list during `dot apply` and saved-state `dot apps install` runs.
 - **Backup list** (`modules.macapps.backup_apps`) — scopes `apps backup/restore`. Empty
   means "manifest ∩ installed casks".
@@ -908,7 +909,8 @@ Productivity utilities, Capture & Dictation, Files, Media, Dev, System, Writing.
 The `defaults:` section defines the preselected bootstrap set. Catalog entries
 can declare required Homebrew taps; `cmux` runs `brew tap manaflow-ai/cmux`
 before `brew install --cask cmux`, and `maru-workspace` runs
-`brew tap staixbwlb/cask` before `brew install --cask maru-workspace`.
+`brew tap staixbwlb/cask` before `brew install --cask maru-workspace`. Orca
+uses the `stablyai/orca` tap.
 
 ### `dot profile` — Versioned Profile Snapshots
 
@@ -1008,7 +1010,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **node** | full | pnpm store relocation outside cloud-synced workspace trees (~/.config/pnpm/npmrc) |
 | **git** | minimal | git config, aliases, global ignore |
 | **ssh** | minimal | SSH config, config.d includes |
-| **terminal** | minimal | starship prompt (minimal / rich selectable), Warp theme (macOS) |
+| **terminal** | minimal | starship prompt, Orca auto-install (macOS/Arch), Warp theme |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (cloud mirror, vault, inbox). Vault location is selectable at init and auto-detected from existing `<workspace>/work/vault` or `<workspace>/vault`; the separate vault repo entry is skipped when the vault lives inside work (e.g. as a submodule). Cloud mirror is selected at init from detected mounts (Dropbox preferred, Google Drive accounts are listed); shell exports `CLOUD_WORKSPACE`/`CLOUD_WORK`, alias `cwork`, and the `ws()` jumper (formerly `GDRIVE_*`/`gwork`) |
 | **ai** | full | AI CLI/config helpers, Claude/Codex/Antigravity settings backup, optional HUD |
@@ -1037,10 +1039,32 @@ Config key: `modules.terminal.prompt_style` (state: `modules.prompt_style`).
 
 ### Terminal Apps
 
-`dot init` and `dot reconfigure` include a macOS non-server multi-select for
-terminal apps: `warp`, `wave`, `cmux`, and `iterm2`. The selection is stored in
-`modules.terminal_apps.casks` and merged into the macOS cask install list.
-Selecting `warp` also enables the managed Warp theme file.
+`dot init` and `dot reconfigure` include a non-server terminal app selection.
+The fresh `full` profile defaults to Orca. macOS offers `orca`, `warp`, `wave`,
+`cmux`, and `iterm2`; Arch Linux offers Orca. Existing explicit selections are
+preserved.
+
+Selections are stored in `modules.terminal_apps.apps`. The legacy `casks` key
+is accepted on load and rewritten as `apps` on the next save. Selecting `warp`
+also enables the managed Warp theme file.
+
+On macOS, regular `dot apply` installs a missing Orca through Homebrew:
+
+```bash
+brew install --cask stablyai/orca/orca
+```
+
+On Arch Linux, the terminal module accepts either `stably-orca-bin` or
+`stably-orca-git` as installed and otherwise runs:
+
+```bash
+yay -S --needed stably-orca-bin
+```
+
+`yay` is a prerequisite; dot reports the required command and stops if the AUR
+helper is unavailable. Other Linux distributions do not attempt an automatic
+GUI app install. This preference controls dot's selected terminal workspace
+app and does not register an operating-system terminal command handler.
 
 ### Packages
 
@@ -1177,10 +1201,8 @@ modules:
   prompt_style: rich    # "minimal" or "rich"
   terminal_apps:
     enabled: true
-    casks:
-      - warp
-      - wave
-      - cmux
+    apps:
+      - orca
   fonts:
     family: "FiraCode"
   macapps:
