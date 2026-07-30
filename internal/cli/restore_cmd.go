@@ -120,7 +120,23 @@ func runOnestopRestore(cmd *cobra.Command, _ []string) error {
 
 	// 6. Per-domain follow-ups.
 	includeSecrets, _ := cmd.Flags().GetBool("include-secrets")
-	if selected["profile"] && !o.yes {
+	// Decrypting the .age archives needs the age identity, and resolving
+	// which archive is the SSH key needs ssh.key_name — both arrive with the
+	// profile snapshot. Unlike the backup side (see planAgeIdentity) this
+	// does not pull the profile domain in on its own: a profile restore
+	// overwrites the live config.yaml, which is too big a side effect to add
+	// silently. Force the age keys when profile is already in scope, and say
+	// so plainly when it is not.
+	switch {
+	case selected["secrets"] && selected["profile"]:
+		if !includeSecrets {
+			includeSecrets = true
+			p.Line("  Restoring age keys — the .age archives cannot be decrypted without them.")
+		}
+	case selected["secrets"]:
+		p.Warn("  secrets without profile: the age identity and ssh.key_name come from the profile snapshot.")
+		p.Warn("  Add profile to the scope, or the decrypt will fail (or silently skip the SSH key).")
+	case selected["profile"] && !o.yes:
 		includeSecrets, err = ui.ConfirmBool("Restore age keys (~/.ssh/age_key*) from the profile snapshot?", includeSecrets, false)
 		if err != nil {
 			return err

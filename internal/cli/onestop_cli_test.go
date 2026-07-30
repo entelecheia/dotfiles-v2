@@ -403,3 +403,105 @@ func TestHostFlagRejectsTraversal(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanAgeIdentity pins the coupling that keeps a secrets backup
+// recoverable: the .age archives are useless on another machine without the
+// age identity, which only the profile snapshot carries.
+func TestPlanAgeIdentity(t *testing.T) {
+	cases := []struct {
+		name           string
+		scopes         []string
+		canBackup      []string
+		includeSecrets bool
+		unattended     bool
+		wantScopes     []string
+		wantInclude    bool
+		wantAdded      bool
+		wantForced     bool
+		wantOrphaned   bool
+		wantAsk        bool
+	}{{
+		// The regression this exists for: `--yes --scope secrets` used to
+		// archive .age files with no key anywhere in the backup.
+		name:       "secrets alone pulls in profile and forces age keys",
+		scopes:     []string{"secrets"},
+		canBackup:  []string{"profile", "apps", "ai", "secrets"},
+		unattended: true,
+		wantScopes: []string{"profile", "secrets"},
+		// scope order feeds only the plan display; steps run profile-first.
+		wantInclude: true, wantAdded: true, wantForced: true,
+	}, {
+		name:        "secrets with profile already selected still forces age keys",
+		scopes:      []string{"profile", "secrets"},
+		canBackup:   []string{"profile", "secrets"},
+		unattended:  true,
+		wantScopes:  []string{"profile", "secrets"},
+		wantInclude: true, wantForced: true,
+	}, {
+		name:           "explicit --include-secrets needs no forcing",
+		scopes:         []string{"profile", "secrets"},
+		canBackup:      []string{"profile", "secrets"},
+		includeSecrets: true,
+		unattended:     true,
+		wantScopes:     []string{"profile", "secrets"},
+		wantInclude:    true,
+	}, {
+		name:         "no profile snapshot to carry the identity is flagged",
+		scopes:       []string{"secrets"},
+		canBackup:    []string{"secrets"},
+		unattended:   true,
+		wantScopes:   []string{"secrets"},
+		wantOrphaned: true,
+	}, {
+		name:       "profile alone is still asked interactively",
+		scopes:     []string{"profile"},
+		canBackup:  []string{"profile", "secrets"},
+		wantScopes: []string{"profile"},
+		wantAsk:    true,
+	}, {
+		name:       "profile alone unattended keeps the flag default",
+		scopes:     []string{"profile"},
+		canBackup:  []string{"profile", "secrets"},
+		unattended: true,
+		wantScopes: []string{"profile"},
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			selected := map[string]bool{}
+			for _, s := range c.scopes {
+				selected[s] = true
+			}
+			canBackup := map[string]bool{}
+			for _, s := range c.canBackup {
+				canBackup[s] = true
+			}
+
+			got := planAgeIdentity(c.scopes, selected, canBackup, c.includeSecrets, c.unattended)
+
+			if strings.Join(got.Scopes, ",") != strings.Join(c.wantScopes, ",") {
+				t.Errorf("Scopes = %v, want %v", got.Scopes, c.wantScopes)
+			}
+			if got.IncludeSecrets != c.wantInclude {
+				t.Errorf("IncludeSecrets = %v, want %v", got.IncludeSecrets, c.wantInclude)
+			}
+			if got.AddedProfile != c.wantAdded {
+				t.Errorf("AddedProfile = %v, want %v", got.AddedProfile, c.wantAdded)
+			}
+			if got.ForcedAgeKeys != c.wantForced {
+				t.Errorf("ForcedAgeKeys = %v, want %v", got.ForcedAgeKeys, c.wantForced)
+			}
+			if got.Orphaned != c.wantOrphaned {
+				t.Errorf("Orphaned = %v, want %v", got.Orphaned, c.wantOrphaned)
+			}
+			if got.AskAgeKeys != c.wantAsk {
+				t.Errorf("AskAgeKeys = %v, want %v", got.AskAgeKeys, c.wantAsk)
+			}
+			// The step gating reads `selected`, not Scopes — a profile
+			// pulled in for its age keys must show up there too.
+			if got.AddedProfile && !selected["profile"] {
+				t.Error("AddedProfile set but selected[profile] is false")
+			}
+		})
+	}
+}
