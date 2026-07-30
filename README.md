@@ -14,10 +14,20 @@ A single Go binary. macOS + Linux + GPU servers. Modular, profile-based, AI-read
 
 ```bash
 brew tap entelecheia/tap
+brew trust entelecheia/tap
 brew install dotfiles
 ```
 
 Provides the `dot` binary and the `dotfiles` back-compat symlink.
+
+`brew trust` is what lets Homebrew load a formula from a non-official tap. On
+Homebrew 6 with `HOMEBREW_REQUIRE_TAP_TRUST` set, tapping alone is not enough;
+the install stops with `Refusing to load formula entelecheia/tap/dotfiles from
+untrusted tap`. It is a no-op on older Homebrew and safe to run twice.
+
+Taps that `dot apply` adds for you (`staixbwlb/cask`, `manaflow-ai/cmux`,
+`stablyai/orca`) are trusted automatically as part of the run, so this is only
+needed for the bootstrap tap that installs `dot` itself.
 
 ### Install via curl (fallback)
 

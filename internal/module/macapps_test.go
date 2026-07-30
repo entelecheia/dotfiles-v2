@@ -1,9 +1,12 @@
 package module
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 func TestMacAppsResolveCasks_AppendsExtrasToDefaults(t *testing.T) {
@@ -96,4 +99,34 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestMacAppsRequiredTaps_IndependentOfInstalledState pins the tap-trust fix:
+// trust must cover every tap a cask declares, not only the taps that are
+// missing. An already-tapped repo can still be untrusted, and Homebrew then
+// refuses to load the cask, which aborts the whole apply.
+func TestMacAppsRequiredTaps_IndependentOfInstalledState(t *testing.T) {
+	m := &MacAppsModule{}
+	runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rc := &RunContext{Runner: runner, Brew: exec.NewBrew(runner)}
+
+	got := m.requiredTaps(rc, []string{"cmux", "orca", "maru-workspace", "raycast"})
+
+	for _, want := range []string{"manaflow-ai/cmux", "stablyai/orca", "staixbwlb/cask"} {
+		if !contains(got, want) {
+			t.Errorf("requiredTaps = %v, missing %q", got, want)
+		}
+	}
+	// raycast declares no tap; nothing extra should be trusted on its behalf.
+	if len(got) != 3 {
+		t.Errorf("requiredTaps = %v, want exactly the 3 declared taps", got)
+	}
+}
+
+// A nil Brew means there is nothing to trust against, not a panic.
+func TestMacAppsRequiredTaps_NilBrew(t *testing.T) {
+	m := &MacAppsModule{}
+	if got := m.requiredTaps(&RunContext{}, []string{"cmux"}); got != nil {
+		t.Errorf("requiredTaps with nil Brew = %v, want nil", got)
+	}
 }

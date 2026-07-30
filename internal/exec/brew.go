@@ -100,6 +100,36 @@ func (b *Brew) Tap(ctx context.Context, taps []string) error {
 	return nil
 }
 
+// TrustTaps marks non-official taps as trusted so Homebrew will load their
+// formulae and casks.
+//
+// Homebrew 6 gates loading anything from a non-official tap behind
+// `brew trust` (HOMEBREW_REQUIRE_TAP_TRUST). Without it the install fails with
+// "Refusing to load <cask> from untrusted tap <tap>", which aborts the whole
+// apply on a fresh machine. A tap the active config asks for is a tap the user
+// asked for, so trust it here instead of making them run `brew trust` by hand
+// for each one.
+//
+// Callers pass every tap their targets need, not just the ones just added:
+// a tap that is already present but untrusted hits the same refusal, and that
+// is the normal state on a machine where the tap arrived some other way.
+//
+// Best-effort by design. `brew trust` does not exist on older Homebrew, where
+// there is no trust gate to satisfy, so a failure is logged and never fatal —
+// if trust really was required, the install that follows reports it.
+func (b *Brew) TrustTaps(ctx context.Context, taps []string) {
+	for _, tap := range dedupeOrdered(taps) {
+		if _, err := b.Runner.Run(ctx, "brew", "trust", "--tap", tap); err != nil {
+			b.Runner.Logger.Warn("brew trust failed; installs from this tap may be refused", "tap", tap, "err", err)
+		}
+	}
+}
+
+// TrustFormulaTaps trusts the taps required by the given formulas.
+func (b *Brew) TrustFormulaTaps(ctx context.Context, formulas []string) {
+	b.TrustTaps(ctx, TapsForFormulas(formulas))
+}
+
 // InstalledTaps returns the set of configured Homebrew taps. The bool is false
 // when the brew query failed, so callers can distinguish "missing" from
 // "unknown".

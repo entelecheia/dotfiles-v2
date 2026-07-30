@@ -115,6 +115,10 @@ func (m *MacAppsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult
 		}
 		msgs = append(msgs, fmt.Sprintf("tapped %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", ")))
 	}
+	// Every tap these casks need, not just the ones tapped above: an
+	// already-present tap can still be untrusted, which fails the install.
+	rc.Brew.TrustTaps(ctx, m.requiredTaps(rc, missing))
+
 	if err := rc.Brew.InstallCask(ctx, missing, false); err != nil {
 		return nil, fmt.Errorf("install casks: %w", err)
 	}
@@ -152,7 +156,9 @@ func (m *MacAppsModule) splitExistingCaskTargets(rc *RunContext, casks []string)
 	return toInstall, skipped
 }
 
-func (m *MacAppsModule) missingTaps(rc *RunContext, casks []string) []string {
+// requiredTaps returns every tap the given cask tokens declare in the catalog,
+// whether or not it is already configured.
+func (m *MacAppsModule) requiredTaps(rc *RunContext, casks []string) []string {
 	if len(casks) == 0 || rc.Brew == nil {
 		return nil
 	}
@@ -161,7 +167,11 @@ func (m *MacAppsModule) missingTaps(rc *RunContext, casks []string) []string {
 		rc.Runner.Logger.Warn("macapps catalog load", "err", err)
 		return nil
 	}
-	taps := cat.TapsForTokens(casks)
+	return cat.TapsForTokens(casks)
+}
+
+func (m *MacAppsModule) missingTaps(rc *RunContext, casks []string) []string {
+	taps := m.requiredTaps(rc, casks)
 	if len(taps) == 0 {
 		return nil
 	}

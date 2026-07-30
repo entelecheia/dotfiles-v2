@@ -89,6 +89,9 @@ func (m *PackagesModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResul
 		}
 		messages = append(messages, fmt.Sprintf("tapped %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", ")))
 	}
+	// Every tap these formulas need, not just the ones tapped above: an
+	// already-present tap can still be untrusted, which fails the install.
+	rc.Brew.TrustFormulaTaps(ctx, missing)
 
 	if err := rc.Brew.Install(ctx, missing); err != nil {
 		// brew install can exit non-zero for non-fatal issues (e.g. post-install
