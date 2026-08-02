@@ -1,8 +1,10 @@
-# Default include rules for `dot gsync` include mode.
+# Default include rules for `dot sync` include mode (the union filter's
+# untracked-binary half).
 #
-# Include mode is the default gsync strategy. It mirrors binary/artifact
-# payloads only; source/text files stay with Git. Matching is case-insensitive
-# in both Go-side planning and generated rsync rules.
+# Include mode is the default strategy: git-tracked files always sync (via
+# tracked-includes.dyn.conf), and untracked files sync only when they match
+# these binary/artifact patterns. Matching is case-insensitive in both
+# Go-side planning and generated rsync rules.
 
 # archives
 *.tgz
@@ -44,3 +46,10 @@
 *.xls*
 *.xlsx
 *.xlsm
+
+# data / ML artifacts (absorbed from the retired binary-extensions.conf)
+*.parquet
+*.pkl
+*.pt
+*.pth
+*.tsv

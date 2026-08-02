@@ -155,6 +155,10 @@ func alwaysExcludeArgs() []string {
 	return []string{
 		"--exclude=/.dotfiles/",
 		"--exclude=/inbox/gdrive/",
+		// .git (dir or gitlink file, any depth) is enforced in code, not just
+		// the editable exclude.txt — an operator edit must never leak VCS
+		// internals to the target.
+		"--exclude=.git",
 	}
 }
 

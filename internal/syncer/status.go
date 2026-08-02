@@ -13,7 +13,8 @@ import (
 type Status struct {
 	LocalPath            string
 	MirrorPath           string
-	StoreDir             string // <local>/.dotfiles/gdrive-sync/ — empty if unresolved
+	Target               Target // parsed destination (local dir or ssh remote)
+	StoreDir             string // <local>/.dotfiles/sync/ — empty if unresolved
 	LocalExists          bool
 	MirrorExists         bool
 	Paused               bool
@@ -21,6 +22,8 @@ type Status struct {
 	IncludeFile          string
 	ExcludeFile          string
 	IgnoreFile           string
+	AllowCount           int // active allow.txt patterns (secrets opt-in) — warn when > 0
+	SubmoduleCount       int // submodules excluded from sync (they sync via Git)
 	Propagation          PropagationPolicy
 	LastPull             time.Time
 	LastPush             time.Time
@@ -54,17 +57,27 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 			localState = *st
 		}
 	}
+	allowCount := 0
+	for _, p := range cfg.AllowPatterns {
+		p = strings.TrimSpace(p)
+		if p != "" && !strings.HasPrefix(p, "#") {
+			allowCount++
+		}
+	}
 	s := &Status{
 		LocalPath:       strings.TrimRight(cfg.LocalPath, "/"),
 		MirrorPath:      strings.TrimRight(cfg.MirrorPath, "/"),
+		Target:          cfg.Target,
 		StoreDir:        storeDir,
 		LocalExists:     runner.IsDir(cfg.LocalPath),
-		MirrorExists:    runner.IsDir(cfg.MirrorPath),
+		MirrorExists:    cfg.Target.IsSSH() || runner.IsDir(cfg.MirrorPath),
 		Paused:          cfg.Paused,
 		FilterMode:      cfg.FilterMode,
 		IncludeFile:     cfg.IncludeFile,
 		ExcludeFile:     cfg.ExcludesFile,
 		IgnoreFile:      cfg.IgnoreFile,
+		AllowCount:      allowCount,
+		SubmoduleCount:  len(gitSubmodulePaths(strings.TrimRight(cfg.LocalPath, "/"))),
 		Propagation:     cfg.Propagation,
 		LastPull:        localState.LastPull,
 		LastPush:        localState.LastPush,

@@ -233,6 +233,12 @@ func isAlwaysExcluded(rel string) bool {
 	if rel == "inbox/gdrive" || strings.HasPrefix(rel, "inbox/gdrive/") {
 		return true
 	}
+	// .git at any depth — dir or gitlink file. Mirrors the hardcoded rsync
+	// exclude so VCS internals can never reach the target.
+	if rel == ".git" || strings.HasSuffix(rel, "/.git") ||
+		strings.HasPrefix(rel, ".git/") || strings.Contains(rel, "/.git/") {
+		return true
+	}
 	return false
 }
 

@@ -84,6 +84,7 @@ Deprecated aliases: 'dot gsync', 'dot gdrive-sync'.`,
 		newSyncInitCmd(),
 		newSyncTargetCmd(),
 		newSyncMirrorCmd(),
+		newSyncFiltersCmd(),
 	)
 	return cmd
 }
@@ -99,6 +100,94 @@ func warnDeprecatedSyncAlias() {
 	case "gsync", "gdrive-sync":
 		fmt.Fprintf(os.Stderr, "note: 'dot %s' is deprecated; use 'dot sync'\n", os.Args[1])
 	}
+}
+
+// ── filters ──────────────────────────────────────────────────────────────
+
+func newSyncFiltersCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "filters",
+		Short: "Show the effective filter layers or reset them from templates",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Help()
+		},
+		SilenceUsage: true,
+	}
+	cmd.AddCommand(
+		&cobra.Command{
+			Use:          "show",
+			Short:        "Print the effective ordered filter rule chain",
+			Args:         cobra.NoArgs,
+			RunE:         runSyncFiltersShow,
+			SilenceUsage: true,
+		},
+		&cobra.Command{
+			Use:   "reset",
+			Short: "Regenerate exclude.txt/include.txt from embedded templates (with backups)",
+			Long: `Backs up the current exclude.txt and include.txt to *.bak-<timestamp>
+and rewrites them from the embedded templates. Use after upgrading dot to
+pick up refreshed junk rules.
+
+ignore.txt and allow.txt are operator-owned and are never touched. Re-add
+any workspace-specific patterns from the backups to ignore.txt afterwards.`,
+			Args:         cobra.NoArgs,
+			RunE:         runSyncFiltersReset,
+			SilenceUsage: true,
+		},
+	)
+	return cmd
+}
+
+func runSyncFiltersShow(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	if err != nil {
+		return err
+	}
+	layers, err := syncer.FilterReport(cfg)
+	if err != nil {
+		return err
+	}
+	p := printerFrom(cmd)
+	p.Header("Sync Filter Chain (first match wins)")
+	for _, layer := range layers {
+		p.Section(layer.Name)
+		for _, d := range layer.Detail {
+			if strings.HasPrefix(d, "WARNING") {
+				p.Line("  %s", ui.StyleWarning.Render(d))
+				continue
+			}
+			p.Line("  %s", d)
+		}
+	}
+	p.Blank()
+	return nil
+}
+
+func runSyncFiltersReset(cmd *cobra.Command, _ []string) error {
+	_, cfg, _, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved — bug in ResolveConfig")
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	p := printerFrom(cmd)
+	if dryRun {
+		p.Line("[dry-run] would reset %s and %s from embedded templates (backups kept)", cfg.ExcludesFile, cfg.IncludeFile)
+		return nil
+	}
+	backups, err := syncer.ResetFilterFiles(cfg.LocalPaths)
+	if err != nil {
+		return err
+	}
+	p.Line("%s", ui.StyleSuccess.Render("✓ filter files reset from templates"))
+	for _, b := range backups {
+		p.KV("Backup", b)
+	}
+	p.Line("Re-add workspace-specific patterns to %s if the backups carried any.", cfg.IgnoreFile)
+	return nil
 }
 
 // ── target ───────────────────────────────────────────────────────────────
@@ -1060,12 +1149,14 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("rsync", "not installed")
 	}
 	p.KV("Local", st.LocalPath)
-	p.KV("Mirror", st.MirrorPath)
+	p.KV("Target", st.Target.String())
 	if st.StoreDir != "" {
 		p.KV("Config", st.StoreDir)
 	}
 	p.KV("Local exists", boolStr(st.LocalExists))
-	p.KV("Mirror exists", boolStr(st.MirrorExists))
+	if !st.Target.IsSSH() {
+		p.KV("Mirror exists", boolStr(st.MirrorExists))
+	}
 	if st.Paused {
 		p.KV("Paused", "yes — run `dot sync resume` to activate")
 	} else {
@@ -1073,6 +1164,14 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	}
 	p.KV("Propagation", st.Propagation.String())
 	p.KV("Filter mode", st.FilterMode.String())
+	if st.SubmoduleCount > 0 {
+		p.KV("Submodules", fmt.Sprintf("%d excluded — they sync via Git, not `dot sync`", st.SubmoduleCount))
+	}
+	if st.AllowCount > 0 {
+		p.KV("Secrets", ui.StyleWarning.Render(fmt.Sprintf("allowed: %d pattern(s) in allow.txt — these sync to the target", st.AllowCount)))
+	} else {
+		p.KV("Secrets", "deny-by-default (allow.txt empty)")
+	}
 	if st.IncludeFile != "" {
 		p.KV("Include file", st.IncludeFile)
 	}
