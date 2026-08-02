@@ -394,7 +394,12 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 		return err
 	}
 	if !dryRun && cfg.LocalPaths != nil {
-		if err := RefreshBaseline(cfg, FingerprintStrict); err != nil {
+		// Fast (stat-only) fingerprints: a strict pass would read every
+		// payload file on the mirror, which forces cloud-placeholder
+		// filesystems (Dropbox online-only files) to download the entire
+		// tree. FingerprintsCompatible falls back to size+mtime when a
+		// manifest entry carries no sha, so fast entries stay comparable.
+		if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
 			return fmt.Errorf("baseline refresh: %w", err)
 		}
 		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {

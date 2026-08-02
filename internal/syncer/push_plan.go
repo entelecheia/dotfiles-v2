@@ -188,7 +188,18 @@ func collectPlanInventory(root string, filter *syncFilter, mode FingerprintMode)
 	}
 	err := filepath.WalkDir(root, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// Unreadable root: abort (an empty inventory would misplan the
+			// whole tree). Deeper failures — cloud-placeholder dirs timing
+			// out under load — skip the subtree; affected files replan as
+			// creates/updates on a later cycle.
+			if absPath == root {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "warning: plan walk skipping %s: %v\n", absPath, err)
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if absPath == root {
 			return nil
