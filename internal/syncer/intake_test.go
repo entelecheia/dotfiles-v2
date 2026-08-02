@@ -825,3 +825,33 @@ func TestIntake_ExcludesGitTrackedFiles(t *testing.T) {
 		t.Fatalf("Intaked = %v, want only asset.bin", res.Intaked)
 	}
 }
+
+func TestRefreshBaseline_SkipsUnreadableSubdirs(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission bits do not block root")
+	}
+	f := newIntakeFixture(t)
+	f.writeMirror("ok/file.bin", "payload")
+	f.writeLocal("ok/file.bin", "payload")
+	f.writeMirror("locked/file.bin", "payload")
+	f.writeLocal("locked/file.bin", "payload")
+	locked := filepath.Join(f.mirror, "locked")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
+		t.Fatalf("RefreshBaseline should tolerate unreadable subdirs: %v", err)
+	}
+	base, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := base["ok/file.bin"]; !ok {
+		t.Fatalf("readable file missing from baseline: %v", base)
+	}
+	if _, ok := base["locked/file.bin"]; ok {
+		t.Fatalf("unreadable subtree should be skipped, not indexed: %v", base)
+	}
+}

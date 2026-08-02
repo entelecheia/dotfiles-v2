@@ -361,10 +361,18 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	entries := map[string]Fingerprint{}
 	err = filepath.WalkDir(walkRoot, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
-			if d != nil && !d.IsDir() {
-				return nil
+			// An unreadable walk root would produce an empty baseline and
+			// wreck delete propagation — abort. Deeper errors (cloud
+			// placeholder dirs timing out under load) skip the subtree so
+			// one slow directory doesn't fail the whole push.
+			if absPath == walkRoot {
+				return err
 			}
-			return err
+			fmt.Fprintf(os.Stderr, "warning: baseline walk skipping %s: %v\n", absPath, err)
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if absPath == walkRoot {
 			return nil
