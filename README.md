@@ -444,7 +444,7 @@ dot sync init                # one-time: create <workspace>/.dotfiles/sync/ (mig
 dot sync target local:~/Dropbox/work      # local cloud folder target
 dot sync target ssh:user@host:~/work      # SSH remote target
 dot sync setup               # rsync check + disable managed schedulers by default
-dot sync setup --push-interval=5m --push-mode=clean
+dot sync setup --push-interval=10m --push-mode=clean
 dot sync setup --pull-interval=15m --pull-mode=force
 
 dot sync push                             # preview workspace → target, then confirm
@@ -454,6 +454,10 @@ dot sync push --propagate=create,update,delete  # include deletes
 dot sync pull                             # baseline-tracked payload restore (local targets)
 dot sync pull --strict                    # hash every baseline entry
 dot sync intake                           # stage new mirror-origin files (local targets)
+dot sync fetch <path>...                  # on-demand restore of specific files/folders
+                                          # (programmatic entry point for tools that need
+                                          #  the binaries behind a path; --update + backups,
+                                          #  exclude layers still apply)
 
 dot sync filters show                     # print the ordered filter layer chain
 dot sync filters reset                    # regenerate exclude/include from templates (backups kept)

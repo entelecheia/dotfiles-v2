@@ -419,6 +419,93 @@ func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	return Push(ctx, runner, cfg, dryRun)
 }
 
+// FetchResult reports what Fetch did per requested path.
+type FetchResult struct {
+	Fetched []string // relpaths handed to rsync
+	Missing []string // relpaths absent on the target (local targets only)
+}
+
+// Fetch restores specific files or directories from the target into the
+// workspace — the on-demand entry point for a program, hook, or another
+// machine that needs the binaries backing a particular path without running
+// a full pull.
+//
+// Semantics per path: `--relative --update --backup` — existing newer local
+// files are never overwritten, overwrites are backed up under
+// .sync-conflicts/<ts>/from-workspace/, nothing is ever deleted. The exclude
+// layers (submodules, secrets unless allowed, junk, shared) still apply, so
+// a fetch can never import .git or non-allowed secrets. The include layers
+// are deliberately skipped: an explicitly requested path comes back whole.
+//
+// Paths missing on a local target are reported in Missing and skipped
+// rather than failing the run. SSH targets cannot be pre-checked; rsync
+// reports missing sources itself (non-fatal to other paths).
+func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string, dryRun bool) (*FetchResult, error) {
+	if err := ensureLogDir(cfg.LogFile); err != nil {
+		return nil, err
+	}
+	rf, err := prepareRuntimeFilters(cfg)
+	if err != nil {
+		return nil, err
+	}
+	res := &FetchResult{}
+	src := strings.TrimRight(cfg.Target.RsyncDest(), "/")
+	mirrorRoot := strings.TrimRight(cfg.MirrorPath, "/")
+	for _, rel := range rels {
+		norm := normalizeRel(rel)
+		if norm == "" {
+			continue
+		}
+		if !cfg.Target.IsSSH() {
+			if _, err := os.Lstat(filepath.Join(mirrorRoot, norm)); err != nil {
+				res.Missing = append(res.Missing, norm)
+				continue
+			}
+		}
+		res.Fetched = append(res.Fetched, norm)
+	}
+	if len(res.Fetched) == 0 {
+		return res, nil
+	}
+
+	conflict := NewConflictDir()
+	args := []string{
+		"-a",
+		"--human-readable",
+		"--stats",
+		"--no-links",
+		"--relative",
+		"--update",
+		"--backup",
+		"--backup-dir=" + conflict.PullBackupRel(),
+	}
+	args = append(args, alwaysExcludeArgs()...)
+	if rf.SubmodulesDyn != "" {
+		args = append(args, "--exclude-from="+rf.SubmodulesDyn)
+	}
+	args = append(args, secretsFilterArgs(cfg.AllowPatterns)...)
+	for _, f := range []string{cfg.ExcludesFile, cfg.IgnoreFile, rf.SharedDyn} {
+		if f != "" {
+			args = append(args, "--exclude-from="+f)
+		}
+	}
+	if dryRun {
+		args = append(args, "--dry-run")
+	}
+	args = append(args, rsyncTransportArgs(cfg)...)
+	for _, rel := range res.Fetched {
+		// `<target>/./<rel>` + --relative rebuilds the subtree under the
+		// workspace root.
+		args = append(args, src+"/./"+rel)
+	}
+	args = append(args, cfg.LocalPath)
+	fmt.Printf("  Fetch: %d path(s) %s → %s\n", len(res.Fetched), cfg.Target.RsyncDest(), cfg.LocalPath)
+	if err := runRsync(ctx, runner, cfg, args); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
 // PullDirect runs a plain rsync pull (target → workspace, --update, with
 // conflict backups). This is the pull path for SSH targets, where the
 // baseline-driven PullTracked cannot walk the remote tree. Workspace-only

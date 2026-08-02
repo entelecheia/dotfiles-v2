@@ -86,6 +86,7 @@ Deprecated aliases: 'dot gsync', 'dot gdrive-sync'.`,
 		newSyncTargetCmd(),
 		newSyncMirrorCmd(),
 		newSyncFiltersCmd(),
+		newSyncFetchCmd(),
 	)
 	return cmd
 }
@@ -101,6 +102,69 @@ func warnDeprecatedSyncAlias() {
 	case "gsync", "gdrive-sync":
 		fmt.Fprintf(os.Stderr, "note: 'dot %s' is deprecated; use 'dot sync'\n", os.Args[1])
 	}
+}
+
+// ── fetch ────────────────────────────────────────────────────────────────
+
+func newSyncFetchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "fetch <path>...",
+		Short: "Restore specific files or folders from the target on demand",
+		Long: `Fetch pulls the named files or directories (workspace-relative paths)
+from the sync target into the workspace — the on-demand entry point when a
+specific file, folder, program, or event needs the binaries backing a path
+without running a full pull. Other tools can shell out to it:
+
+  dot sync fetch projects/oda/koica-tiu/06-proposal
+  dot sync fetch admin/scan.pdf research/data --dry-run
+
+Safety: newer local files are never overwritten (--update), overwrites are
+backed up under .sync-conflicts/, nothing is deleted, and the exclude layers
+still apply — .git and non-allowed secrets can never be imported. Paths
+missing on the target are reported and skipped.`,
+		Args:         cobra.MinimumNArgs(1),
+		RunE:         runSyncFetch,
+		SilenceUsage: true,
+	}
+}
+
+func runSyncFetch(cmd *cobra.Command, args []string) error {
+	state, cfg, runner, err := syncBootstrap(cmd)
+	if err != nil {
+		return err
+	}
+	p := printerFrom(cmd)
+	if !syncPreflight(p, cfg, runner) {
+		return nil
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	release, lockErr := syncer.AcquireLock(cfg.LockDir)
+	if lockErr != nil {
+		p.Line("  %s", lockErr)
+		return nil
+	}
+	defer release()
+
+	if dryRun {
+		p.Line("  (dry-run — no changes)")
+	}
+	res, fetchErr := syncer.Fetch(cmd.Context(), runner, cfg, args, dryRun)
+	recordSyncResult(state, cfg, "fetch", fetchErr, dryRun)
+	if res != nil {
+		for _, rel := range res.Missing {
+			p.Warn("not on target, skipped: %s", rel)
+		}
+	}
+	if fetchErr != nil {
+		return fmt.Errorf("fetch failed: %w", fetchErr)
+	}
+	if res == nil || len(res.Fetched) == 0 {
+		p.Line("Nothing to fetch.")
+		return nil
+	}
+	p.Line("%s", ui.StyleSuccess.Render(fmt.Sprintf("✓ fetched %d path(s)", len(res.Fetched))))
+	return nil
 }
 
 // ── filters ──────────────────────────────────────────────────────────────

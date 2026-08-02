@@ -108,6 +108,12 @@ git rm -qf notes.md
 FILTERS_OUT=$("$BIN" sync filters show 2>/dev/null || true)
 echo "$FILTERS_OUT" | grep -qi "submodule" && pass "filters show lists submodule layer" || fail "filters show lists submodule layer"
 
+# ── fetch (on-demand restore) ────────────────────────────────────────────────
+echo "--- fetch ---"
+rm -f "$WS/report.pdf"
+"$BIN" sync fetch report.pdf --yes >/dev/null 2>&1 || fail "fetch exited non-zero"
+[ -f "$WS/report.pdf" ] && pass "fetch restored deleted binary" || fail "fetch restored deleted binary"
+
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
