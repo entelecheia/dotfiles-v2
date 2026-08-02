@@ -18,7 +18,7 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 		return fmt.Errorf("cannot find dot binary in PATH; run `make install` first")
 	}
 
-	content, err := s.Engine.Render("gsync/com.dotfiles.gdrive-sync.plist.tmpl", data)
+	content, err := s.Engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		return fmt.Errorf("rendering plist: %w", err)
 	}
@@ -83,6 +83,20 @@ func (s *Scheduler) StateKind(ctx context.Context, kind SchedulerKind) Scheduler
 	target := launchdPrintTarget(os.Getuid(), kind.LaunchdLabel())
 	result, err := s.Runner.RunQuery(ctx, "launchctl", "print", target)
 	return launchdStateFromPrintStatus(true, err == nil && result != nil && result.ExitCode == 0)
+}
+
+// CleanupLegacyUnits unloads and removes launchd plists left behind by the
+// pre-rename schedulers (gdrive-sync push/intake, SSH-only workspace-sync).
+// Best-effort: missing files and unload failures are ignored.
+func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) {
+	dir := filepath.Dir(s.Paths.LaunchdPlist)
+	for _, label := range legacyLaunchdLabels {
+		plist := filepath.Join(dir, label+".plist")
+		_, _ = s.Runner.Run(ctx, "launchctl", "unload", plist)
+		if s.Runner.FileExists(plist) {
+			_ = s.Runner.Remove(plist)
+		}
+	}
 }
 
 func launchdPrintTarget(uid int, label string) string {

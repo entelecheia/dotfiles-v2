@@ -18,11 +18,11 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 		return fmt.Errorf("cannot find dot binary in PATH; run `make install` first")
 	}
 
-	svcContent, err := s.Engine.Render("gsync/dotfiles-gdrive-sync.service.tmpl", data)
+	svcContent, err := s.Engine.Render("sync/dotfiles-sync.service.tmpl", data)
 	if err != nil {
 		return fmt.Errorf("rendering service: %w", err)
 	}
-	timerContent, err := s.Engine.Render("gsync/dotfiles-gdrive-sync.timer.tmpl", data)
+	timerContent, err := s.Engine.Render("sync/dotfiles-sync.timer.tmpl", data)
 	if err != nil {
 		return fmt.Errorf("rendering timer: %w", err)
 	}
@@ -78,6 +78,26 @@ func (s *Scheduler) ResumeKind(ctx context.Context, kind SchedulerKind) error {
 	}
 	_, err := s.Runner.Run(ctx, "systemctl", "--user", "start", kind.SystemdTimerName())
 	return err
+}
+
+// CleanupLegacyUnits disables and removes systemd units left behind by the
+// pre-rename gdrive-sync schedulers. Best-effort.
+func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) {
+	dir := filepath.Dir(s.Paths.SystemdService)
+	removed := false
+	for _, unit := range legacySystemdUnits {
+		if strings.HasSuffix(unit, ".timer") {
+			_, _ = s.Runner.Run(ctx, "systemctl", "--user", "disable", "--now", unit)
+		}
+		path := filepath.Join(dir, unit)
+		if s.Runner.FileExists(path) {
+			_ = s.Runner.Remove(path)
+			removed = true
+		}
+	}
+	if removed {
+		_, _ = s.Runner.Run(ctx, "systemctl", "--user", "daemon-reload")
+	}
 }
 
 // StateKind asks systemctl for the timer's runtime status for the kind.

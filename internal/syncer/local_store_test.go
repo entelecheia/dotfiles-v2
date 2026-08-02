@@ -53,7 +53,7 @@ func TestResolveLocalPaths_LayoutShape(t *testing.T) {
 	root := "/tmp/wk"
 	paths := ResolveLocalPaths(root + "/")
 
-	wantStore := filepath.Join(root, ".dotfiles", "gdrive-sync")
+	wantStore := filepath.Join(root, ".dotfiles", "sync")
 	if paths.StoreDir != wantStore {
 		t.Errorf("StoreDir = %q, want %q", paths.StoreDir, wantStore)
 	}
@@ -69,7 +69,7 @@ func TestResolveLocalPaths_LayoutShape(t *testing.T) {
 		filepath.Join(wantStore, "baseline.manifest"),
 		filepath.Join(wantStore, "imports.manifest"),
 		filepath.Join(wantStore, "tombstones.log"),
-		filepath.Join(wantStore, "log", "gdrive-sync.log"),
+		filepath.Join(wantStore, "log", "sync.log"),
 	} {
 		seen := false
 		for _, got := range []string{

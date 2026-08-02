@@ -11,15 +11,15 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
-// Paths holds well-known file locations for gsync artifacts.
+// Paths holds well-known file locations for sync artifacts.
 type Paths struct {
 	ConfigDir      string // ~/.config/dotfiles (or $XDG_CONFIG_HOME/dotfiles)
-	ExcludesFile   string // <ConfigDir>/gsync-excludes.conf (materialized from embed)
-	LogFile        string // ~/.local/log/dotfiles-gdrive-sync.log
-	LockDir        string // ~/Library/Caches/dotfiles/gsync.lock (macOS) or equivalent
-	LaunchdPlist   string // ~/Library/LaunchAgents/com.dotfiles.gdrive-sync.plist (macOS, push)
-	SystemdService string // ~/.config/systemd/user/dotfiles-gdrive-sync.service (Linux, push)
-	SystemdTimer   string // ~/.config/systemd/user/dotfiles-gdrive-sync.timer (Linux, push)
+	ExcludesFile   string // <ConfigDir> legacy global excludes (superseded by the workspace store)
+	LogFile        string // ~/.local/log/dotfiles-sync.log
+	LockDir        string // ~/Library/Caches/dotfiles/sync.lock (macOS) or equivalent
+	LaunchdPlist   string // ~/Library/LaunchAgents/com.dotfiles.sync.plist (macOS, push)
+	SystemdService string // ~/.config/systemd/user/dotfiles-sync.service (Linux, push)
+	SystemdTimer   string // ~/.config/systemd/user/dotfiles-sync.timer (Linux, push)
 }
 
 // PlistFor returns the launchd plist path for the given kind. The push
@@ -87,11 +87,11 @@ func pathsFor(home, cacheDir string) *Paths {
 	return &Paths{
 		ConfigDir:      configDir,
 		ExcludesFile:   filepath.Join(configDir, excludesDiskName),
-		LogFile:        filepath.Join(home, ".local", "log", "dotfiles-gdrive-sync.log"),
-		LockDir:        filepath.Join(cacheDir, "dotfiles", "gdrive-sync.lock"),
-		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.gdrive-sync.plist"),
-		SystemdService: filepath.Join(home, ".config", "systemd", "user", "dotfiles-gdrive-sync.service"),
-		SystemdTimer:   filepath.Join(home, ".config", "systemd", "user", "dotfiles-gdrive-sync.timer"),
+		LogFile:        filepath.Join(home, ".local", "log", "dotfiles-sync.log"),
+		LockDir:        filepath.Join(cacheDir, "dotfiles", "sync.lock"),
+		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", launchdLabel+".plist"),
+		SystemdService: filepath.Join(home, ".config", "systemd", "user", systemdServiceName),
+		SystemdTimer:   filepath.Join(home, ".config", "systemd", "user", systemdTimerName),
 	}
 }
 

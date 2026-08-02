@@ -13,36 +13,63 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
 
-// localStoreDir is the per-workspace root for gsync runtime state
+// localStoreDir is the per-workspace root for sync runtime state
 // and config. Lives directly under the local sync tree (e.g.
-// ~/workspace/work/.dotfiles/gdrive-sync/) so settings travel with the
+// ~/workspace/work/.dotfiles/sync/) so settings travel with the
 // workspace instead of in the user's home config dir.
 const (
-	localStoreDirRel = ".dotfiles/gdrive-sync"
+	localStoreDirRel = ".dotfiles/sync"
 
-	localConfigName     = "config.yaml"
-	localStateName      = "state.yaml"
-	localIncludeName    = "include.txt"
-	localExcludeName    = "exclude.txt"
-	localIgnoreName     = "ignore.txt"
-	localSharedDynName  = "shared-excludes.dyn.conf"
-	localBaselineName   = "baseline.manifest"
-	localImportsName    = "imports.manifest"
-	localTombstonesName = "tombstones.log"
-	localLogDirRel      = "log"
-	localLogFileName    = "gdrive-sync.log"
+	// legacyStoreDirRel is the pre-rename store location. Read-only
+	// resolution falls back to it, and MigrateLegacyStore renames it.
+	legacyStoreDirRel = ".dotfiles/gdrive-sync"
 
-	gitignoreBlockHeader = "# dot sync: track shared baseline, ignore machine-local state"
+	localConfigName        = "config.yaml"
+	localStateName         = "state.yaml"
+	localIncludeName       = "include.txt"
+	localExcludeName       = "exclude.txt"
+	localIgnoreName        = "ignore.txt"
+	localAllowName         = "allow.txt"
+	localSharedDynName     = "shared-excludes.dyn.conf"
+	localSubmodulesDynName = "submodules.dyn.conf"
+	localTrackedDynName    = "tracked-includes.dyn.conf"
+	localBaselineName      = "baseline.manifest"
+	localImportsName       = "imports.manifest"
+	localTombstonesName    = "tombstones.log"
+	localLogDirRel         = "log"
+	localLogFileName       = "sync.log"
+	legacyLogFileName      = "gdrive-sync.log"
+
+	gitignoreBlockHeader = "# dot sync: track shared baseline + filter policy, ignore machine-local state"
 )
 
 var gitignoreEntries = []string{
 	gitignoreBlockHeader,
 	"!/.dotfiles/",
 	"/.dotfiles/*",
-	"!/.dotfiles/gdrive-sync/",
-	"/.dotfiles/gdrive-sync/*",
-	"!/.dotfiles/gdrive-sync/baseline.manifest",
+	"!/.dotfiles/sync/",
+	"/.dotfiles/sync/*",
+	"!/.dotfiles/sync/baseline.manifest",
+	"!/.dotfiles/sync/exclude.txt",
+	"!/.dotfiles/sync/ignore.txt",
+	"!/.dotfiles/sync/allow.txt",
 }
+
+// allowFileHeader documents the secrets opt-in contract at the top of a
+// freshly created allow.txt. The operator's env files and tokens may already
+// live in the cloud mirror and the private Git remote — allowing them here is
+// an explicit, recorded decision, never a default.
+const allowFileHeader = `# dot sync allow.txt — explicit secrets opt-in.
+#
+# Patterns listed here re-include paths that the built-in secrets layer
+# excludes by default (/.secrets/**, /.maru/secrets/**, _sys/mcp.local.json,
+# **/.env, **/.env.*). One rsync pattern per line; comments start with '#'.
+#
+# WARNING: every pattern below ships the matching secrets to the sync
+# target (cloud mirror or SSH remote). Only add a pattern when you have
+# consciously accepted that exposure. 'dot sync status' reports how many
+# allow patterns are active.
+`
 
 // PropagationPolicy controls which kinds of workspace changes Push
 // propagates to the mirror. Default is `{true, true, false}` so the
@@ -105,6 +132,9 @@ func (p PropagationPolicy) String() string {
 // LocalConfig is the workspace-local source of truth for gsync
 // settings. Persists to <localStoreDir>/config.yaml.
 type LocalConfig struct {
+	// Target is the canonical destination spec ("local:~/Dropbox/work" or
+	// "ssh:user@host:path"). When empty, MirrorPath (legacy) applies.
+	Target         string            `yaml:"target,omitempty"`
 	MirrorPath     string            `yaml:"mirror_path,omitempty"`
 	FilterMode     FilterMode        `yaml:"filter_mode,omitempty"`
 	Propagation    PropagationPolicy `yaml:"propagation"`
@@ -128,51 +158,107 @@ type LocalState struct {
 }
 
 // LocalPaths resolves every well-known path under
-// <localPath>/.dotfiles/gdrive-sync/. Constructed via ResolveLocalPaths
+// <localPath>/.dotfiles/sync/. Constructed via ResolveLocalPaths
 // so callers don't string-glue these by hand.
 type LocalPaths struct {
-	StoreDir        string
-	ConfigFile      string
-	StateFile       string
-	IncludeFile     string
-	ExcludeFile     string
-	IgnoreFile      string
-	SharedDynFile   string
-	BaselineFile    string
-	ImportsFile     string
-	TombstonesFile  string
-	LogDir          string
-	LogFile         string
-	WorkspaceRoot   string // the local sync tree itself (parent of .dotfiles)
-	WorkspaceIgnore string // <local>/.gitignore (workspace-level)
+	StoreDir          string
+	ConfigFile        string
+	StateFile         string
+	IncludeFile       string
+	ExcludeFile       string
+	IgnoreFile        string
+	AllowFile         string
+	SharedDynFile     string
+	SubmodulesDynFile string
+	TrackedDynFile    string
+	BaselineFile      string
+	ImportsFile       string
+	TombstonesFile    string
+	LogDir            string
+	LogFile           string
+	WorkspaceRoot     string // the local sync tree itself (parent of .dotfiles)
+	WorkspaceIgnore   string // <local>/.gitignore (workspace-level)
 }
 
 // ResolveLocalPaths returns the canonical layout for a given local
 // sync tree. localPath should be the absolute path to the workspace
 // root (with or without trailing slash).
+//
+// When the workspace still carries only the pre-rename store
+// (.dotfiles/gdrive-sync/) the layout points there, so read-only commands
+// stay truthful before MigrateLegacyStore has run. Once .dotfiles/sync/
+// exists it always wins.
 func ResolveLocalPaths(localPath string) *LocalPaths {
 	root := strings.TrimRight(localPath, "/")
-	store := filepath.Join(root, localStoreDirRel)
+	storeRel := localStoreDirRel
+	if !pathExists(filepath.Join(root, localStoreDirRel)) &&
+		pathExists(filepath.Join(root, legacyStoreDirRel)) {
+		storeRel = legacyStoreDirRel
+	}
+	store := filepath.Join(root, storeRel)
 	logDir := filepath.Join(store, localLogDirRel)
+	logFile := filepath.Join(logDir, localLogFileName)
+	if storeRel == legacyStoreDirRel && !pathExists(logFile) {
+		if legacy := filepath.Join(logDir, legacyLogFileName); pathExists(legacy) {
+			logFile = legacy
+		}
+	}
 	return &LocalPaths{
-		StoreDir:        store,
-		ConfigFile:      filepath.Join(store, localConfigName),
-		StateFile:       filepath.Join(store, localStateName),
-		IncludeFile:     filepath.Join(store, localIncludeName),
-		ExcludeFile:     filepath.Join(store, localExcludeName),
-		IgnoreFile:      filepath.Join(store, localIgnoreName),
-		SharedDynFile:   filepath.Join(store, localSharedDynName),
-		BaselineFile:    filepath.Join(store, localBaselineName),
-		ImportsFile:     filepath.Join(store, localImportsName),
-		TombstonesFile:  filepath.Join(store, localTombstonesName),
-		LogDir:          logDir,
-		LogFile:         filepath.Join(logDir, localLogFileName),
-		WorkspaceRoot:   root,
-		WorkspaceIgnore: filepath.Join(root, ".gitignore"),
+		StoreDir:          store,
+		ConfigFile:        filepath.Join(store, localConfigName),
+		StateFile:         filepath.Join(store, localStateName),
+		IncludeFile:       filepath.Join(store, localIncludeName),
+		ExcludeFile:       filepath.Join(store, localExcludeName),
+		IgnoreFile:        filepath.Join(store, localIgnoreName),
+		AllowFile:         filepath.Join(store, localAllowName),
+		SharedDynFile:     filepath.Join(store, localSharedDynName),
+		SubmodulesDynFile: filepath.Join(store, localSubmodulesDynName),
+		TrackedDynFile:    filepath.Join(store, localTrackedDynName),
+		BaselineFile:      filepath.Join(store, localBaselineName),
+		ImportsFile:       filepath.Join(store, localImportsName),
+		TombstonesFile:    filepath.Join(store, localTombstonesName),
+		LogDir:            logDir,
+		LogFile:           logFile,
+		WorkspaceRoot:     root,
+		WorkspaceIgnore:   filepath.Join(root, ".gitignore"),
 	}
 }
 
-// EnsureLocalLayout creates the .dotfiles/gdrive-sync/ directory plus
+// MigrateLegacyStore renames <root>/.dotfiles/gdrive-sync/ to
+// <root>/.dotfiles/sync/ and rewrites any gdrive-sync references in the
+// workspace .gitignore (managed block plus operator-added whitelist lines).
+// Returns true when a migration happened. No-op when the new store already
+// exists or no legacy store is present.
+func MigrateLegacyStore(localPath string) (bool, error) {
+	root := strings.TrimRight(localPath, "/")
+	newDir := filepath.Join(root, localStoreDirRel)
+	oldDir := filepath.Join(root, legacyStoreDirRel)
+	if pathExists(newDir) || !pathExists(oldDir) {
+		return false, nil
+	}
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return false, fmt.Errorf("renaming %s -> %s: %w", oldDir, newDir, err)
+	}
+	// Keep log continuity under the new file name.
+	oldLog := filepath.Join(newDir, localLogDirRel, legacyLogFileName)
+	newLog := filepath.Join(newDir, localLogDirRel, localLogFileName)
+	if pathExists(oldLog) && !pathExists(newLog) {
+		_ = os.Rename(oldLog, newLog)
+	}
+	// Rewrite .gitignore lines in place so operator-added whitelist entries
+	// (e.g. !/.dotfiles/gdrive-sync/exclude.txt) survive the rename.
+	gitignorePath := filepath.Join(root, ".gitignore")
+	if body, err := os.ReadFile(gitignorePath); err == nil &&
+		strings.Contains(string(body), legacyStoreDirRel) {
+		updated := strings.ReplaceAll(string(body), legacyStoreDirRel, localStoreDirRel)
+		if err := os.WriteFile(gitignorePath, []byte(updated), 0644); err != nil {
+			return true, fmt.Errorf("updating %s: %w", gitignorePath, err)
+		}
+	}
+	return true, nil
+}
+
+// EnsureLocalLayout creates the .dotfiles/sync/ directory plus
 // all default files (empty manifests, header-only ignore.txt, embedded
 // include/exclude copies). Idempotent — existing files are left untouched.
 //
@@ -194,6 +280,7 @@ func EnsureLocalLayout(paths *LocalPaths) error {
 		header string
 	}{
 		{paths.IgnoreFile, "# User-supplied ignore patterns for `dot sync`.\n# One pattern per line; same syntax as exclude.txt. Layered after exclude.txt.\n"},
+		{paths.AllowFile, allowFileHeader},
 		{paths.BaselineFile, "# Auto-generated by `dot sync push` — do not edit.\n# relpath\\tsize\\tmtime-rfc3339\\tsha256-or-dash\n"},
 		{paths.ImportsFile, "# Auto-generated by `dot sync intake` — clear via `dot sync inbox clear`.\n# relpath\\tsize\\tmtime-rfc3339\\tsha256-or-dash\\timported-rfc3339\n"},
 		{paths.TombstonesFile, "# Auto-generated by `dot sync intake` — mirror deletions detected.\n# relpath\\tbaseline-fingerprint\\tdetected-rfc3339\n"},

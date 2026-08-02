@@ -38,11 +38,12 @@ const (
 	logRotateKeepLines = 1000
 )
 
-// Config holds resolved gsync parameters. Populated by ResolveConfig.
+// Config holds resolved sync parameters. Populated by ResolveConfig.
 type Config struct {
 	LocalPath       string // workspace tree, with trailing slash
-	MirrorPath      string // gdrive tree, with trailing slash
-	MirrorIsDefault bool   // MirrorPath came from defaultMirrorPath, not explicit config
+	MirrorPath      string // local mirror tree with trailing slash; empty for ssh targets
+	Target          Target // parsed destination (local dir or ssh host:path)
+	MirrorIsDefault bool   // target came from defaultMirrorPath, not explicit config
 	FilterMode      FilterMode
 	IncludeFile     string   // editable include list (under .dotfiles/gdrive-sync/)
 	IncludePatterns []string // parsed include list used by Go filters + rsync args
@@ -118,6 +119,14 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 		localPath += "/"
 	}
 
+	if migrate {
+		if migrated, err := MigrateLegacyStore(localPath); err != nil {
+			return nil, err
+		} else if migrated {
+			fmt.Fprintln(os.Stderr, "note: migrated workspace store .dotfiles/gdrive-sync -> .dotfiles/sync")
+		}
+	}
+
 	localPaths := ResolveLocalPaths(localPath)
 
 	var localCfg *LocalConfig
@@ -136,17 +145,35 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 		}
 	}
 
-	mirrorPath := localCfg.MirrorPath
-	if mirrorPath == "" {
-		mirrorPath = gs.MirrorPath
+	// Resolve the destination: the canonical `target` spec wins, then the
+	// legacy mirror_path (local + global), then the detected cloud default.
+	var target Target
+	mirrorIsDefault := false
+	if spec := strings.TrimSpace(localCfg.Target); spec != "" {
+		t, err := ParseTarget(spec)
+		if err != nil {
+			return nil, fmt.Errorf("config target: %w", err)
+		}
+		target = t
+	} else {
+		mirrorPath := localCfg.MirrorPath
+		if mirrorPath == "" {
+			mirrorPath = gs.MirrorPath
+		}
+		mirrorIsDefault = mirrorPath == ""
+		if mirrorIsDefault {
+			mirrorPath = defaultMirrorPath(home)
+		}
+		target = Target{Kind: TargetLocal, Path: mirrorPath}
 	}
-	mirrorIsDefault := mirrorPath == ""
-	if mirrorIsDefault {
-		mirrorPath = defaultMirrorPath(home)
-	}
-	mirrorPath = expandHome(mirrorPath, home)
-	if !strings.HasSuffix(mirrorPath, "/") {
-		mirrorPath += "/"
+	mirrorPath := ""
+	if target.Kind == TargetLocal {
+		p := expandHome(target.Path, home)
+		if !strings.HasSuffix(p, "/") {
+			p += "/"
+		}
+		target.Path = p
+		mirrorPath = p
 	}
 
 	maxDelete := localCfg.MaxDelete
@@ -172,6 +199,7 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 	return &Config{
 		LocalPath:       localPath,
 		MirrorPath:      mirrorPath,
+		Target:          target,
 		MirrorIsDefault: mirrorIsDefault,
 		FilterMode:      filterMode,
 		IncludeFile:     localPaths.IncludeFile,

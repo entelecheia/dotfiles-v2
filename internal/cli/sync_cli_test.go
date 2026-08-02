@@ -194,12 +194,12 @@ func TestSyncMirrorCLI_SetsLocalConfigAndPrints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gsync mirror set: %v\nstdout=%s\nstderr=%s", err, out, errOut)
 	}
-	if !strings.Contains(out, "mirror path set") || !strings.Contains(out, newMirror) {
+	if !strings.Contains(out, "sync target set") || !strings.Contains(out, newMirror) {
 		t.Errorf("set output unexpected:\n%s", out)
 	}
 
 	// Local config (authoritative for the current workspace) must carry it.
-	localCfg := filepath.Join(f.local, ".dotfiles", "gdrive-sync", "config.yaml")
+	localCfg := filepath.Join(f.local, ".dotfiles", "sync", "config.yaml")
 	data, err := os.ReadFile(localCfg)
 	if err != nil {
 		t.Fatalf("read local config: %v", err)
@@ -220,7 +220,7 @@ func TestSyncMirrorCLI_SetsLocalConfigAndPrints(t *testing.T) {
 
 func TestSyncMirrorCLI_PrintAndDryRunAreReadOnly(t *testing.T) {
 	f := newSyncCLIFixture(t)
-	store := filepath.Join(f.local, ".dotfiles", "gdrive-sync")
+	store := filepath.Join(f.local, ".dotfiles", "sync")
 
 	// No-arg print on a fresh workspace must not create the local layout.
 	if _, _, err := runDotForTest("gsync", "mirror"); err != nil {

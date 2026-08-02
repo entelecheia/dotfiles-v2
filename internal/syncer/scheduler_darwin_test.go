@@ -6,7 +6,7 @@ import "testing"
 
 func TestLaunchdPrintTarget(t *testing.T) {
 	got := launchdPrintTarget(501, SchedulerKindPush.LaunchdLabel())
-	want := "gui/501/com.dotfiles.gdrive-sync"
+	want := "gui/501/com.dotfiles.sync"
 	if got != want {
 		t.Fatalf("launchdPrintTarget = %q, want %q", got, want)
 	}

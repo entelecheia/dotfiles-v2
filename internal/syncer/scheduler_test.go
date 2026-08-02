@@ -26,14 +26,14 @@ func TestSchedulerLabels_DistinctFromRsync(t *testing.T) {
 	// Stable identifiers must not collide with internal/rsync's so that
 	// both schedulers can run on the same machine. Hard-code the strings
 	// so a casual rename catches in review.
-	if launchdLabel != "com.dotfiles.gdrive-sync" {
-		t.Errorf("launchdLabel = %q, want com.dotfiles.gdrive-sync (must differ from rsync)", launchdLabel)
+	if launchdLabel != "com.dotfiles.sync" {
+		t.Errorf("launchdLabel = %q, want com.dotfiles.sync (must differ from rsync)", launchdLabel)
 	}
-	if systemdTimerName != "dotfiles-gdrive-sync.timer" {
-		t.Errorf("systemdTimerName = %q, want dotfiles-gdrive-sync.timer (must differ from rsync)", systemdTimerName)
+	if systemdTimerName != "dotfiles-sync.timer" {
+		t.Errorf("systemdTimerName = %q, want dotfiles-sync.timer (must differ from rsync)", systemdTimerName)
 	}
-	if systemdServiceName != "dotfiles-gdrive-sync.service" {
-		t.Errorf("systemdServiceName = %q, want dotfiles-gdrive-sync.service", systemdServiceName)
+	if systemdServiceName != "dotfiles-sync.service" {
+		t.Errorf("systemdServiceName = %q, want dotfiles-sync.service", systemdServiceName)
 	}
 	for _, label := range []string{launchdLabel, systemdTimerName, systemdServiceName} {
 		if strings.Contains(label, "workspace-sync") {
@@ -54,13 +54,13 @@ func TestPlistTemplate_RendersPushUnit(t *testing.T) {
 		Description:  SchedulerKindPush.Description(),
 		ServiceName:  SchedulerKindPush.SystemdServiceName(),
 	}
-	out, err := engine.Render("gsync/com.dotfiles.gdrive-sync.plist.tmpl", data)
+	out, err := engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		t.Fatalf("render plist: %v", err)
 	}
 	body := string(out)
 	for _, want := range []string{
-		"<string>com.dotfiles.gdrive-sync</string>",
+		"<string>com.dotfiles.sync</string>",
 		"<string>/usr/local/bin/dotfiles</string>",
 		"<string>sync</string>",
 		"<string>push</string>",
@@ -99,13 +99,13 @@ func TestPlistTemplate_RendersIntakeUnit(t *testing.T) {
 		Description:  SchedulerKindIntake.Description(),
 		ServiceName:  SchedulerKindIntake.SystemdServiceName(),
 	}
-	out, err := engine.Render("gsync/com.dotfiles.gdrive-sync.plist.tmpl", data)
+	out, err := engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		t.Fatalf("render intake plist: %v", err)
 	}
 	body := string(out)
 	for _, want := range []string{
-		"<string>com.dotfiles.gdrive-sync-intake</string>",
+		"<string>com.dotfiles.sync-intake</string>",
 		"<string>pull</string>",
 		"<string>--mode=force</string>",
 		"<integer>900</integer>",
@@ -132,7 +132,7 @@ func TestSystemdTemplates_RenderPushUnit(t *testing.T) {
 		ServiceName:  SchedulerKindPush.SystemdServiceName(),
 	}
 
-	svc, err := engine.Render("gsync/dotfiles-gdrive-sync.service.tmpl", data)
+	svc, err := engine.Render("sync/dotfiles-sync.service.tmpl", data)
 	if err != nil {
 		t.Fatalf("render service: %v", err)
 	}
@@ -140,13 +140,13 @@ func TestSystemdTemplates_RenderPushUnit(t *testing.T) {
 		t.Errorf("service ExecStart wrong:\n%s", svc)
 	}
 
-	timer, err := engine.Render("gsync/dotfiles-gdrive-sync.timer.tmpl", data)
+	timer, err := engine.Render("sync/dotfiles-sync.timer.tmpl", data)
 	if err != nil {
 		t.Fatalf("render timer: %v", err)
 	}
 	for _, want := range []string{
 		"OnUnitActiveSec=900s",
-		"Unit=dotfiles-gdrive-sync.service",
+		"Unit=dotfiles-sync.service",
 		"WantedBy=timers.target",
 	} {
 		if !strings.Contains(string(timer), want) {
@@ -168,7 +168,7 @@ func TestSystemdTemplates_RenderIntakeUnit(t *testing.T) {
 		ServiceName:  SchedulerKindIntake.SystemdServiceName(),
 	}
 
-	svc, err := engine.Render("gsync/dotfiles-gdrive-sync.service.tmpl", data)
+	svc, err := engine.Render("sync/dotfiles-sync.service.tmpl", data)
 	if err != nil {
 		t.Fatalf("render intake service: %v", err)
 	}
@@ -176,11 +176,11 @@ func TestSystemdTemplates_RenderIntakeUnit(t *testing.T) {
 		t.Errorf("pull service ExecStart wrong:\n%s", svc)
 	}
 
-	timer, err := engine.Render("gsync/dotfiles-gdrive-sync.timer.tmpl", data)
+	timer, err := engine.Render("sync/dotfiles-sync.timer.tmpl", data)
 	if err != nil {
 		t.Fatalf("render intake timer: %v", err)
 	}
-	if !strings.Contains(string(timer), "Unit=dotfiles-gdrive-sync-intake.service") {
+	if !strings.Contains(string(timer), "Unit=dotfiles-sync-intake.service") {
 		t.Errorf("intake timer must reference -intake service:\n%s", timer)
 	}
 }
@@ -211,13 +211,13 @@ func TestPathsFor_Kind(t *testing.T) {
 	if intakePlist == paths.LaunchdPlist {
 		t.Error("intake plist must differ from push plist")
 	}
-	if !strings.HasSuffix(intakePlist, "com.dotfiles.gdrive-sync-intake.plist") {
+	if !strings.HasSuffix(intakePlist, "com.dotfiles.sync-intake.plist") {
 		t.Errorf("intake plist tail wrong: %s", intakePlist)
 	}
-	if !strings.HasSuffix(paths.SystemdServiceFor(SchedulerKindIntake), "dotfiles-gdrive-sync-intake.service") {
+	if !strings.HasSuffix(paths.SystemdServiceFor(SchedulerKindIntake), "dotfiles-sync-intake.service") {
 		t.Errorf("intake service path wrong: %s", paths.SystemdServiceFor(SchedulerKindIntake))
 	}
-	if !strings.HasSuffix(paths.SystemdTimerFor(SchedulerKindIntake), "dotfiles-gdrive-sync-intake.timer") {
+	if !strings.HasSuffix(paths.SystemdTimerFor(SchedulerKindIntake), "dotfiles-sync-intake.timer") {
 		t.Errorf("intake timer path wrong: %s", paths.SystemdTimerFor(SchedulerKindIntake))
 	}
 }
@@ -302,13 +302,13 @@ func TestResolvePaths_IncludesSchedulerArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolvePaths: %v", err)
 	}
-	if !strings.HasSuffix(paths.LaunchdPlist, "com.dotfiles.gdrive-sync.plist") {
+	if !strings.HasSuffix(paths.LaunchdPlist, "com.dotfiles.sync.plist") {
 		t.Errorf("LaunchdPlist tail wrong: %s", paths.LaunchdPlist)
 	}
-	if !strings.HasSuffix(paths.SystemdService, "dotfiles-gdrive-sync.service") {
+	if !strings.HasSuffix(paths.SystemdService, "dotfiles-sync.service") {
 		t.Errorf("SystemdService tail wrong: %s", paths.SystemdService)
 	}
-	if !strings.HasSuffix(paths.SystemdTimer, "dotfiles-gdrive-sync.timer") {
+	if !strings.HasSuffix(paths.SystemdTimer, "dotfiles-sync.timer") {
 		t.Errorf("SystemdTimer tail wrong: %s", paths.SystemdTimer)
 	}
 }

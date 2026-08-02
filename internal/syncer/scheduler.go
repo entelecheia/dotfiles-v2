@@ -9,15 +9,30 @@ import (
 )
 
 // Stable identifiers used across launchd / systemd integrations.
-// Distinct from the existing rsync sync labels so both schedulers can
-// coexist on the same machine without colliding.
 const (
-	launchdLabel         = "com.dotfiles.gdrive-sync"
-	launchdLabelIntake   = "com.dotfiles.gdrive-sync-intake"
-	systemdServiceName   = "dotfiles-gdrive-sync.service"
-	systemdTimerName     = "dotfiles-gdrive-sync.timer"
-	systemdServiceIntake = "dotfiles-gdrive-sync-intake.service"
-	systemdTimerIntake   = "dotfiles-gdrive-sync-intake.timer"
+	launchdLabel         = "com.dotfiles.sync"
+	launchdLabelIntake   = "com.dotfiles.sync-intake"
+	systemdServiceName   = "dotfiles-sync.service"
+	systemdTimerName     = "dotfiles-sync.timer"
+	systemdServiceIntake = "dotfiles-sync-intake.service"
+	systemdTimerIntake   = "dotfiles-sync-intake.timer"
+)
+
+// Legacy unit identifiers superseded by the unified `dot sync` names.
+// CleanupLegacyUnits removes these when installing or uninstalling the
+// current units so stale schedulers never double-fire a sync.
+var (
+	legacyLaunchdLabels = []string{
+		"com.dotfiles.gdrive-sync",        // pre-rename push unit
+		"com.dotfiles.gdrive-sync-intake", // pre-rename pull unit
+		"com.dotfiles.workspace-sync",     // retired SSH-only `dot sync`
+	}
+	legacySystemdUnits = []string{
+		"dotfiles-gdrive-sync.service",
+		"dotfiles-gdrive-sync.timer",
+		"dotfiles-gdrive-sync-intake.service",
+		"dotfiles-gdrive-sync-intake.timer",
+	}
 )
 
 // SchedulerKind selects which periodic action a Scheduler call targets.
@@ -65,9 +80,9 @@ func (k SchedulerKind) SystemdTimerName() string {
 // systemd units (and used for log/status banners).
 func (k SchedulerKind) Description() string {
 	if k == SchedulerKindIntake {
-		return "gsync pull (baseline-tracked payload restore)"
+		return "dot sync pull (baseline-tracked payload restore)"
 	}
-	return "gsync push (workspace → mirror)"
+	return "dot sync push (workspace → target)"
 }
 
 // SchedulerState is the runtime status of an auto-sync timer.
@@ -128,8 +143,11 @@ func NewScheduler(runner *exec.Runner, paths *Paths, cfg *Config, engine *templa
 	return &Scheduler{Runner: runner, Paths: paths, Config: cfg, Engine: engine}
 }
 
-// Install installs only explicitly enabled units. Idempotent.
+// Install installs only explicitly enabled units. Idempotent. Legacy
+// gdrive-sync / workspace-sync units are always removed first so a renamed
+// scheduler never leaves a stale twin firing in parallel.
 func (s *Scheduler) Install(ctx context.Context) error {
+	s.CleanupLegacyUnits(ctx)
 	if s.Config.Interval > 0 {
 		if err := s.InstallKind(ctx, SchedulerKindPush); err != nil {
 			return err
@@ -146,6 +164,7 @@ func (s *Scheduler) Install(ctx context.Context) error {
 // Uninstall removes both the push and intake units. Missing units are
 // silently skipped (handled by the per-kind helpers).
 func (s *Scheduler) Uninstall(ctx context.Context) error {
+	s.CleanupLegacyUnits(ctx)
 	if err := s.UninstallKind(ctx, SchedulerKindPush); err != nil {
 		return err
 	}

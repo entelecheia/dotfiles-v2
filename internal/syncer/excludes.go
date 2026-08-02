@@ -14,13 +14,13 @@ import (
 )
 
 // excludesTemplatePath is the path inside the embedded templates FS.
-const excludesTemplatePath = "gsync/excludes.txt"
+const excludesTemplatePath = "sync/excludes.txt"
 
 // includesTemplatePath is the path inside the embedded templates FS.
-const includesTemplatePath = "gsync/includes.txt"
+const includesTemplatePath = "sync/includes.txt"
 
 // excludesDiskName is kept for legacy global path reporting; runtime gsync
-// uses the workspace-local exclude file under .dotfiles/gdrive-sync/.
+// uses the workspace-local exclude file under .dotfiles/sync/.
 const excludesDiskName = "gdrive-sync-excludes.conf"
 
 // LoadDefaultIncludePatterns returns the parsed default include patterns from

@@ -14,7 +14,7 @@ import (
 )
 
 // intakeFixture sets up a synthetic mirror + workspace pair with a
-// real .dotfiles/gdrive-sync layout, baseline.manifest seeded, and
+// real .dotfiles/sync layout, baseline.manifest seeded, and
 // returns a Config ready for Intake().
 type intakeFixture struct {
 	t      *testing.T
@@ -482,7 +482,7 @@ func TestIntake_NeverIntakesInboxOrDotfiles(t *testing.T) {
 	f := newIntakeFixture(t)
 	// Mirror somehow has these (operator pushed before always-on excludes
 	// landed). Intake must refuse to echo them back.
-	f.writeMirror(".dotfiles/gdrive-sync/secrets.txt", "should-never-cross")
+	f.writeMirror(".dotfiles/sync/secrets.txt", "should-never-cross")
 	f.writeMirror("inbox/gdrive/2025-99-99/leftover.md", "should-never-cross")
 	f.writeMirror("normal/file.md", "fine")
 

@@ -82,6 +82,7 @@ Deprecated aliases: 'dot gsync', 'dot gdrive-sync'.`,
 		newSyncPauseCmd(),
 		newSyncSharedCmd(),
 		newSyncInitCmd(),
+		newSyncTargetCmd(),
 		newSyncMirrorCmd(),
 	)
 	return cmd
@@ -100,32 +101,60 @@ func warnDeprecatedSyncAlias() {
 	}
 }
 
-// ── mirror ───────────────────────────────────────────────────────────────
+// ── target ───────────────────────────────────────────────────────────────
 
-func newSyncMirrorCmd() *cobra.Command {
+func newSyncTargetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "mirror [path]",
-		Short: "Show or set the gsync mirror path (the cloud-synced tree)",
-		Long: `With no argument, prints the resolved mirror path.
+		Use:   "target [spec]",
+		Short: "Show or set the sync target (local mirror dir or SSH remote)",
+		Long: `With no argument, prints the resolved sync target.
 
-With a path, sets mirror_path in this workspace's local config
-(<workspace>/.dotfiles/gdrive-sync/config.yaml) so it takes effect
-immediately, and also records it in the global user state so future
-workspaces inherit it. Use this to point the mirror at, e.g.,
-~/Dropbox/work after switching cloud providers.`,
+With a spec, sets the target in this workspace's local config
+(<workspace>/.dotfiles/sync/config.yaml) so it takes effect immediately.
+Accepted forms:
+
+  local:~/Dropbox/work       local directory (a cloud client's folder)
+  ssh:user@host:~/work       rsync over SSH
+  ~/Dropbox/work             bare path — shorthand for local:
+
+Local targets are also recorded in the global user state so future
+workspaces inherit them.`,
 		Args:         cobra.MaximumNArgs(1),
-		RunE:         runSyncMirror,
+		RunE:         runSyncTarget,
 		SilenceUsage: true,
 	}
 }
 
-func runSyncMirror(cmd *cobra.Command, args []string) error {
+func newSyncMirrorCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "mirror [path]",
+		Short:        "Show or set the local mirror path",
+		Deprecated:   "use 'dot sync target' instead.",
+		Args:         cobra.MaximumNArgs(1),
+		RunE:         runSyncTarget,
+		SilenceUsage: true,
+	}
+}
+
+func runSyncTarget(cmd *cobra.Command, args []string) error {
 	p := printerFrom(cmd)
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	home := homeFromCmd(cmd) // honors the persistent --home override
 
+	var target syncer.Target
+	if len(args) == 1 {
+		t, err := syncer.ParseTarget(args[0])
+		if err != nil {
+			return err
+		}
+		if t.Kind == syncer.TargetLocal {
+			t.Path = appsettings.ExpandHome(t.Path, home)
+		}
+		target = t
+	}
+
 	// Print + dry-run are read-only: use the read-only bootstrap so neither
-	// creates the per-workspace .dotfiles/gdrive-sync layout or touches
+	// creates the per-workspace .dotfiles/sync layout or touches
 	// .gitignore on first use.
 	if len(args) == 0 || dryRun {
 		_, cfg, _, err := syncBootstrapReadOnly(cmd)
@@ -133,14 +162,14 @@ func runSyncMirror(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if len(args) == 0 {
-			p.KV("Mirror", stripTrailingSlash(cfg.MirrorPath))
+			p.KV("Target", cfg.Target.String())
 			return nil
 		}
-		p.Line("[dry-run] would set mirror_path to %s (local config + global state)", appsettings.ExpandHome(args[0], home))
+		p.Line("[dry-run] would set target to %s (local config%s)", target.String(),
+			map[bool]string{true: " + global state", false: ""}[target.Kind == syncer.TargetLocal])
 		return nil
 	}
 
-	mirror := appsettings.ExpandHome(args[0], home)
 	homeOverride, _ := cmd.Flags().GetString("home")
 
 	// Local config governs the current workspace (global state is ignored
@@ -160,26 +189,32 @@ func runSyncMirror(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("load local config: %w", err)
 		}
-		localCfg.MirrorPath = mirror
+		localCfg.Target = target.String()
+		if target.Kind == syncer.TargetLocal {
+			// Keep the legacy field in step so older binaries reading this
+			// workspace still resolve the same mirror.
+			localCfg.MirrorPath = target.Path
+		}
 		if err := syncer.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
 			return fmt.Errorf("save local config: %w", err)
 		}
 	}
 
-	// Global state, home-aware: load + save for the target user so an admin
-	// using --home writes that user's state (not the current user's), and so
-	// future workspaces under that home inherit the new mirror.
-	state, err := loadStateForCmd(cmd)
-	if err != nil {
-		return fmt.Errorf("load global state: %w", err)
-	}
-	state.Modules.Gsync.MirrorPath = mirror
-	if err := persistUserState(cmd, state); err != nil {
-		p.Warn("could not update global state: %v", err)
+	// Global state, home-aware: local targets are inherited by future
+	// workspaces. SSH targets stay workspace-local.
+	if target.Kind == syncer.TargetLocal {
+		state, err := loadStateForCmd(cmd)
+		if err != nil {
+			return fmt.Errorf("load global state: %w", err)
+		}
+		state.Modules.Gsync.MirrorPath = target.Path
+		if err := persistUserState(cmd, state); err != nil {
+			p.Warn("could not update global state: %v", err)
+		}
 	}
 
-	p.Line("%s", ui.StyleSuccess.Render("✓ mirror path set"))
-	p.KV("Mirror", mirror)
+	p.Line("%s", ui.StyleSuccess.Render("✓ sync target set"))
+	p.KV("Target", target.String())
 	return nil
 }
 
@@ -188,9 +223,9 @@ func runSyncMirror(cmd *cobra.Command, args []string) error {
 func newSyncInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Initialize <workspace>/.dotfiles/gdrive-sync/ from current state",
+		Short: "Initialize <workspace>/.dotfiles/sync/ from current state",
 		Long: `One-time onboarding for the per-workspace store. Creates
-<workspace>/.dotfiles/gdrive-sync/ with config.yaml, include.txt, exclude.txt,
+<workspace>/.dotfiles/sync/ with config.yaml, include.txt, exclude.txt,
 ignore.txt, manifests, log dir; appends '/.dotfiles/' to <workspace>/.gitignore
 so the store is never committed; and creates <workspace>/inbox/gdrive/ if
 missing.
@@ -214,7 +249,7 @@ func runSyncInit(cmd *cobra.Command, _ []string) error {
 	}
 
 	// syncBootstrap already triggered LoadOrMigrateLocalConfig, so the
-	// .dotfiles/gdrive-sync/ tree exists by the time we get here. Heal
+	// .dotfiles/sync/ tree exists by the time we get here. Heal
 	// anything missing (operator may have deleted files) and create the
 	// inbox/gdrive staging dir.
 	if err := syncer.EnsureLocalLayout(paths); err != nil {
@@ -370,7 +405,7 @@ func newSyncPullCmd() *cobra.Command {
 		Use:   "pull",
 		Short: "Restore/update baseline-tracked mirror payloads into the workspace",
 		Long: `Pull applies mirror-side changes only for paths listed in
-.dotfiles/gdrive-sync/baseline.manifest. Baseline is expected to be tracked in
+.dotfiles/sync/baseline.manifest. Baseline is expected to be tracked in
 Git, so a second machine can git pull the index and then restore binary
 payloads from the cloud mirror.
 
@@ -589,7 +624,7 @@ func newSyncInboxCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inbox",
 		Short: "Inspect and manage the mirror intake staging area",
-		Long: `View what's staged + tracked under .dotfiles/gdrive-sync/, force a
+		Long: `View what's staged + tracked under .dotfiles/sync/, force a
 re-intake of one path, or clear the imports + tombstones manifests
 entirely.
 
@@ -1626,7 +1661,7 @@ func newSyncSharedCmd() *cobra.Command {
 		Long: `View and manage which folders gsync skips because they are shared.
 
 This list contains relative paths the operator added to the workspace-local
-gdrive-sync config. Use it for owned-but-shared-out folders that must never be
+sync config. Use it for owned-but-shared-out folders that must never be
 propagated through the workspace-authoritative mirror flow.
 
 The list feeds a per-run dynamic excludes file passed to rsync.
