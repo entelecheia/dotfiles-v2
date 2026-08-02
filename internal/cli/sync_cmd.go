@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -440,12 +441,17 @@ func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) bool {
 		p.Line("Local path missing: %s", cfg.LocalPath)
 		return false
 	}
-	if !runner.IsDir(cfg.MirrorPath) {
+	if cfg.Target.IsSSH() {
+		if err := syncer.CheckSSH(context.Background(), runner, cfg.Target.Host); err != nil {
+			p.Line("SSH target unreachable: %v", err)
+			return false
+		}
+	} else if !runner.IsDir(cfg.MirrorPath) {
 		p.Line("Mirror path missing: %s", cfg.MirrorPath)
 		return false
 	}
 	if cfg.Paused {
-		p.Line("gsync is paused. Run `dot sync resume` to activate.")
+		p.Line("sync is paused. Run `dot sync resume` to activate.")
 		return false
 	}
 	return true
@@ -532,6 +538,23 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	defer release()
+
+	// SSH targets: direct rsync pull (--update, backups). The baseline-
+	// driven pull below needs to walk the target tree, which ssh can't.
+	if cfg.Target.IsSSH() {
+		p.Line("Pull %s → %s (direct rsync --update; workspace files win ties)",
+			cfg.Target.RsyncDest(), cfg.LocalPath)
+		if dryRun {
+			p.Line("  (dry-run — no changes)")
+		}
+		pullErr := syncer.PullDirect(cmd.Context(), runner, cfg, dryRun)
+		recordSyncResult(state, cfg, "pull", pullErr, dryRun)
+		if pullErr != nil {
+			return fmt.Errorf("pull failed: %w", pullErr)
+		}
+		p.Line("✓ Pull complete.")
+		return nil
+	}
 
 	p.Line("Pull plan for baseline-tracked payloads %s → %s (%s)", cfg.MirrorPath, cfg.LocalPath, mode)
 	if dryRun {
@@ -919,6 +942,31 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	defer release()
+
+	// SSH targets cannot be plan-previewed (the remote tree is not
+	// walkable); push runs rsync directly, like the retired SSH-only sync.
+	if cfg.Target.IsSSH() {
+		p.Line("Push %s → %s (%s, direct rsync — no plan preview for ssh targets)",
+			cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
+		if mode == syncer.ModeManual && !dryRun {
+			yes, _ := cmd.Flags().GetBool("yes")
+			confirmed, err := ui.Confirm("Push to SSH target?", yes)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				p.Line("Aborted.")
+				return nil
+			}
+		}
+		pushErr := syncer.Push(cmd.Context(), runner, cfg, dryRun)
+		recordSyncResult(state, cfg, "push", pushErr, dryRun)
+		if pushErr != nil {
+			return fmt.Errorf("push failed: %w", pushErr)
+		}
+		p.Line("✓ Push complete.")
+		return nil
+	}
 
 	p.Line("Push plan for %s → %s (%s, mode=%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation, mode)
 	if dryRun {

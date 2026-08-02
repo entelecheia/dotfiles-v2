@@ -56,6 +56,9 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 	if cfg.LocalPaths == nil {
 		return nil, fmt.Errorf("pull: local paths unresolved")
 	}
+	if cfg.Target.IsSSH() {
+		return nil, fmt.Errorf("baseline-tracked pull requires a local target; use the direct rsync pull for ssh targets")
+	}
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return nil, err
 	}

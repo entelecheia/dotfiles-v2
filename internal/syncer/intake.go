@@ -64,6 +64,9 @@ func Intake(ctx context.Context, runner *exec.Runner, cfg *Config, opts IntakeOp
 	if cfg.LocalPaths == nil {
 		return nil, fmt.Errorf("intake: local paths unresolved")
 	}
+	if cfg.Target.IsSSH() {
+		return nil, fmt.Errorf("intake requires a local target (cannot walk an ssh remote)")
+	}
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return nil, err
 	}
@@ -330,10 +333,15 @@ func copyFilePreservingMtime(src, dst string) error {
 }
 
 // RefreshBaseline rebuilds <baseline.manifest> as the Git-shared sync payload
-// index. It records files that exist on both mirror and local — including
-// Git-tracked files, which are payload since the union filter. Mirror-only
-// files stay out of baseline so target-origin new files continue to flow
-// through inbox/gdrive until an operator accepts them.
+// index. For local targets it records files that exist on both mirror and
+// local — including Git-tracked files, which are payload since the union
+// filter. Mirror-only files stay out of baseline so target-origin new files
+// continue to flow through inbox/gdrive until an operator accepts them.
+//
+// For SSH targets the remote tree cannot be walked, so the baseline records
+// the local payload set instead — what the push just shipped. That keeps
+// delete propagation working (a deleted file's baseline key keeps it in the
+// include layer until the next refresh drops it).
 func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("refresh baseline: local paths unresolved")
@@ -344,18 +352,24 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	if err != nil {
 		return fmt.Errorf("loading filters: %w", err)
 	}
+	walkRoot := mirror
+	requireLocalTwin := true
+	if cfg.Target.IsSSH() {
+		walkRoot = local
+		requireLocalTwin = false
+	}
 	entries := map[string]Fingerprint{}
-	err = filepath.WalkDir(mirror, func(absPath string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if d != nil && !d.IsDir() {
 				return nil
 			}
 			return err
 		}
-		if absPath == mirror {
+		if absPath == walkRoot {
 			return nil
 		}
-		rel, err := filepath.Rel(mirror, absPath)
+		rel, err := filepath.Rel(walkRoot, absPath)
 		if err != nil {
 			return err
 		}
@@ -375,10 +389,12 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		localAbs := filepath.Join(local, rel)
-		localInfo, err := os.Lstat(localAbs)
-		if err != nil || localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {
-			return nil
+		if requireLocalTwin {
+			localAbs := filepath.Join(local, rel)
+			localInfo, err := os.Lstat(localAbs)
+			if err != nil || localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {
+				return nil
+			}
 		}
 		fp, err := FingerprintFile(absPath, mode)
 		if err != nil {

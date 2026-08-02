@@ -46,6 +46,9 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	if cfg.LocalPaths == nil {
 		return nil, fmt.Errorf("push plan: local paths unresolved")
 	}
+	if cfg.Target.IsSSH() {
+		return nil, fmt.Errorf("push plan requires a local target; ssh targets push directly")
+	}
 	if err := cfg.Propagation.Validate(); err != nil {
 		return nil, fmt.Errorf("push refused: %w", err)
 	}

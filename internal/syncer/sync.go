@@ -414,6 +414,35 @@ func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	return Push(ctx, runner, cfg, dryRun)
 }
 
+// PullDirect runs a plain rsync pull (target → workspace, --update, with
+// conflict backups). This is the pull path for SSH targets, where the
+// baseline-driven PullTracked cannot walk the remote tree. Workspace-only
+// files are never deleted; remote-newer files overwrite local with a backup
+// under .sync-conflicts/.
+func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
+	if err := ensureLogDir(cfg.LogFile); err != nil {
+		return err
+	}
+	rf, err := prepareRuntimeFilters(cfg)
+	if err != nil {
+		return err
+	}
+	conflict := NewConflictDir()
+	args := pullArgs(cfg, conflict, rf, dryRun)
+	fmt.Printf("  Pull: %s → %s\n", cfg.Target.RsyncDest(), cfg.LocalPath)
+	if err := runRsync(ctx, runner, cfg, args); err != nil {
+		return err
+	}
+	if !dryRun && cfg.LocalPaths != nil {
+		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
+			s.LastPull = time.Now().UTC()
+		}); err != nil {
+			return fmt.Errorf("state update: %w", err)
+		}
+	}
+	return nil
+}
+
 func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
 	if cfg.Verbose {
 		return runner.RunAttached(ctx, "rsync", args...)

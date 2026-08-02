@@ -1,6 +1,10 @@
 package syncer
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 func TestParseTarget(t *testing.T) {
 	cases := []struct {
@@ -59,5 +63,32 @@ func TestTarget_StringRoundTrip(t *testing.T) {
 		if parsed.String() != spec {
 			t.Errorf("round trip %q -> %q", spec, parsed.String())
 		}
+	}
+}
+
+func TestPushPullArgs_SSHTransport(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Target = Target{Kind: TargetSSH, Host: "me@host", Path: "~/work"}
+	cfg.MirrorPath = ""
+	conflict := NewConflictDir()
+
+	push := pushArgs(cfg, conflict, runtimeFilters{}, false)
+	joined := strings.Join(push, " ")
+	if !strings.Contains(joined, "-e ssh") {
+		t.Errorf("ssh push args missing -e ssh: %v", push)
+	}
+	if push[len(push)-1] != "me@host:~/work/" {
+		t.Errorf("ssh push dest = %q, want me@host:~/work/", push[len(push)-1])
+	}
+	if push[len(push)-2] != cfg.LocalPath {
+		t.Errorf("ssh push source = %q, want %q", push[len(push)-2], cfg.LocalPath)
+	}
+
+	pull := pullArgs(cfg, conflict, runtimeFilters{}, false)
+	if pull[len(pull)-2] != "me@host:~/work/" || pull[len(pull)-1] != cfg.LocalPath {
+		t.Errorf("ssh pull src/dest wrong: %v", pull[len(pull)-2:])
+	}
+	if !slices.Contains(pull, "--update") {
+		t.Errorf("ssh pull args missing --update: %v", pull)
 	}
 }
