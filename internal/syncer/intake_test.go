@@ -44,6 +44,7 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 	cfg := &Config{
 		LocalPath:    local + "/",
 		MirrorPath:   mirror + "/",
+		Target:       Target{Kind: TargetLocal, Path: mirror + "/"},
 		FilterMode:   FilterModeExclude,
 		IncludeFile:  paths.IncludeFile,
 		ExcludesFile: paths.ExcludeFile,
@@ -704,16 +705,19 @@ func TestRefreshBaseline_IncludeModeSkipsTextAndHonorsCaseInsensitive(t *testing
 	}
 }
 
-func TestPlanPush_IncludeModeExcludesGitTrackedIncludedFiles(t *testing.T) {
+// Union filter: tracked files (whatever their extension) and untracked
+// binary-allowlist files are both payload; untracked source files are not.
+func TestPlanPush_IncludeModeUnionsTrackedAndBinaryAllowlist(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.cfg.FilterMode = FilterModeInclude
 	f.cfg.IncludePatterns = []string{"*.pdf"}
 	if err := osexec.Command("git", "-C", f.local, "init").Run(); err != nil {
 		t.Skipf("git init unavailable: %v", err)
 	}
-	f.writeLocal("tracked.pdf", "git-owned")
+	f.writeLocal("notes.md", "git-owned source")
 	f.writeLocal("asset.PDF", "drive-owned")
-	if err := osexec.Command("git", "-C", f.local, "add", "tracked.pdf").Run(); err != nil {
+	f.writeLocal("untracked.md", "neither tracked nor binary")
+	if err := osexec.Command("git", "-C", f.local, "add", "notes.md").Run(); err != nil {
 		t.Skipf("git add unavailable: %v", err)
 	}
 
@@ -721,13 +725,14 @@ func TestPlanPush_IncludeModeExcludesGitTrackedIncludedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Creates) != 1 || plan.Creates[0] != "asset.PDF" {
-		t.Fatalf("Creates = %v, want only asset.PDF", plan.Creates)
+	want := []string{"asset.PDF", "notes.md"}
+	if len(plan.Creates) != len(want) || plan.Creates[0] != want[0] || plan.Creates[1] != want[1] {
+		t.Fatalf("Creates = %v, want %v", plan.Creates, want)
 	}
-	for _, rel := range append(append([]string{}, plan.Updates...), plan.Deletes...) {
-		if rel == "tracked.pdf" {
-			t.Fatalf("tracked included file leaked into push plan: %+v", plan)
-		}
+	// Tracked edits must never surface as conflicts — a conflict here would
+	// wedge the clean-mode scheduler.
+	if plan.HasConflicts() {
+		t.Fatalf("unexpected conflicts: %+v", plan.Conflicts)
 	}
 }
 
@@ -769,7 +774,10 @@ func TestRefreshBaseline_AppliesExcludeIgnoreAndSharedFilters(t *testing.T) {
 	}
 }
 
-func TestRefreshBaseline_ExcludesGitTrackedFiles(t *testing.T) {
+// Tracked files are sync payload since the union filter — the baseline
+// must index them like any other mirrored file so drift detection and
+// delete propagation cover them.
+func TestRefreshBaseline_IncludesGitTrackedFiles(t *testing.T) {
 	f := newIntakeFixture(t)
 	if err := osexec.Command("git", "-C", f.local, "init").Run(); err != nil {
 		t.Skipf("git init unavailable: %v", err)
@@ -789,11 +797,11 @@ func TestRefreshBaseline_ExcludesGitTrackedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := base["tracked.md"]; ok {
-		t.Fatalf("Git-tracked file should not be in baseline: %v", base)
+	if _, ok := base["tracked.md"]; !ok {
+		t.Fatalf("Git-tracked file missing from baseline: %v", base)
 	}
 	if _, ok := base["asset.bin"]; !ok {
-		t.Fatalf("untracked Drive asset missing from baseline: %v", base)
+		t.Fatalf("untracked asset missing from baseline: %v", base)
 	}
 }
 

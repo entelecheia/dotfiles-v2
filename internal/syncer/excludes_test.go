@@ -135,7 +135,7 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.FilterMode = FilterModeExclude
 	cfg.ExcludesFile = "/tmp/excludes.conf"
-	args := commonArgs(cfg, "")
+	args := commonArgs(cfg, runtimeFilters{})
 
 	wantContains := []string{
 		"-a",
@@ -163,7 +163,7 @@ func TestCommonArgs_AlwaysOnRules(t *testing.T) {
 
 	// With verbose=true: --progress should be present.
 	cfg.Verbose = true
-	args = commonArgs(cfg, "")
+	args = commonArgs(cfg, runtimeFilters{})
 	if !slices.Contains(args, "--progress") {
 		t.Error("commonArgs(verbose=true) did not add --progress")
 	}
@@ -174,7 +174,7 @@ func TestCommonArgs_IncludeModeAddsCaseInsensitiveIncludes(t *testing.T) {
 	cfg.FilterMode = FilterModeInclude
 	cfg.IncludePatterns = []string{"*.pdf", "*.hwp*"}
 
-	args := commonArgs(cfg, "")
+	args := commonArgs(cfg, runtimeFilters{})
 
 	for _, want := range []string{
 		"--include=*/",
@@ -192,7 +192,7 @@ func TestCommonArgs_ExcludeModeDoesNotAddIncludeCatchall(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.FilterMode = FilterModeExclude
 
-	args := commonArgs(cfg, "")
+	args := commonArgs(cfg, runtimeFilters{})
 
 	for _, forbidden := range []string{"--include=*/", "--exclude=*"} {
 		if slices.Contains(args, forbidden) {
@@ -205,7 +205,7 @@ func TestCommonArgs_NoDeleteFlags(t *testing.T) {
 	// commonArgs is shared between pull and push; the actual --delete-after / --update
 	// must be added by the caller. Guard: commonArgs must NOT inject either of those.
 	cfg := newTestConfig(t)
-	args := commonArgs(cfg, "")
+	args := commonArgs(cfg, runtimeFilters{})
 	for _, forbidden := range []string{"--delete", "--delete-after", "--delete-excluded", "--update"} {
 		if slices.Contains(args, forbidden) {
 			t.Errorf("commonArgs leaked direction-specific flag %q (must be added by Pull/Push only)", forbidden)

@@ -323,10 +323,11 @@ func copyFilePreservingMtime(src, dst string) error {
 	return os.Chtimes(dst, info.ModTime(), info.ModTime())
 }
 
-// RefreshBaseline rebuilds <baseline.manifest> as the Git-shared Drive payload
-// index. It records files that exist on both mirror and local and are not
-// Git-tracked. Mirror-only files stay out of baseline so GDrive-origin new
-// files continue to flow through inbox/gdrive until an operator accepts them.
+// RefreshBaseline rebuilds <baseline.manifest> as the Git-shared sync payload
+// index. It records files that exist on both mirror and local — including
+// Git-tracked files, which are payload since the union filter. Mirror-only
+// files stay out of baseline so target-origin new files continue to flow
+// through inbox/gdrive until an operator accepts them.
 func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("refresh baseline: local paths unresolved")
@@ -337,7 +338,6 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	if err != nil {
 		return fmt.Errorf("loading filters: %w", err)
 	}
-	tracked := gitTrackedRelPaths(local)
 	entries := map[string]Fingerprint{}
 	err = filepath.WalkDir(mirror, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -354,9 +354,6 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 			return err
 		}
 		rel = normalizeRel(rel)
-		if tracked[rel] {
-			return nil
-		}
 		if filter.shouldSkip(absPath, rel, d.IsDir()) {
 			if d.IsDir() {
 				return filepath.SkipDir

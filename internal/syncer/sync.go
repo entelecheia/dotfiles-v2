@@ -6,7 +6,6 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,11 +44,13 @@ type Config struct {
 	Target          Target // parsed destination (local dir or ssh host:path)
 	MirrorIsDefault bool   // target came from defaultMirrorPath, not explicit config
 	FilterMode      FilterMode
-	IncludeFile     string   // editable include list (under .dotfiles/gdrive-sync/)
+	IncludeFile     string   // editable include list (under .dotfiles/sync/)
 	IncludePatterns []string // parsed include list used by Go filters + rsync args
-	ExcludesFile    string   // materialized static exclude list (under .dotfiles/gdrive-sync/)
-	IgnoreFile      string   // user-supplied ignore patterns (under .dotfiles/gdrive-sync/)
-	ConfigDir       string   // workspace-local store dir (.dotfiles/gdrive-sync/) — dynamic files land here
+	ExcludesFile    string   // materialized static exclude list (under .dotfiles/sync/)
+	IgnoreFile      string   // user-supplied ignore patterns (under .dotfiles/sync/)
+	AllowFile       string   // explicit secrets opt-in patterns (under .dotfiles/sync/)
+	AllowPatterns   []string // parsed allow.txt — re-included ahead of the secrets layer
+	ConfigDir       string   // workspace-local store dir (.dotfiles/sync/) — dynamic files land here
 	SharedExcludes  []string // operator-curated shared paths (relative to MirrorPath)
 	LogFile         string
 	LockDir         string
@@ -193,6 +194,10 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 	if err != nil {
 		return nil, fmt.Errorf("loading include patterns: %w", err)
 	}
+	allowPatterns, err := loadPatternFileOrDefault(localPaths.AllowFile, func() ([]string, error) { return nil, nil })
+	if err != nil {
+		return nil, fmt.Errorf("loading allow patterns: %w", err)
+	}
 
 	rsyncPath, _ := osexec.LookPath("rsync")
 
@@ -206,6 +211,8 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 		IncludePatterns: includePatterns,
 		ExcludesFile:    localPaths.ExcludeFile,
 		IgnoreFile:      localPaths.IgnoreFile,
+		AllowFile:       localPaths.AllowFile,
+		AllowPatterns:   allowPatterns,
 		ConfigDir:       localPaths.StoreDir,
 		SharedExcludes:  append([]string(nil), localCfg.SharedExcludes...),
 		LogFile:         localPaths.LogFile,
@@ -231,12 +238,11 @@ func expandHome(path, home string) string {
 
 // ── arg builders (extracted for testability) ────────────────────────────
 
-// pullArgs builds the rsync argv for the pull (mirror → local) pass.
+// pullArgs builds the rsync argv for the pull (target → local) pass.
 // Uses --update (workspace-authoritative) so workspace-only files are
 // never deleted. --backup snapshots overwrites into the conflict dir.
-// dynExcludesFile is the per-run runtime exclude file; "" skips it.
-func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs(cfg, dynExcludesFile)
+func pullArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool) []string {
+	args := commonArgs(cfg, rf)
 	args = append(args,
 		"--update",
 		"--backup",
@@ -245,20 +251,20 @@ func pullArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
-	args = append(args, cfg.MirrorPath, cfg.LocalPath)
+	args = append(args, rsyncTransportArgs(cfg)...)
+	args = append(args, cfg.Target.RsyncDest(), cfg.LocalPath)
 	return args
 }
 
-// pushArgs builds the rsync argv for the push (local → mirror) pass.
+// pushArgs builds the rsync argv for the push (local → target) pass.
 // Translates cfg.Propagation into rsync flags (--existing /
 // --ignore-existing for create/update toggles; --delete-after with
 // --max-delete cap for delete) and always excludes the workspace's
 // staging dirs so they never bounce back to mirror.
-// dynExcludesFile is the per-run runtime exclude file; "" skips it.
-func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun bool) []string {
-	args := commonArgs(cfg, dynExcludesFile)
+func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool) []string {
+	args := commonArgs(cfg, rf)
 	args = append(args, propagationFlags(cfg.Propagation, cfg.MaxDelete)...)
-	// Skip directories that would be empty on the mirror after filtering, so
+	// Skip directories that would be empty on the target after filtering, so
 	// gitignored leaves do not leave behind shells of folder structure.
 	args = append(args, "--prune-empty-dirs")
 	args = append(args,
@@ -268,8 +274,18 @@ func pushArgs(cfg *Config, conflict *ConflictDir, dynExcludesFile string, dryRun
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
-	args = append(args, cfg.LocalPath, cfg.MirrorPath)
+	args = append(args, rsyncTransportArgs(cfg)...)
+	args = append(args, cfg.LocalPath, cfg.Target.RsyncDest())
 	return args
+}
+
+// rsyncTransportArgs returns transport flags for the configured target
+// (SSH remotes need `-e ssh`; local directories need nothing).
+func rsyncTransportArgs(cfg *Config) []string {
+	if cfg.Target.IsSSH() {
+		return []string{"-e", "ssh"}
+	}
+	return nil
 }
 
 // propagationFlags translates a PropagationPolicy into the rsync flags
@@ -296,27 +312,38 @@ func propagationFlags(p PropagationPolicy, maxDelete int) []string {
 	return flags
 }
 
-// prepareDynamicExcludes scans the mirror for Drive shortcuts, merges
-// the operator's manual list plus Git-tracked relpaths, and writes the
-// union to a per-run file. The file is always written (even empty) for
-// predictable layering.
-func prepareDynamicExcludes(cfg *Config) (string, error) {
+// prepareRuntimeFilters materializes the per-run filter files: the
+// operator's shared-folder excludes, the submodule exclude layer, and the
+// tracked ∪ baseline include layer. Every file is always written (even
+// empty) for predictable layering.
+func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
+	var rf runtimeFilters
 	entries, err := ScanShared(strings.TrimRight(cfg.MirrorPath, "/"), cfg.SharedExcludes)
 	if err != nil {
-		return "", fmt.Errorf("scanning shared entries: %w", err)
+		return rf, fmt.Errorf("scanning shared entries: %w", err)
 	}
-	tracked := sortedTrackedRelPaths(strings.TrimRight(cfg.LocalPath, "/"))
-	return MaterializeRuntimeExcludesFile(cfg.ConfigDir, entries, tracked)
-}
-
-func sortedTrackedRelPaths(root string) []string {
-	tracked := gitTrackedRelPaths(root)
-	paths := make([]string, 0, len(tracked))
-	for rel := range tracked {
-		paths = append(paths, rel)
+	rf.SharedDyn, err = MaterializeRuntimeExcludesFile(cfg.ConfigDir, entries)
+	if err != nil {
+		return rf, err
 	}
-	sort.Strings(paths)
-	return paths
+	if cfg.LocalPaths == nil {
+		return rf, fmt.Errorf("local paths unresolved")
+	}
+	local := strings.TrimRight(cfg.LocalPath, "/")
+	rf.SubmodulesDyn, err = MaterializeSubmodulesDynFile(cfg.LocalPaths, gitSubmodulePaths(local))
+	if err != nil {
+		return rf, err
+	}
+	baseline, err := LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		return rf, fmt.Errorf("loading baseline: %w", err)
+	}
+	rels := unionTrackedWithBaseline(gitTrackedForSync(local), baseline)
+	rf.TrackedDyn, err = MaterializeTrackedIncludesFile(cfg.LocalPaths, rels)
+	if err != nil {
+		return rf, err
+	}
+	return rf, nil
 }
 
 // refuseSharedDriveMirror returns a non-nil error if cfg.MirrorPath
@@ -356,13 +383,13 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return err
 	}
-	dyn, err := prepareDynamicExcludes(cfg)
+	rf, err := prepareRuntimeFilters(cfg)
 	if err != nil {
 		return err
 	}
 	conflict := NewConflictDir()
-	args := pushArgs(cfg, conflict, dyn, dryRun)
-	fmt.Printf("  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation)
+	args := pushArgs(cfg, conflict, rf, dryRun)
+	fmt.Printf("  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
 		return err
 	}

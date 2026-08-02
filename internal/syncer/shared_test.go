@@ -111,11 +111,11 @@ func TestRefuseSharedDriveMirror_AllowsMyDrive(t *testing.T) {
 	}
 }
 
-func TestMaterializeRuntimeExcludesFile_IncludesSharedAndGitTrackedRelpaths(t *testing.T) {
+func TestMaterializeRuntimeExcludesFile_IncludesSharedEntries(t *testing.T) {
 	tmp := t.TempDir()
 	path, err := MaterializeRuntimeExcludesFile(tmp, []SharedEntry{
 		{RelPath: "projects/koica-shared", Reason: SharedManual},
-	}, []string{"tracked.pdf", "nested/source.go"})
+	})
 	if err != nil {
 		t.Fatalf("MaterializeRuntimeExcludesFile: %v", err)
 	}
@@ -126,11 +126,14 @@ func TestMaterializeRuntimeExcludesFile_IncludesSharedAndGitTrackedRelpaths(t *t
 	for _, want := range []string{
 		"/projects/koica-shared\n",
 		"/projects/koica-shared/\n",
-		"/tracked.pdf\n",
-		"/nested/source.go\n",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("runtime excludes file missing %q\n--- got ---\n%s", want, body)
 		}
+	}
+	// Git-tracked relpaths moved to the tracked-includes layer — they must
+	// no longer be written as excludes.
+	if strings.Contains(string(body), "Git-tracked") {
+		t.Errorf("runtime excludes file still mentions git-tracked layer:\n%s", body)
 	}
 }

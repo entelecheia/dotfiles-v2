@@ -68,15 +68,51 @@ func parsePatternLines(content []byte) ([]string, error) {
 	return patterns, nil
 }
 
+// runtimeFilters bundles the per-run generated filter files that layer into
+// the rsync argv alongside the static exclude/ignore/allow files.
+type runtimeFilters struct {
+	SharedDyn     string // shared-folder excludes (operator-curated)
+	SubmodulesDyn string // git submodule paths — synced via Git, never rsync
+	TrackedDyn    string // include layer: tracked relpaths ∪ baseline keys
+}
+
+// secretExcludePatterns is the deny-by-default secrets layer. These paths
+// never sync unless the operator explicitly re-includes them in allow.txt.
+var secretExcludePatterns = []string{
+	"/.secrets",
+	"/.secrets/**",
+	"/.maru/secrets",
+	"/.maru/secrets/**",
+	"/_sys/mcp.local.json",
+	".env",
+	".env.*",
+}
+
+// secretAllowBuiltins re-include harmless env templates ahead of the
+// `.env.*` exclude — they are documentation, not credentials.
+var secretAllowBuiltins = []string{
+	".env.example",
+	".env.sample",
+	".env.template",
+}
+
 // commonArgs returns the rsync flags shared between pull and push.
-// dynExcludesFile must be a real path on disk; empty paths are skipped.
+// Empty paths inside rf are skipped.
 //
-// Filter order is safety first: always-on state paths, static excludes,
-// user ignore.txt, runtime excludes (shared folders + Git-tracked relpaths),
-// then include mode's case-insensitive allowlist and final catch-all exclude.
+// Filter order is first-match-wins, safety first:
+//  1. always-on state paths (/.dotfiles/, /inbox/gdrive/)
+//  2. submodule excludes (submodules sync through Git)
+//  3. allow.txt re-includes — the only way secrets sync — plus the
+//     env-template builtins
+//  4. hardcoded secrets excludes
+//  5. exclude.txt (junk), 6. ignore.txt (user), 7. shared-folder excludes
+//  8. --include=*/ (traversal), 9. tracked ∪ baseline includes,
+//  10. binary-extension allowlist, 11. --exclude=* catch-all
+//
 // .gitignore is intentionally not a sync filter because gitignored binaries
-// are a primary gsync use case.
-func commonArgs(cfg *Config, dynExcludesFile string) []string {
+// are a primary sync payload. Exclude mode stops after layer 7 (everything
+// not excluded syncs).
+func commonArgs(cfg *Config, rf runtimeFilters) []string {
 	args := []string{
 		"-a",
 		"--human-readable",
@@ -84,7 +120,11 @@ func commonArgs(cfg *Config, dynExcludesFile string) []string {
 		"--no-links",
 	}
 	args = append(args, alwaysExcludeArgs()...)
-	excludeFiles := []string{cfg.ExcludesFile, cfg.IgnoreFile, dynExcludesFile}
+	if rf.SubmodulesDyn != "" {
+		args = append(args, "--exclude-from="+rf.SubmodulesDyn)
+	}
+	args = append(args, secretsFilterArgs(cfg.AllowPatterns)...)
+	excludeFiles := []string{cfg.ExcludesFile, cfg.IgnoreFile, rf.SharedDyn}
 	for _, f := range excludeFiles {
 		if f == "" {
 			continue
@@ -92,7 +132,18 @@ func commonArgs(cfg *Config, dynExcludesFile string) []string {
 		args = append(args, "--exclude-from="+f)
 	}
 	if normalizeFilterMode(cfg.FilterMode) == FilterModeInclude {
-		args = append(args, includeArgs(cfg.IncludePatterns)...)
+		args = append(args, "--include=*/")
+		if rf.TrackedDyn != "" {
+			args = append(args, "--include-from="+rf.TrackedDyn)
+		}
+		for _, p := range cfg.IncludePatterns {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			args = append(args, "--include="+rsyncCaseFoldPattern(p))
+		}
+		args = append(args, "--exclude=*")
 	}
 	if cfg.Verbose {
 		args = append(args, "--progress")
@@ -107,17 +158,50 @@ func alwaysExcludeArgs() []string {
 	}
 }
 
-func includeArgs(patterns []string) []string {
-	args := []string{"--include=*/"}
-	for _, p := range patterns {
+// secretsFilterArgs renders the allow.txt re-includes (with parent-dir
+// includes so rsync can descend into otherwise-excluded directories),
+// the env-template builtins, then the hardcoded secrets excludes.
+func secretsFilterArgs(allowPatterns []string) []string {
+	var args []string
+	for _, p := range allowPatterns {
 		p = strings.TrimSpace(p)
-		if p == "" {
+		if p == "" || strings.HasPrefix(p, "#") {
 			continue
 		}
-		args = append(args, "--include="+rsyncCaseFoldPattern(p))
+		for _, dir := range allowParentDirs(p) {
+			args = append(args, "--include="+dir)
+		}
+		args = append(args, "--include="+p)
 	}
-	args = append(args, "--exclude=*")
+	for _, p := range secretAllowBuiltins {
+		args = append(args, "--include="+p)
+	}
+	for _, p := range secretExcludePatterns {
+		args = append(args, "--exclude="+p)
+	}
 	return args
+}
+
+// allowParentDirs returns anchored directory includes for every literal
+// parent of an anchored allow pattern, so `/​.maru/secrets/app.token` also
+// re-includes `/.maru/` and `/.maru/secrets/`. Parents containing wildcards
+// are skipped (rsync would treat them literally).
+func allowParentDirs(pattern string) []string {
+	if !strings.HasPrefix(pattern, "/") {
+		return nil
+	}
+	trimmed := strings.TrimPrefix(strings.TrimSuffix(pattern, "/"), "/")
+	segs := strings.Split(trimmed, "/")
+	var dirs []string
+	prefix := ""
+	for _, seg := range segs[:len(segs)-1] {
+		if strings.ContainsAny(seg, "*?[") {
+			break
+		}
+		prefix += "/" + seg
+		dirs = append(dirs, prefix+"/")
+	}
+	return dirs
 }
 
 func rsyncCaseFoldPattern(pattern string) string {

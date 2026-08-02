@@ -59,16 +59,15 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading filters: %w", err)
 	}
-	tracked := gitTrackedRelPaths(local)
 	baseline, err := LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
 	if err != nil {
 		return nil, fmt.Errorf("loading baseline: %w", err)
 	}
-	localInv, err := collectPlanInventory(local, filter, tracked, FingerprintFast)
+	localInv, err := collectPlanInventory(local, filter, FingerprintFast)
 	if err != nil {
 		return nil, fmt.Errorf("scanning local: %w", err)
 	}
-	mirrorInv, err := collectPlanInventory(mirror, filter, tracked, FingerprintFast)
+	mirrorInv, err := collectPlanInventory(mirror, filter, FingerprintFast)
 	if err != nil {
 		return nil, fmt.Errorf("scanning mirror: %w", err)
 	}
@@ -179,7 +178,7 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	return plan, nil
 }
 
-func collectPlanInventory(root string, filter *syncFilter, tracked map[string]bool, mode FingerprintMode) (*planInventory, error) {
+func collectPlanInventory(root string, filter *syncFilter, mode FingerprintMode) (*planInventory, error) {
 	inv := &planInventory{
 		files:   map[string]Fingerprint{},
 		nonFile: map[string]string{},
@@ -196,9 +195,6 @@ func collectPlanInventory(root string, filter *syncFilter, tracked map[string]bo
 			return err
 		}
 		rel = normalizeRel(rel)
-		if tracked[rel] {
-			return nil
-		}
 		info, err := d.Info()
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {

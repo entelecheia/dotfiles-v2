@@ -11,7 +11,7 @@ func TestCollectPlanInventory_UsesRequestedFingerprintMode(t *testing.T) {
 		t.Fatalf("newSyncFilter: %v", err)
 	}
 
-	fast, err := collectPlanInventory(f.local, filter, map[string]bool{}, FingerprintFast)
+	fast, err := collectPlanInventory(f.local, filter, FingerprintFast)
 	if err != nil {
 		t.Fatalf("collectPlanInventory fast: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestCollectPlanInventory_UsesRequestedFingerprintMode(t *testing.T) {
 		t.Fatalf("fast inventory unexpectedly hashed file: %q", got)
 	}
 
-	strict, err := collectPlanInventory(f.local, filter, map[string]bool{}, FingerprintStrict)
+	strict, err := collectPlanInventory(f.local, filter, FingerprintStrict)
 	if err != nil {
 		t.Fatalf("collectPlanInventory strict: %v", err)
 	}

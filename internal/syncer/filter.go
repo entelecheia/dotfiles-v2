@@ -9,7 +9,12 @@ import (
 
 type syncFilter struct {
 	mode            FilterMode
+	submodules      []string         // sorted relpaths — excluded wholesale, synced via Git
+	allowPatterns   []excludePattern // allow.txt + env-template builtins — win over every exclude
+	allowDirs       map[string]bool  // literal parent dirs of anchored allow patterns
+	secretPatterns  []excludePattern // deny-by-default secrets layer
 	excludePatterns []excludePattern
+	tracked         map[string]bool // tracked ∪ baseline — include layer
 	includePatterns []excludePattern
 }
 
@@ -18,8 +23,32 @@ type excludePattern struct {
 	base string
 }
 
+// newSyncFilter builds the Go-side twin of commonArgs' rsync filter chain.
+// The two MUST agree layer for layer — PlanPush previews what rsync will do.
 func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 	f := &syncFilter{mode: normalizeFilterMode(cfg.FilterMode)}
+
+	local := strings.TrimRight(cfg.LocalPath, "/")
+	f.submodules = gitSubmodulePaths(local)
+
+	f.allowDirs = map[string]bool{}
+	for _, p := range cfg.AllowPatterns {
+		p = strings.TrimSpace(p)
+		if p == "" || strings.HasPrefix(p, "#") {
+			continue
+		}
+		for _, dir := range allowParentDirs(p) {
+			f.allowDirs[normalizeRel(dir)] = true
+		}
+		f.allowPatterns = append(f.allowPatterns, excludePattern{raw: p})
+	}
+	for _, p := range secretAllowBuiltins {
+		f.allowPatterns = append(f.allowPatterns, excludePattern{raw: p})
+	}
+	for _, p := range secretExcludePatterns {
+		f.secretPatterns = append(f.secretPatterns, excludePattern{raw: p})
+	}
+
 	for _, path := range []string{cfg.ExcludesFile, cfg.IgnoreFile} {
 		patterns, err := loadExcludeFile(path, "")
 		if err != nil {
@@ -27,6 +56,7 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 		}
 		f.excludePatterns = append(f.excludePatterns, patterns...)
 	}
+
 	if f.mode == FilterModeInclude {
 		patterns := cfg.IncludePatterns
 		if len(patterns) == 0 {
@@ -43,7 +73,17 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 			}
 			f.includePatterns = append(f.includePatterns, excludePattern{raw: strings.ToLower(p)})
 		}
+		// Tracked ∪ baseline include layer (mirrors tracked-includes.dyn.conf).
+		f.tracked = gitTrackedForSync(local)
+		if cfg.LocalPaths != nil {
+			if baseline, err := LoadBaselineManifest(cfg.LocalPaths.BaselineFile); err == nil {
+				for rel := range baseline {
+					f.tracked[rel] = true
+				}
+			}
+		}
 	}
+
 	shared, err := ScanShared(strings.TrimRight(cfg.MirrorPath, "/"), cfg.SharedExcludes)
 	if err != nil {
 		return nil, err
@@ -86,6 +126,11 @@ func loadExcludeFile(path, base string) ([]excludePattern, error) {
 	return out, sc.Err()
 }
 
+// shouldSkip mirrors the rsync filter chain in commonArgs, layer for layer:
+// always-excluded state paths, submodules, allow re-includes, secrets
+// deny-by-default, static/shared excludes, then (include mode) directory
+// traversal, tracked ∪ baseline includes, the binary allowlist, and the
+// final catch-all.
 func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 	rel = normalizeRel(rel)
 	if rel == "" || rel == "." {
@@ -93,6 +138,27 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 	}
 	if isAlwaysExcluded(rel) {
 		return true
+	}
+	for _, sub := range f.submodules {
+		if rel == sub || strings.HasPrefix(rel, sub+"/") {
+			return true
+		}
+	}
+	// Allow layer: explicit re-includes beat everything below, and their
+	// literal parent dirs stay traversable even when a later layer would
+	// exclude them (matching the rsync parent-dir includes).
+	if isDir && f.allowDirs[rel] {
+		return false
+	}
+	for _, p := range f.allowPatterns {
+		if p.matches(rel, isDir) {
+			return false
+		}
+	}
+	for _, p := range f.secretPatterns {
+		if p.matches(rel, isDir) {
+			return true
+		}
 	}
 	for _, p := range f.excludePatterns {
 		if p.matches(rel, isDir) {
@@ -103,6 +169,9 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 		return false
 	}
 	if isDir {
+		return false
+	}
+	if f.tracked[rel] {
 		return false
 	}
 	lowerRel := strings.ToLower(rel)
