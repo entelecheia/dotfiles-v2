@@ -80,6 +80,14 @@ func (s *Scheduler) ResumeKind(ctx context.Context, kind SchedulerKind) error {
 	return err
 }
 
+// legacySystemdUnits are unit names superseded by dotfiles-sync.*.
+var legacySystemdUnits = []string{
+	"dotfiles-gdrive-sync.service",
+	"dotfiles-gdrive-sync.timer",
+	"dotfiles-gdrive-sync-intake.service",
+	"dotfiles-gdrive-sync-intake.timer",
+}
+
 // CleanupLegacyUnits disables and removes systemd units left behind by the
 // pre-rename gdrive-sync schedulers. Best-effort.
 func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) {

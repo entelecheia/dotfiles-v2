@@ -18,22 +18,10 @@ const (
 	systemdTimerIntake   = "dotfiles-sync-intake.timer"
 )
 
-// Legacy unit identifiers superseded by the unified `dot sync` names.
-// CleanupLegacyUnits removes these when installing or uninstalling the
-// current units so stale schedulers never double-fire a sync.
-var (
-	legacyLaunchdLabels = []string{
-		"com.dotfiles.gdrive-sync",        // pre-rename push unit
-		"com.dotfiles.gdrive-sync-intake", // pre-rename pull unit
-		"com.dotfiles.workspace-sync",     // retired SSH-only `dot sync`
-	}
-	legacySystemdUnits = []string{
-		"dotfiles-gdrive-sync.service",
-		"dotfiles-gdrive-sync.timer",
-		"dotfiles-gdrive-sync-intake.service",
-		"dotfiles-gdrive-sync-intake.timer",
-	}
-)
+// Legacy unit identifiers superseded by the unified `dot sync` names live in
+// the per-platform scheduler files (scheduler_darwin.go / scheduler_other.go);
+// CleanupLegacyUnits removes them when installing or uninstalling the current
+// units so stale schedulers never double-fire a sync.
 
 // SchedulerKind selects which periodic action a Scheduler call targets.
 // Push and intake are both opt-in via Interval/PullInterval > 0.

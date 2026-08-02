@@ -85,6 +85,13 @@ func (s *Scheduler) StateKind(ctx context.Context, kind SchedulerKind) Scheduler
 	return launchdStateFromPrintStatus(true, err == nil && result != nil && result.ExitCode == 0)
 }
 
+// legacyLaunchdLabels are unit names superseded by com.dotfiles.sync*.
+var legacyLaunchdLabels = []string{
+	"com.dotfiles.gdrive-sync",        // pre-rename push unit
+	"com.dotfiles.gdrive-sync-intake", // pre-rename pull unit
+	"com.dotfiles.workspace-sync",     // retired SSH-only `dot sync`
+}
+
 // CleanupLegacyUnits unloads and removes launchd plists left behind by the
 // pre-rename schedulers (gdrive-sync push/intake, SSH-only workspace-sync).
 // Best-effort: missing files and unload failures are ignored.
