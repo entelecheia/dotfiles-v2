@@ -7,6 +7,8 @@
 # Go-side planning and generated rsync rules.
 
 # archives
+*.zip
+*.tar
 *.tgz
 *.gz
 *.rar
@@ -30,6 +32,8 @@
 *.jpg
 *.jpeg
 *.heic
+*.webp
+*.bmp
 *.wmf
 *.ai
 

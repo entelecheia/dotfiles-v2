@@ -75,7 +75,7 @@ func TestLoadDefaultIncludePatterns_ContainsBinaryPayloadRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadDefaultIncludePatterns: %v", err)
 	}
-	for _, want := range []string{"*.tgz", "*.gz", "*.rar", "*.zst", "*.mp3", "*.mp4", "*.png", "*.jpg", "*.heic", "*.wmf", "*.ai", "*.key", "*.pdf", "*.hwp*", "*.docx", "*.pptx", "*.xls*", "*.xlsx"} {
+	for _, want := range []string{"*.zip", "*.tar", "*.tgz", "*.gz", "*.rar", "*.zst", "*.mp3", "*.mp4", "*.png", "*.jpg", "*.heic", "*.wmf", "*.ai", "*.key", "*.pdf", "*.hwp*", "*.docx", "*.pptx", "*.xls*", "*.xlsx"} {
 		if !slices.Contains(patterns, want) {
 			t.Errorf("includes.txt missing required pattern %q\nGot patterns: %v", want, patterns)
 		}
