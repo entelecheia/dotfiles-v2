@@ -1,0 +1,96 @@
+# Static exclude rules for `dot sync` (junk layer).
+#
+# Layered with the other filter mechanisms:
+#   - submodules.dyn.conf     submodule paths (synced via Git, regenerated per run)
+#   - built-in secrets layer  /.secrets, /.maru/secrets, .env* — allow.txt opts in
+#   - ignore.txt              operator-specific excludes
+#   - tracked-includes.dyn.conf + include.txt   the union include layers
+#   - `--no-links` skips all symlinks
+# `.gitignore` is intentionally not a sync filter: Git-ignored binaries are a
+# primary sync payload. This file is the always-on junk baseline.
+
+# git internals — match file AND directory at any depth.
+# Submodules and worktrees use a `.git` *file* (gitlink), not a directory,
+# so both shapes are covered. Also enforced in code (always-on layer).
+.git
+.git/
+.git/**
+.gitmodules
+**/.git
+**/.git/
+
+# claude / omc local state
+.omc/
+.omx/
+.claude/settings.local.json
+**/.claude/settings.local.json
+
+# legacy dual-path artifacts
+.gdrive
+.gdrive/
+
+# Note: shared-folder exclusions are NOT name-based here.
+# The operator's manual list (`dot sync shared`) is layered in at sync-time
+# via a second --exclude-from file.
+
+# rsync self-protection (never sync the conflict backups themselves)
+.sync-conflicts/
+
+# OS / editor noise
+.DS_Store
+._*
+Icon?
+~$*
+*.tmp
+*.temp
+*.swp
+*~
+
+# Dropbox client artifacts
+.dropbox
+.dropbox.attr
+*conflicted copy*
+
+# Google Docs native (workspace never edits these directly)
+*.gdoc
+*.gsheet
+*.gslides
+*.gdraw
+*.gform
+*.gshortcut
+*.gtable
+*.gmap
+*.gsite
+
+# Drive in-flight artifacts
+*.tmp.driveupload
+*.tmp.drivedownload
+
+# build / dependency / cache directories
+node_modules/
+.pnpm-store/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+target/
+dist/
+build/
+.next/
+.turbo/
+.tox/
+
+# tool state / generated caches
+.archive/
+.gstack/
+.anchor
+.brain
+.smart-env/
+.obsidian/workspace.json
+.obsidian/cache
+graphify-out/cache/
+
+# never sync the toolkit venv
+_sys/env/.venv/

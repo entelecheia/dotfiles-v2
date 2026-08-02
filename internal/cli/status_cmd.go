@@ -13,9 +13,8 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
-	"github.com/entelecheia/dotfiles-v2/internal/gsync"
 	"github.com/entelecheia/dotfiles-v2/internal/module"
-	"github.com/entelecheia/dotfiles-v2/internal/rsync"
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/workspace"
@@ -78,7 +77,6 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 
 	// ── Sync ───────────────────────────────────────────────────────────
 	statusPrintSync(p, state)
-	statusPrintGsync(p, state)
 
 	// ── Workspace ──────────────────────────────────────────────────────
 	statusPrintWorkspace(p)
@@ -213,61 +211,16 @@ func statusPrintSecrets(p *Printer, state *config.UserState) {
 	}
 }
 
-// statusPrintSync prints a compact rsync sync summary.
+// statusPrintSync prints a compact workspace sync (mirror) summary.
 func statusPrintSync(p *Printer, state *config.UserState) {
 	p.Section("Sync")
 
-	if state.Modules.Rsync.RemoteHost == "" {
-		p.Line("  %s", ui.StyleHint.Render("(not configured — run 'dot sync setup')"))
-		return
-	}
-
-	syncCfg, err := rsync.ResolveConfig(state)
+	cfg, err := syncer.ResolveConfigReadOnly(state)
 	if err != nil {
 		p.Line("  %s", ui.StyleHint.Render("(config error: "+err.Error()+")"))
 		return
 	}
-
-	paths, err := rsync.ResolvePaths()
-	if err != nil {
-		p.Line("  %s", ui.StyleHint.Render("(cannot resolve paths)"))
-		return
-	}
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	runner := exec.NewRunner(true, logger)
-	engine := template.NewEngine()
-	sched := rsync.NewScheduler(runner, paths, syncCfg, engine)
-
-	st, err := rsync.GetStatus(context.Background(), sched, syncCfg)
-	if err != nil {
-		p.Line("  %s", ui.StyleHint.Render("(status unavailable: "+err.Error()+")"))
-		return
-	}
-
-	p.KV("Remote", st.RemoteHost+":"+st.RemotePath)
-	p.KV("Scheduler", st.SchedulerState.String())
-
-	if st.LastSyncTime != nil {
-		p.KV("Last sync", humanDuration(time.Since(*st.LastSyncTime))+" ago")
-	} else {
-		p.KV("Last sync", "(never)")
-	}
-
-	if st.LastResult != "" {
-		p.KV("Last result", st.LastResult)
-	}
-}
-
-func statusPrintGsync(p *Printer, state *config.UserState) {
-	p.Section("Gsync")
-
-	cfg, err := gsync.ResolveConfigReadOnly(state)
-	if err != nil {
-		p.Line("  %s", ui.StyleHint.Render("(config error: "+err.Error()+")"))
-		return
-	}
-	paths, err := gsync.ResolvePaths()
+	paths, err := syncer.ResolvePaths()
 	if err != nil {
 		p.Line("  %s", ui.StyleHint.Render("(cannot resolve paths)"))
 		return
@@ -275,8 +228,8 @@ func statusPrintGsync(p *Printer, state *config.UserState) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	runner := exec.NewRunner(true, logger)
 	engine := template.NewEngine()
-	sched := gsync.NewScheduler(runner, paths, cfg, engine)
-	st, err := gsync.GetStatus(context.Background(), runner, cfg, state, sched)
+	sched := syncer.NewScheduler(runner, paths, cfg, engine)
+	st, err := syncer.GetStatus(context.Background(), runner, cfg, state, sched)
 	if err != nil {
 		p.Line("  %s", ui.StyleHint.Render("(status unavailable: "+err.Error()+")"))
 		return

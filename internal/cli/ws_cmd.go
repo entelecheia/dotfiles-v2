@@ -13,7 +13,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
-	"github.com/entelecheia/dotfiles-v2/internal/gsync"
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/ws"
 )
@@ -153,7 +153,7 @@ func wsBootstrap(cmd *cobra.Command) (ws.Roots, *exec.Runner, bool, error) {
 		return p
 	}
 
-	gsyncCfg, err := gsync.ResolveConfigReadOnlyForHome(state, home)
+	gsyncCfg, err := syncer.ResolveConfigReadOnlyForHome(state, home)
 	if err != nil {
 		return ws.Roots{}, nil, false, fmt.Errorf("resolving gsync mirror: %w", err)
 	}
