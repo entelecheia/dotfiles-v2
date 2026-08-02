@@ -56,11 +56,8 @@ Also available as 'dotfiles' for back-compat.`,
 	// Workspace cleanup
 	root.AddCommand(newCleanCmd())
 
-	// Sync (rsync binary sync to remote server)
+	// Sync (rsync workspace mirror: local cloud folder or SSH remote)
 	root.AddCommand(newSyncCmd())
-
-	// Gsync (local rsync mirror between workspace and gdrive-workspace)
-	root.AddCommand(newGsyncCmd())
 
 	// Cloudflare Tunnel SSH access
 	root.AddCommand(newTunnelCmd())
