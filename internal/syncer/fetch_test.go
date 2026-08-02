@@ -117,16 +117,31 @@ func TestFetch_DryRunWritesNothing(t *testing.T) {
 	}
 }
 
-func TestFetch_SSHSourceSpelling(t *testing.T) {
-	// Args-only check: verify the --relative source form for ssh targets
-	// without invoking rsync.
-	cfg := newTestConfig(t)
-	cfg.Target = Target{Kind: TargetSSH, Host: "me@host", Path: "~/work"}
-	src := strings.TrimRight(cfg.Target.RsyncDest(), "/")
-	if src != "me@host:~/work" {
-		t.Fatalf("ssh fetch source root = %q", src)
+func TestFetchScopeArgs(t *testing.T) {
+	// Known file + known dir: parents traversable, dir gets /** expansion,
+	// catch-all last. Order matters (first-match-wins in rsync).
+	args := fetchScopeArgs([]fetchEntry{
+		{rel: "a/b/report.pdf", isDir: false, known: true},
+		{rel: "a/deck", isDir: true, known: true},
+	})
+	want := []string{
+		"--include=/a/",
+		"--include=/a/b/",
+		"--include=/a/b/report.pdf",
+		"--include=/a/deck/",
+		"--include=/a/deck/**",
+		"--exclude=*",
 	}
-	if got := src + "/./" + "a/b.pdf"; got != "me@host:~/work/./a/b.pdf" {
-		t.Fatalf("ssh fetch source spec = %q", got)
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Fatalf("scope args = %v, want %v", args, want)
+	}
+
+	// Unknown shape (ssh): both dir and file forms emitted.
+	sshArgs := fetchScopeArgs([]fetchEntry{{rel: "x/y", known: false}})
+	joined := strings.Join(sshArgs, " ")
+	for _, w := range []string{"--include=/x/", "--include=/x/y/", "--include=/x/y/**", "--include=/x/y", "--exclude=*"} {
+		if !strings.Contains(joined, w) {
+			t.Fatalf("ssh scope args missing %q: %v", w, sshArgs)
+		}
 	}
 }

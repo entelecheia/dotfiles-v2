@@ -430,16 +430,18 @@ type FetchResult struct {
 // machine that needs the binaries backing a particular path without running
 // a full pull.
 //
-// Semantics per path: `--relative --update --backup` — existing newer local
-// files are never overwritten, overwrites are backed up under
+// Semantics per path: `--update --backup` — existing newer local files are
+// never overwritten, overwrites are backed up under
 // .sync-conflicts/<ts>/from-workspace/, nothing is ever deleted. The exclude
 // layers (submodules, secrets unless allowed, junk, shared) still apply, so
-// a fetch can never import .git or non-allowed secrets. The include layers
-// are deliberately skipped: an explicitly requested path comes back whole.
+// a fetch can never import .git or non-allowed secrets. Scoping uses an
+// include chain anchored at the transfer root (parent dirs + `/rel/**`)
+// instead of `--relative`, which Apple's openrsync does not honor — the
+// anchored filter layers stay aligned with the workspace root this way.
 //
 // Paths missing on a local target are reported in Missing and skipped
 // rather than failing the run. SSH targets cannot be pre-checked; rsync
-// reports missing sources itself (non-fatal to other paths).
+// reports missing sources itself.
 func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string, dryRun bool) (*FetchResult, error) {
 	if err := ensureLogDir(cfg.LogFile); err != nil {
 		return nil, err
@@ -449,22 +451,27 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 		return nil, err
 	}
 	res := &FetchResult{}
-	src := strings.TrimRight(cfg.Target.RsyncDest(), "/")
 	mirrorRoot := strings.TrimRight(cfg.MirrorPath, "/")
+	var entries []fetchEntry
 	for _, rel := range rels {
 		norm := normalizeRel(rel)
 		if norm == "" {
 			continue
 		}
+		e := fetchEntry{rel: norm}
 		if !cfg.Target.IsSSH() {
-			if _, err := os.Lstat(filepath.Join(mirrorRoot, norm)); err != nil {
+			info, err := os.Lstat(filepath.Join(mirrorRoot, norm))
+			if err != nil {
 				res.Missing = append(res.Missing, norm)
 				continue
 			}
+			e.isDir = info.IsDir()
+			e.known = true
 		}
+		entries = append(entries, e)
 		res.Fetched = append(res.Fetched, norm)
 	}
-	if len(res.Fetched) == 0 {
+	if len(entries) == 0 {
 		return res, nil
 	}
 
@@ -474,7 +481,6 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 		"--human-readable",
 		"--stats",
 		"--no-links",
-		"--relative",
 		"--update",
 		"--backup",
 		"--backup-dir=" + conflict.PullBackupRel(),
@@ -489,21 +495,54 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 			args = append(args, "--exclude-from="+f)
 		}
 	}
+	args = append(args, fetchScopeArgs(entries)...)
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
 	args = append(args, rsyncTransportArgs(cfg)...)
-	for _, rel := range res.Fetched {
-		// `<target>/./<rel>` + --relative rebuilds the subtree under the
-		// workspace root.
-		args = append(args, src+"/./"+rel)
-	}
-	args = append(args, cfg.LocalPath)
+	args = append(args, cfg.Target.RsyncDest(), cfg.LocalPath)
 	fmt.Printf("  Fetch: %d path(s) %s → %s\n", len(res.Fetched), cfg.Target.RsyncDest(), cfg.LocalPath)
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
 		return res, err
 	}
 	return res, nil
+}
+
+// fetchEntry is one requested fetch path with its target-side shape.
+type fetchEntry struct {
+	rel   string
+	isDir bool
+	known bool // isDir is reliable (local target only)
+}
+
+// fetchScopeArgs builds the scope layer for Fetch: after the exclude layers
+// (so junk/secrets still win), include each requested path plus its literal
+// parent dirs, then drop everything else. Anchored at the transfer root so
+// the anchored exclude layers stay aligned; no `--relative`, which Apple's
+// openrsync does not honor. For unknown shapes (ssh) both dir and file
+// forms are emitted.
+func fetchScopeArgs(entries []fetchEntry) []string {
+	var args []string
+	seenDirs := map[string]bool{}
+	for _, e := range entries {
+		segs := strings.Split(e.rel, "/")
+		prefix := ""
+		for _, seg := range segs[:len(segs)-1] {
+			prefix += "/" + seg
+			if !seenDirs[prefix] {
+				seenDirs[prefix] = true
+				args = append(args, "--include="+prefix+"/")
+			}
+		}
+		if e.isDir || !e.known {
+			args = append(args, "--include=/"+e.rel+"/", "--include=/"+e.rel+"/**")
+		}
+		if !e.isDir || !e.known {
+			args = append(args, "--include=/"+e.rel)
+		}
+	}
+	args = append(args, "--exclude=*")
+	return args
 }
 
 // PullDirect runs a plain rsync pull (target → workspace, --update, with
