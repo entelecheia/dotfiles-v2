@@ -79,6 +79,8 @@ Deprecated aliases: 'dot gsync', 'dot gdrive-sync'.`,
 		newSyncIntakeCmd(),
 		newSyncInboxCmd(),
 		newSyncStatusCmd(),
+		newSyncLogCmd(),
+		newSyncConfigureCmd(),
 		newSyncOwnerCmd(),
 		newSyncConflictsCmd(),
 		newSyncSetupCmd(),
@@ -183,6 +185,8 @@ func newSyncFiltersCmd() *cobra.Command {
 		SilenceUsage: true,
 	}
 	cmd.AddCommand(
+		newSyncFiltersGetCmd(),
+		newSyncFiltersSetCmd(),
 		&cobra.Command{
 			Use:          "show",
 			Short:        "Print the effective ordered filter rule chain",
@@ -1249,11 +1253,13 @@ func tombstonePaths(tombstones []syncer.Tombstone) []string {
 // ── status ───────────────────────────────────────────────────────────────
 
 func newSyncStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show local↔mirror sync status",
 		RunE:  runSyncStatus,
 	}
+	cmd.Flags().Bool("json", false, "print a stable machine-readable status document")
+	return cmd
 }
 
 func runSyncStatus(cmd *cobra.Command, _ []string) error {
@@ -1268,6 +1274,10 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	st, err := syncer.GetStatus(cmd.Context(), runner, cfg, state, sched)
 	if err != nil {
 		return err
+	}
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+	if jsonOutput {
+		return writeSyncStatusJSON(cmd, cfg, st, sched)
 	}
 	p := printerFrom(cmd)
 	p.Header("Sync Status")

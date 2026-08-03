@@ -123,10 +123,12 @@ first and exits cleanly when the other machine is away.`,
 	}
 
 	cmd.AddCommand(newPeerInitCmd())
+	cmd.AddCommand(newPeerStatusCmd())
 	cmd.AddCommand(newPeerDoctorCmd())
 	cmd.AddCommand(newPeerSyncCmd())
 	cmd.AddCommand(newPeerSetupCmd())
 	cmd.AddCommand(newPeerDiffCmd())
+	cmd.AddCommand(newPeerHomePathsCmd())
 	return cmd
 }
 
@@ -781,7 +783,6 @@ func peerBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec
 	runner := exec.NewRunner(dryRun, logger)
 	return state, cfg, runner, nil
 }
-
 func peerHomePathsFile(paths *syncer.LocalPaths) string {
 	return filepath.Join(paths.StoreDir, "home-paths.txt")
 }

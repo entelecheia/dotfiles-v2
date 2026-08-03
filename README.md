@@ -461,9 +461,19 @@ dot sync fetch <path>...                  # on-demand restore of specific files/
 
 dot sync filters show                     # print the ordered filter layer chain
 dot sync filters reset                    # regenerate exclude/include from templates (backups kept)
+dot sync filters get ignore --json        # stable editor API for one filter file
+printf '*.tmp\n' | dot sync filters set ignore --json
+
+dot sync configure --target local:~/Dropbox/work \
+  --owner "$(hostname -s)" --filter-mode include \
+  --propagate create,update --max-delete 1000 \
+  --push-interval 10m --pull-interval 0 \
+  --push-mode clean --pull-mode clean --json
 
 dot sync inbox                            # show staging + manifest counters
 dot sync status                           # target, filters, secrets allows, schedulers, last runs
+dot sync status --json                    # stable schemaVersion=1 status API
+dot sync log --tail=200 --json            # bounded machine-readable log tail
 dot sync conflicts / conflicts prune      # inspect / prune .sync-conflicts backups
 dot sync pause / resume                   # paused gate for all operations
 dot sync shared                           # manual shared-folder exclusions
@@ -610,7 +620,17 @@ dot peer doctor                       # check before transferring
 dot peer sync [--dry-run]             # pull, quarantine deletes, push, then host paths
 dot peer diff                         # paths that changed on BOTH machines
 dot peer setup --interval=15m         # schedule it (--off to remove)
+dot peer status --json                # profile + launchd status, no SSH probe
+dot peer home-paths get --json        # read the host-path allowlist
+printf '.ssh\n.gitconfig\n' | dot peer home-paths set --json
 ```
+
+The `--json` status and editor commands are the supported integration surface
+for desktop clients such as Maru. Status documents use `schemaVersion: 1`;
+callers must reject unknown schema versions rather than guessing. Filter and
+home-path replacement commands read stdin, cap input at 1 MiB, and write by
+atomic rename. Increasing active patterns in `allow.txt` additionally requires
+`--ack-secret-exposure`.
 
 **Addressing a machine that moves.** Use a hostname that survives a network
 change. A Tailscale MagicDNS name (`<machine>.<tailnet>.ts.net`) works from any
