@@ -21,6 +21,10 @@ import (
 // The guard is deliberately opt-in (empty Owner = unrestricted) so upgrading
 // `dot` does not break a workspace that has not declared an owner yet.
 
+// scutilPath is where macOS keeps scutil. Resolving it by PATH is not safe:
+// see MachineNames.
+const scutilPath = "/usr/sbin/scutil"
+
 // ShortHostname returns the machine's hostname without its domain suffix.
 // launchd and Bonjour hand back "foo.local" in some contexts and "foo" in
 // others, so compare on the short form only.
@@ -60,7 +64,13 @@ func MachineNames() []string {
 	}
 	if runtime.GOOS == "darwin" {
 		for _, key := range []string{"LocalHostName", "ComputerName"} {
-			if b, err := osexec.Command("scutil", "--get", key).Output(); err == nil {
+			// Absolute path, not PATH lookup: launchd hands agents a minimal
+			// PATH (/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin) with no
+			// /usr/sbin, so a bare "scutil" resolves interactively and fails
+			// under the scheduler. That asymmetry made the guard reject the
+			// very machine that owned the profile, and only in the scheduled
+			// run - the interactive check kept reporting success.
+			if b, err := osexec.Command(scutilPath, "--get", key).Output(); err == nil {
 				add(string(b))
 			}
 		}

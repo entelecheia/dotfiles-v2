@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -384,5 +385,30 @@ func TestSchedulerUnitsAreProfileScoped(t *testing.T) {
 	}
 	if svc := profiledServiceName(SchedulerKindPush, "peer"); svc == profiledServiceName(SchedulerKindPush, DefaultProfile) {
 		t.Error("systemd unit name is not profile-scoped")
+	}
+}
+
+// TestMachineNamesSurvivesMinimalPATH reproduces the launchd failure: the
+// scheduler hands agents a PATH without /usr/sbin, so a PATH-resolved scutil
+// silently returned nothing and the owner guard locked out the owning machine.
+// Only the scheduled run failed, so the interactive check kept reporting OK.
+func TestMachineNamesSurvivesMinimalPATH(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("scutil is darwin-only")
+	}
+	full := MachineNames()
+	t.Setenv("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin") // launchd's PATH
+	minimal := MachineNames()
+	if len(minimal) != len(full) {
+		t.Fatalf("PATH without /usr/sbin changed identity: %v vs %v", minimal, full)
+	}
+	for i := range full {
+		if full[i] != minimal[i] {
+			t.Fatalf("PATH without /usr/sbin changed identity: %v vs %v", minimal, full)
+		}
+	}
+	// And the guard must accept the name we would have recorded as owner.
+	if err := CheckOwner(&Config{Owner: PreferredMachineName()}); err != nil {
+		t.Fatalf("owner guard rejects this machine under launchd PATH: %v", err)
 	}
 }
