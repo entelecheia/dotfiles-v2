@@ -463,8 +463,22 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	conflict := NewConflictDir()
 	args := pushArgs(cfg, conflict, rf, dryRun)
 	fmt.Printf("  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
+	// A partial transfer must still finalize. Returning here would leave the
+	// baseline stale, so every file that DID transfer comes back on the next
+	// run as "mirror-only file is not in baseline", and the conflict set grows
+	// until a clean push refuses outright - the exact failure this avoids.
+	//
+	// Finalizing is safe because RefreshBaseline walks the MIRROR, not the
+	// workspace: a file that failed to transfer is simply absent there, so it
+	// stays out of the baseline and gets retried, while a file that did arrive
+	// is recorded. The partial error is still returned so callers can classify
+	// it and report it rather than claim a clean push.
+	var partial error
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
-		return err
+		if !IsPartialTransfer(err) {
+			return err
+		}
+		partial = err
 	}
 	if !dryRun && cfg.LocalPaths != nil {
 		// Fast (stat-only) fingerprints: a strict pass would read every
@@ -481,7 +495,7 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 			return fmt.Errorf("state update: %w", err)
 		}
 	}
-	return nil
+	return partial
 }
 
 // Sync is now a thin alias for Push — the historical bidirectional Pull

@@ -431,3 +431,46 @@ func sameNameSet(a, b []string) bool {
 	}
 	return true
 }
+
+// TestPushFinalizesAfterPartialTransfer pins the ordering the reviewer caught:
+// converting a partial transfer to success at the CLI layer is not enough,
+// because Push returned before RefreshBaseline. A stale baseline makes every
+// file that DID transfer reappear next run as "mirror-only file is not in
+// baseline", and the conflict set grows until a clean push refuses outright.
+//
+// Asserting on source order rather than behavior is deliberate: faking rsync
+// here would need an exec seam that does not exist, and the bug was purely one
+// of control flow - an early return placed above the finalization.
+func TestPushFinalizesAfterPartialTransfer(t *testing.T) {
+	src, err := os.ReadFile("sync.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func Push(")
+	if start < 0 {
+		t.Fatal("Push not found")
+	}
+	end := strings.Index(body[start:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not bound Push")
+	}
+	push := body[start : start+end]
+
+	rsyncAt := strings.Index(push, "runRsync(")
+	guardAt := strings.Index(push, "IsPartialTransfer(")
+	baselineAt := strings.Index(push, "RefreshBaseline(")
+	if rsyncAt < 0 || baselineAt < 0 {
+		t.Fatal("Push no longer calls runRsync and RefreshBaseline")
+	}
+	if guardAt < 0 {
+		t.Fatal("Push does not classify partial transfers; exit 23 would skip finalization")
+	}
+	if rsyncAt >= guardAt || guardAt >= baselineAt {
+		t.Errorf("expected runRsync -> IsPartialTransfer -> RefreshBaseline, got %d/%d/%d",
+			rsyncAt, guardAt, baselineAt)
+	}
+	if !strings.Contains(push, "return partial") {
+		t.Error("Push must surface the partial error so callers can report it")
+	}
+}
