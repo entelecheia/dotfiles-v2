@@ -1034,9 +1034,9 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 				return nil
 			}
 		}
-		pushErr := syncer.Push(cmd.Context(), runner, cfg, dryRun)
+		pushErr := reportPushPartial(p, syncer.Push(cmd.Context(), runner, cfg, dryRun))
 		recordSyncResult(state, cfg, "push", pushErr, dryRun)
-		if pushErr = reportPushPartial(p, pushErr); pushErr != nil {
+		if pushErr != nil {
 			return fmt.Errorf("push failed: %w", pushErr)
 		}
 		p.Line("✓ Push complete.")
@@ -1077,9 +1077,9 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 			return nil
 		}
 	}
-	pushErr := syncer.Push(cmd.Context(), runner, cfg, false)
+	pushErr := reportPushPartial(p, syncer.Push(cmd.Context(), runner, cfg, false))
 	recordSyncResult(state, cfg, "push", pushErr, false)
-	if pushErr = reportPushPartial(p, pushErr); pushErr != nil {
+	if pushErr != nil {
 		return fmt.Errorf("push failed: %w", pushErr)
 	}
 	p.Line("✓ Push complete.")
