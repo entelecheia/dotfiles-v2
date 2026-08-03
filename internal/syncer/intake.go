@@ -354,18 +354,19 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 	}
 	walkRoot := mirror
 	requireLocalTwin := true
-	if cfg.Target.IsSSH() {
+	remoteBaseline := cfg.Target.IsSSH()
+	if remoteBaseline {
 		walkRoot = local
 		requireLocalTwin = false
 	}
 	entries := map[string]Fingerprint{}
 	err = filepath.WalkDir(walkRoot, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
-			// An unreadable walk root would produce an empty baseline and
-			// wreck delete propagation — abort. Deeper errors (cloud
-			// placeholder dirs timing out under load) skip the subtree so
-			// one slow directory doesn't fail the whole push.
-			if absPath == walkRoot {
+			// An incomplete SSH inventory would retire baseline keys and make
+			// later local deletions indistinguishable from peer-only paths. Fail
+			// closed there. Local mirrors can still skip slow cloud-placeholder
+			// subtrees because their baseline is rebuilt from the mirror itself.
+			if remoteBaseline || absPath == walkRoot {
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "warning: baseline walk skipping %s: %v\n", absPath, err)
@@ -406,6 +407,9 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 		}
 		fp, err := FingerprintFile(absPath, mode)
 		if err != nil {
+			if remoteBaseline {
+				return fmt.Errorf("fingerprinting %s: %w", rel, err)
+			}
 			return nil
 		}
 		entries[rel] = fp

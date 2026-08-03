@@ -18,8 +18,13 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-// PeerProfile is the sync profile name used for machine-to-machine sync.
-const PeerProfile = "peer"
+const (
+	// PeerProfile is the sync profile name used for machine-to-machine sync.
+	PeerProfile = syncer.PeerProfile
+	// Peer deletions are normally tens of inbox paths. Keep the new-profile cap
+	// well below the mirror's broader 1000-path default.
+	peerDefaultMaxDelete = 100
+)
 
 // peerAllowHeader seeds the peer profile's allow.txt. The cloud mirror keeps
 // secrets out; a peer is a second machine the operator already trusts with the
@@ -165,7 +170,8 @@ inbound port, which is what a laptop needs.`,
 			if err != nil {
 				return err
 			}
-			if !ok || local == nil {
+			newProfile := !ok || local == nil
+			if newProfile {
 				local = &syncer.LocalConfig{}
 			}
 			local.Target = "ssh:" + host + ":" + remotePath
@@ -180,12 +186,13 @@ inbound port, which is what a laptop needs.`,
 			// this expensive - node_modules, target, .next, .venv, __pycache__ -
 			// and secrets remain governed by allow.txt.
 			local.FilterMode = syncer.FilterModeExclude
-			// Deletions propagate. Without this a file removed on one machine
-			// returns on the next pull, which breaks any workflow whose normal
-			// course is to remove files. It is safe because removals are
-			// quarantined rather than unlinked, only baseline-recorded paths
-			// are eligible, and max_delete caps the set.
-			local.Propagation = syncer.PropagationPolicy{Create: true, Update: true, Delete: true}
+			if newProfile {
+				// Deletions propagate for a new peer profile. Without this a file
+				// removed on one machine returns on the next pull. Re-running init
+				// must preserve an operator's later opt-out.
+				local.Propagation = syncer.PropagationPolicy{Create: true, Update: true, Delete: true}
+				local.MaxDelete = peerDefaultMaxDelete
+			}
 			local.IncludeSubmodules = true
 			// Peer profiles are per-machine by construction (the store is
 			// gitignored), so the owner is simply this machine. Use the DNS-safe
@@ -209,7 +216,14 @@ inbound port, which is what a laptop needs.`,
 			p.KV("store", paths.StoreDir)
 			p.KV("secrets", "opted in via "+paths.AllowFile)
 			p.KV("host paths", peerHomePathsFile(paths))
-			p.KV("deletes", "never propagated")
+			deletes := "disabled; peer copy retained"
+			if local.Propagation.Delete {
+				deletes = "baseline-recorded paths quarantine on peer"
+				if local.MaxDelete > 0 {
+					deletes = fmt.Sprintf("%s (max %d per run)", deletes, local.MaxDelete)
+				}
+			}
+			p.KV("deletes", deletes)
 			p.Blank()
 			p.Line("Next: dot peer doctor")
 			return nil

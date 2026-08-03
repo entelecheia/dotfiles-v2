@@ -855,3 +855,33 @@ func TestRefreshBaseline_SkipsUnreadableSubdirs(t *testing.T) {
 		t.Fatalf("unreadable subtree should be skipped, not indexed: %v", base)
 	}
 }
+
+func TestRefreshBaseline_SSHRefusesUnreadableSubdirs(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission bits do not block root")
+	}
+	f := newIntakeFixture(t)
+	f.cfg.Target = Target{Kind: TargetSSH, Host: "user@peer", Path: "/remote/work"}
+	f.writeLocal("locked/file.bin", "payload")
+	if err := SaveBaselineManifest(f.cfg.LocalPaths.BaselineFile, map[string]Fingerprint{
+		"previous.bin": {Size: 1, Mtime: time.Now().UTC()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(f.local, "locked")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	if err := RefreshBaseline(f.cfg, FingerprintFast); err == nil {
+		t.Fatal("SSH baseline must fail closed on an incomplete local inventory")
+	}
+	base, err := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := base["previous.bin"]; !ok {
+		t.Fatalf("failed refresh overwrote the prior baseline: %v", base)
+	}
+}

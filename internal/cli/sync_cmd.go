@@ -590,6 +590,9 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectGenericPeerProfile(cfg); err != nil {
+		return err
+	}
 	p := printerFrom(cmd)
 	if !syncPreflight(p, cfg, runner) {
 		return nil
@@ -983,6 +986,9 @@ The per-workspace store (.dotfiles/) and intake staging area
 func runSyncPush(cmd *cobra.Command, _ []string) error {
 	state, cfg, runner, err := syncBootstrap(cmd)
 	if err != nil {
+		return err
+	}
+	if err := rejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
@@ -1556,6 +1562,9 @@ func runSyncResume(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectGenericPeerProfile(cfg); err != nil {
+		return err
+	}
 	p := printerFrom(cmd)
 
 	if cfg.Paused {
@@ -1598,6 +1607,9 @@ func newSyncPauseCmd() *cobra.Command {
 func runSyncPause(cmd *cobra.Command, _ []string) error {
 	_, cfg, runner, err := syncBootstrap(cmd)
 	if err != nil {
+		return err
+	}
+	if err := rejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
@@ -1666,6 +1678,9 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		_, cfg, runner, err = syncBootstrap(cmd)
 	}
 	if err != nil {
+		return err
+	}
+	if err := rejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	ctx := cmd.Context()
@@ -1779,6 +1794,16 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		p.Line("  Paused gate is set — run `dot sync resume` to start syncing.")
 	} else {
 		p.Line("  Run `dot sync push` or `dot sync pull` when you want to sync manually.")
+	}
+	return nil
+}
+
+// The peer profile has a different transaction: compute tombstones, protect
+// the pull, quarantine remote deletions, then push. Generic sync entrypoints
+// skip that transaction and can retire or restore the only deletion evidence.
+func rejectGenericPeerProfile(cfg *syncer.Config) error {
+	if cfg != nil && cfg.Profile == syncer.PeerProfile {
+		return fmt.Errorf("the peer profile must use `dot peer sync` and `dot peer setup`; generic sync push, pull, setup, pause, and resume bypass peer tombstones")
 	}
 	return nil
 }

@@ -5,10 +5,11 @@ Date: 2026-08-04
 
 Three things were learned while building it and are folded in below: the delete
 pass must run before the push, not after (see "Retire tombstones"); rsync
-signals the expected missing source args as a partial transfer (see "Delete on
-the peer, into quarantine"); and turning on `propagation.delete` also arms the
-pre-existing blanket `--delete-after` in the push, which has to be suppressed
-for ssh targets (see "Keep the push additive").
+must be told that the expected missing source args are not errors while every
+remaining partial-transfer outcome fails closed (see "Delete on the peer, into
+quarantine"); and turning on `propagation.delete` also arms the pre-existing
+blanket `--delete-after` in the push, which has to be suppressed for ssh
+targets (see "Keep the push additive").
 
 ## Problem
 
@@ -97,12 +98,13 @@ Without this step, every later step is moot.
 
 ### 3. Delete on the peer, into quarantine
 
-A dedicated pass after the push:
+A dedicated pass after the pull and before the push:
 
 ```
-rsync --files-from=<tombstones> --from0 --delete-missing-args \
+rsync --files-from=<tombstones> --from0 --ignore-missing-args \
+      --delete-missing-args \
       --backup --backup-dir=.sync-conflicts/<ts>/from-workspace \
-      <local>/ <peer>:<path>/
+      <staged-empty-parent-tree>/ <peer>:<path>/
 ```
 
 `--delete-missing-args` removes exactly the listed paths that are missing on
@@ -120,11 +122,18 @@ Verified empirically. Given a tombstone list of `a/gone.txt`:
 This is preferred over `--delete-after`, which would delete every peer path
 absent locally, including files the peer legitimately created.
 
-Every path in the list is missing from the sender by construction, and rsync
-reports absent source args as a partial transfer, exit 23/24. For this pass
-that exit code is the success signal, so `IsPartialTransfer` is treated as
-success and any other error is returned. This only surfaced once the pass ran
-against real rsync; an argv-only test cannot see it.
+Every path in the list is missing from the sender by construction.
+`--ignore-missing-args` makes that expected condition clean while
+`--delete-missing-args` turns the missing entry into the scoped receiver-side
+delete request. Any remaining non-zero exit, including partial-transfer exits
+23/24, is a real failure: it can mean the target removal or quarantine failed.
+The run returns before push so the baseline keeps the tombstone for retry.
+
+The sender is a private temporary tree containing only each tombstone's parent
+directories. Without those parents, rsync reports the implied directories as
+vanished and exits 24 even after a successful nested deletion. Using a staged
+tree avoids that false partial without `--no-implied-dirs`, which could follow
+a receiver-side symlink outside the workspace.
 
 ### 4. Keep the push additive
 
@@ -180,10 +189,21 @@ that would otherwise leave no local record.
   filter presenting the whole tree as deleted.
 - **Quarantine, not removal.** Nothing is unlinked on the peer; files are moved
   under `.sync-conflicts/` and only removed later by the retention purge.
+- **Quarantine containment.** Before the destructive pass, the receiver's
+  workspace and timestamped quarantine components must be real directories,
+  not symlinks or files. Otherwise the pass aborts before rsync.
 - **Dry run.** `--dry-run` reports the tombstone set and the would-be
-  quarantine paths without touching either machine.
+  quarantine paths without changing synchronized payloads or quarantine.
+  Generated local runtime filter/list files may still be refreshed.
 - **Pull is unchanged in kind.** It still never deletes locally. The new filter
   only prevents restoration.
+
+The algorithm has no remote fingerprint inventory or distributed lock. If the
+peer edit exists when the delete pass runs, the local deletion wins and the
+edited copy moves into quarantine. A recreation after the pass can return on a
+later cycle. Operators should avoid overlapping peer runs and review quarantine
+before pruning; this is not equivalent to the changed-after-baseline conflict
+rule available for a locally walkable mirror.
 
 ## Defaults
 
@@ -191,9 +211,20 @@ that would otherwise leave no local record.
 |---|---|---|
 | Quarantine retention | 30 days | Matches the existing `conflicts prune` default. This is the only expiry in the design |
 | Tombstone lifetime | until applied | Expiring a tombstone would resurrect the file; see "Retire tombstones" |
-| `max_delete` | 100 | Routine inbox clearing is tens of files; a larger set means something is wrong |
+| `max_delete` | 100 for newly initialized peer profiles | Routine inbox clearing is tens of files; legacy/unset profiles still resolve through the general sync fallback of 1000 |
 | Scope | peer profile only | The mirror profile has a single writer and does not have this problem |
 | Deployment | both machines | Each Mac runs its own `com.dotfiles.peer` job with itself as owner; symmetric behavior needs the change on both |
+
+The scope is the workspace transfer. The separate explicit host-path pass
+remains additive and does not create or apply tombstones.
+
+The peer baseline carries a machine-local target marker written only after a
+successful SSH push with create and update enabled. A missing or mismatched
+marker makes tombstone detection return an empty set, so a pre-feature baseline,
+a baseline built under a restrictive propagation policy, or a changed target
+cannot authorize deletion. The first full push bootstraps the marker.
+Generic `dot sync push/pull/setup --profile=peer` entrypoints are refused;
+only `dot peer sync` executes the complete tombstone transaction.
 
 ## Testing
 
@@ -201,7 +232,10 @@ that would otherwise leave no local record.
   in-baseline-and-absent (tombstone), not-in-baseline (peer-new, protected),
   filtered-out (ignored), and recreated-locally (not a tombstone).
 - Unit: pull args carry the protective filter; delete-pass args carry
-  `--files-from`, `--from0`, `--delete-missing-args`, and a backup dir.
+  `--files-from`, `--from0`, `--ignore-missing-args`,
+  `--delete-missing-args`, and a backup dir.
+- Unit: a partial-transfer exit from the delete pass remains fatal so push
+  cannot retire an unapplied tombstone.
 - Unit: tombstone count over `max_delete` aborts without invoking rsync.
 - Integration: two local trees standing in for local and peer. Delete a file
   locally, run a full cycle, assert it stays deleted locally, is gone from the

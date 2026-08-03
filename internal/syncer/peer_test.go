@@ -432,16 +432,16 @@ func sameNameSet(a, b []string) bool {
 	return true
 }
 
-// TestPushFinalizesAfterPartialTransfer pins the ordering the reviewer caught:
-// converting a partial transfer to success at the CLI layer is not enough,
-// because Push returned before RefreshBaseline. A stale baseline makes every
-// file that DID transfer reappear next run as "mirror-only file is not in
-// baseline", and the conflict set grows until a clean push refuses outright.
+// TestPushFinalizesLocalTargetAfterPartialTransfer pins the ordering the
+// reviewer caught for a local mirror: converting a partial transfer to success
+// at the CLI layer is not enough, because Push once returned before
+// RefreshBaseline. SSH targets deliberately return before refresh because
+// their baseline cannot confirm which paths reached the remote.
 //
 // Asserting on source order rather than behavior is deliberate: faking rsync
 // here would need an exec seam that does not exist, and the bug was purely one
 // of control flow - an early return placed above the finalization.
-func TestPushFinalizesAfterPartialTransfer(t *testing.T) {
+func TestPushFinalizesLocalTargetAfterPartialTransfer(t *testing.T) {
 	src, err := os.ReadFile("sync.go")
 	if err != nil {
 		t.Fatal(err)

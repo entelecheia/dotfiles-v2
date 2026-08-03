@@ -583,20 +583,31 @@ questions:
 | writers | exactly one | both |
 | secrets | excluded | included (own `allow.txt`) |
 | submodule working trees | excluded (they travel via Git) | included |
-| deletes | propagated if configured | never |
+| deletes | propagated if configured | baseline-recorded paths quarantined on the peer (enabled by `peer init`) |
 | purpose | read the workspace from a phone | keep two machines interchangeable |
 
 Peer sync includes secrets because a peer is a machine you already trust with
 the same work, and the workspace does not run there without its env files. It
 includes submodule working trees because uncommitted work inside a submodule is
-precisely what Git has not seen. It never deletes: deletion is the one
-irreversible operation and there is no shared history to justify it, so a file
-removed on one machine simply stops being sent.
+precisely what Git has not seen. `dot peer init` enables deletion propagation:
+a path present in the last successful push but now absent locally is protected
+from pull restoration, then moved on the peer into `.sync-conflicts/` quarantine
+before the next push. Peer-created paths absent from the baseline are spared,
+and `peer init` sets `max_delete: 100` for new profiles. Set
+`propagation.delete: false` to keep the peer copy instead. Deploy the same dot
+version on both machines before enabling the scheduler; an older peer does not
+understand tombstones and can send a retained copy back. Deletion propagation
+applies to the workspace pass only; the explicit host-path pass remains
+additive. After an upgrade or peer-target change, the first successful full
+create/update push establishes a target-bound baseline; deletion starts on a
+later run. Run peer transfers and scheduling through `dot peer`; generic
+`dot sync push/pull/setup --profile=peer` is refused because it bypasses the
+tombstone transaction.
 
 ```bash
 dot peer init --host user@host        # write the peer profile
 dot peer doctor                       # check before transferring
-dot peer sync [--dry-run]             # pull, push, then host paths
+dot peer sync [--dry-run]             # pull, quarantine deletes, push, then host paths
 dot peer diff                         # paths that changed on BOTH machines
 dot peer setup --interval=15m         # schedule it (--off to remove)
 ```
@@ -618,6 +629,12 @@ all, and cannot even be verified over SSH.
 keeps both versions. When timestamps do not order cleanly rsync skips it in both
 directions - nothing is lost, but the machines quietly stop agreeing, which is
 what `dot peer diff` surfaces.
+
+If the peer's edit exists when the delete pass runs, local delete wins and the
+edited copy moves into `.sync-conflicts/` rather than being pulled back. A peer
+recreation after that pass can return on a later cycle because there is no
+distributed lock; avoid overlapping manual/scheduled peer runs and review
+conflicts before pruning them.
 
 **Offline peers.** An unreachable peer exits 0. That is what makes the scheduled
 job safe on a laptop that comes and goes.

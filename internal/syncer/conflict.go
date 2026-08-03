@@ -27,9 +27,11 @@ type ConflictDir struct {
 	Timestamp string
 }
 
-// NewConflictDir mints a fresh filesystem-safe RFC3339 timestamp.
+// NewConflictDir mints a fresh filesystem-safe timestamp with subsecond
+// resolution. A retry in the same wall-clock second must not overwrite the
+// quarantined copy created by the prior pass.
 func NewConflictDir() *ConflictDir {
-	return &ConflictDir{Timestamp: newTimestamp()}
+	return &ConflictDir{Timestamp: newSubSecondTimestamp()}
 }
 
 // PullBackupRel returns the --backup-dir argument for the pull pass,

@@ -321,7 +321,7 @@ func pullArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool) []string {
 	args := commonArgs(cfg, rf)
 	prop := cfg.Propagation
-	if cfg.Target.IsSSH() {
+	if cfg.Target.IsSSH() && cfg.Profile == PeerProfile {
 		// Blanket --delete removes every target path absent locally. Against a
 		// mirror that is the intended meaning; against a peer it is most of the
 		// other machine's tree, including everything it created that has not
@@ -493,11 +493,12 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	// run as "mirror-only file is not in baseline", and the conflict set grows
 	// until a clean push refuses outright - the exact failure this avoids.
 	//
-	// Finalizing is safe because RefreshBaseline walks the MIRROR, not the
-	// workspace: a file that failed to transfer is simply absent there, so it
-	// stays out of the baseline and gets retried, while a file that did arrive
-	// is recorded. The partial error is still returned so callers can classify
-	// it and report it rather than claim a clean push.
+	// Finalizing is safe for a local target because RefreshBaseline walks the
+	// MIRROR: a file that failed to transfer is absent there and gets retried.
+	// An SSH baseline instead walks the local tree, so refreshing after a partial
+	// push would falsely record unsent paths as peer-seen and could later turn a
+	// local delete into deletion of independent peer work. Keep that baseline
+	// unchanged on partial SSH pushes.
 	var partial error
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
 		if !IsPartialTransfer(err) {
@@ -505,14 +506,27 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 		}
 		partial = err
 	}
+	if partial != nil && cfg.Target.IsSSH() {
+		return partial
+	}
 	if !dryRun && cfg.LocalPaths != nil {
 		// Fast (stat-only) fingerprints: a strict pass would read every
 		// payload file on the mirror, which forces cloud-placeholder
 		// filesystems (Dropbox online-only files) to download the entire
 		// tree. FingerprintsCompatible falls back to size+mtime when a
 		// manifest entry carries no sha, so fast entries stay comparable.
-		if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
-			return fmt.Errorf("baseline refresh: %w", err)
+		fullPeerPush := cfg.Target.IsSSH() && cfg.Profile == PeerProfile &&
+			cfg.Propagation.Create && cfg.Propagation.Update
+		partialPeerPolicy := cfg.Target.IsSSH() && cfg.Profile == PeerProfile && !fullPeerPush
+		if !partialPeerPolicy {
+			if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
+				return fmt.Errorf("baseline refresh: %w", err)
+			}
+			if fullPeerPush {
+				if err := markPeerBaselineTarget(cfg); err != nil {
+					return err
+				}
+			}
 		}
 		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
 			s.LastPush = time.Now().UTC()

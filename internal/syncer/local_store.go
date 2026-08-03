@@ -213,7 +213,10 @@ func ResolveLocalPaths(localPath string) *LocalPaths {
 // ignores /.dotfiles/* and whitelists only sync/, so a peer baseline never
 // enters git. Two machines writing one shared baseline would otherwise produce
 // merge conflicts in the very file that coordinates them.
-const DefaultProfile = "sync"
+const (
+	DefaultProfile = "sync"
+	PeerProfile    = "peer"
+)
 
 // NormalizeProfile trims and defaults a profile name.
 func NormalizeProfile(profile string) string {
