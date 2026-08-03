@@ -452,9 +452,7 @@ func TestPullArgs_StillNeverDeletes(t *testing.T) {
 // peer. Proves the property the whole feature rests on: the listed path is
 // removed and quarantined, and a path the peer created is left alone.
 func TestPropagateDeletes_RemovesListedPathAndSparesPeerOnlyFile(t *testing.T) {
-	if _, err := exec.LookPath("rsync"); err != nil {
-		t.Skip("rsync not installed")
-	}
+	requireDeleteMissingArgsRsync(t)
 	root := t.TempDir()
 	local := filepath.Join(root, "local")
 	peer := filepath.Join(root, "peer")
@@ -506,6 +504,22 @@ func TestPropagateDeletes_RemovesListedPathAndSparesPeerOnlyFile(t *testing.T) {
 	}
 	if string(body) != "removed" {
 		t.Errorf("quarantined content = %q, want %q", body, "removed")
+	}
+}
+
+func requireDeleteMissingArgsRsync(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("rsync"); err != nil {
+		t.Skip("rsync not installed")
+	}
+	help, err := exec.Command("rsync", "--help").CombinedOutput()
+	if err != nil {
+		t.Skipf("cannot inspect rsync capabilities: %v", err)
+	}
+	for _, option := range []string{"--ignore-missing-args", "--delete-missing-args"} {
+		if !strings.Contains(string(help), option) {
+			t.Skipf("rsync does not support %s (peer deletion requires rsync 3.x)", option)
+		}
 	}
 }
 
