@@ -214,6 +214,13 @@ func HasMemoryInstructions(path string) bool {
 // associated with the workspace recorded in its Kimi/Kiro sidecar metadata.
 func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error) {
 	watches := append(m.kimiWatches(), m.kiroWatches()...)
+	if watches == nil {
+		// A machine with no Kimi/Kiro sessions yet leaves this nil, and a nil
+		// slice marshals to `null`, which the plugin's watcher rejects as an
+		// invalid config - so a fresh machine got a bridge that exited 1 on
+		// every start while `dot ai memory install` reported success.
+		watches = []transcriptWatch{}
+	}
 	sort.Slice(watches, func(i, j int) bool { return watches[i].Path < watches[j].Path })
 	return transcriptWatchConfig{
 		Version: 1,

@@ -1,6 +1,7 @@
 package aisettings
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -173,5 +174,30 @@ func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestTranscriptConfigWatchesIsArrayWhenEmpty pins the JSON shape, not the Go
+// value: a nil slice marshals to `null`, and the plugin's watcher rejects that
+// as an invalid config. A machine with no Kimi/Kiro sessions is exactly the
+// fresh-install case, so this failed only where it mattered most.
+func TestTranscriptConfigWatchesIsArrayWhenEmpty(t *testing.T) {
+	m := &ClaudeMemManager{HomeDir: t.TempDir()} // no kimi/kiro sessions
+	cfg, err := m.BuildTranscriptConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Watches) != 0 {
+		t.Fatalf("expected no watches, got %d", len(cfg.Watches))
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"watches":null`)) {
+		t.Errorf("watches serialized as null; the plugin rejects that config:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"watches":[]`)) {
+		t.Errorf("watches is not an empty array:\n%s", raw)
 	}
 }
