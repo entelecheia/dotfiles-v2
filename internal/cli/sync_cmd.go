@@ -79,6 +79,7 @@ Deprecated aliases: 'dot gsync', 'dot gdrive-sync'.`,
 		newSyncIntakeCmd(),
 		newSyncInboxCmd(),
 		newSyncStatusCmd(),
+		newSyncOwnerCmd(),
 		newSyncConflictsCmd(),
 		newSyncSetupCmd(),
 		newSyncResumeCmd(),
@@ -2169,4 +2170,81 @@ func stripTrailingSlash(p string) string {
 		return p[:len(p)-1]
 	}
 	return p
+}
+
+// newSyncOwnerCmd shows or moves the writer of a profile.
+//
+// The mirror is a single-writer channel: each machine keeps its own baseline and
+// the mirror profile runs with delete propagation on, so two pushers take turns
+// undoing each other. Ownership is therefore an explicit, recorded decision
+// rather than something inferred at run time.
+func newSyncOwnerCmd() *cobra.Command {
+	var setSelf bool
+	var setTo string
+	var clearOwner bool
+	cmd := &cobra.Command{
+		Use:   "owner",
+		Short: "Show or set which machine may push this profile",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			p := printerFrom(c)
+			_, cfg, _, err := syncBootstrap(c)
+			if err != nil {
+				return err
+			}
+			paths := cfg.LocalPaths
+			if paths == nil {
+				return fmt.Errorf("profile store unresolved")
+			}
+			names := syncer.MachineNames()
+
+			if !setSelf && setTo == "" && !clearOwner {
+				p.KV("profile", cfg.Profile)
+				if strings.TrimSpace(cfg.Owner) == "" {
+					p.KV("owner", "(unset - any machine may push)")
+				} else {
+					p.KV("owner", cfg.Owner)
+				}
+				p.KV("this machine", strings.Join(names, ", "))
+				if err := syncer.CheckOwner(cfg); err != nil {
+					p.Warn("this machine may NOT push this profile")
+				} else {
+					p.Success("this machine may push this profile")
+				}
+				return nil
+			}
+
+			local, ok, err := syncer.LoadLocalConfig(paths)
+			if err != nil {
+				return err
+			}
+			if !ok || local == nil {
+				return fmt.Errorf("profile %q has no config yet; run dot sync init first", cfg.Profile)
+			}
+			switch {
+			case clearOwner:
+				local.Owner = ""
+			case setSelf:
+				local.Owner = syncer.PreferredMachineName()
+				if local.Owner == "" {
+					return fmt.Errorf("cannot determine this machine's name")
+				}
+			default:
+				local.Owner = setTo
+			}
+			if err := syncer.SaveLocalConfig(paths, local); err != nil {
+				return err
+			}
+			if local.Owner == "" {
+				p.Success("owner cleared for profile %q (any machine may push)", cfg.Profile)
+			} else {
+				p.Success("owner of profile %q is now %q", cfg.Profile, local.Owner)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&setSelf, "set-self", false, "claim ownership for this machine")
+	cmd.Flags().StringVar(&setTo, "set", "", "set ownership to a specific machine name")
+	cmd.Flags().BoolVar(&clearOwner, "clear", false, "remove the ownership restriction")
+	return cmd
 }

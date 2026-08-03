@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -159,10 +160,11 @@ inbound port, which is what a laptop needs.`,
 			// Never delete across peers.
 			local.Propagation = syncer.PropagationPolicy{Create: true, Update: true, Delete: false}
 			local.IncludeSubmodules = true
-			if hostname, err := syncer.ShortHostname(); err == nil {
-				// Peer profiles are per-machine by construction (the store is
-				// gitignored), so the owner is simply this machine.
-				local.Owner = hostname
+			// Peer profiles are per-machine by construction (the store is
+			// gitignored), so the owner is simply this machine. Use the DNS-safe
+			// name rather than os.Hostname(), which can be the generic "Mac".
+			if name := syncer.PreferredMachineName(); name != "" {
+				local.Owner = name
 			}
 			if err := syncer.SaveLocalConfig(paths, local); err != nil {
 				return err
@@ -314,11 +316,11 @@ Checks, and why each exists:
                  verified over ssh — a reminder, not a failure`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
-			state, cfg, runner, err := peerBootstrap(c)
+			_, cfg, _, err := peerBootstrap(c)
 			if err != nil {
 				return err
 			}
-			_ = state
+			runner := probeRunner()
 			if !cfg.Target.IsSSH() {
 				return fmt.Errorf("peer profile target is %q, expected an ssh: target; run dot peer init", cfg.Target.String())
 			}
@@ -402,11 +404,12 @@ on a laptop.`,
 			}
 			ctx := context.Background()
 
-			if err := syncer.CheckSSH(ctx, runner, cfg.Target.Host); err != nil {
+			probe := probeRunner()
+			if err := syncer.CheckSSH(ctx, probe, cfg.Target.Host); err != nil {
 				p.Warn("peer %s unreachable; nothing to do", cfg.Target.Host)
 				return nil
 			}
-			rp, err := syncer.RemoteRsyncPath(ctx, runner, cfg.Target.Host)
+			rp, err := syncer.RemoteRsyncPath(ctx, probe, cfg.Target.Host)
 			if err != nil {
 				return err
 			}
@@ -515,6 +518,19 @@ func reportPartial(p *Printer, err error) error {
 	return err
 }
 
+// probeRunner is always live, even under --dry-run.
+//
+// Reachability, the remote rsync version and the clock are read-only questions
+// about the peer, and a dry-run runner does not execute anything - it returns
+// empty output. That made every probe answer "nothing found", so `peer sync
+// --dry-run` failed with "no rsync found" against a peer doctor had just
+// confirmed. A dry run must still be able to inspect the remote; only the
+// transfer itself is what --dry-run holds back.
+func probeRunner() *exec.Runner {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	return exec.NewRunner(false, logger)
+}
+
 func peerBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec.Runner, error) {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	state, err := config.LoadState()
@@ -527,7 +543,9 @@ func peerBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec
 	}
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	cfg.Verbose = verbose
-	runner := exec.NewRunner(dryRun, nil)
+	// exec.Runner dereferences its logger, so nil panics on the first Info call.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	runner := exec.NewRunner(dryRun, logger)
 	return state, cfg, runner, nil
 }
 

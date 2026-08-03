@@ -300,3 +300,20 @@ func gitAddCommit(t *testing.T, dir, msg string) {
 		}
 	}
 }
+
+func TestPreferredMachineNameIsDNSSafeAndSpecific(t *testing.T) {
+	got := PreferredMachineName()
+	if got == "" {
+		t.Skip("no machine name available")
+	}
+	if !dnsSafeName(got) {
+		t.Errorf("PreferredMachineName() = %q, which is not DNS-safe; owner values get typed and diffed", got)
+	}
+	if got == "mac" && len(MachineNames()) > 1 {
+		t.Errorf("picked the generic default %q despite better candidates %v", got, MachineNames())
+	}
+	// Whatever it picks must actually satisfy the guard on this machine.
+	if err := CheckOwner(&Config{Profile: "sync", Owner: got}); err != nil {
+		t.Errorf("PreferredMachineName() = %q but CheckOwner rejects it: %v", got, err)
+	}
+}
