@@ -397,7 +397,15 @@ walks the whole tree.`,
 			ctx := context.Background()
 
 			if off {
+				dryRun, _ := c.Flags().GetBool("dry-run")
 				_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
+				if dryRun {
+					// runner already skipped the bootout; removing the plist here
+					// anyway would leave a loaded job with no on-disk definition,
+					// which is the opposite of a preview.
+					p.Line("dry-run: would remove %s", plist)
+					return nil
+				}
 				if err := os.Remove(plist); err != nil && !os.IsNotExist(err) {
 					return err
 				}
@@ -540,9 +548,18 @@ on a laptop.`,
 				return err
 			}
 			if !cfg.Target.IsSSH() {
-				return fmt.Errorf("peer target is not ssh:; run dot peer init --host ...")
+				return fmt.Errorf("peer target is not an ssh target; run: dot peer init --host <user@host>")
 			}
 			ctx := context.Background()
+
+			// One peer run at a time. The scheduled job and a manual run would
+			// otherwise overlap and drive concurrent rsync writes into the same
+			// tree and the same conflict directory.
+			release, err := syncer.AcquireLock(cfg.LockDir)
+			if err != nil {
+				return fmt.Errorf("another peer sync is already running: %w", err)
+			}
+			defer release()
 
 			probe := probeRunner()
 			if err := syncer.CheckSSH(ctx, probe, cfg.Target.Host); err != nil {

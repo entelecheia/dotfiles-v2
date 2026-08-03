@@ -154,35 +154,43 @@ func submodulePathsForScan(root string) []string {
 }
 
 // gitTrackedInSubmodules collects tracked files inside each submodule, keyed by
-// path relative to the outer workspace, recursing into nested submodules.
+// path relative to the outer workspace, recursing to any depth.
 //
 // `git ls-files` at the root reports a submodule as a single gitlink and never
 // descends, so without this the include layer has no entry for anything inside
 // one. That gap is invisible until a tracked file also matches an exclude
 // pattern: rsync then skips it and the receiver reports a deletion.
+//
+// Depth matters here - dev/ carries submodules that carry their own. A
+// fixed two-level walk would silently drop the third level and reintroduce
+// exactly the bug this exists to prevent.
 func gitTrackedInSubmodules(root string, subs []string) map[string]bool {
 	out := map[string]bool{}
-	root = strings.TrimRight(root, "/")
+	collectTrackedInSubmodules(strings.TrimRight(root, "/"), "", subs, out, 0)
+	return out
+}
+
+// maxSubmoduleDepth bounds the walk. Real trees are 2-3 deep; the limit only
+// exists so a pathological or cyclic layout cannot spin forever.
+const maxSubmoduleDepth = 8
+
+func collectTrackedInSubmodules(absRoot, relPrefix string, subs []string, out map[string]bool, depth int) {
+	if depth >= maxSubmoduleDepth {
+		return
+	}
 	for _, sub := range subs {
 		sub = strings.Trim(filepath.ToSlash(sub), "/")
 		if sub == "" {
 			continue
 		}
-		abs := filepath.Join(root, sub)
-		for rel := range gitTrackedForSync(abs) {
-			out[sub+"/"+rel] = true
+		abs := filepath.Join(absRoot, sub)
+		rel := sub
+		if relPrefix != "" {
+			rel = relPrefix + "/" + sub
 		}
-		// Nested submodules: dev/ carries its own set, and their working trees
-		// hold uncommitted work too.
-		for _, nested := range gitSubmodulePaths(abs) {
-			nested = strings.Trim(filepath.ToSlash(nested), "/")
-			if nested == "" {
-				continue
-			}
-			for rel := range gitTrackedForSync(filepath.Join(abs, nested)) {
-				out[sub+"/"+nested+"/"+rel] = true
-			}
+		for f := range gitTrackedForSync(abs) {
+			out[rel+"/"+f] = true
 		}
+		collectTrackedInSubmodules(abs, rel, gitSubmodulePaths(abs), out, depth+1)
 	}
-	return out
 }

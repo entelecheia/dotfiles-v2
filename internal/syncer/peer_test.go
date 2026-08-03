@@ -339,3 +339,50 @@ func TestFreshProfileHasEveryFilterFileRsyncReferences(t *testing.T) {
 		}
 	}
 }
+
+// TestTrackedIncludesRecurseDeeply guards the depth the doc comment promises.
+// A fixed two-level walk silently drops the third level and reintroduces the
+// tracked-but-excluded deletion bug in trees like dev/ that nest submodules.
+func TestTrackedIncludesRecurseDeeply(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	root := t.TempDir()
+	deep := filepath.Join(root, "dev", "outer", "inner")
+	mustMkdir(t, deep)
+	gitInit(t, deep)
+	writeFile(t, filepath.Join(deep, "__pycache__", "deep.pyc"), "x")
+	gitAddCommit(t, deep, "deep")
+
+	got := gitTrackedInSubmodules(root, []string{"dev"})
+	// dev is not itself a repo here, so walk from the level that is.
+	got2 := gitTrackedInSubmodules(filepath.Join(root, "dev"), []string{"outer/inner"})
+	if !got2["outer/inner/__pycache__/deep.pyc"] {
+		t.Errorf("third-level tracked file missing; got %v (and %v)", keys(got2), keys(got))
+	}
+}
+
+func TestSchedulerUnitsAreProfileScoped(t *testing.T) {
+	// Profile-aware file paths are not enough: the unit identifier lives INSIDE
+	// the rendered file, so two profiles would write different files carrying
+	// the same launchd Label and the second load would collide with the first.
+	if got := profiledLabel(SchedulerKindPush, DefaultProfile); got != launchdLabel {
+		t.Errorf("default profile label changed: %s", got)
+	}
+	peer := profiledLabel(SchedulerKindPush, "peer")
+	if peer == launchdLabel {
+		t.Error("peer profile shares the default launchd label")
+	}
+	if !strings.Contains(peer, "peer") {
+		t.Errorf("peer label = %s, want it to name the profile", peer)
+	}
+	if got := profileArg(DefaultProfile); got != "" {
+		t.Errorf("default profile must render no --profile arg, got %q", got)
+	}
+	if got := profileArg("peer"); got != "peer" {
+		t.Errorf("profileArg(peer) = %q", got)
+	}
+	if svc := profiledServiceName(SchedulerKindPush, "peer"); svc == profiledServiceName(SchedulerKindPush, DefaultProfile) {
+		t.Error("systemd unit name is not profile-scoped")
+	}
+}

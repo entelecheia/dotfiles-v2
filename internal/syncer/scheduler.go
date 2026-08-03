@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	osexec "os/exec"
+	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
@@ -102,6 +103,7 @@ type SchedulerTemplateData struct {
 	// Per-kind fields: the templates render the same file twice with
 	// distinct labels/actions so push and intake units don't collide.
 	Label       string // launchd Label
+	Profile     string // sync profile the unit operates on ("" for the default)
 	Action      string // gsync subcommand to run
 	Mode        string // non-interactive run mode (clean|force)
 	Description string // systemd Description= line
@@ -118,6 +120,44 @@ type SchedulerTemplateData struct {
 // Methods Install*Kind / Uninstall*Kind / Pause*Kind / Resume*Kind /
 // StateKind are defined per platform in scheduler_darwin.go and
 // scheduler_other.go.
+// profiledLabel/profiledServiceName keep a non-default profile's units distinct.
+//
+// Making only the file PATHS profile-aware is not enough: the unit identifier
+// lives inside the rendered file, so two profiles would write different files
+// carrying the same launchd Label. The second load either collides with the
+// first or silently replaces it, and the survivor would sync the wrong target.
+func profiledLabel(kind SchedulerKind, profile string) string {
+	base := kind.LaunchdLabel()
+	if profile == "" || profile == DefaultProfile {
+		return base
+	}
+	return strings.Replace(base, "com.dotfiles.sync", "com.dotfiles."+profile, 1)
+}
+
+func profiledServiceName(kind SchedulerKind, profile string) string {
+	base := kind.SystemdServiceName()
+	if profile == "" || profile == DefaultProfile {
+		return base
+	}
+	return strings.Replace(base, "dotfiles-sync", "dotfiles-"+profile, 1)
+}
+
+// profileArg is the value rendered into the unit's command line. Empty for the
+// default profile so existing units render byte-identical to before.
+func profileArg(profile string) string {
+	if profile == "" || profile == DefaultProfile {
+		return ""
+	}
+	return profile
+}
+
+func (s *Scheduler) profile() string {
+	if s == nil || s.Config == nil {
+		return DefaultProfile
+	}
+	return NormalizeProfile(s.Config.Profile)
+}
+
 type Scheduler struct {
 	Runner *exec.Runner
 	Paths  *Paths
@@ -201,10 +241,11 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 		DotfilesPath: dotfilesPath,
 		LogFile:      s.Config.LogFile,
 		Interval:     interval,
-		Label:        kind.LaunchdLabel(),
+		Label:        profiledLabel(kind, s.profile()),
+		Profile:      profileArg(s.profile()),
 		Action:       kind.Action(),
 		Mode:         mode.String(),
 		Description:  kind.Description(),
-		ServiceName:  kind.SystemdServiceName(),
+		ServiceName:  profiledServiceName(kind, s.profile()),
 	}
 }
