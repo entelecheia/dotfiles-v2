@@ -3,10 +3,12 @@
 Status: implemented on `feat/peer-delete-propagation`
 Date: 2026-08-04
 
-Two things were learned while building it and are folded in below: the delete
-pass must run before the push, not after (see "Retire tombstones"), and rsync
+Three things were learned while building it and are folded in below: the delete
+pass must run before the push, not after (see "Retire tombstones"); rsync
 signals the expected missing source args as a partial transfer (see "Delete on
-the peer, into quarantine").
+the peer, into quarantine"); and turning on `propagation.delete` also arms the
+pre-existing blanket `--delete-after` in the push, which has to be suppressed
+for ssh targets (see "Keep the push additive").
 
 ## Problem
 
@@ -61,7 +63,7 @@ reused; its inventory step is not.
 
 ## Design
 
-Four changes, all scoped to the peer profile.
+Five changes, all scoped to the peer profile.
 
 ### 1. Compute tombstones before the pull
 
@@ -84,7 +86,7 @@ The set is *derived* each run rather than accumulated, so it cannot drift out
 of step with the tree. Each newly seen path is also appended to the peer
 profile's `tombstones.log` with its baseline fingerprint and a detection
 timestamp, using the existing `Tombstone` type and `AppendTombstones`. That log
-is an audit trail only; nothing in the algorithm reads it back (step 4).
+is an audit trail only; nothing in the algorithm reads it back (step 5).
 
 ### 2. Protect tombstoned paths during the pull
 
@@ -124,7 +126,25 @@ that exit code is the success signal, so `IsPartialTransfer` is treated as
 success and any other error is returned. This only surfaced once the pass ran
 against real rsync; an argv-only test cannot see it.
 
-### 4. Retire tombstones
+### 4. Keep the push additive
+
+`propagation.delete` already fed `propagationFlags`, which emits
+`--delete-after --max-delete=N` on the push. Turning the knob on therefore
+armed that blanket delete alongside the precise pass. Against a mirror that is
+the intended reading; against a peer, "every target path absent locally" is
+most of the other machine's tree, including everything it created that has not
+been pulled yet.
+
+`pushArgs` now forces `Delete: false` for ssh targets, leaving removal on a
+peer entirely to the pass above. The mirror keeps the blanket behavior.
+
+Found by running against the real peer: rsync hit `--max-delete` and exited 25
+having deleted nothing, so the cap alone stood between the change and an
+emptied peer. The quarantine directories from that run contain only overwrite
+backups, no deletions, which is how it was confirmed as a near miss rather
+than an incident.
+
+### 5. Retire tombstones
 
 No explicit baseline surgery is needed. `Push` ends with `RefreshBaseline`,
 which for an SSH target walks the *local* tree, so a path that is gone locally
@@ -189,6 +209,20 @@ that would otherwise leave no local record.
   file created in the same cycle survives on both sides.
 - Regression: existing peer tests asserting no `--delete*` flags on the pull
   pass must still pass. The pull must remain non-deleting.
+- Regression: an ssh push must carry no `--delete*` flag even with
+  propagation.delete on; a local (mirror) push must still carry
+  `--delete-after`.
+
+Verified live against the real peer on 2026-08-04, with a probe file deleted
+locally and a control file created only on the peer in the same cycle:
+
+| Property | Result |
+|---|---|
+| Probe stays deleted locally after a full cycle | pass |
+| Probe removed from the peer | pass |
+| Probe quarantined on the peer with content intact | pass |
+| Peer-only control file survives on the peer | pass |
+| Peer-only control file still reaches this machine | pass |
 
 ## Out of scope
 
