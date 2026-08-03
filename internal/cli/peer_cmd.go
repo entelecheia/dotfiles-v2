@@ -107,6 +107,7 @@ first and exits cleanly when the other machine is away.`,
 	cmd.AddCommand(newPeerInitCmd())
 	cmd.AddCommand(newPeerDoctorCmd())
 	cmd.AddCommand(newPeerSyncCmd())
+	cmd.AddCommand(newPeerSetupCmd())
 	return cmd
 }
 
@@ -187,6 +188,111 @@ inbound port, which is what a laptop needs.`,
 	}
 	cmd.Flags().StringVar(&host, "host", "", "ssh destination for the other machine (user@host)")
 	cmd.Flags().StringVar(&remotePath, "remote-path", "", "workspace path on the peer (default: same as local)")
+	return cmd
+}
+
+// peerPlistTmpl runs `dot peer sync` on an interval.
+//
+// The PATH is explicit for the same reason the mirror unit's is: launchd hands a
+// job a minimal PATH that finds Apple's /usr/bin/rsync (openrsync) before
+// Homebrew's 3.x. A peer transfer with the wrong rsync fails at data time, not
+// at probe time.
+const peerPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dotfiles.peer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>%s</string>
+    <string>peer</string>
+    <string>sync</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>%d</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>%s</string>
+  <key>StandardErrorPath</key>
+  <string>%s</string>
+</dict>
+</plist>
+`
+
+func newPeerSetupCmd() *cobra.Command {
+	var interval time.Duration
+	var off bool
+	cmd := &cobra.Command{
+		Use:   "setup",
+		Short: "Install or remove the periodic peer sync job",
+		Args:  cobra.NoArgs,
+		Long: `Schedule dot peer sync.
+
+An unreachable peer exits 0, so a laptop that is away simply produces quiet
+no-op runs rather than failures. That is why this can be scheduled at all.
+
+Pick an interval in minutes, not seconds: the payload is large and each run
+walks the whole tree.`,
+		RunE: func(c *cobra.Command, _ []string) error {
+			p := printerFrom(c)
+			_, cfg, runner, err := peerBootstrap(c)
+			if err != nil {
+				return err
+			}
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			plist := filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+			ctx := context.Background()
+
+			if off {
+				_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
+				if err := os.Remove(plist); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				p.Success("peer sync job removed")
+				return nil
+			}
+			if interval < time.Minute {
+				return fmt.Errorf("--interval must be at least 1m (got %s)", interval)
+			}
+			if !cfg.Target.IsSSH() {
+				return fmt.Errorf("peer target is not configured; run dot peer init first")
+			}
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			logFile := cfg.LogFile
+			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+				return err
+			}
+			body := fmt.Sprintf(peerPlistTmpl, exe, int(interval.Seconds()), logFile, logFile)
+			if err := os.WriteFile(plist, []byte(body), 0o644); err != nil {
+				return err
+			}
+			label := "gui/" + strconv.Itoa(os.Getuid()) + "/com.dotfiles.peer"
+			_, _ = runner.Run(ctx, "launchctl", "bootout", label)
+			if _, err := runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(os.Getuid()), plist); err != nil {
+				return fmt.Errorf("loading %s: %w", plist, err)
+			}
+			p.Success("peer sync scheduled every %s", interval)
+			p.KV("plist", plist)
+			p.KV("log", logFile)
+			return nil
+		},
+	}
+	cmd.Flags().DurationVar(&interval, "interval", 15*time.Minute, "how often to sync with the peer")
+	cmd.Flags().BoolVar(&off, "off", false, "remove the scheduled job")
 	return cmd
 }
 
@@ -273,7 +379,7 @@ Checks, and why each exists:
 }
 
 func newPeerSyncCmd() *cobra.Command {
-	var pushOnly, pullOnly bool
+	var pushOnly, pullOnly, skipHome bool
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Exchange workspace and host paths with the peer (both directions)",
@@ -319,6 +425,17 @@ on a laptop.`,
 					return err
 				}
 			}
+
+			// Host paths are a separate pass because they live outside the
+			// workspace and are addressed by an explicit list rather than the
+			// workspace filter chain. Without them the workspace does not run on
+			// the peer: 16 of its 19 submodule remotes are SSH.
+			if !skipHome {
+				p.Section("host paths")
+				if err := reportPartial(p, peerHomeSync(ctx, runner, p, cfg, dryRun, pushOnly, pullOnly)); err != nil {
+					return err
+				}
+			}
 			p.Blank()
 			p.Success("peer sync complete")
 			p.Line("Conflicting edits keep both versions; list them with:")
@@ -328,7 +445,59 @@ on a laptop.`,
 	}
 	cmd.Flags().BoolVar(&pushOnly, "push-only", false, "send local changes without pulling first")
 	cmd.Flags().BoolVar(&pullOnly, "pull-only", false, "receive peer changes without pushing")
+	cmd.Flags().BoolVar(&skipHome, "skip-home", false, "workspace only; skip the host-path pass")
 	return cmd
+}
+
+// peerHomeSync exchanges the explicitly listed host paths.
+//
+// --ignore-missing-args matters: the list is shared between machines and a few
+// entries legitimately do not exist on every one. A missing path must not abort
+// a transfer that has already moved gigabytes.
+func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syncer.Config, dryRun, pushOnly, pullOnly bool) error {
+	list := peerHomePathsFile(cfg.LocalPaths)
+	if _, err := os.Stat(list); err != nil {
+		p.Warn("no host-path list at %s; skipping", list)
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	base := []string{"-aHAX", "--numeric-ids", "-r", "--human-readable", "--stats",
+		"--ignore-missing-args", "--chmod=Du+w", "--files-from=" + list}
+	if cfg.RemoteRsyncPath != "" {
+		base = append(base, "--rsync-path="+cfg.RemoteRsyncPath)
+	}
+	if dryRun {
+		base = append(base, "--dry-run")
+	}
+	base = append(base, "-e", "ssh")
+	remote := cfg.Target.Host + ":"
+
+	// Pull first, same reasoning as the workspace pass: the additive direction
+	// records a conflict before this machine's version goes out.
+	if !pushOnly {
+		args := append(append([]string{}, base...), remote, home+"/")
+		if err := runPeerRsync(ctx, runner, cfg, args); err != nil {
+			return err
+		}
+	}
+	if !pullOnly {
+		args := append(append([]string{}, base...), home+"/", remote)
+		if err := runPeerRsync(ctx, runner, cfg, args); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runPeerRsync(ctx context.Context, runner *exec.Runner, cfg *syncer.Config, args []string) error {
+	if cfg.Verbose {
+		return syncer.ClassifyRsyncError(runner.RunAttached(ctx, "rsync", args...))
+	}
+	_, err := runner.Run(ctx, "rsync", args...)
+	return syncer.ClassifyRsyncError(err)
 }
 
 // reportPartial turns rsync's partial-transfer outcome into a warning instead of

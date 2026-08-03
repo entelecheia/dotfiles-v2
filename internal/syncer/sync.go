@@ -672,6 +672,10 @@ func IsPartialTransfer(err error) bool {
 // after the first pass and silently skip the second one entirely, while
 // reporting success. Callers that care can branch with IsPartialTransfer; the
 // default is still a non-nil error so nothing is swept under the rug.
+// ClassifyRsyncError is the exported form for callers outside this package that
+// run their own rsync (the peer host-path pass).
+func ClassifyRsyncError(err error) error { return classifyRsyncError(err) }
+
 func classifyRsyncError(err error) error {
 	if err == nil {
 		return nil
