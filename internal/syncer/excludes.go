@@ -118,6 +118,13 @@ func commonArgs(cfg *Config, rf runtimeFilters) []string {
 		"--human-readable",
 		"--stats",
 		"--no-links",
+		// A source directory without owner-write is recreated with that mode on
+		// the receiver, and rsync then cannot mkstemp inside it: "Permission
+		// denied (13)" and exit 23. Measured: one dr-xr-xr-x directory in an 88 GB
+		// tree held the only two files that failed a full transfer. Adding
+		// owner-write to received directories costs one mode bit and removes the
+		// whole failure class; file modes are untouched.
+		"--chmod=Du+w",
 	}
 	args = append(args, alwaysExcludeArgs()...)
 	if rf.SubmodulesDyn != "" {

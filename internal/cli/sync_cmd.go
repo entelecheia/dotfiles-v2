@@ -67,6 +67,8 @@ Deprecated aliases: 'dot gsync', 'dot gdrive-sync'.`,
 			warnDeprecatedSyncAlias()
 		},
 	}
+	cmd.PersistentFlags().String("profile", syncer.DefaultProfile,
+		"sync profile (store under <workspace>/.dotfiles/<profile>/); \"sync\" is the cloud mirror")
 	cmd.PersistentFlags().BoolP("verbose", "V", false, "Show rsync progress output")
 	cmd.PersistentFlags().String("mode", syncer.ModeManual.String(), "execution mode for push/pull: manual, clean, or force")
 	cmd.PersistentFlags().String("filter-mode", "", "override config filter mode for this run: include or exclude")
@@ -435,7 +437,8 @@ func syncBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("loading state: %w", err)
 	}
-	cfg, err := syncer.ResolveConfig(state)
+	profile, _ := cmd.Flags().GetString("profile")
+	cfg, err := syncer.ResolveConfigForProfile(state, profile)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -456,7 +459,8 @@ func syncBootstrapReadOnly(cmd *cobra.Command) (*config.UserState, *syncer.Confi
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("loading state: %w", err)
 	}
-	cfg, err := syncer.ResolveConfigReadOnly(state)
+	profile, _ := cmd.Flags().GetString("profile")
+	cfg, err := syncer.ResolveConfigReadOnlyForProfile(state, profile)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -981,6 +985,12 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p := printerFrom(cmd)
+
+	// Refuse before touching anything: a second writer on one target is the
+	// failure this guard exists for, and it is cheap to detect up front.
+	if err := syncer.CheckOwner(cfg); err != nil {
+		return err
+	}
 
 	if cmd.Flags().Changed("propagate") {
 		raw, _ := cmd.Flags().GetString("propagate")

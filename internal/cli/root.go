@@ -58,6 +58,7 @@ Also available as 'dotfiles' for back-compat.`,
 
 	// Sync (rsync workspace mirror: local cloud folder or SSH remote)
 	root.AddCommand(newSyncCmd())
+	root.AddCommand(newPeerCmd())
 
 	// Cloudflare Tunnel SSH access
 	root.AddCommand(newTunnelCmd())
