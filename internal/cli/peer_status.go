@@ -57,7 +57,6 @@ func peerBootstrapReadOnly() (*config.UserState, *syncer.Config, *exec.Runner, e
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	enforcePeerRuntimePolicy(cfg)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	return state, cfg, exec.NewRunner(false, logger), nil
 }

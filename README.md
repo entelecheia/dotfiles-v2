@@ -625,10 +625,6 @@ dot peer home-paths get --json        # read the host-path allowlist
 printf '.ssh\n.gitconfig\n' | dot peer home-paths set --json
 ```
 
-`dot peer` enforces `propagation.delete=false` whenever the peer profile is
-loaded, including profiles created by older versions. The peer is deliberately
-bidirectional for creates and updates, but it never propagates deletions.
-
 The `--json` status and editor commands are the supported integration surface
 for desktop clients such as Maru. Status documents use `schemaVersion: 1`;
 callers must reject unknown schema versions rather than guessing. Filter and
