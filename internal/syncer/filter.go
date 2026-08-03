@@ -30,6 +30,9 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 
 	local := strings.TrimRight(cfg.LocalPath, "/")
 	f.submodules = gitSubmodulePaths(local)
+	if cfg.IncludeSubmodules {
+		f.submodules = nil
+	}
 
 	f.allowDirs = map[string]bool{}
 	for _, p := range cfg.AllowPatterns {
@@ -181,6 +184,21 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 		}
 	}
 	return true
+}
+
+// shouldSkipFileOrAncestor checks a file together with every directory rsync
+// must traverse to reach it. A directory-only rule such as /archive/ does not
+// match archive/old.bin when evaluated as a file, but rsync never visits that
+// file because the parent directory was excluded first.
+func (f *syncFilter) shouldSkipFileOrAncestor(rel string) bool {
+	rel = normalizeRel(rel)
+	parts := strings.Split(rel, "/")
+	for i := 1; i < len(parts); i++ {
+		if f.shouldSkip("", strings.Join(parts[:i], "/"), true) {
+			return true
+		}
+	}
+	return f.shouldSkip("", rel, false)
 }
 
 func (p excludePattern) matches(rel string, isDir bool) bool {

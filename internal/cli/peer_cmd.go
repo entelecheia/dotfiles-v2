@@ -18,8 +18,13 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-// PeerProfile is the sync profile name used for machine-to-machine sync.
-const PeerProfile = "peer"
+const (
+	// PeerProfile is the sync profile name used for machine-to-machine sync.
+	PeerProfile = syncer.PeerProfile
+	// Peer deletions are normally tens of inbox paths. Keep the new-profile cap
+	// well below the mirror's broader 1000-path default.
+	peerDefaultMaxDelete = 100
+)
 
 // peerAllowHeader seeds the peer profile's allow.txt. The cloud mirror keeps
 // secrets out; a peer is a second machine the operator already trusts with the
@@ -101,10 +106,16 @@ questions:
              uncommitted work inside a submodule is exactly what Git has
              not seen and what a second machine still needs.
 
-Peer sync never deletes. Deletion is the one irreversible operation and there
-is no shared history to justify it, so a file removed on one machine simply
-stops being sent. Every overwrite is quarantined under .sync-conflicts/, so a
-file edited on both machines keeps both versions.
+Nothing is ever unlinked. Every overwrite is quarantined under
+.sync-conflicts/, so a file edited on both machines keeps both versions.
+
+With propagation.delete on, a file removed here is removed on the peer too,
+into that same quarantine, and "dot sync conflicts prune" expires it later.
+Only paths recorded in the baseline are eligible: a path the peer created and
+this machine has never seen is not a deletion and is left alone. The set is
+capped by max_delete, so a failed mount cannot present the whole tree as
+deleted. With propagation.delete off, a file removed here simply stops being
+sent and the peer keeps its copy.
 
 A peer that is offline is not an error: the scheduled run probes reachability
 first and exits cleanly when the other machine is away.`,
@@ -159,7 +170,8 @@ inbound port, which is what a laptop needs.`,
 			if err != nil {
 				return err
 			}
-			if !ok || local == nil {
+			newProfile := !ok || local == nil
+			if newProfile {
 				local = &syncer.LocalConfig{}
 			}
 			local.Target = "ssh:" + host + ":" + remotePath
@@ -174,8 +186,13 @@ inbound port, which is what a laptop needs.`,
 			// this expensive - node_modules, target, .next, .venv, __pycache__ -
 			// and secrets remain governed by allow.txt.
 			local.FilterMode = syncer.FilterModeExclude
-			// Never delete across peers.
-			local.Propagation = syncer.PropagationPolicy{Create: true, Update: true, Delete: false}
+			if newProfile {
+				// Deletions propagate for a new peer profile. Without this a file
+				// removed on one machine returns on the next pull. Re-running init
+				// must preserve an operator's later opt-out.
+				local.Propagation = syncer.PropagationPolicy{Create: true, Update: true, Delete: true}
+				local.MaxDelete = peerDefaultMaxDelete
+			}
 			local.IncludeSubmodules = true
 			// Peer profiles are per-machine by construction (the store is
 			// gitignored), so the owner is simply this machine. Use the DNS-safe
@@ -199,7 +216,14 @@ inbound port, which is what a laptop needs.`,
 			p.KV("store", paths.StoreDir)
 			p.KV("secrets", "opted in via "+paths.AllowFile)
 			p.KV("host paths", peerHomePathsFile(paths))
-			p.KV("deletes", "never propagated")
+			deletes := "disabled; peer copy retained"
+			if local.Propagation.Delete {
+				deletes = "baseline-recorded paths quarantine on peer"
+				if local.MaxDelete > 0 {
+					deletes = fmt.Sprintf("%s (max %d per run)", deletes, local.MaxDelete)
+				}
+			}
+			p.KV("deletes", deletes)
 			p.Blank()
 			p.Line("Next: dot peer doctor")
 			return nil
@@ -537,7 +561,13 @@ func newPeerSyncCmd() *cobra.Command {
 		Long: `Pull the peer's changes, then push this machine's.
 
 Pull first on purpose: it is the direction that can only add, so a conflict is
-recorded before this machine's version goes out. Neither direction deletes.
+recorded before this machine's version goes out. The pull never deletes
+anything locally.
+
+When propagation.delete is on, deletions are detected before the pull runs and
+applied to the peer before the push. Both halves of that order matter: the pull
+would otherwise restore the deleted file, and the push ends by rewriting the
+baseline the detection depends on.
 
 Exits 0 when the peer is unreachable. That is what makes this safe to schedule
 on a laptop.`,
@@ -573,6 +603,23 @@ on a laptop.`,
 			cfg.RemoteRsyncPath = rp
 
 			dryRun, _ := c.Flags().GetBool("dry-run")
+
+			// Deletions are detected before the pull and applied before the
+			// push, and the order is load-bearing in both directions. The pull
+			// uses --update, so it would restore anything deleted here and
+			// erase the evidence. The push ends with RefreshBaseline, which
+			// walks the local tree and retires these keys, so a delete pass
+			// that ran after it and failed would lose the tombstone and let the
+			// peer's copy return on the next pull.
+			//
+			// Empty unless the profile is SSH with propagation.delete on.
+			tombstones, err := syncer.ComputeTombstones(cfg)
+			if err != nil {
+				return err
+			}
+			cfg.Tombstones = tombstones
+			conflict := syncer.NewConflictDir()
+
 			if !pushOnly {
 				p.Section("pull from peer")
 				if err := reportPartial(p, syncer.PullDirect(ctx, runner, cfg, dryRun)); err != nil {
@@ -580,6 +627,12 @@ on a laptop.`,
 				}
 			}
 			if !pullOnly {
+				if len(tombstones) > 0 {
+					p.Section("propagate deletions")
+					if err := syncer.PropagateDeletes(ctx, runner, cfg, conflict, tombstones, dryRun); err != nil {
+						return err
+					}
+				}
 				p.Section("push to peer")
 				if err := reportPartial(p, syncer.Push(ctx, runner, cfg, dryRun)); err != nil {
 					return err
