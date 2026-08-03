@@ -314,6 +314,37 @@ func TestPropagateDeletes_RefusesOverCap(t *testing.T) {
 	}
 }
 
+// Blanket --delete removes every target path absent locally. On a peer that
+// is most of the other machine's tree, so the dedicated pass owns deletion
+// there and the push must stay additive even with propagation.delete on.
+func TestPushArgs_SSHTargetNeverGetsBlanketDelete(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Target = Target{Kind: TargetSSH, Host: "user@peer", Path: "/remote/work"}
+	cfg.Propagation = PropagationPolicy{Create: true, Update: true, Delete: true}
+
+	args := pushArgs(cfg, &ConflictDir{Timestamp: "ts"}, runtimeFilters{}, false)
+
+	for _, forbidden := range []string{"--delete", "--delete-after", "--delete-during", "--delete-excluded"} {
+		if slices.Contains(args, forbidden) {
+			t.Errorf("ssh pushArgs leaked %q — it would delete the peer's own files; got %v", forbidden, args)
+		}
+	}
+}
+
+// The mirror has a single writer and no separate delete pass, so it keeps the
+// blanket behaviour.
+func TestPushArgs_LocalTargetKeepsBlanketDelete(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Target = Target{Kind: TargetLocal, Path: "/tmp/mirror/"}
+	cfg.Propagation = PropagationPolicy{Create: true, Update: true, Delete: true}
+
+	args := pushArgs(cfg, &ConflictDir{Timestamp: "ts"}, runtimeFilters{}, false)
+
+	if !slices.Contains(args, "--delete-after") {
+		t.Errorf("mirror pushArgs lost --delete-after; got %v", args)
+	}
+}
+
 func TestCheckTombstoneCap(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.MaxDelete = 2

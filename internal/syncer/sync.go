@@ -320,7 +320,16 @@ func pullArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 // staging dirs so they never bounce back to mirror.
 func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool) []string {
 	args := commonArgs(cfg, rf)
-	args = append(args, propagationFlags(cfg.Propagation, cfg.MaxDelete)...)
+	prop := cfg.Propagation
+	if cfg.Target.IsSSH() {
+		// Blanket --delete removes every target path absent locally. Against a
+		// mirror that is the intended meaning; against a peer it is most of the
+		// other machine's tree, including everything it created that has not
+		// been pulled yet. PropagateDeletes handles removal there, scoped to
+		// baseline-recorded paths, so the push stays additive.
+		prop.Delete = false
+	}
+	args = append(args, propagationFlags(prop, cfg.MaxDelete)...)
 	// Skip directories that would be empty on the target after filtering, so
 	// gitignored leaves do not leave behind shells of folder structure.
 	args = append(args, "--prune-empty-dirs")
