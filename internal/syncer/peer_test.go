@@ -399,16 +399,35 @@ func TestMachineNamesSurvivesMinimalPATH(t *testing.T) {
 	full := MachineNames()
 	t.Setenv("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin") // launchd's PATH
 	minimal := MachineNames()
-	if len(minimal) != len(full) {
+	// Compare as sets: MachineNames promises which names identify this machine,
+	// not what order they come back in. CheckOwner only ever tests membership.
+	if !sameNameSet(full, minimal) {
 		t.Fatalf("PATH without /usr/sbin changed identity: %v vs %v", minimal, full)
-	}
-	for i := range full {
-		if full[i] != minimal[i] {
-			t.Fatalf("PATH without /usr/sbin changed identity: %v vs %v", minimal, full)
-		}
 	}
 	// And the guard must accept the name we would have recorded as owner.
 	if err := CheckOwner(&Config{Owner: PreferredMachineName()}); err != nil {
 		t.Fatalf("owner guard rejects this machine under launchd PATH: %v", err)
 	}
+}
+
+// sameNameSet reports whether two name slices carry the same members,
+// ignoring order and duplicates.
+func sameNameSet(a, b []string) bool {
+	set := func(in []string) map[string]bool {
+		out := make(map[string]bool, len(in))
+		for _, v := range in {
+			out[v] = true
+		}
+		return out
+	}
+	x, y := set(a), set(b)
+	if len(x) != len(y) {
+		return false
+	}
+	for k := range x {
+		if !y[k] {
+			return false
+		}
+	}
+	return true
 }
