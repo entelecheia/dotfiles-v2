@@ -551,6 +551,80 @@ Files in baseline that are missing from mirror become tombstones — recorded in
 
 > Automatic sync is disabled by default. Scheduler units are `com.dotfiles.sync` (push) and `com.dotfiles.sync-intake` (pull) on macOS, `dotfiles-sync.*` / `dotfiles-sync-intake.*` on Linux.
 
+**Profiles.** `--profile=<name>` selects an independent store under
+`<workspace>/.dotfiles/<name>/` - its own target, filter files, baseline, lock
+and scheduler unit. The default profile is `sync` (the cloud mirror) and behaves
+exactly as before. A non-default profile is machine-local: the managed
+`.gitignore` block ignores `/.dotfiles/*` and whitelists only `sync/`, so its
+baseline never enters Git. That matters because two machines writing one shared
+baseline would produce merge conflicts in the very file that coordinates them.
+
+**Single writer.** A profile may declare an owner; `push` refuses on any other
+machine. The cloud mirror is not a merge point - each machine keeps its own
+baseline and delete propagation is on, so two pushers take turns undoing each
+other.
+
+```bash
+dot sync owner                       # who may push this profile
+dot sync owner --set-self            # claim it for this machine
+dot sync owner --set <machine-name>  # hand it to another
+dot sync owner --clear               # remove the restriction
+```
+
+### `dot peer`
+
+Machine-to-machine workspace sync over SSH, so either machine can continue the
+same work. A sibling of `dot sync`, not a replacement - they answer different
+questions:
+
+| | `dot sync` | `dot peer` |
+|---|---|---|
+| direction | workspace to cloud mirror | both ways with another machine |
+| writers | exactly one | both |
+| secrets | excluded | included (own `allow.txt`) |
+| submodule working trees | excluded (they travel via Git) | included |
+| deletes | propagated if configured | never |
+| purpose | read the workspace from a phone | keep two machines interchangeable |
+
+Peer sync includes secrets because a peer is a machine you already trust with
+the same work, and the workspace does not run there without its env files. It
+includes submodule working trees because uncommitted work inside a submodule is
+precisely what Git has not seen. It never deletes: deletion is the one
+irreversible operation and there is no shared history to justify it, so a file
+removed on one machine simply stops being sent.
+
+```bash
+dot peer init --host user@host        # write the peer profile
+dot peer doctor                       # check before transferring
+dot peer sync [--dry-run]             # pull, push, then host paths
+dot peer diff                         # paths that changed on BOTH machines
+dot peer setup --interval=15m         # schedule it (--off to remove)
+```
+
+**Addressing a machine that moves.** Use a hostname that survives a network
+change. A Tailscale MagicDNS name (`<machine>.<tailnet>.ts.net`) works from any
+network with no static IP and no inbound port.
+
+**Host paths.** A second rsync pass carries the files outside the workspace that
+it still needs - `~/.ssh`, `~/.claude.json`, `~/.config/dotfiles` and friends -
+listed in `<workspace>/.dotfiles/peer/home-paths.txt`. Deliberately excluded, in
+code: `known_hosts` (per-machine trust; overwriting it deletes the host key for
+the channel the sync runs over), `~/.maru/env` (venv console scripts bake an
+absolute interpreter path - rebuild, never copy), plugin caches, and
+`~/.codex/auth.json`. Keychain-backed tokens cannot be moved by any file copy at
+all, and cannot even be verified over SSH.
+
+**Conflicts.** Every overwrite is quarantined, so a path edited on both machines
+keeps both versions. When timestamps do not order cleanly rsync skips it in both
+directions - nothing is lost, but the machines quietly stop agreeing, which is
+what `dot peer diff` surfaces.
+
+**Offline peers.** An unreachable peer exits 0. That is what makes the scheduled
+job safe on a laptop that comes and goes.
+
+> Scheduler unit is `com.dotfiles.peer`. Peer sync takes its own lock, so a
+> scheduled run and a manual one cannot overlap.
+
 ### `dot version`
 
 Shows version, git commit, Go version, and OS/arch. For dev builds (no ldflags), falls back to Go's embedded VCS info with `-dirty` suffix if the working tree has uncommitted changes.

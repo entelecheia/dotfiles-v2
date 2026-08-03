@@ -11,6 +11,9 @@
     <string>sync</string>
     <string>{{.Action}}</string>
     <string>--mode={{.Mode}}</string>
+{{- if .Profile }}
+    <string>--profile={{.Profile}}</string>
+{{- end }}
   </array>
   <key>EnvironmentVariables</key>
   <dict>

@@ -78,6 +78,44 @@ func ResolvePathsForHome(home string) (*Paths, error) {
 	return pathsFor(home, cacheDirForHome(home)), nil
 }
 
+// ResolvePathsForProfile builds the artifact layout for one sync profile.
+// The lock and the launchd unit must be per-profile: a shared lock would make
+// a peer sync block a mirror push for no reason, and a shared unit would mean
+// installing one scheduler uninstalls the other.
+//
+// The default profile is unchanged by construction - "sync.lock" and
+// "com.dotfiles.sync.plist" are exactly what the templated names produce when
+// the profile is "sync".
+func ResolvePathsForProfile(profile string) (*Paths, error) {
+	p, err := ResolvePaths()
+	if err != nil {
+		return nil, err
+	}
+	return withProfile(p, profile), nil
+}
+
+// ResolvePathsForHomeProfile is ResolvePathsForProfile with an explicit home.
+func ResolvePathsForHomeProfile(home, profile string) (*Paths, error) {
+	p, err := ResolvePathsForHome(home)
+	if err != nil {
+		return nil, err
+	}
+	return withProfile(p, profile), nil
+}
+
+func withProfile(p *Paths, profile string) *Paths {
+	prof := NormalizeProfile(profile)
+	if prof == DefaultProfile {
+		return p
+	}
+	out := *p
+	out.LockDir = filepath.Join(filepath.Dir(p.LockDir), prof+".lock")
+	out.LaunchdPlist = filepath.Join(filepath.Dir(p.LaunchdPlist), "com.dotfiles."+prof+".plist")
+	out.SystemdService = filepath.Join(filepath.Dir(p.SystemdService), "dotfiles-"+prof+".service")
+	out.SystemdTimer = filepath.Join(filepath.Dir(p.SystemdTimer), "dotfiles-"+prof+".timer")
+	return &out
+}
+
 // pathsFor builds the artifact layout for a given home + cache dir.
 func pathsFor(home, cacheDir string) *Paths {
 	configDir := filepath.Join(home, ".config", "dotfiles")

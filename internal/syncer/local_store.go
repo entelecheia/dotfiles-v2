@@ -134,17 +134,28 @@ func (p PropagationPolicy) String() string {
 type LocalConfig struct {
 	// Target is the canonical destination spec ("local:~/Dropbox/work" or
 	// "ssh:user@host:path"). When empty, MirrorPath (legacy) applies.
-	Target         string            `yaml:"target,omitempty"`
-	MirrorPath     string            `yaml:"mirror_path,omitempty"`
-	FilterMode     FilterMode        `yaml:"filter_mode,omitempty"`
-	Propagation    PropagationPolicy `yaml:"propagation"`
-	MaxDelete      int               `yaml:"max_delete,omitempty"`
-	Interval       int               `yaml:"interval,omitempty"`      // push scheduler cadence (seconds)
-	PullInterval   int               `yaml:"pull_interval,omitempty"` // pull scheduler cadence (0 = off)
-	PushMode       RunMode           `yaml:"push_mode,omitempty"`     // automatic push mode (clean|force)
-	PullMode       RunMode           `yaml:"pull_mode,omitempty"`     // automatic pull mode (clean|force)
-	Paused         bool              `yaml:"paused,omitempty"`
-	SharedExcludes []string          `yaml:"shared_excludes,omitempty"`
+	Target string `yaml:"target,omitempty"`
+	// Owner is the hostname allowed to push this profile. A mirror with two
+	// pushers corrupts: both carry different baselines and delete propagation
+	// is on, so each run undoes the other. Empty means unrestricted (the
+	// pre-existing behavior, kept so upgrades are not gated on setting it).
+	Owner string `yaml:"owner,omitempty"`
+	// IncludeSubmodules carries submodule working trees in the payload.
+	// The cloud mirror deliberately leaves them out - they round-trip through
+	// Git, and mirroring them would duplicate gigabytes. A peer profile wants
+	// the opposite: "either machine can continue the same work" includes the
+	// uncommitted state inside submodules, which Git by definition has not seen.
+	IncludeSubmodules bool              `yaml:"include_submodules,omitempty"`
+	MirrorPath        string            `yaml:"mirror_path,omitempty"`
+	FilterMode        FilterMode        `yaml:"filter_mode,omitempty"`
+	Propagation       PropagationPolicy `yaml:"propagation"`
+	MaxDelete         int               `yaml:"max_delete,omitempty"`
+	Interval          int               `yaml:"interval,omitempty"`      // push scheduler cadence (seconds)
+	PullInterval      int               `yaml:"pull_interval,omitempty"` // pull scheduler cadence (0 = off)
+	PushMode          RunMode           `yaml:"push_mode,omitempty"`     // automatic push mode (clean|force)
+	PullMode          RunMode           `yaml:"pull_mode,omitempty"`     // automatic pull mode (clean|force)
+	Paused            bool              `yaml:"paused,omitempty"`
+	SharedExcludes    []string          `yaml:"shared_excludes,omitempty"`
 }
 
 // LocalState holds non-config runtime telemetry — the sticky timestamps
@@ -189,11 +200,58 @@ type LocalPaths struct {
 // stay truthful before MigrateLegacyStore has run. Once .dotfiles/sync/
 // exists it always wins.
 func ResolveLocalPaths(localPath string) *LocalPaths {
+	return ResolveLocalPathsForProfile(localPath, DefaultProfile)
+}
+
+// DefaultProfile is the store name for the cloud-mirror sync. A profile is
+// just a store directory name under <workspace>/.dotfiles/, so each profile
+// carries its own target, filter files, baseline, state, lock and scheduler
+// unit. That separation is what lets a peer profile opt secrets IN via its own
+// allow.txt without touching the mirror profile, which must keep them out.
+//
+// Non-default profiles are machine-local for free: the managed .gitignore block
+// ignores /.dotfiles/* and whitelists only sync/, so a peer baseline never
+// enters git. Two machines writing one shared baseline would otherwise produce
+// merge conflicts in the very file that coordinates them.
+const DefaultProfile = "sync"
+
+// NormalizeProfile trims and defaults a profile name.
+func NormalizeProfile(profile string) string {
+	p := strings.TrimSpace(profile)
+	if p == "" {
+		return DefaultProfile
+	}
+	return p
+}
+
+// ValidateProfile rejects names that would escape the store directory or
+// collide with the layout. Profiles become path segments and scheduler labels,
+// so they must be a single safe token.
+func ValidateProfile(profile string) error {
+	p := NormalizeProfile(profile)
+	if p == "." || p == ".." {
+		return fmt.Errorf("invalid sync profile %q", profile)
+	}
+	if strings.ContainsAny(p, `/\`) || strings.ContainsRune(p, os.PathSeparator) {
+		return fmt.Errorf("sync profile %q must not contain a path separator", profile)
+	}
+	return nil
+}
+
+// ResolveLocalPathsForProfile returns the layout for one profile's store.
+// The legacy gdrive-sync fallback applies only to the default profile: it
+// exists to keep pre-rename workspaces truthful, and a new profile has no
+// legacy twin to fall back to.
+func ResolveLocalPathsForProfile(localPath, profile string) *LocalPaths {
 	root := strings.TrimRight(localPath, "/")
-	storeRel := localStoreDirRel
-	if !pathExists(filepath.Join(root, localStoreDirRel)) &&
-		pathExists(filepath.Join(root, legacyStoreDirRel)) {
-		storeRel = legacyStoreDirRel
+	prof := NormalizeProfile(profile)
+	storeRel := filepath.Join(".dotfiles", prof)
+	if prof == DefaultProfile {
+		storeRel = localStoreDirRel
+		if !pathExists(filepath.Join(root, localStoreDirRel)) &&
+			pathExists(filepath.Join(root, legacyStoreDirRel)) {
+			storeRel = legacyStoreDirRel
+		}
 	}
 	store := filepath.Join(root, storeRel)
 	logDir := filepath.Join(store, localLogDirRel)

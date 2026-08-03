@@ -32,9 +32,18 @@ func FilterReport(cfg *Config) ([]FilterLayer, error) {
 		{Name: "1. always-on excludes", Detail: []string{"/.dotfiles/", "/inbox/gdrive/", ".git (any depth, dir or gitlink)"}},
 	}
 
+	// Honor the profile's policy, not just the repo's submodule list. Reporting
+	// "excluded here" while the transfer actually includes them makes an operator
+	// distrust the config - and the peer profile deliberately carries submodule
+	// working trees, because uncommitted work inside one is exactly what Git has
+	// not seen.
 	subs := gitSubmodulePaths(local)
 	subDetail := []string{"(none)"}
-	if len(subs) > 0 {
+	switch {
+	case cfg.IncludeSubmodules:
+		subDetail = []string{fmt.Sprintf(
+			"include_submodules: %d submodule working tree(s) ARE carried (not excluded)", len(subs))}
+	case len(subs) > 0:
 		subDetail = append([]string{fmt.Sprintf("%d submodules — synced via Git, excluded here:", len(subs))}, subs...)
 	}
 	layers = append(layers, FilterLayer{Name: "2. submodule excludes (submodules.dyn.conf)", Detail: subDetail})

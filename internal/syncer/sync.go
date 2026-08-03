@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -39,22 +40,30 @@ const (
 
 // Config holds resolved sync parameters. Populated by ResolveConfig.
 type Config struct {
-	LocalPath       string // workspace tree, with trailing slash
-	MirrorPath      string // local mirror tree with trailing slash; empty for ssh targets
-	Target          Target // parsed destination (local dir or ssh host:path)
-	MirrorIsDefault bool   // target came from defaultMirrorPath, not explicit config
-	FilterMode      FilterMode
-	IncludeFile     string   // editable include list (under .dotfiles/sync/)
-	IncludePatterns []string // parsed include list used by Go filters + rsync args
-	ExcludesFile    string   // materialized static exclude list (under .dotfiles/sync/)
-	IgnoreFile      string   // user-supplied ignore patterns (under .dotfiles/sync/)
-	AllowFile       string   // explicit secrets opt-in patterns (under .dotfiles/sync/)
-	AllowPatterns   []string // parsed allow.txt — re-included ahead of the secrets layer
-	ConfigDir       string   // workspace-local store dir (.dotfiles/sync/) — dynamic files land here
-	SharedExcludes  []string // operator-curated shared paths (relative to MirrorPath)
-	LogFile         string
-	LockDir         string
-	RsyncPath       string // resolved rsync binary; empty if not installed
+	Profile string // store name under .dotfiles/ ("sync" = cloud mirror)
+	// IncludeSubmodules keeps submodule working trees in the payload instead of
+	// excluding them (mirror excludes; peer includes).
+	IncludeSubmodules bool
+	Owner             string // hostname allowed to push this profile; empty = unrestricted
+	LocalPath         string // workspace tree, with trailing slash
+	MirrorPath        string // local mirror tree with trailing slash; empty for ssh targets
+	Target            Target // parsed destination (local dir or ssh host:path)
+	MirrorIsDefault   bool   // target came from defaultMirrorPath, not explicit config
+	FilterMode        FilterMode
+	IncludeFile       string   // editable include list (under .dotfiles/sync/)
+	IncludePatterns   []string // parsed include list used by Go filters + rsync args
+	ExcludesFile      string   // materialized static exclude list (under .dotfiles/sync/)
+	IgnoreFile        string   // user-supplied ignore patterns (under .dotfiles/sync/)
+	AllowFile         string   // explicit secrets opt-in patterns (under .dotfiles/sync/)
+	AllowPatterns     []string // parsed allow.txt — re-included ahead of the secrets layer
+	ConfigDir         string   // workspace-local store dir (.dotfiles/sync/) — dynamic files land here
+	SharedExcludes    []string // operator-curated shared paths (relative to MirrorPath)
+	LogFile           string
+	LockDir           string
+	RsyncPath         string // resolved rsync binary; empty if not installed
+	// RemoteRsyncPath is passed as --rsync-path for ssh targets whose default
+	// rsync cannot serve a modern client (macOS 26 openrsync). Empty = default OK.
+	RemoteRsyncPath string
 	MaxDelete       int
 	Interval        int               // push scheduler cadence (seconds)
 	PullInterval    int               // pull scheduler cadence (0 = no unit)
@@ -80,14 +89,26 @@ type Config struct {
 // workspace). Once .dotfiles/gdrive-sync/config.yaml exists, the
 // global block is no longer read.
 func ResolveConfig(state *config.UserState) (*Config, error) {
-	return resolveConfig(state, true, "")
+	return resolveConfig(state, true, "", DefaultProfile)
+}
+
+// ResolveConfigForProfile resolves one named sync profile. Each profile has its
+// own store under <workspace>/.dotfiles/<profile>/, so its target, filters,
+// baseline, lock and scheduler unit are independent of every other profile.
+func ResolveConfigForProfile(state *config.UserState, profile string) (*Config, error) {
+	return resolveConfig(state, true, "", profile)
 }
 
 // ResolveConfigReadOnly resolves the same runtime values without creating
 // the local store, migrating global config, or healing .gitignore. Use it for
 // status/list commands that must not mutate the workspace.
 func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
-	return resolveConfig(state, false, "")
+	return resolveConfig(state, false, "", DefaultProfile)
+}
+
+// ResolveConfigReadOnlyForProfile is ResolveConfigReadOnly for one profile.
+func ResolveConfigReadOnlyForProfile(state *config.UserState, profile string) (*Config, error) {
+	return resolveConfig(state, false, "", profile)
 }
 
 // ResolveConfigReadOnlyForHome is like ResolveConfigReadOnly but resolves all
@@ -97,14 +118,18 @@ func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
 // rather than the invoking user's. An empty home falls back to the current
 // user's home.
 func ResolveConfigReadOnlyForHome(state *config.UserState, home string) (*Config, error) {
-	return resolveConfig(state, false, home)
+	return resolveConfig(state, false, home, DefaultProfile)
 }
 
-func resolveConfig(state *config.UserState, migrate bool, home string) (*Config, error) {
+func resolveConfig(state *config.UserState, migrate bool, home, profile string) (*Config, error) {
+	if err := ValidateProfile(profile); err != nil {
+		return nil, err
+	}
+	profile = NormalizeProfile(profile)
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	systemPaths, err := ResolvePathsForHome(home)
+	systemPaths, err := ResolvePathsForHomeProfile(home, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +145,8 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 		localPath += "/"
 	}
 
-	if migrate {
+	// The gdrive-sync -> sync rename only ever applied to the default store.
+	if migrate && profile == DefaultProfile {
 		if migrated, err := MigrateLegacyStore(localPath); err != nil {
 			return nil, err
 		} else if migrated {
@@ -128,13 +154,34 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 		}
 	}
 
-	localPaths := ResolveLocalPaths(localPath)
+	localPaths := ResolveLocalPathsForProfile(localPath, profile)
 
 	var localCfg *LocalConfig
-	if migrate {
+	if migrate && profile == DefaultProfile {
 		localCfg, err = LoadOrMigrateLocalConfig(state, localPaths)
 		if err != nil {
 			return nil, err
+		}
+	} else if profile != DefaultProfile {
+		// A non-default profile has no global twin to migrate from: an unset
+		// profile is genuinely empty, not "inherit the mirror settings".
+		//
+		// It still needs the surrounding layout. commonArgs passes
+		// --exclude-from for exclude.txt and ignore.txt unconditionally, and
+		// rsync exits 11 ("file IO error") when it cannot open one - so a fresh
+		// profile whose store lacks those files fails every transfer. Measured on
+		// the first real peer run.
+		if migrate {
+			if err := EnsureLocalLayout(localPaths); err != nil {
+				return nil, err
+			}
+		}
+		if cfg, ok, err := LoadLocalConfig(localPaths); err != nil {
+			return nil, err
+		} else if ok {
+			localCfg = cfg
+		} else {
+			localCfg = &LocalConfig{}
 		}
 	} else {
 		if cfg, ok, err := LoadLocalConfig(localPaths); err != nil {
@@ -202,30 +249,33 @@ func resolveConfig(state *config.UserState, migrate bool, home string) (*Config,
 	rsyncPath, _ := osexec.LookPath("rsync")
 
 	return &Config{
-		LocalPath:       localPath,
-		MirrorPath:      mirrorPath,
-		Target:          target,
-		MirrorIsDefault: mirrorIsDefault,
-		FilterMode:      filterMode,
-		IncludeFile:     localPaths.IncludeFile,
-		IncludePatterns: includePatterns,
-		ExcludesFile:    localPaths.ExcludeFile,
-		IgnoreFile:      localPaths.IgnoreFile,
-		AllowFile:       localPaths.AllowFile,
-		AllowPatterns:   allowPatterns,
-		ConfigDir:       localPaths.StoreDir,
-		SharedExcludes:  append([]string(nil), localCfg.SharedExcludes...),
-		LogFile:         localPaths.LogFile,
-		LockDir:         systemPaths.LockDir,
-		RsyncPath:       rsyncPath,
-		MaxDelete:       maxDelete,
-		Interval:        schedule.Interval,
-		PullInterval:    schedule.PullInterval,
-		PushMode:        schedule.PushMode,
-		PullMode:        schedule.PullMode,
-		Propagation:     policy,
-		Paused:          localCfg.Paused,
-		LocalPaths:      localPaths,
+		Profile:           profile,
+		Owner:             localCfg.Owner,
+		IncludeSubmodules: localCfg.IncludeSubmodules,
+		LocalPath:         localPath,
+		MirrorPath:        mirrorPath,
+		Target:            target,
+		MirrorIsDefault:   mirrorIsDefault,
+		FilterMode:        filterMode,
+		IncludeFile:       localPaths.IncludeFile,
+		IncludePatterns:   includePatterns,
+		ExcludesFile:      localPaths.ExcludeFile,
+		IgnoreFile:        localPaths.IgnoreFile,
+		AllowFile:         localPaths.AllowFile,
+		AllowPatterns:     allowPatterns,
+		ConfigDir:         localPaths.StoreDir,
+		SharedExcludes:    append([]string(nil), localCfg.SharedExcludes...),
+		LogFile:           localPaths.LogFile,
+		LockDir:           systemPaths.LockDir,
+		RsyncPath:         rsyncPath,
+		MaxDelete:         maxDelete,
+		Interval:          schedule.Interval,
+		PullInterval:      schedule.PullInterval,
+		PushMode:          schedule.PushMode,
+		PullMode:          schedule.PullMode,
+		Propagation:       policy,
+		Paused:            localCfg.Paused,
+		LocalPaths:        localPaths,
 	}, nil
 }
 
@@ -282,10 +332,15 @@ func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 // rsyncTransportArgs returns transport flags for the configured target
 // (SSH remotes need `-e ssh`; local directories need nothing).
 func rsyncTransportArgs(cfg *Config) []string {
-	if cfg.Target.IsSSH() {
-		return []string{"-e", "ssh"}
+	if !cfg.Target.IsSSH() {
+		return nil
 	}
-	return nil
+	args := []string{"-e", "ssh"}
+	// RemoteRsyncPath is empty when the peer's default rsync is already usable.
+	if cfg.RemoteRsyncPath != "" {
+		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
+	}
+	return args
 }
 
 // propagationFlags translates a PropagationPolicy into the rsync flags
@@ -330,7 +385,14 @@ func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
 		return rf, fmt.Errorf("local paths unresolved")
 	}
 	local := strings.TrimRight(cfg.LocalPath, "/")
-	rf.SubmodulesDyn, err = MaterializeSubmodulesDynFile(cfg.LocalPaths, gitSubmodulePaths(local))
+	// An empty submodule list materializes an empty exclude file, which is how a
+	// peer profile carries submodule working trees: same layering, no special case
+	// in commonArgs.
+	submodules := gitSubmodulePaths(local)
+	if cfg.IncludeSubmodules {
+		submodules = nil
+	}
+	rf.SubmodulesDyn, err = MaterializeSubmodulesDynFile(cfg.LocalPaths, submodules)
 	if err != nil {
 		return rf, err
 	}
@@ -338,7 +400,18 @@ func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
 	if err != nil {
 		return rf, fmt.Errorf("loading baseline: %w", err)
 	}
-	rels := unionTrackedWithBaseline(gitTrackedForSync(local), baseline)
+	// When submodules travel, their tracked files must be in the include layer
+	// too. Measured failure: 27 tracked build artifacts inside two submodules
+	// (committed .pyc, a pnpm index) matched an exclude pattern, never shipped,
+	// and arrived on the peer as 27 deletions - git reported a dirty tree that
+	// no one had touched.
+	tracked := gitTrackedForSync(local)
+	if cfg.IncludeSubmodules {
+		for rel := range gitTrackedInSubmodules(local, submodulePathsForScan(local)) {
+			tracked[rel] = true
+		}
+	}
+	rels := unionTrackedWithBaseline(tracked, baseline)
 	rf.TrackedDyn, err = MaterializeTrackedIncludesFile(cfg.LocalPaths, rels)
 	if err != nil {
 		return rf, err
@@ -575,9 +648,55 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 }
 
 func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
+	var err error
 	if cfg.Verbose {
-		return runner.RunAttached(ctx, "rsync", args...)
+		err = runner.RunAttached(ctx, "rsync", args...)
+	} else {
+		_, err = runner.Run(ctx, "rsync", args...)
 	}
-	_, err := runner.Run(ctx, "rsync", args...)
+	return classifyRsyncError(err)
+}
+
+// PartialTransferError reports an rsync run that moved data but not all of it.
+type PartialTransferError struct {
+	Code int
+	Err  error
+}
+
+func (e *PartialTransferError) Error() string {
+	return fmt.Sprintf("rsync completed with partial results (exit %d); some files were skipped: %v", e.Code, e.Err)
+}
+func (e *PartialTransferError) Unwrap() error { return e.Err }
+
+// IsPartialTransfer reports whether err is a partial-transfer outcome.
+func IsPartialTransfer(err error) bool {
+	var p *PartialTransferError
+	return errors.As(err, &p)
+}
+
+// classifyRsyncError separates "moved nothing, something is broken" from
+// "moved almost everything, a few files were skipped".
+//
+// rsync exit 23 is "partial transfer due to error" and 24 is "some files
+// vanished before transfer" - both are routine on a live tree (a file deleted
+// mid-run yields 24). Treating them as fatal is what made a real transfer abort
+// after the first pass and silently skip the second one entirely, while
+// reporting success. Callers that care can branch with IsPartialTransfer; the
+// default is still a non-nil error so nothing is swept under the rug.
+// ClassifyRsyncError is the exported form for callers outside this package that
+// run their own rsync (the peer host-path pass).
+func ClassifyRsyncError(err error) error { return classifyRsyncError(err) }
+
+func classifyRsyncError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ee *osexec.ExitError
+	if errors.As(err, &ee) {
+		switch ee.ExitCode() {
+		case 23, 24:
+			return &PartialTransferError{Code: ee.ExitCode(), Err: err}
+		}
+	}
 	return err
 }
