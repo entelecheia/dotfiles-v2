@@ -11,6 +11,8 @@ import (
 
 // Status is the snapshot returned by GetStatus for the `status` command.
 type Status struct {
+	Profile              string
+	Owner                string
 	LocalPath            string
 	MirrorPath           string
 	Target               Target // parsed destination (local dir or ssh remote)
@@ -65,6 +67,8 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		}
 	}
 	s := &Status{
+		Profile:         cfg.Profile,
+		Owner:           cfg.Owner,
 		LocalPath:       strings.TrimRight(cfg.LocalPath, "/"),
 		MirrorPath:      strings.TrimRight(cfg.MirrorPath, "/"),
 		Target:          cfg.Target,

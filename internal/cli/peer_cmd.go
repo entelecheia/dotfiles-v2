@@ -123,10 +123,12 @@ first and exits cleanly when the other machine is away.`,
 	}
 
 	cmd.AddCommand(newPeerInitCmd())
+	cmd.AddCommand(newPeerStatusCmd())
 	cmd.AddCommand(newPeerDoctorCmd())
 	cmd.AddCommand(newPeerSyncCmd())
 	cmd.AddCommand(newPeerSetupCmd())
 	cmd.AddCommand(newPeerDiffCmd())
+	cmd.AddCommand(newPeerHomePathsCmd())
 	return cmd
 }
 
@@ -774,12 +776,27 @@ func peerBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	enforcePeerRuntimePolicy(cfg)
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	cfg.Verbose = verbose
 	// exec.Runner dereferences its logger, so nil panics on the first Info call.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	runner := exec.NewRunner(dryRun, logger)
 	return state, cfg, runner, nil
+}
+
+// A peer transfer is intentionally non-destructive even if an older binary,
+// hand edit, or `dot sync --profile=peer` left an unsafe policy on disk. Keep
+// the hard safety boundary in the runtime path that constructs rsync args.
+func enforcePeerRuntimePolicy(cfg *syncer.Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.Propagation.Delete = false
+	if !cfg.Propagation.Create && !cfg.Propagation.Update {
+		cfg.Propagation.Create = true
+		cfg.Propagation.Update = true
+	}
 }
 
 func peerHomePathsFile(paths *syncer.LocalPaths) string {
