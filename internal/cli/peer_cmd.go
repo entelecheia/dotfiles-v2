@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,11 @@ const peerHomePathsHeader = `# dot peer home-paths.txt — host-local paths carr
 #
 # Also unreachable by any file copy: tokens in the macOS keychain (gh, for
 # one). They cannot be transferred and cannot even be verified over ssh.
+#
+# ~/.ssh is listed as a directory but known_hosts is excluded in code: it is
+# per-machine trust state, merging it is meaningless, and overwriting it with the
+# peer's copy deletes the host key for the channel this sync runs over. That is
+# not hypothetical - it happened on the first real run and broke the next ssh.
 .ssh
 .gitconfig
 .config/git
@@ -109,6 +115,7 @@ first and exits cleanly when the other machine is away.`,
 	cmd.AddCommand(newPeerDoctorCmd())
 	cmd.AddCommand(newPeerSyncCmd())
 	cmd.AddCommand(newPeerSetupCmd())
+	cmd.AddCommand(newPeerDiffCmd())
 	return cmd
 }
 
@@ -156,7 +163,17 @@ inbound port, which is what a laptop needs.`,
 				local = &syncer.LocalConfig{}
 			}
 			local.Target = "ssh:" + host + ":" + remotePath
-			local.FilterMode = syncer.FilterModeInclude
+			// exclude-mode, not include-mode. The mirror uses an allowlist
+			// (tracked files plus a binary-extension list) because untracked text
+			// round-trips through Git anyway. A peer is different: "either machine
+			// can continue the same work" has to cover an untracked scratch note,
+			// which is neither tracked nor a binary extension and would otherwise
+			// sync by neither channel. Measured: a new .md file never arrived.
+			//
+			// Safe because the junk layer already excludes the caches that make
+			// this expensive - node_modules, target, .next, .venv, __pycache__ -
+			// and secrets remain governed by allow.txt.
+			local.FilterMode = syncer.FilterModeExclude
 			// Never delete across peers.
 			local.Propagation = syncer.PropagationPolicy{Create: true, Update: true, Delete: false}
 			local.IncludeSubmodules = true
@@ -228,6 +245,129 @@ const peerPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>
 `
+
+// newPeerDiffCmd reports paths where the two machines disagree.
+//
+// This exists because "no data loss" and "no surprises" are different
+// properties. Peer sync runs with --update, so when the same path was edited on
+// both machines and the timestamps do not order cleanly, rsync skips it in both
+// directions: nothing is destroyed, but the machines quietly stop agreeing and
+// no one is told. Measured on a real round trip.
+//
+// The detector is a metadata-only dry run in each direction. A path that both
+// sides want to send is a path where they differ. That misses two files with
+// identical size and mtime but different content - rsync cannot see that without
+// reading every byte, and a checksum pass over 60 GB is not something to do on a
+// schedule.
+func newPeerDiffCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "diff",
+		Short: "List paths where this machine and the peer disagree",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			p := printerFrom(c)
+			_, cfg, _, err := peerBootstrap(c)
+			if err != nil {
+				return err
+			}
+			if !cfg.Target.IsSSH() {
+				return fmt.Errorf("peer target is not configured; run dot peer init first")
+			}
+			ctx := context.Background()
+			probe := probeRunner()
+			if err := syncer.CheckSSH(ctx, probe, cfg.Target.Host); err != nil {
+				p.Warn("peer %s unreachable", cfg.Target.Host)
+				return nil
+			}
+			rp, err := syncer.RemoteRsyncPath(ctx, probe, cfg.Target.Host)
+			if err != nil {
+				return err
+			}
+			cfg.RemoteRsyncPath = rp
+
+			outgoing, err := peerPendingPaths(ctx, probe, cfg, true)
+			if err != nil {
+				return err
+			}
+			incoming, err := peerPendingPaths(ctx, probe, cfg, false)
+			if err != nil {
+				return err
+			}
+
+			var both []string
+			for path := range outgoing {
+				if incoming[path] {
+					both = append(both, path)
+				}
+			}
+			sort.Strings(both)
+
+			p.Section("peer divergence")
+			p.KV("would send", strconv.Itoa(len(outgoing)))
+			p.KV("would receive", strconv.Itoa(len(incoming)))
+			if len(both) == 0 {
+				p.Success("no path is contested")
+				return nil
+			}
+			p.Warn("%d path(s) changed on BOTH machines:", len(both))
+			for i, path := range both {
+				if i >= 40 {
+					p.Line("  ... and %d more", len(both)-i)
+					break
+				}
+				p.Line("  %s", path)
+			}
+			p.Blank()
+			p.Line("Each machine currently keeps its own version. Reconcile by hand, or")
+			p.Line("force one direction for a specific path:")
+			p.Line("  dot sync fetch --profile=%s <path>   # take the peer's copy", PeerProfile)
+			return nil
+		},
+	}
+}
+
+// peerPendingPaths lists what one direction would transfer, using a
+// metadata-only dry run. --update is deliberately omitted: the question is
+// "does this side have something different", not "is it newer".
+func peerPendingPaths(ctx context.Context, runner *exec.Runner, cfg *syncer.Config, outgoing bool) (map[string]bool, error) {
+	// A distinctive prefix so rsync's own messages ("skipping non-regular
+	// file ...", warnings, the stats block) cannot be mistaken for paths. The
+	// runner returns combined output, so filtering by prefix is the only
+	// reliable way to read a file list back out.
+	args := []string{"-a", "--no-links", "--dry-run", "--out-format=@@%n",
+		"--exclude=/.dotfiles/", "--exclude=/inbox/gdrive/", "--exclude=.git",
+		"--exclude-from=" + cfg.ExcludesFile,
+		"--exclude-from=" + cfg.IgnoreFile,
+	}
+	if cfg.RemoteRsyncPath != "" {
+		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
+	}
+	args = append(args, "-e", "ssh")
+	if outgoing {
+		args = append(args, cfg.LocalPath, cfg.Target.RsyncDest())
+	} else {
+		args = append(args, cfg.Target.RsyncDest(), cfg.LocalPath)
+	}
+	res, err := runner.Run(ctx, "rsync", args...)
+	if err != nil {
+		if !syncer.IsPartialTransfer(err) {
+			return nil, err
+		}
+	}
+	out := map[string]bool{}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "@@") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "@@")
+		if line == "" || strings.HasSuffix(line, "/") {
+			continue
+		}
+		out[line] = true
+	}
+	return out, nil
+}
 
 func newPeerSetupCmd() *cobra.Command {
 	var interval time.Duration
@@ -467,8 +607,25 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syn
 	if err != nil {
 		return err
 	}
+	// --update and --backup are not optional here. Without them this pass
+	// overwrites host config unconditionally in both directions, and the first
+	// real run did exactly that: it replaced this machine's
+	// ~/.ssh/known_hosts with the peer's copy, deleting the host key entry for
+	// the very channel the sync runs over. The next ssh failed with "Host key
+	// verification failed".
+	//
+	// The exclusions are machine-local trust and runtime state. known_hosts is
+	// per-machine by nature - merging it is meaningless and losing it is
+	// self-inflicted denial of service. Agent sockets are not files worth moving.
+	conflict := NewHomeConflictDir()
 	base := []string{"-aHAX", "--numeric-ids", "-r", "--human-readable", "--stats",
-		"--ignore-missing-args", "--chmod=Du+w", "--files-from=" + list}
+		"--ignore-missing-args", "--chmod=Du+w",
+		"--update",
+		"--backup", "--backup-dir=" + conflict,
+		"--exclude=known_hosts", "--exclude=known_hosts.old", "--exclude=known_hosts2",
+		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
+		"--exclude=.DS_Store",
+		"--files-from=" + list}
 	if cfg.RemoteRsyncPath != "" {
 		base = append(base, "--rsync-path="+cfg.RemoteRsyncPath)
 	}
@@ -493,6 +650,12 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syn
 		}
 	}
 	return nil
+}
+
+// NewHomeConflictDir names the quarantine directory for the host-path pass.
+// Destination-relative, so each side keeps its own displaced copies.
+func NewHomeConflictDir() string {
+	return ".dot-peer-conflicts/" + time.Now().UTC().Format("2006-01-02T15-04-05Z")
 }
 
 func runPeerRsync(ctx context.Context, runner *exec.Runner, cfg *syncer.Config, args []string) error {

@@ -317,3 +317,25 @@ func TestPreferredMachineNameIsDNSSafeAndSpecific(t *testing.T) {
 		t.Errorf("PreferredMachineName() = %q but CheckOwner rejects it: %v", got, err)
 	}
 }
+
+// TestFreshProfileHasEveryFilterFileRsyncReferences is the regression test for a
+// real failure: commonArgs passes --exclude-from for exclude.txt and ignore.txt
+// unconditionally, and rsync exits 11 when it cannot open one. A freshly created
+// profile whose store lacked them failed every transfer.
+func TestFreshProfileHasEveryFilterFileRsyncReferences(t *testing.T) {
+	ws := t.TempDir()
+	paths := ResolveLocalPathsForProfile(ws, "peer")
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatalf("EnsureLocalLayout: %v", err)
+	}
+	for _, f := range []struct{ name, path string }{
+		{"exclude.txt", paths.ExcludeFile},
+		{"ignore.txt", paths.IgnoreFile},
+		{"include.txt", paths.IncludeFile},
+		{"allow.txt", paths.AllowFile},
+	} {
+		if _, err := os.Stat(f.path); err != nil {
+			t.Errorf("%s missing after layout creation: %v (rsync would exit 11)", f.name, err)
+		}
+	}
+}

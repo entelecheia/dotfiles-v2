@@ -165,6 +165,17 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 	} else if profile != DefaultProfile {
 		// A non-default profile has no global twin to migrate from: an unset
 		// profile is genuinely empty, not "inherit the mirror settings".
+		//
+		// It still needs the surrounding layout. commonArgs passes
+		// --exclude-from for exclude.txt and ignore.txt unconditionally, and
+		// rsync exits 11 ("file IO error") when it cannot open one - so a fresh
+		// profile whose store lacks those files fails every transfer. Measured on
+		// the first real peer run.
+		if migrate {
+			if err := EnsureLocalLayout(localPaths); err != nil {
+				return nil, err
+			}
+		}
 		if cfg, ok, err := LoadLocalConfig(localPaths); err != nil {
 			return nil, err
 		} else if ok {
