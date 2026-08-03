@@ -1036,7 +1036,7 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 		}
 		pushErr := syncer.Push(cmd.Context(), runner, cfg, dryRun)
 		recordSyncResult(state, cfg, "push", pushErr, dryRun)
-		if pushErr != nil {
+		if pushErr = reportPushPartial(p, pushErr); pushErr != nil {
 			return fmt.Errorf("push failed: %w", pushErr)
 		}
 		p.Line("✓ Push complete.")
@@ -1079,7 +1079,7 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 	pushErr := syncer.Push(cmd.Context(), runner, cfg, false)
 	recordSyncResult(state, cfg, "push", pushErr, false)
-	if pushErr != nil {
+	if pushErr = reportPushPartial(p, pushErr); pushErr != nil {
 		return fmt.Errorf("push failed: %w", pushErr)
 	}
 	p.Line("✓ Push complete.")
@@ -2247,4 +2247,26 @@ func newSyncOwnerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&setTo, "set", "", "set ownership to a specific machine name")
 	cmd.Flags().BoolVar(&clearOwner, "clear", false, "remove the ownership restriction")
 	return cmd
+}
+
+// reportPushPartial downgrades an rsync partial transfer (exit 23/24) from a
+// failed run to a warning, matching what the peer path already does.
+//
+// Why the mirror needs this: the target is a cloud-provider folder, and a file
+// Dropbox keeps online-only is dataless on disk. Touching one asks the provider
+// to hydrate it, and macOS answers EDEADLK rather than block, so rsync reports
+// those paths as skipped and exits 23. That is routine for this target, not a
+// broken run - the destination copy still exists in the cloud, and hydrating
+// the whole mirror to satisfy a stat would be far worse than skipping it.
+//
+// Treating 23 as fatal made the scheduled push exit 1 forever on a workspace
+// with any archived, never-opened files.
+func reportPushPartial(p *Printer, err error) error {
+	if err == nil || !syncer.IsPartialTransfer(err) {
+		return err
+	}
+	p.Warn("partial transfer: %v", err)
+	p.Line("  Some files were skipped; the rest arrived. Files the cloud client")
+	p.Line("  keeps online-only cannot be stat'd locally and are expected here.")
+	return nil
 }

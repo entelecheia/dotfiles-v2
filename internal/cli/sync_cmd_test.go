@@ -2,7 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
+	osexec "os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -174,4 +177,41 @@ func TestSyncConflictsRegistersListAndPrune(t *testing.T) {
 	if prune.Flags().Lookup("older-than") == nil || prune.Flags().Lookup("all") == nil {
 		t.Error("prune is missing --older-than/--all flags")
 	}
+}
+
+// TestReportPushPartial pins the mirror push's treatment of rsync exit 23.
+// The target is a cloud folder: files the client keeps online-only cannot be
+// stat'd (macOS returns EDEADLK rather than hydrate synchronously), so rsync
+// skips them and exits 23. Treating that as fatal made the scheduled push exit
+// 1 on every cycle for a workspace containing any archived, never-opened file.
+func TestReportPushPartial(t *testing.T) {
+	p := &Printer{Out: io.Discard, Err: io.Discard}
+
+	if got := reportPushPartial(p, nil); got != nil {
+		t.Errorf("nil in, %v out", got)
+	}
+
+	partial := syncer.ClassifyRsyncError(rsyncExit(t, 23))
+	if !syncer.IsPartialTransfer(partial) {
+		t.Fatal("precondition: exit 23 should classify as partial")
+	}
+	if got := reportPushPartial(p, partial); got != nil {
+		t.Errorf("partial transfer must not fail the push, got %v", got)
+	}
+
+	// A genuine failure must still fail: exit 12 is a protocol error, not a
+	// skipped file, and silently succeeding there would hide a broken mirror.
+	fatal := syncer.ClassifyRsyncError(rsyncExit(t, 12))
+	if got := reportPushPartial(p, fatal); got == nil {
+		t.Error("exit 12 must still fail the push")
+	}
+}
+
+func rsyncExit(t *testing.T, code int) error {
+	t.Helper()
+	err := osexec.Command("sh", "-c", "exit "+strconv.Itoa(code)).Run()
+	if err == nil {
+		t.Fatalf("expected exit %d", code)
+	}
+	return err
 }
