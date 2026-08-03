@@ -1,7 +1,12 @@
 # Peer delete propagation with quarantine
 
-Status: approved design, not yet implemented
+Status: implemented on `feat/peer-delete-propagation`
 Date: 2026-08-04
+
+Two things were learned while building it and are folded in below: the delete
+pass must run before the push, not after (see "Retire tombstones"), and rsync
+signals the expected missing source args as a partial transfer (see "Delete on
+the peer, into quarantine").
 
 ## Problem
 
@@ -113,11 +118,24 @@ Verified empirically. Given a tombstone list of `a/gone.txt`:
 This is preferred over `--delete-after`, which would delete every peer path
 absent locally, including files the peer legitimately created.
 
+Every path in the list is missing from the sender by construction, and rsync
+reports absent source args as a partial transfer, exit 23/24. For this pass
+that exit code is the success signal, so `IsPartialTransfer` is treated as
+success and any other error is returned. This only surfaced once the pass ran
+against real rsync; an argv-only test cannot see it.
+
 ### 4. Retire tombstones
 
-On a successful delete pass, drop those keys from `baseline.manifest` and their
-rows from `tombstones.log`. Since the set is recomputed from the baseline each
-run, the tombstone then disappears on its own.
+No explicit baseline surgery is needed. `Push` ends with `RefreshBaseline`,
+which for an SSH target walks the *local* tree, so a path that is gone locally
+drops out of the baseline on its own and stops being a tombstone from the next
+run onward.
+
+That is also why **the delete pass runs after the pull but before the push**.
+If it ran after the push, `RefreshBaseline` would already have retired the key;
+a delete pass that then failed would leave no tombstone, and the peer's copy
+would come back on the next pull. Returning early on failure leaves the
+baseline untouched, so the deletion is simply retried next run.
 
 - Peer unreachable → baseline unchanged → tombstone recomputed next run and
   applied when the peer returns.

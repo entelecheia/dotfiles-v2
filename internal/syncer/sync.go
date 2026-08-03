@@ -73,6 +73,13 @@ type Config struct {
 	Paused          bool              // mirrors LocalConfig.Paused; the auth source for sync gating
 	Verbose         bool
 
+	// Tombstones are relpaths deleted locally since the last push, computed
+	// once per run by ComputeTombstones before the pull. Runtime-only, set by
+	// the caller the same way RemoteRsyncPath is. prepareRuntimeFilters turns
+	// them into the pull's protective exclude layer; PropagateDeletes applies
+	// them to the target.
+	Tombstones []string
+
 	// LocalPaths exposes the resolved per-workspace layout for
 	// callers (status, init, manifest readers) that need granular
 	// access beyond what the convenience fields above expose.
@@ -415,6 +422,15 @@ func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
 	rf.TrackedDyn, err = MaterializeTrackedIncludesFile(cfg.LocalPaths, rels)
 	if err != nil {
 		return rf, err
+	}
+	// Deleted paths are still baseline keys, so unionTrackedWithBaseline just
+	// re-admitted every one of them to the include layer. The tombstone
+	// excludes sit ahead of it in commonArgs and take them back out.
+	if len(cfg.Tombstones) > 0 {
+		rf.TombstonesDyn, err = MaterializeTombstoneExcludesFile(cfg.ConfigDir, cfg.Tombstones)
+		if err != nil {
+			return rf, err
+		}
 	}
 	return rf, nil
 }

@@ -74,6 +74,7 @@ type runtimeFilters struct {
 	SharedDyn     string // shared-folder excludes (operator-curated)
 	SubmodulesDyn string // git submodule paths — synced via Git, never rsync
 	TrackedDyn    string // include layer: tracked relpaths ∪ baseline keys
+	TombstonesDyn string // paths deleted locally — must not be pulled back
 }
 
 // secretExcludePatterns is the deny-by-default secrets layer. These paths
@@ -100,6 +101,8 @@ var secretAllowBuiltins = []string{
 // Empty paths inside rf are skipped.
 //
 // Filter order is first-match-wins, safety first:
+//  0. tombstones (paths deleted locally) — first so the include layer cannot
+//     re-admit them and the pull cannot restore what was just deleted
 //  1. always-on state paths (/.dotfiles/, /inbox/gdrive/)
 //  2. submodule excludes (submodules sync through Git)
 //  3. allow.txt re-includes — the only way secrets sync — plus the
@@ -125,6 +128,9 @@ func commonArgs(cfg *Config, rf runtimeFilters) []string {
 		// owner-write to received directories costs one mode bit and removes the
 		// whole failure class; file modes are untouched.
 		"--chmod=Du+w",
+	}
+	if rf.TombstonesDyn != "" {
+		args = append(args, "--exclude-from="+rf.TombstonesDyn)
 	}
 	args = append(args, alwaysExcludeArgs()...)
 	if rf.SubmodulesDyn != "" {
