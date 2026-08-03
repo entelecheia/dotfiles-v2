@@ -466,7 +466,7 @@ func TestPushFinalizesAfterPartialTransfer(t *testing.T) {
 	if guardAt < 0 {
 		t.Fatal("Push does not classify partial transfers; exit 23 would skip finalization")
 	}
-	if !(rsyncAt < guardAt && guardAt < baselineAt) {
+	if rsyncAt >= guardAt || guardAt >= baselineAt {
 		t.Errorf("expected runRsync -> IsPartialTransfer -> RefreshBaseline, got %d/%d/%d",
 			rsyncAt, guardAt, baselineAt)
 	}
