@@ -56,12 +56,30 @@ func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
 	if document.Jobs[0].LastRunAt == nil || *document.Jobs[0].LastRunAt != lastPush.Format(time.RFC3339Nano) {
 		t.Fatalf("unexpected last run: %+v", document.Jobs[0].LastRunAt)
 	}
+	cfg.Profile = "archive"
+	if got := buildSyncStatusJSON(cfg, status, scheduler).Kind; got != "mirror" {
+		t.Fatalf("non-peer profile kind = %q, want mirror", got)
+	}
+	cfg.Profile = syncer.PeerProfile
+	if got := buildSyncStatusJSON(cfg, status, scheduler).Kind; got != "peer-profile" {
+		t.Fatalf("peer profile kind = %q, want peer-profile", got)
+	}
 }
 
 func TestActivePatternCountIgnoresCommentsAndBlanks(t *testing.T) {
 	content := "# header\n\n*.md\n  # comment\n/.secrets/**\n"
 	if got := activePatternCount(content); got != 2 {
 		t.Fatalf("activePatternCount = %d, want 2", got)
+	}
+}
+
+func TestAddsActivePatternChecksPatternIdentityNotCount(t *testing.T) {
+	current := "# approved\n/.secrets/narrow.env\n"
+	if !addsActivePattern(current, "/**\n") {
+		t.Fatal("same-count replacement with a broader new pattern must require acknowledgement")
+	}
+	if addsActivePattern(current, "\n/.secrets/narrow.env\n# reordered\n") {
+		t.Fatal("reordering the same active patterns must not require acknowledgement")
 	}
 }
 
@@ -87,7 +105,17 @@ func TestTailSyncLogKeepsNewestLines(t *testing.T) {
 	if err := os.WriteFile(path, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := tailSyncLog(path, 2); got != "two\nthree" {
+	got, err := tailSyncLog(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "two\nthree" {
 		t.Fatalf("tail = %q", got)
+	}
+}
+
+func TestTailSyncLogSurfacesReadErrors(t *testing.T) {
+	if _, err := tailSyncLog(t.TempDir(), 2); err == nil {
+		t.Fatal("reading a directory as a log must return an error")
 	}
 }

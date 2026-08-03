@@ -13,7 +13,10 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-const maxPatternFileBytes = 1024 * 1024
+const (
+	maxPatternFileBytes     = 1024 * 1024
+	syncFilterSchemaVersion = 1
+)
 
 type syncFilterFileJSON struct {
 	SchemaVersion int    `json:"schemaVersion"`
@@ -78,6 +81,27 @@ func activePatternCount(content string) int {
 	return count
 }
 
+func activePatternSet(content string) map[string]struct{} {
+	patterns := make(map[string]struct{})
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			patterns[line] = struct{}{}
+		}
+	}
+	return patterns
+}
+
+func addsActivePattern(current, replacement string) bool {
+	existing := activePatternSet(current)
+	for pattern := range activePatternSet(replacement) {
+		if _, ok := existing[pattern]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
 func readFilterDocument(cfg *syncer.Config, kind string) (syncFilterFileJSON, error) {
 	path, err := filterPath(cfg, kind)
 	if err != nil {
@@ -89,7 +113,7 @@ func readFilterDocument(cfg *syncer.Config, kind string) (syncFilterFileJSON, er
 	}
 	text := string(content)
 	return syncFilterFileJSON{
-		SchemaVersion: syncStatusSchemaVersion,
+		SchemaVersion: syncFilterSchemaVersion,
 		Profile:       cfg.Profile,
 		Kind:          strings.ToLower(kind),
 		Path:          path,
@@ -142,7 +166,7 @@ func runSyncFiltersSet(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if kind == "allow" && activePatternCount(content) > current.ActiveCount {
+	if kind == "allow" && addsActivePattern(current.Content, content) {
 		ack, _ := cmd.Flags().GetBool("ack-secret-exposure")
 		if !ack {
 			return fmt.Errorf("adding allow patterns requires --ack-secret-exposure")

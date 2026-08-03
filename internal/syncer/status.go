@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -115,8 +116,10 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 	if confs, err := ListConflicts(s.LocalPath); err == nil {
 		s.Conflicts = confs
 	}
-	if confs, err := ListConflicts(s.MirrorPath); err == nil {
-		s.Conflicts = append(s.Conflicts, confs...)
+	if s.MirrorPath != "" && !cfg.Target.IsSSH() && filepath.Clean(s.MirrorPath) != filepath.Clean(s.LocalPath) {
+		if confs, err := ListConflicts(s.MirrorPath); err == nil {
+			s.Conflicts = append(s.Conflicts, confs...)
+		}
 	}
 
 	// Populate manual shared entries. Errors are non-fatal; status is best-effort.

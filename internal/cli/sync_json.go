@@ -118,7 +118,7 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 	}
 	return syncStatusJSON{
 		SchemaVersion:  syncStatusSchemaVersion,
-		Kind:           map[bool]string{true: "peer-profile", false: "mirror"}[cfg.Profile != syncer.DefaultProfile],
+		Kind:           map[bool]string{true: "peer-profile", false: "mirror"}[cfg.Profile == syncer.PeerProfile],
 		Profile:        cfg.Profile,
 		Configured:     configured,
 		WorkspacePath:  st.LocalPath,

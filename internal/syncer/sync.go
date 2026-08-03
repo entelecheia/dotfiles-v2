@@ -231,10 +231,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		mirrorPath = p
 	}
 
-	maxDelete := localCfg.MaxDelete
-	if maxDelete <= 0 {
-		maxDelete = defaultMaxDelete
-	}
+	maxDelete := EffectiveMaxDelete(localCfg.MaxDelete)
 
 	schedule := ScheduleSettingsFromLocalConfig(localCfg).NormalizeLenient(nil)
 
@@ -284,6 +281,15 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Paused:            localCfg.Paused,
 		LocalPaths:        localPaths,
 	}, nil
+}
+
+// EffectiveMaxDelete resolves the persisted zero sentinel to the safety
+// default used by runtime configuration.
+func EffectiveMaxDelete(value int) int {
+	if value <= 0 {
+		return defaultMaxDelete
+	}
+	return value
 }
 
 func expandHome(path, home string) string {

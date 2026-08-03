@@ -23,7 +23,7 @@ func newSyncConfigureCmd() *cobra.Command {
 	cmd.Flags().String("target", "", "local:path or ssh:user@host:path")
 	cmd.Flags().String("owner", "", "self, none, or a machine name")
 	cmd.Flags().String("propagate", "", "comma-separated create,update,delete")
-	cmd.Flags().Int("max-delete", -1, "maximum deletes per push")
+	cmd.Flags().Int("max-delete", -1, "maximum deletes per push; 0 uses the default")
 	cmd.Flags().String("push-interval", "", "push cadence, or 0 to disable")
 	cmd.Flags().String("pull-interval", "", "pull cadence, or 0 to disable")
 	cmd.Flags().String("push-mode", "", "clean or force")
@@ -36,6 +36,9 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 	state, cfg, runner, err := syncBootstrap(cmd)
 	if err != nil {
 		return err
+	}
+	if err := rejectGenericPeerProfile(cfg); err != nil {
+		return fmt.Errorf("configure: %w; use `dot peer init` and `dot peer setup`", err)
 	}
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("sync profile store unresolved")
@@ -75,6 +78,8 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 			local.Owner = strings.TrimSpace(owner)
 		}
 	}
+	// --filter-mode is inherited from the parent sync command's persistent
+	// flags, so it is valid both before and after the configure subcommand.
 	if cmd.Flags().Changed("filter-mode") {
 		raw, _ := cmd.Flags().GetString("filter-mode")
 		mode, err := syncer.ParseFilterMode(raw)
@@ -93,8 +98,8 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 	}
 	if cmd.Flags().Changed("max-delete") {
 		value, _ := cmd.Flags().GetInt("max-delete")
-		if value <= 0 {
-			return fmt.Errorf("--max-delete must be positive")
+		if value < 0 {
+			return fmt.Errorf("--max-delete must be non-negative")
 		}
 		local.MaxDelete = value
 	}
@@ -152,6 +157,8 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 				return err
 			}
 		}
+	} else if err := applyLocalConfigPreview(cfg, local); err != nil {
+		return err
 	}
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	if jsonOutput {
@@ -172,5 +179,49 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 	} else {
 		printerFrom(cmd).Success("sync profile %s configured", cfg.Profile)
 	}
+	return nil
+}
+
+// applyLocalConfigPreview projects validated edits onto a resolved config so
+// --dry-run --json describes the configuration that would be persisted. It
+// intentionally touches no files or schedulers.
+func applyLocalConfigPreview(cfg *syncer.Config, local *syncer.LocalConfig) error {
+	if cfg == nil || local == nil {
+		return fmt.Errorf("sync configuration unresolved")
+	}
+	if spec := strings.TrimSpace(local.Target); spec != "" {
+		target, err := syncer.ParseTarget(spec)
+		if err != nil {
+			return err
+		}
+		cfg.MirrorPath = ""
+		if target.Kind == syncer.TargetLocal {
+			home, _ := os.UserHomeDir()
+			target.Path = appsettings.ExpandHome(target.Path, home)
+			if !strings.HasSuffix(target.Path, "/") {
+				target.Path += "/"
+			}
+			cfg.MirrorPath = target.Path
+		}
+		cfg.Target = target
+	}
+	cfg.Owner = local.Owner
+	if local.FilterMode != "" {
+		cfg.FilterMode = local.FilterMode
+	}
+	if err := local.Propagation.Validate(); err != nil {
+		return err
+	}
+	cfg.Propagation = local.Propagation
+	cfg.MaxDelete = syncer.EffectiveMaxDelete(local.MaxDelete)
+	schedule, err := syncer.ScheduleSettingsFromLocalConfig(local).Normalize()
+	if err != nil {
+		return err
+	}
+	cfg.Interval = schedule.Interval
+	cfg.PullInterval = schedule.PullInterval
+	cfg.PushMode = schedule.PushMode
+	cfg.PullMode = schedule.PullMode
+	cfg.Paused = local.Paused
 	return nil
 }

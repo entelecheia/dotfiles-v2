@@ -9,7 +9,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const maxSyncLogTailBytes int64 = 256 * 1024
+const (
+	maxSyncLogTailBytes  int64 = 256 * 1024
+	syncLogSchemaVersion       = 1
+)
 
 type syncLogJSON struct {
 	SchemaVersion int    `json:"schemaVersion"`
@@ -43,13 +46,16 @@ func runSyncLog(cmd *cobra.Command, _ []string) error {
 	if lines > 1000 {
 		lines = 1000
 	}
-	content := tailSyncLog(cfg.LogFile, lines)
+	content, err := tailSyncLog(cfg.LogFile, lines)
+	if err != nil {
+		return err
+	}
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	if jsonOutput {
 		encoder := json.NewEncoder(cmd.OutOrStdout())
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(syncLogJSON{
-			SchemaVersion: syncStatusSchemaVersion,
+			SchemaVersion: syncLogSchemaVersion,
 			Profile:       cfg.Profile,
 			Path:          cfg.LogFile,
 			Content:       content,
@@ -59,26 +65,29 @@ func runSyncLog(cmd *cobra.Command, _ []string) error {
 	return err
 }
 
-func tailSyncLog(path string, maxLines int) string {
+func tailSyncLog(path string, maxLines int) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return ""
+		return "", err
 	}
 	offset := info.Size() - maxSyncLogTailBytes
 	if offset < 0 {
 		offset = 0
 	}
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return ""
+		return "", err
 	}
 	body, err := io.ReadAll(file)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	text := string(body)
 	if offset > 0 {
@@ -91,7 +100,7 @@ func tailSyncLog(path string, maxLines int) string {
 		rows = rows[len(rows)-maxLines:]
 	}
 	if len(rows) == 1 && rows[0] == "" {
-		return ""
+		return "", nil
 	}
-	return strings.Join(rows, "\n")
+	return strings.Join(rows, "\n"), nil
 }

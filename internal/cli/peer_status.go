@@ -18,6 +18,8 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
+const peerStatusSchemaVersion = 1
+
 type peerSchedulerSnapshot struct {
 	Label           string
 	State           string
@@ -88,7 +90,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 		encoder := json.NewEncoder(cmd.OutOrStdout())
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(peerStatusJSON{
-			SchemaVersion: syncStatusSchemaVersion,
+			SchemaVersion: peerStatusSchemaVersion,
 			Kind:          "peer",
 			Profile:       base,
 			Job:           job,

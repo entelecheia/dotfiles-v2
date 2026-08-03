@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const peerHomePathsSchemaVersion = 1
+
 type peerHomePathsJSON struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	Path          string `json:"path"`
@@ -52,7 +54,7 @@ func readPeerHomePaths(path string) (peerHomePathsJSON, error) {
 	}
 	content := string(body)
 	return peerHomePathsJSON{
-		SchemaVersion: syncStatusSchemaVersion,
+		SchemaVersion: peerHomePathsSchemaVersion,
 		Path:          path,
 		ActiveCount:   activePatternCount(content),
 		Content:       content,
@@ -105,7 +107,7 @@ func runPeerHomePathsSet(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	document := peerHomePathsJSON{
-		SchemaVersion: syncStatusSchemaVersion,
+		SchemaVersion: peerHomePathsSchemaVersion,
 		Path:          path,
 		ActiveCount:   activePatternCount(content),
 		Content:       content,
