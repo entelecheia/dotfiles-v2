@@ -56,6 +56,9 @@ Also available as 'dotfiles' for back-compat.`,
 	// Workspace cleanup
 	root.AddCommand(newCleanCmd())
 
+	// Spotlight exclusion markers for build/cache dirs
+	root.AddCommand(newNoindexCmd())
+
 	// Sync (rsync workspace mirror: local cloud folder or SSH remote)
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newPeerCmd())

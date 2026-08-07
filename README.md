@@ -331,6 +331,31 @@ dot clean ~/projects     # custom path (default: ~/workspace/work)
 
 > Alias: `dot gc`
 
+### `dot noindex`
+
+Keep Spotlight out of regenerable directories. An empty `.metadata_never_index` file makes `mds` skip a directory and everything under it, which matters once a machine collects a few hundred `node_modules` trees.
+
+```bash
+dot noindex                  # sweep the default roots
+dot noindex --dry-run -v     # list what would be marked
+dot noindex ~/projects       # walk specific paths instead
+dot noindex setup            # install the 6-hourly LaunchAgent
+dot noindex uninstall        # remove it (markers stay)
+```
+
+Two shapes of target:
+
+- **Project roots** (`~/workspace`, `~/Sites`, `~/conductor`, `~/orca`, ...) are walked, and every matching directory inside gets its own marker. Matched directories are pruned, so nested copies cost nothing.
+- **Cache roots** (`~/.local`, `~/.npm`, `~/.cursor`, `~/.vscode`, `~/.cache`, `~/Library/Caches`, ...) get a single marker at the top instead of a walk. `~/.claude` is deliberately excluded so plans and skills stay searchable.
+
+**Marked**: `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.venv`, `venv`, `env` (with pyvenv.cfg), `.next`, `.cache`, `dist`, `target`
+
+**Not marked**, though `dot clean` treats them as junk: `build`, `out`. That is where finished deliverables land (rendered decks, exports), and a file you cannot find by name costs more than the indexing it saves.
+
+Interactive shells also stamp `./node_modules`, `./.venv` and `./.next` right after `npm`/`pnpm`/`yarn`/`bun` returns (defined in `~/.config/shell/00-exports.sh`), so the scheduled sweep is the backstop for everything else.
+
+> The marker only prevents *future* indexing. Anything already in the Spotlight store stays until a full reindex: `sudo mdutil -E /`.
+
 ### `dot tunnel`
 
 Configure SSH access to this Mac through a locally managed Cloudflare Tunnel.

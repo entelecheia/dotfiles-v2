@@ -18,11 +18,37 @@ export PATH="${CUDA_HOME}/bin:$PATH"
 export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
 {{ end -}}
 
-# pnpm: load pnpm-only config from ~/.config/pnpm/npmrc so npm 11+ doesn't warn
-# about unknown keys (virtual-store-dir, store-dir, cache-dir). `command pnpm`
-# avoids recursion; the function only activates if pnpm is on PATH.
-if command -v pnpm >/dev/null 2>&1; then
-  pnpm() {
-    NPM_CONFIG_USERCONFIG="$HOME/.config/pnpm/npmrc" command pnpm "$@"
-  }
-fi
+# Node package manager wrappers. Both concerns live in one place on purpose:
+# a second definition site further down the load order silently wins, and that
+# is exactly how the pnpm config wrapper got lost once already.
+#
+#   1. pnpm reads its own config from ~/.config/pnpm/npmrc so npm 11+ doesn't
+#      warn about unknown keys (virtual-store-dir, store-dir, cache-dir).
+#   2. a fresh node_modules/.venv/.next gets a .metadata_never_index marker so
+#      Spotlight never indexes it. This is the cheap cwd-only case; `dot noindex`
+#      sweeps everything else on a schedule.
+#
+# Defined unconditionally: this file is sourced before 50-tools-init.sh runs
+# `fnm env`, so an `if command -v npm` guard here would see an fnm-managed npm
+# as missing and skip the wrapper for the whole session. `command X` inside
+# resolves at call time, when PATH is complete, and exits 127 exactly like an
+# uninstalled tool would.
+__dot_noindex_cwd() {
+  for __dot_d in node_modules .venv .next; do
+    if [ -d "./$__dot_d" ] && [ ! -e "./$__dot_d/.metadata_never_index" ]; then
+      : >"./$__dot_d/.metadata_never_index" 2>/dev/null
+    fi
+  done
+  unset __dot_d
+  return 0
+}
+
+npm() { command npm "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
+pnpm() {
+  NPM_CONFIG_USERCONFIG="$HOME/.config/pnpm/npmrc" command pnpm "$@"
+  local rc=$?
+  __dot_noindex_cwd
+  return $rc
+}
+yarn() { command yarn "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
+bun() { command bun "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
