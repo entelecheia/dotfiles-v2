@@ -244,6 +244,9 @@ dot update          # download, verify & install
 dot update --check  # check only
 ```
 
+Updates the `dot` binary only. To update the AI CLIs, their plugins, and
+skills, use [`dot ai update`](#dot-ai-update).
+
 ### `dot config`
 
 Show current configuration (profile, system, modules, packages).
@@ -805,6 +808,12 @@ dot ai skills status               # maru SSOT + detected tools by default (read
 dot ai memory install              # share claude-mem across Codex, Kimi, and Kiro
 dot ai memory status               # verify hooks, MCP recall, and transcript capture
 
+dot ai update --check              # report available CLI/plugin/skill updates
+dot ai update                      # update CLIs, plugins, marketplaces, skills
+
+dot ai auth status                 # list MCP servers and pending re-auth
+dot ai auth relogin cloudflare-bindings
+
 dot ai audit summary               # summarize append-only dot ai mutation events
 dot ai audit tail 20               # print recent events as JSONL
 
@@ -919,6 +928,85 @@ from `modules.ai.skills` config:
 
 Legacy `tools` entries for `agents`, `gemini`, and `antigravity` remain
 loadable; diagnostics warn and normalize them out of Maru-managed targets.
+
+#### `dot ai update`
+
+Brings the managed AI tooling current in one pass. Phases run in a fixed order
+and are partial-failure tolerant — one tool failing never aborts the rest, and
+a missing binary is skipped rather than treated as an error. Any failed step
+still produces a summary and a non-zero exit code.
+
+| Phase | What it runs |
+|-------|--------------|
+| `claude` | `claude update`, `claude plugin marketplace update`, then `claude plugin update <id> -s <scope>` for every installed plugin |
+| `codex` | `codex update`, `codex plugin marketplace upgrade` (Codex has no per-plugin update) |
+| `copilot` | `copilot update` (the CLI also auto-updates on startup) |
+| `gemini` | `npm install -g @google/gemini-cli` through `fnm`, falling back to a system `npm` (no self-update subcommand exists) |
+| `skills` | `brew upgrade maru-cli`, then `maru skills update` and `maru skills sync --tools claude,codex` |
+
+```bash
+dot ai update --check                    # read-only report, no changes
+dot ai update                            # all phases
+dot ai update --tool claude,skills       # subset (phase order is preserved)
+dot ai update --json                     # machine-readable step results
+```
+
+`--check` compares each installed plugin's recorded `gitCommitSha` against the
+sha its marketplace clone currently points at. Semver is unusable here — some
+plugins report version `unknown` — and `claude plugin list --available` omits
+already-installed plugins, so the marketplace checkout is the only reference.
+Plugins whose marketplace is not a git clone, or that were installed from a
+different repository, report `unknown` rather than a guess. Because `--check`
+makes no changes it compares against the last fetched snapshot; the mutating
+path refreshes marketplaces first.
+
+When Claude's native self-update previously failed (recorded in
+`~/.claude/.last-update-result.json`), the command surfaces that state before
+retrying once and hints at a manual reinstall. It never downloads or runs an
+installer script itself.
+
+Skills are delegated entirely to `maru` — per `docs/BOUNDARIES.md`, dot never
+writes under `~/.maru/skills` or any tool skill root. `~/.agents/skills` (the
+npm `skills` CLI) is a multi-owner directory and is not managed by dot; the
+command prints a hint instead of touching it.
+
+Claude plugin updates take effect after a Claude Code restart. There is no
+periodic auto-updater — run the command when you want it.
+
+#### `dot ai auth`
+
+OAuth-backed MCP servers (Cloudflare plugin servers, `claude.ai` connectors)
+periodically lose their credentials. The only upstream primitives are
+`claude mcp login` / `claude mcp logout`, one server at a time.
+
+```bash
+dot ai auth status                       # servers + which need re-auth
+dot ai auth status --json --probe        # add live 'claude mcp list' output
+dot ai auth login --all-needed           # authenticate every pending server
+dot ai auth login excalidraw --no-browser
+dot ai auth relogin cloudflare-bindings cloudflare-builds cloudflare-observability
+dot ai auth relogin --tool codex my-server
+```
+
+`status` is file-driven: the pending set comes from
+`~/.claude/mcp-needs-auth-cache.json` and the server list from `.mcpServers` in
+`~/.claude.json`. A server that appears only in the pending cache (a `claude.ai`
+connector, which lives server-side) is still listed. Pass `--probe` to also
+stream live connection state from `claude mcp list`.
+
+`relogin` clears stored credentials before logging in again — the fix for
+servers stuck in a failed-auth state. Because a logout is destructive it
+confirms first unless `--yes` is passed. Login flows need a real TTY, so they
+are a no-op under `--dry-run`.
+
+Server names containing spaces must be quoted:
+
+```bash
+dot ai auth relogin "claude.ai Canva"
+```
+
+`--tool codex` swaps the underlying binary to `codex mcp login|logout`. The
+`status` view is Claude-only: Codex exposes no equivalent pending-auth cache.
 
 ```yaml
 modules:

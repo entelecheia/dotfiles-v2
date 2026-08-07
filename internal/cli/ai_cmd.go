@@ -38,6 +38,8 @@ Codex, Antigravity, or ChatGPT apps; use 'dot apps install' for Homebrew casks.`
 	cmd.AddCommand(newAIAgentsCmd())
 	cmd.AddCommand(newAISkillsCmd())
 	cmd.AddCommand(newAIMemoryCmd())
+	cmd.AddCommand(newAIUpdateCmd())
+	cmd.AddCommand(newAIAuthCmd())
 	cmd.AddCommand(newAIAuditCmd())
 	return cmd
 }
