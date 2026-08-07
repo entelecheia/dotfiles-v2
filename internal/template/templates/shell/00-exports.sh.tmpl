@@ -28,7 +28,11 @@ export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
 #      Spotlight never indexes it. This is the cheap cwd-only case; `dot noindex`
 #      sweeps everything else on a schedule.
 #
-# `command X` avoids recursion; each wrapper only activates if X is on PATH.
+# Defined unconditionally: this file is sourced before 50-tools-init.sh runs
+# `fnm env`, so an `if command -v npm` guard here would see an fnm-managed npm
+# as missing and skip the wrapper for the whole session. `command X` inside
+# resolves at call time, when PATH is complete, and exits 127 exactly like an
+# uninstalled tool would.
 __dot_noindex_cwd() {
   for __dot_d in node_modules .venv .next; do
     if [ -d "./$__dot_d" ] && [ ! -e "./$__dot_d/.metadata_never_index" ]; then
@@ -39,20 +43,12 @@ __dot_noindex_cwd() {
   return 0
 }
 
-if command -v npm >/dev/null 2>&1; then
-  npm() { command npm "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
-fi
-if command -v pnpm >/dev/null 2>&1; then
-  pnpm() {
-    NPM_CONFIG_USERCONFIG="$HOME/.config/pnpm/npmrc" command pnpm "$@"
-    local rc=$?
-    __dot_noindex_cwd
-    return $rc
-  }
-fi
-if command -v yarn >/dev/null 2>&1; then
-  yarn() { command yarn "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
-fi
-if command -v bun >/dev/null 2>&1; then
-  bun() { command bun "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
-fi
+npm() { command npm "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
+pnpm() {
+  NPM_CONFIG_USERCONFIG="$HOME/.config/pnpm/npmrc" command pnpm "$@"
+  local rc=$?
+  __dot_noindex_cwd
+  return $rc
+}
+yarn() { command yarn "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }
+bun() { command bun "$@"; local rc=$?; __dot_noindex_cwd; return $rc; }

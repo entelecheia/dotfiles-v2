@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -89,6 +90,11 @@ func runNoindex(cmd *cobra.Command, args []string) error {
 	opts := noindex.Options{DryRun: dryRun}
 	if len(args) > 0 {
 		for _, a := range args {
+			// absPath expands ~ against the invoking user; under --home the
+			// effective home is the one that matters.
+			if strings.HasPrefix(a, "~/") {
+				a = filepath.Join(home, a[2:])
+			}
 			path := absPath(a)
 			if _, err := os.Stat(path); err != nil {
 				return fmt.Errorf("path does not exist: %s", path)
@@ -106,13 +112,23 @@ func runNoindex(cmd *cobra.Command, args []string) error {
 		for _, d := range res.Marked {
 			p.Bullet(ui.StyleHint.Render(ui.MarkPending), d)
 		}
+		for _, d := range res.Failed {
+			p.Bullet(ui.StyleWarning.Render(ui.MarkWarn), d)
+		}
+	}
+
+	// A read-only tree does not fail the sweep, but it must not read as
+	// success either: "nothing to do" and "could not write" look identical
+	// from the outside otherwise.
+	if len(res.Failed) > 0 {
+		p.Warn("could not mark %d directories (permissions?); re-run with -v to list them", len(res.Failed))
 	}
 
 	verb := "marked"
 	if dryRun {
 		verb = "would mark"
 	}
-	if len(res.Marked) == 0 {
+	if len(res.Marked) == 0 && len(res.Failed) == 0 {
 		p.Success("nothing to do (%d already marked)", res.Present)
 		return nil
 	}
@@ -162,14 +178,26 @@ func newNoindexSetupCmd() *cobra.Command {
 			}
 
 			ctx := context.Background()
-			runner := guardRunner(false)
-			_, _ = runner.Run(ctx, "launchctl", "bootout", guiTarget()+"/"+noindexLabel)
-			if _, err := runner.Run(ctx, "launchctl", "bootstrap", guiTarget(), plist); err != nil {
-				return fmt.Errorf("loading %s: %w", plist, err)
+			// launchctl can only address the *invoking* user's domain, so under
+			// --home the plist belongs to someone else: write it, retire the
+			// legacy files in that home, and let them load it. Same rule as
+			// cleanupLegacyCloneScheduler.
+			sameUser := sameUserHome(c)
+			if sameUser {
+				runner := guardRunner(false)
+				_, _ = runner.Run(ctx, "launchctl", "bootout", guiTarget()+"/"+noindexLabel)
+				if _, err := runner.Run(ctx, "launchctl", "bootstrap", guiTarget(), plist); err != nil {
+					return fmt.Errorf("loading %s: %w", plist, err)
+				}
 			}
 
-			cleanupLegacyNoindex(ctx, p, home)
+			cleanupLegacyNoindex(ctx, p, home, sameUser)
 
+			if !sameUser {
+				p.Success("wrote %s", plist)
+				p.Line("  --home set: log in as that user (or use sudo -u) to load it")
+				return nil
+			}
 			p.Success("noindex sweep scheduled every %s", interval)
 			p.KV("plist", plist)
 			p.KV("log", logFile)
@@ -195,7 +223,9 @@ func newNoindexUninstallCmd() *cobra.Command {
 				p.Line("dry-run: would remove %s", plist)
 				return nil
 			}
-			_, _ = guardRunner(false).Run(context.Background(), "launchctl", "bootout", guiTarget()+"/"+noindexLabel)
+			if sameUserHome(c) {
+				_, _ = guardRunner(false).Run(context.Background(), "launchctl", "bootout", guiTarget()+"/"+noindexLabel)
+			}
 			if err := os.Remove(plist); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -213,15 +243,24 @@ func guiTarget() string {
 	return "gui/" + strconv.Itoa(os.Getuid())
 }
 
+// sameUserHome reports whether the effective home belongs to the invoking user.
+// launchctl can only address gui/<our uid>, so under --home every launchctl
+// call would hit the wrong domain with paths from another home.
+func sameUserHome(cmd *cobra.Command) bool {
+	over, _ := cmd.Flags().GetString("home")
+	return over == ""
+}
+
 // cleanupLegacyNoindex retires the hand-rolled spotlight-nmi setup this command
 // replaces: its LaunchAgent, its sweeper script, and the shell snippet that
 // defined the npm/pnpm/yarn/bun wrappers. The wrappers now live in
 // ~/.config/shell/00-exports.sh, which `dot apply` owns; leaving the old file
 // behind would re-shadow the managed pnpm wrapper. Best-effort and quiet when
-// nothing is installed.
-func cleanupLegacyNoindex(ctx context.Context, p *Printer, home string) {
+// nothing is installed. Unloading is only attempted for the invoking user
+// (sameUser); under --home only the files in the target home are removed.
+func cleanupLegacyNoindex(ctx context.Context, p *Printer, home string, sameUser bool) {
 	legacyPlist := filepath.Join(home, "Library", "LaunchAgents", legacyNoindexLabel+".plist")
-	if _, err := os.Stat(legacyPlist); err == nil {
+	if _, err := os.Stat(legacyPlist); err == nil && sameUser {
 		_, _ = guardRunner(false).Run(ctx, "launchctl", "bootout", guiTarget()+"/"+legacyNoindexLabel)
 	}
 	for _, path := range []string{

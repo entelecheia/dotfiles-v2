@@ -6,10 +6,15 @@ import (
 	"testing"
 )
 
-// tree builds a directory layout under a temp root.
+// tree builds a directory layout under a temp root. The root is resolved
+// because Sweep resolves its walk roots, and on macOS t.TempDir() hands back a
+// /var path that is really /private/var.
 func tree(t *testing.T, dirs ...string) string {
 	t.Helper()
 	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			t.Fatal(err)
@@ -146,6 +151,46 @@ func TestCacheRootsAreStampedNotWalked(t *testing.T) {
 	}
 	if len(res.Marked) != 1 {
 		t.Errorf("Marked = %v, want 1 entry", res.Marked)
+	}
+}
+
+// `dot apply` can create ~/workspace as a symlink, and WalkDir lstats its root:
+// without resolving it first the entire default sweep silently does nothing.
+func TestSweepFollowsSymlinkedRoot(t *testing.T) {
+	root := tree(t, "real/proj/node_modules", "link-parent")
+	link := filepath.Join(root, "link-parent/workspace")
+	if err := os.Symlink(filepath.Join(root, "real"), link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	res := Sweep(Options{WalkRoots: []string{link}})
+
+	if !marked(t, filepath.Join(root, "real/proj/node_modules")) {
+		t.Error("symlinked root was not walked")
+	}
+	if len(res.Marked) != 1 {
+		t.Errorf("Marked = %v, want 1 entry", res.Marked)
+	}
+}
+
+func TestSweepReportsUnwritableDirs(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	root := tree(t, "proj/node_modules")
+	locked := filepath.Join(root, "proj/node_modules")
+	if err := os.Chmod(locked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	res := Sweep(Options{WalkRoots: []string{root}})
+
+	if len(res.Marked) != 0 {
+		t.Errorf("Marked = %v, want nothing", res.Marked)
+	}
+	if len(res.Failed) != 1 || res.Failed[0] != locked {
+		t.Errorf("Failed = %v, want [%s]", res.Failed, locked)
 	}
 }
 

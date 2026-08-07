@@ -15,6 +15,7 @@
 package noindex
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -121,6 +122,7 @@ type Options struct {
 type Result struct {
 	Marked  []string // directories that got (or with DryRun, would get) a marker
 	Present int      // directories that already had one
+	Failed  []string // directories whose marker could not be written
 }
 
 // Sweep stamps the cache roots and walks the project roots.
@@ -137,6 +139,13 @@ func Sweep(opts Options) *Result {
 	for _, root := range opts.WalkRoots {
 		if !isDir(root) {
 			continue
+		}
+		// WalkDir lstats the root, so a symlinked root (which `dot apply` will
+		// happily create for ~/workspace) would be reported as a non-dir and
+		// skip the whole tree. Resolve the root only; nested links still stop
+		// the walk, which is what keeps it inside the tree.
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			root = resolved
 		}
 		// Callback errors are swallowed below, so WalkDir only fails on a root
 		// we already know is readable.
@@ -174,8 +183,9 @@ func Sweep(opts Options) *Result {
 }
 
 // mark creates the marker unless it is already there. A directory we cannot
-// write to is skipped rather than failing the sweep: one read-only tree should
-// not stop the other few hundred.
+// write to is recorded in Failed rather than failing the sweep: one read-only
+// tree should not stop the other few hundred, but a silent skip is
+// indistinguishable from success.
 func (r *Result) mark(dir string, dryRun bool) {
 	marker := filepath.Join(dir, Marker)
 	if _, err := os.Lstat(marker); err == nil {
@@ -187,11 +197,17 @@ func (r *Result) mark(dir string, dryRun bool) {
 		return
 	}
 	f, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
+	switch {
+	// A concurrent sweep (scheduled run overlapping a manual one) got there
+	// between the Lstat and here. Already marked, not a failure.
+	case errors.Is(err, fs.ErrExist):
+		r.Present++
+	case err != nil:
+		r.Failed = append(r.Failed, dir)
+	default:
+		_ = f.Close()
+		r.Marked = append(r.Marked, dir)
 	}
-	_ = f.Close()
-	r.Marked = append(r.Marked, dir)
 }
 
 func isDir(path string) bool {
