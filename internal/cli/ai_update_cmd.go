@@ -343,6 +343,11 @@ func (u *aiUpdater) updateClaude(ctx context.Context) []updateStep {
 		steps = append(steps, u.skip("claude", "plugins", "no installed plugins found"))
 		return steps
 	}
+	if u.runner.DryRun {
+		steps = append(steps, u.skip("claude", "plugins",
+			fmt.Sprintf("dry-run: would update %d installed plugin(s)", len(pluginsBefore))))
+		return steps
+	}
 	for _, pl := range pluginsBefore {
 		scope := pl.Scope
 		if scope == "" {
@@ -430,8 +435,8 @@ func (u *aiUpdater) updateSkills(ctx context.Context) []updateStep {
 		step := u.run(ctx, "skills", "bundle", "maru", "skills", "update", "--apply")
 		if step.Status == stepRan {
 			step.Status = stepUpdated
+			step.Detail = fmt.Sprintf("%s → %s", active, avail)
 		}
-		step.Detail = fmt.Sprintf("%s → %s", active, avail)
 		steps = append(steps, step)
 	}
 
@@ -444,8 +449,8 @@ func (u *aiUpdater) updateSkills(ctx context.Context) []updateStep {
 		step := u.run(ctx, "skills", "sync", "maru", "skills", "sync", "--apply", "--tools", "claude,codex")
 		if step.Status == stepRan {
 			step.Status = stepUpdated
+			step.Detail = fmt.Sprintf("%d pending action(s) applied", pending)
 		}
-		step.Detail = fmt.Sprintf("%d pending action(s) applied", pending)
 		steps = append(steps, step)
 	}
 	return steps

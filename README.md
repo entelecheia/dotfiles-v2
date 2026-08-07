@@ -999,7 +999,7 @@ connector, which lives server-side) is still listed. Pass `--probe` to also
 stream live connection state from `claude mcp list`.
 
 `relogin` clears stored credentials before logging in again — the fix for
-servers stuck in a failed-auth state. Because a logout is destructive it
+servers stuck in a failed-auth state. Because a logout is destructive, it
 confirms first unless `--yes` is passed. Login flows need a real TTY, so they
 are a no-op under `--dry-run`.
 

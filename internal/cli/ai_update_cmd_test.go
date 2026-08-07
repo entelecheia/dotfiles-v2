@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // Fixtures mirror the real v2 installed_plugins.json, including a plugin whose
-// version is the literal "unknown" — semver is unusable, sha is the truth.
+// version is the literal "unknown" — claude resolves update availability from
+// each plugin's own manifest, so dot records rather than interprets these.
 const installedPluginsFixture = `{
   "version": 2,
   "plugins": {
@@ -189,6 +191,25 @@ func TestAIUpdateDryRunReportsSkippedNotUpdated(t *testing.T) {
 	}
 	if !strings.Contains(out, `"status": "skipped"`) {
 		t.Fatalf("dry-run should report skipped steps:\n%s", out)
+	}
+}
+
+func TestAIUpdateDryRunSkipsPluginLoop(t *testing.T) {
+	// A populated plugin file must not produce an "up-to-date" plugins step
+	// under --dry-run: the update loop never ran, so the before/after diff of
+	// installed_plugins.json is trivially empty and means nothing.
+	home := t.TempDir()
+	writeCLITestFile(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), installedPluginsFixture)
+
+	out, errOut, err := runDotForTest("--home", home, "--dry-run", "ai", "update", "--tool", "claude", "--json")
+	if err != nil {
+		t.Fatalf("dry-run update: %v\nstderr=%s", err, errOut)
+	}
+	if strings.Contains(out, stepCurrent) || strings.Contains(out, `"status": "updated"`) {
+		t.Fatalf("dry-run plugin step claimed a verified outcome:\n%s", out)
+	}
+	if !strings.Contains(out, "would update 3 installed plugin(s)") {
+		t.Fatalf("dry-run should describe the plugin work it would do:\n%s", out)
 	}
 }
 
