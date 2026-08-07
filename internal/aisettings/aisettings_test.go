@@ -637,6 +637,36 @@ func TestRestoreMigratesLegacyAnchorPaths(t *testing.T) {
 	}
 }
 
+// Snapshots written before the Copilot CLI path move carry the old
+// .config/github-copilot manifest entry; they must restore into the current
+// ~/.copilot/copilot-instructions.md target.
+func TestRestoreMigratesLegacyCopilotPath(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	version := "legacy-copilot"
+	root := eng.VersionPath(version)
+	mustWrite(t, filepath.Join(root, homePrefix, ".config", "github-copilot", "AGENTS.md"), []byte("# instructions\n"))
+	manifest, err := yaml.Marshal(ArchiveManifest{Schema: archiveVersion, Entries: []EntrySummary{
+		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, "manifest.yaml"), manifest)
+	if _, err := eng.Restore(RestoreOptions{Version: version}); err != nil {
+		t.Fatalf("restore legacy copilot snapshot: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".copilot", "copilot-instructions.md"))
+	if err != nil {
+		t.Fatalf("legacy copilot instructions were not restored to the new path: %v", err)
+	}
+	if string(got) != "# instructions\n" {
+		t.Fatalf("restored copilot instructions = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "github-copilot", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("legacy copilot path should not be restored: %v", err)
+	}
+}
+
 // Claude keeps large machine-local state in ~/.claude.json; only the small
 // mcpServers projection is archived, so state size must not block backup.
 func TestBackupAllowsLargeClaudeState(t *testing.T) {

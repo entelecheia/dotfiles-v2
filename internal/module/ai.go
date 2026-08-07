@@ -51,7 +51,7 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 	if aisettings.IsManagedAgentsFile(legacyCopilot) {
 		changes = append(changes, Change{
 			Description: fmt.Sprintf("remove legacy %s", legacyCopilot),
-			Command:     fmt.Sprintf("rm %s", legacyCopilot),
+			Command:     fmt.Sprintf("rm %q", legacyCopilot),
 		})
 	}
 	if rc.Config.Modules.AI.AgentsSSOT {

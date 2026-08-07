@@ -1229,6 +1229,8 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 		legacyClaudeMCPPath:     claudeStateRelPath,
 		".anchor/settings.json": ".maru/settings.json",
 		".anchor/sites.json":    ".maru/sites.json",
+		// Copilot CLI moved its instructions file out of ~/.config.
+		".config/github-copilot/AGENTS.md": ".copilot/copilot-instructions.md",
 	}
 	seenSource := map[string]bool{}
 	seenTarget := map[string]bool{}
