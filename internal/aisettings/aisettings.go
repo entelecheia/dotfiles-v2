@@ -150,7 +150,12 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/settings.json", Description: "Antigravity CLI settings"},
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/keybindings.json", Description: "Antigravity CLI keybindings"},
 		{Tool: "antigravity", Path: ".gemini/antigravity-cli/plugins", Description: "Antigravity CLI plugins"},
-		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md", Description: "GitHub Copilot global instructions"},
+		// Copilot CLI reads user settings from settings.json; config.json is
+		// machine/login state (its own header says so) and stays out.
+		{Tool: "copilot", Path: ".copilot/copilot-instructions.md", Description: "GitHub Copilot global instructions"},
+		{Tool: "copilot", Path: ".copilot/settings.json", Description: "Copilot CLI user settings"},
+		{Tool: "copilot", Path: ".copilot/mcp-config.json", Description: "Copilot CLI MCP servers"},
+		{Tool: "copilot", Path: ".copilot/permissions-config.json", Description: "Copilot CLI tool permissions"},
 		{Tool: "aider", Path: ".aider.conf.md", Description: "Aider global instructions"},
 		// Maru settings files only — skills/_sources/env are Maru-managed git
 		// repos and venvs that Maru restores itself.

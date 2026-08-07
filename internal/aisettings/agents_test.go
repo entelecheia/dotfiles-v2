@@ -558,3 +558,40 @@ func TestAgentsRegistryIncludesKiroAndKimi(t *testing.T) {
 		t.Fatalf("kimi target = %q, err=%v", target, err)
 	}
 }
+
+func TestAgentsRegistryCopilotIsFirstClass(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	copilot, ok := mgr.Tool("copilot")
+	if !ok || copilot.Optional {
+		t.Fatalf("copilot tool = %+v, ok=%v; want non-optional entry", copilot, ok)
+	}
+	// Copilot CLI 1.x reads ~/.copilot/copilot-instructions.md, not the old
+	// ~/.config/github-copilot/AGENTS.md.
+	if target, err := mgr.TargetPath("copilot"); err != nil || !strings.HasSuffix(target, filepath.Join(".copilot", "copilot-instructions.md")) {
+		t.Fatalf("copilot target = %q, err=%v", target, err)
+	}
+}
+
+func TestIsManagedAgentsFile(t *testing.T) {
+	dir := t.TempDir()
+
+	managed := filepath.Join(dir, "managed.md")
+	if err := os.WriteFile(managed, []byte(agentsManagedHeader+"\n\n# body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !IsManagedAgentsFile(managed) {
+		t.Error("managed file not recognized")
+	}
+
+	user := filepath.Join(dir, "user.md")
+	if err := os.WriteFile(user, []byte("# my own instructions\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if IsManagedAgentsFile(user) {
+		t.Error("user-authored file misdetected as managed")
+	}
+
+	if IsManagedAgentsFile(filepath.Join(dir, "missing.md")) {
+		t.Error("missing file misdetected as managed")
+	}
+}

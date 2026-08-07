@@ -264,6 +264,27 @@ func TestEntriesIncludeAntigravityAndKeepAuthOptional(t *testing.T) {
 	}
 }
 
+func TestEntriesCoverCopilotCLI(t *testing.T) {
+	entries := Entries(false)
+	for _, path := range []string{
+		".copilot/copilot-instructions.md",
+		".copilot/settings.json",
+		".copilot/mcp-config.json",
+		".copilot/permissions-config.json",
+	} {
+		if !hasEntry(entries, "copilot", path) {
+			t.Errorf("copilot entry %s missing: %+v", path, entries)
+		}
+	}
+	// config.json is machine/login state; the legacy path predates Copilot CLI.
+	if hasEntryPath(entries, ".copilot/config.json") {
+		t.Error("copilot config.json is machine state and must not be backed up")
+	}
+	if hasEntryPath(entries, ".config/github-copilot/AGENTS.md") {
+		t.Error("legacy github-copilot AGENTS.md entry should be gone")
+	}
+}
+
 func TestEntriesExcludeSkillRuntimeDirectories(t *testing.T) {
 	entries := Entries(true)
 	excluded := []string{

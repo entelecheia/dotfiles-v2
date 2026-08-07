@@ -17,6 +17,11 @@ kiro-yolo() {
   command kiro-cli chat --trust-all-tools "$@"
 }
 
+# Copilot CLI full-access mode (all tools/paths/URLs allowed)
+copilot-yolo() {
+  command copilot --allow-all "$@"
+}
+
 # ── GitHub Models ──
 command -v gh &>/dev/null && {
   alias g4="gh models run gpt-4o"

@@ -58,9 +58,8 @@ func RegisteredAgentTools() []AgentTool {
 		{
 			ID:          "copilot",
 			DisplayName: "GitHub Copilot",
-			TargetPath:  "~/.config/github-copilot/AGENTS.md",
+			TargetPath:  "~/.copilot/copilot-instructions.md",
 			OverlayFile: "copilot.md",
-			Optional:    true,
 		},
 		{
 			ID:          "aider",
