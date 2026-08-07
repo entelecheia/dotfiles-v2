@@ -76,13 +76,13 @@ overwritten local file in per-step pre-restore backups. Unattended:
 # On the existing machine
 dot profile backup --tag "pre-migration" --include-secrets
 dot apps backup                       # also snapshot per-app settings
-dot ai backup                         # portable Claude/Codex/Antigravity/Maru/MCP settings
+dot ai backup                         # portable Claude/Codex/Copilot/Antigravity/Maru/MCP settings
 
 # On the new machine (Drive already mounted)
 dot profile restore --include-secrets # restores ~/.config/dotfiles + ~/.ssh/age_key*
 dot apply                             # brew formulas + casks from install list
 dot apps restore                      # plists, Application Support, containers
-dot ai restore                        # Claude/Codex/Antigravity/MCP settings
+dot ai restore                        # Claude/Codex/Copilot/Antigravity/MCP settings
 ```
 
 The shared backup root lives in a single cloud folder
@@ -817,7 +817,7 @@ The `ai` module writes shell/config helper files:
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/shell/30-ai.sh` | Claude Code env, yolo helpers (Codex/Claude/Kiro), GitHub Models aliases, Fabric alias, GPU helper aliases |
+| `~/.config/shell/30-ai.sh` | Claude Code env, yolo helpers (Codex/Claude/Kiro/Copilot), GitHub Models aliases, Fabric alias, GPU helper aliases |
 | `~/.config/claude/settings.json` | Minimal dot-managed Claude settings |
 
 The yolo helpers are thin wrappers that forward all arguments to the underlying
@@ -828,6 +828,7 @@ CLI with its full-access flag:
 | `codex-yolo [args...]` | `codex --dangerously-bypass-approvals-and-sandbox` |
 | `claude-yolo [args...]` | `claude --dangerously-skip-permissions` |
 | `kiro-yolo [args...]` | `kiro-cli chat --trust-all-tools` |
+| `copilot-yolo [args...]` | `copilot --allow-all` |
 
 They run with the current user's full host permissions and skip every approval
 prompt, so use them only in trusted workspaces.
@@ -859,7 +860,7 @@ agent targets immediately. The managed AGENTS block also preserves the global
 English-only git commit message policy; an explicit user request can still
 allow a coauthor trailer.
 
-Portable backup includes Claude/Codex/Antigravity/Maru settings, MCP config
+Portable backup includes Claude/Codex/Copilot/Antigravity/Maru settings, MCP config
 (Claude MCP state comes from `~/.claude.json`), agents,
 hooks, prompts, rules, and plugins. It excludes skill directories, auth tokens,
 local overrides, caches, logs, sessions, histories, telemetry, sqlite DBs,
@@ -952,7 +953,7 @@ tool's expected global path:
 | Kiro CLI | `~/.kiro/steering/AGENTS.md` |
 | Kimi Code CLI | `~/.kimi-code/AGENTS.md` |
 | Antigravity CLI (`gemini` alias) | `~/.gemini/GEMINI.md` |
-| GitHub Copilot | `~/.config/github-copilot/AGENTS.md` |
+| GitHub Copilot | `~/.copilot/copilot-instructions.md` |
 | Aider | `~/.aider.conf.md` |
 
 The deploy model is copy-based, not symlink-based. The SSOT stays authoritative,

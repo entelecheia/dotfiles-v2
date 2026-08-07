@@ -43,6 +43,17 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			Command:     fmt.Sprintf("rm %s", legacy),
 		})
 	}
+	// Copilot's fan-out target moved from ~/.config/github-copilot/AGENTS.md
+	// to ~/.copilot/copilot-instructions.md. Only a dot-rendered file (managed
+	// header) is removed: the old dir also holds IDE auth files, and the
+	// AGENTS.md there could be user-authored.
+	legacyCopilot := filepath.Join(rc.HomeDir, ".config", "github-copilot", "AGENTS.md")
+	if aisettings.IsManagedAgentsFile(legacyCopilot) {
+		changes = append(changes, Change{
+			Description: fmt.Sprintf("remove legacy %s", legacyCopilot),
+			Command:     fmt.Sprintf("rm %q", legacyCopilot),
+		})
+	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
 		statuses, err := manager.Status()
@@ -114,6 +125,14 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 			return nil, fmt.Errorf("removing legacy %s: %w", legacy, err)
 		}
 		messages = append(messages, fmt.Sprintf("removed legacy %s", legacy))
+	}
+	// See Check: only remove the old copilot target if dot rendered it.
+	legacyCopilot := filepath.Join(rc.HomeDir, ".config", "github-copilot", "AGENTS.md")
+	if aisettings.IsManagedAgentsFile(legacyCopilot) {
+		if err := rc.Runner.Remove(legacyCopilot); err != nil {
+			return nil, fmt.Errorf("removing legacy %s: %w", legacyCopilot, err)
+		}
+		messages = append(messages, fmt.Sprintf("removed legacy %s", legacyCopilot))
 	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	osexec "os/exec"
@@ -890,6 +891,21 @@ func shortHashForMessage(hash string) string {
 		return hash
 	}
 	return hash[:12]
+}
+
+// IsManagedAgentsFile reports whether the file at path starts with the managed
+// agents header, i.e. it was rendered by dot and is safe to remove or replace.
+// Missing or unreadable files report false.
+func IsManagedAgentsFile(path string) bool {
+	// The header is the first line; a small prefix read is plenty.
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, len(agentsManagedHeader))
+	n, _ := io.ReadFull(f, buf)
+	return strings.HasPrefix(string(buf[:n]), agentsManagedHeader)
 }
 
 func stripManagedHeader(data []byte) []byte {

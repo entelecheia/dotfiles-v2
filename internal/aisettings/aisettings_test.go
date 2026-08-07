@@ -264,6 +264,27 @@ func TestEntriesIncludeAntigravityAndKeepAuthOptional(t *testing.T) {
 	}
 }
 
+func TestEntriesCoverCopilotCLI(t *testing.T) {
+	entries := Entries(false)
+	for _, path := range []string{
+		".copilot/copilot-instructions.md",
+		".copilot/settings.json",
+		".copilot/mcp-config.json",
+		".copilot/permissions-config.json",
+	} {
+		if !hasEntry(entries, "copilot", path) {
+			t.Errorf("copilot entry %s missing: %+v", path, entries)
+		}
+	}
+	// config.json is machine/login state; the legacy path predates Copilot CLI.
+	if hasEntryPath(entries, ".copilot/config.json") {
+		t.Error("copilot config.json is machine state and must not be backed up")
+	}
+	if hasEntryPath(entries, ".config/github-copilot/AGENTS.md") {
+		t.Error("legacy github-copilot AGENTS.md entry should be gone")
+	}
+}
+
 func TestEntriesExcludeSkillRuntimeDirectories(t *testing.T) {
 	entries := Entries(true)
 	excluded := []string{
@@ -613,6 +634,36 @@ func TestRestoreMigratesLegacyAnchorPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".anchor", "settings.json")); !os.IsNotExist(err) {
 		t.Fatalf("legacy anchor path should not be restored: %v", err)
+	}
+}
+
+// Snapshots written before the Copilot CLI path move carry the old
+// .config/github-copilot manifest entry; they must restore into the current
+// ~/.copilot/copilot-instructions.md target.
+func TestRestoreMigratesLegacyCopilotPath(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	version := "legacy-copilot"
+	root := eng.VersionPath(version)
+	mustWrite(t, filepath.Join(root, homePrefix, ".config", "github-copilot", "AGENTS.md"), []byte("# instructions\n"))
+	manifest, err := yaml.Marshal(ArchiveManifest{Schema: archiveVersion, Entries: []EntrySummary{
+		{Tool: "copilot", Path: ".config/github-copilot/AGENTS.md"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, "manifest.yaml"), manifest)
+	if _, err := eng.Restore(RestoreOptions{Version: version}); err != nil {
+		t.Fatalf("restore legacy copilot snapshot: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".copilot", "copilot-instructions.md"))
+	if err != nil {
+		t.Fatalf("legacy copilot instructions were not restored to the new path: %v", err)
+	}
+	if string(got) != "# instructions\n" {
+		t.Fatalf("restored copilot instructions = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "github-copilot", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("legacy copilot path should not be restored: %v", err)
 	}
 }
 
