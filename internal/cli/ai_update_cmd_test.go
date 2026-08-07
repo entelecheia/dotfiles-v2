@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -205,8 +206,16 @@ func TestAIUpdateDryRunSkipsPluginLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run update: %v\nstderr=%s", err, errOut)
 	}
-	if strings.Contains(out, stepCurrent) || strings.Contains(out, `"status": "updated"`) {
-		t.Fatalf("dry-run plugin step claimed a verified outcome:\n%s", out)
+	// Holds whether or not claude is installed: with no claude the whole phase
+	// is skipped, and with claude the plugin loop must still not claim an
+	// outcome it never verified.
+	for _, forbidden := range []string{`"status": "updated"`, `"status": "` + stepCurrent + `"`, `"status": "` + stepRan + `"`} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("dry-run step claimed a verified outcome (%s):\n%s", forbidden, out)
+		}
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		return // no claude on this machine (CI); the phase-level skip is all we can assert
 	}
 	if !strings.Contains(out, "would update 3 installed plugin(s)") {
 		t.Fatalf("dry-run should describe the plugin work it would do:\n%s", out)
