@@ -951,14 +951,18 @@ dot ai update --tool claude,skills       # subset (phase order is preserved)
 dot ai update --json                     # machine-readable step results
 ```
 
-`--check` compares each installed plugin's recorded `gitCommitSha` against the
-sha its marketplace clone currently points at. Semver is unusable here — some
-plugins report version `unknown` — and `claude plugin list --available` omits
-already-installed plugins, so the marketplace checkout is the only reference.
-Plugins whose marketplace is not a git clone, or that were installed from a
-different repository, report `unknown` rather than a guess. Because `--check`
-makes no changes it compares against the last fetched snapshot; the mutating
-path refreshes marketplaces first.
+Step statuses are `updated` (a verified change), `ran` (the command succeeded
+but the tool reports no comparable version), `up-to-date`, `skipped` (binary
+absent, or `--dry-run`), and `failed`.
+
+`--check` is read-only. It reports each CLI's current version, the installed
+Claude plugin inventory (id, version, scope, sha), and maru's bundle/sync
+state. It deliberately does **not** guess plugin update availability: `claude`
+resolves that from each plugin's own manifest, and every offline
+approximation tried (marketplace clone HEAD sha, marketplace manifest
+version) was verified against the live machine to produce false `outdated`
+results. `dot ai update` reports what actually changed by diffing
+`installed_plugins.json` around the update loop.
 
 When Claude's native self-update previously failed (recorded in
 `~/.claude/.last-update-result.json`), the command surfaces that state before

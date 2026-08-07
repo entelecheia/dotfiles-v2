@@ -28,12 +28,11 @@ type updateStep struct {
 }
 
 const (
-	stepUpdated  = "updated"
-	stepCurrent  = "up-to-date"
-	stepFailed   = "failed"
-	stepSkipped  = "skipped"
-	stepUnknown  = "unknown"
-	stepOutdated = "outdated"
+	stepUpdated = "updated"
+	stepRan     = "ran"
+	stepCurrent = "up-to-date"
+	stepFailed  = "failed"
+	stepSkipped = "skipped"
 )
 
 func newAIUpdateCmd() *cobra.Command {
@@ -145,11 +144,11 @@ func runAIUpdateCheck(cmd *cobra.Command, selected []string) error {
 	}
 	report["versions"] = versions
 
-	var checks []pluginCheck
+	var installed []installedPlugin
 	claudeSelected := containsString(selected, "claude")
 	if claudeSelected {
-		checks = u.pluginChecks(ctx)
-		report["plugins"] = checks
+		installed = u.installedPlugins()
+		report["plugins"] = installed
 		if outcome, status, ok := u.claudeLastUpdate(); ok && outcome == "failed" {
 			report["claude_last_update"] = map[string]string{"outcome": outcome, "status": status}
 		}
@@ -176,12 +175,16 @@ func runAIUpdateCheck(cmd *cobra.Command, selected []string) error {
 	}
 	if claudeSelected {
 		p.Section("Claude plugins")
-		if len(checks) == 0 {
+		if len(installed) == 0 {
 			p.Bullet(ui.StyleHint.Render(ui.MarkAbsent), "no installed plugins found")
 		}
-		for _, c := range checks {
-			marker, style := pluginCheckMarker(c.State)
-			p.Bullet(style.Render(marker), fmt.Sprintf("%-44s %-9s %s", ui.StyleValue.Render(c.ID), c.State, c.Detail))
+		for _, pl := range installed {
+			version := pl.Version
+			if version == "" || version == "unknown" {
+				version = "-"
+			}
+			p.Bullet(ui.StyleHint.Render(ui.MarkPartial),
+				fmt.Sprintf("%-44s %-10s %-8s %s", ui.StyleValue.Render(pl.ID), version, pl.Scope, shortHash(pl.SHA)))
 		}
 	}
 	if containsString(selected, "skills") {
@@ -191,7 +194,7 @@ func runAIUpdateCheck(cmd *cobra.Command, selected []string) error {
 		}
 	}
 	p.Section("Notes")
-	p.Bullet(ui.StyleHint.Render(ui.MarkPartial), "Plugin state compares against the last fetched marketplace snapshot; 'dot ai update' refreshes it first.")
+	p.Bullet(ui.StyleHint.Render(ui.MarkPartial), "Plugin update availability is resolved by claude itself during 'dot ai update'.")
 	p.Bullet(ui.StyleHint.Render(ui.MarkPartial), "Chrome extensions update via the Chrome Web Store — no CLI path.")
 	p.Line("\nRun 'dot ai update' to apply.")
 	return nil
@@ -218,8 +221,9 @@ func newAIUpdaterFromCmd(cmd *cobra.Command) *aiUpdater {
 }
 
 // run executes a mutating command and maps its outcome onto an updateStep.
-// Under --dry-run nothing executes, so the step reports "skipped" rather than
-// claiming an update that never happened.
+// A successful command reports "ran", not "updated": only callers that probe a
+// version before and after can tell whether anything actually changed. Under
+// --dry-run nothing executes, so the step reports "skipped".
 func (u *aiUpdater) run(ctx context.Context, tool, step string, name string, args ...string) updateStep {
 	if u.runner.DryRun {
 		return updateStep{Tool: tool, Step: step, Status: stepSkipped, Detail: "dry-run: would run " + name + " " + strings.Join(args, " ")}
@@ -229,7 +233,22 @@ func (u *aiUpdater) run(ctx context.Context, tool, step string, name string, arg
 	if err != nil {
 		return updateStep{Tool: tool, Step: step, Status: stepFailed, Detail: cmdFailureDetail(res, err)}
 	}
-	return updateStep{Tool: tool, Step: step, Status: stepUpdated, Detail: firstLine(strings.TrimSpace(res.Stdout))}
+	return updateStep{Tool: tool, Step: step, Status: stepRan, Detail: firstLine(strings.TrimSpace(res.Stdout))}
+}
+
+// withVersionDelta upgrades a "ran" step to updated or up-to-date by comparing
+// the tool's version before and after the command.
+func (u *aiUpdater) withVersionDelta(ctx context.Context, step updateStep, tool, before, suffix string) updateStep {
+	if step.Status != stepRan {
+		return step
+	}
+	after := u.toolVersion(ctx, tool)
+	step.Status = stepUpdated
+	if after == before {
+		step.Status = stepCurrent
+	}
+	step.Detail = fmt.Sprintf("%s → %s%s", before, after, suffix)
+	return step
 }
 
 // cmdFailureDetail prefers the command's stderr over the wrapped error string,
@@ -311,16 +330,9 @@ func (u *aiUpdater) updateClaude(ctx context.Context) []updateStep {
 		}
 	}
 	before := u.toolVersion(ctx, "claude")
-	self := u.run(ctx, "claude", "self-update", "claude", "update")
+	self := u.withVersionDelta(ctx, u.run(ctx, "claude", "self-update", "claude", "update"), "claude", before, "")
 	if self.Status == stepFailed && priorFailure {
 		self.Detail += " (native installer previously failed — reinstall Claude Code manually)"
-	}
-	if self.Status == stepUpdated {
-		after := u.toolVersion(ctx, "claude")
-		if after == before {
-			self.Status = stepCurrent
-		}
-		self.Detail = fmt.Sprintf("%s → %s", before, after)
 	}
 	steps = append(steps, self)
 
@@ -353,20 +365,12 @@ func (u *aiUpdater) updateClaude(ctx context.Context) []updateStep {
 	steps = append(steps, updateStep{Tool: "claude", Step: "plugins", Status: status, Detail: detail})
 	return steps
 }
-
 func (u *aiUpdater) updateCodex(ctx context.Context) []updateStep {
 	if !u.runner.CommandExists("codex") {
 		return []updateStep{u.skip("codex", "self-update", "codex not in PATH")}
 	}
 	before := u.toolVersion(ctx, "codex")
-	self := u.run(ctx, "codex", "self-update", "codex", "update")
-	if self.Status == stepUpdated {
-		after := u.toolVersion(ctx, "codex")
-		if after == before {
-			self.Status = stepCurrent
-		}
-		self.Detail = fmt.Sprintf("%s → %s", before, after)
-	}
+	self := u.withVersionDelta(ctx, u.run(ctx, "codex", "self-update", "codex", "update"), "codex", before, "")
 	// Codex has no per-plugin update; refreshing marketplace snapshots is the
 	// only available upgrade path.
 	return []updateStep{self, u.run(ctx, "codex", "marketplace-upgrade", "codex", "plugin", "marketplace", "upgrade")}
@@ -378,14 +382,7 @@ func (u *aiUpdater) updateCopilot(ctx context.Context) []updateStep {
 	}
 	before := u.toolVersion(ctx, "copilot")
 	self := u.run(ctx, "copilot", "self-update", "copilot", "update")
-	if self.Status == stepUpdated {
-		after := u.toolVersion(ctx, "copilot")
-		if after == before {
-			self.Status = stepCurrent
-		}
-		self.Detail = fmt.Sprintf("%s → %s (also auto-updates on startup)", before, after)
-	}
-	return []updateStep{self}
+	return []updateStep{u.withVersionDelta(ctx, self, "copilot", before, " (also auto-updates on startup)")}
 }
 
 // updateGemini reinstalls the npm package: gemini has no self-update
@@ -402,14 +399,7 @@ func (u *aiUpdater) updateGemini(ctx context.Context) []updateStep {
 	default:
 		return []updateStep{u.skip("gemini", "npm-install", "neither fnm nor npm in PATH")}
 	}
-	if step.Status == stepUpdated {
-		after := u.toolVersion(ctx, "gemini")
-		if after == before {
-			step.Status = stepCurrent
-		}
-		step.Detail = fmt.Sprintf("%s → %s", before, after)
-	}
-	return []updateStep{step}
+	return []updateStep{u.withVersionDelta(ctx, step, "gemini", before, "")}
 }
 
 // updateSkills delegates entirely to maru: docs/BOUNDARIES.md forbids dot
@@ -438,6 +428,9 @@ func (u *aiUpdater) updateSkills(ctx context.Context) []updateStep {
 		steps = append(steps, updateStep{Tool: "skills", Step: "bundle", Status: stepCurrent, Detail: "active " + active})
 	} else {
 		step := u.run(ctx, "skills", "bundle", "maru", "skills", "update", "--apply")
+		if step.Status == stepRan {
+			step.Status = stepUpdated
+		}
 		step.Detail = fmt.Sprintf("%s → %s", active, avail)
 		steps = append(steps, step)
 	}
@@ -449,45 +442,13 @@ func (u *aiUpdater) updateSkills(ctx context.Context) []updateStep {
 		steps = append(steps, updateStep{Tool: "skills", Step: "sync", Status: stepCurrent, Detail: "no pending actions"})
 	} else {
 		step := u.run(ctx, "skills", "sync", "maru", "skills", "sync", "--apply", "--tools", "claude,codex")
+		if step.Status == stepRan {
+			step.Status = stepUpdated
+		}
 		step.Detail = fmt.Sprintf("%d pending action(s) applied", pending)
 		steps = append(steps, step)
 	}
 	return steps
-}
-
-func (u *aiUpdater) pluginChecks(ctx context.Context) []pluginCheck {
-	installed := u.installedPlugins()
-	if len(installed) == 0 {
-		return nil
-	}
-	return pluginUpdateChecks(installed, u.marketplaceSHAs(ctx))
-}
-
-// marketplaceSHAs resolves each marketplace's currently checked-out git sha.
-// Marketplaces that aren't git clones are simply absent from the map.
-func (u *aiUpdater) marketplaceSHAs(ctx context.Context) map[string]string {
-	out := map[string]string{}
-	if !u.runner.CommandExists("claude") {
-		return out
-	}
-	res, err := u.runner.RunQuery(ctx, "claude", "plugin", "marketplace", "list", "--json")
-	if err != nil {
-		return out
-	}
-	locations, err := parseMarketplaceLocations([]byte(res.Stdout))
-	if err != nil {
-		return out
-	}
-	for name, dir := range locations {
-		rev, err := u.runner.RunQuery(ctx, "git", "-C", dir, "rev-parse", "HEAD")
-		if err != nil {
-			continue
-		}
-		if sha := strings.TrimSpace(rev.Stdout); sha != "" {
-			out[name] = sha
-		}
-	}
-	return out
 }
 
 func (u *aiUpdater) skillsCheck(ctx context.Context) map[string]any {
@@ -553,23 +514,12 @@ func updateStepMarker(status string) (string, interface{ Render(...string) strin
 	switch status {
 	case stepUpdated:
 		return ui.MarkPresent, ui.StyleSuccess
-	case stepCurrent:
+	case stepRan, stepCurrent:
 		return ui.MarkPresent, ui.StyleHint
 	case stepFailed:
 		return ui.MarkFail, ui.StyleError
 	default:
 		return ui.MarkAbsent, ui.StyleHint
-	}
-}
-
-func pluginCheckMarker(state string) (string, interface{ Render(...string) string }) {
-	switch state {
-	case stepOutdated:
-		return ui.MarkPending, ui.StyleWarning
-	case "current":
-		return ui.MarkPresent, ui.StyleSuccess
-	default:
-		return ui.MarkPartial, ui.StyleHint
 	}
 }
 
@@ -661,33 +611,6 @@ func parseInstalledPlugins(data []byte) ([]installedPlugin, error) {
 	return out, nil
 }
 
-// parseMarketplaceLocations maps marketplace name → local install location from
-// `claude plugin marketplace list --json` (a bare array).
-func parseMarketplaceLocations(data []byte) (map[string]string, error) {
-	var entries []struct {
-		Name            string `json:"name"`
-		InstallLocation string `json:"installLocation"`
-	}
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("parse marketplace list: %w", err)
-	}
-	out := make(map[string]string, len(entries))
-	for _, e := range entries {
-		if e.Name != "" && e.InstallLocation != "" {
-			out[e.Name] = e.InstallLocation
-		}
-	}
-	return out, nil
-}
-
-// marketplaceOf extracts the marketplace from a "<name>@<marketplace>" plugin id.
-func marketplaceOf(pluginID string) string {
-	if i := strings.LastIndexByte(pluginID, '@'); i >= 0 {
-		return pluginID[i+1:]
-	}
-	return ""
-}
-
 // diffPlugins returns the ids whose sha or version changed between two reads
 // of installed_plugins.json.
 func diffPlugins(before, after []installedPlugin) []string {
@@ -709,40 +632,6 @@ func diffPlugins(before, after []installedPlugin) []string {
 	}
 	sort.Strings(changed)
 	return changed
-}
-
-// pluginCheck is one row of the --check plugin table.
-type pluginCheck struct {
-	ID        string `json:"id"`
-	Installed string `json:"installed"`
-	Available string `json:"available"`
-	State     string `json:"state"`
-	Detail    string `json:"detail,omitempty"`
-}
-
-// pluginUpdateChecks compares each plugin's installed git sha against the sha
-// its marketplace clone currently points at. Semver is unreliable here — some
-// plugins report version "unknown" — and `claude plugin list --available`
-// omits already-installed plugins, so the marketplace checkout is the only
-// available reference. A plugin sourced from a repo other than its own
-// marketplace, or a marketplace that isn't a git clone, yields "unknown".
-func pluginUpdateChecks(installed []installedPlugin, marketplaceSHAs map[string]string) []pluginCheck {
-	var out []pluginCheck
-	for _, pl := range installed {
-		check := pluginCheck{ID: pl.ID, Installed: pl.SHA, Available: marketplaceSHAs[marketplaceOf(pl.ID)], State: stepUnknown}
-		switch {
-		case pl.SHA == "" || check.Available == "":
-			check.Detail = "no marketplace sha to compare against"
-		case pl.SHA == check.Available:
-			check.State = "current"
-			check.Detail = shortHash(pl.SHA)
-		default:
-			check.State = stepOutdated
-			check.Detail = fmt.Sprintf("%s → %s", shortHash(pl.SHA), shortHash(check.Available))
-		}
-		out = append(out, check)
-	}
-	return out
 }
 
 // parseClaudeLastUpdate reads ~/.claude/.last-update-result.json. ok is false

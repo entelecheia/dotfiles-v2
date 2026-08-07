@@ -63,42 +63,8 @@ func TestParseInstalledPluginsRejectsOtherSchema(t *testing.T) {
 	}
 }
 
-func TestParseMarketplaceLocations(t *testing.T) {
-	body := `[
-	  {"name":"cloudflare","source":"github","repo":"cloudflare/skills","installLocation":"/home/.claude/plugins/marketplaces/cloudflare"},
-	  {"name":"openai-codex","installLocation":"/home/.claude/plugins/marketplaces/openai-codex"},
-	  {"name":"broken"}
-	]`
-	locs, err := parseMarketplaceLocations([]byte(body))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if len(locs) != 2 {
-		t.Fatalf("locations = %v, want 2 entries", locs)
-	}
-	if locs["cloudflare"] != "/home/.claude/plugins/marketplaces/cloudflare" {
-		t.Fatalf("cloudflare location = %q", locs["cloudflare"])
-	}
-	if _, ok := locs["broken"]; ok {
-		t.Fatal("entry without installLocation should be skipped")
-	}
-	if _, err := parseMarketplaceLocations([]byte(`{}`)); err == nil {
-		t.Fatal("object payload should error (list is an array)")
-	}
-}
-
-func TestMarketplaceOf(t *testing.T) {
-	if got := marketplaceOf("codex@openai-codex"); got != "openai-codex" {
-		t.Fatalf("marketplaceOf = %q", got)
-	}
-	if got := marketplaceOf("claude.ai@name@market"); got != "market" {
-		t.Fatalf("last @ should win, got %q", got)
-	}
-	if got := marketplaceOf("bare"); got != "" {
-		t.Fatalf("id without marketplace should yield empty, got %q", got)
-	}
-}
-
+// diffPlugins is the ground truth for "what did the update actually change" —
+// it compares two reads of installed_plugins.json around the update loop.
 func TestDiffPlugins(t *testing.T) {
 	before := []installedPlugin{
 		{ID: "a@m", Scope: "user", Version: "1.0.0", SHA: "aaa"},
@@ -108,6 +74,7 @@ func TestDiffPlugins(t *testing.T) {
 	after := []installedPlugin{
 		{ID: "a@m", Scope: "user", Version: "1.1.0", SHA: "aaa2"},
 		{ID: "b@m", Scope: "user", Version: "2.0.0", SHA: "bbb"},
+		// Version stays "unknown"; only the sha moves.
 		{ID: "c@m", Scope: "user", Version: "unknown", SHA: "ccc9"},
 	}
 	changed := diffPlugins(before, after)
@@ -117,35 +84,8 @@ func TestDiffPlugins(t *testing.T) {
 	if got := diffPlugins(before, before); len(got) != 0 {
 		t.Fatalf("identical reads should report no changes, got %v", got)
 	}
-}
-
-func TestPluginUpdateChecks(t *testing.T) {
-	installed := []installedPlugin{
-		{ID: "current@mkt-a", SHA: "1111111111"},
-		{ID: "outdated@mkt-b", SHA: "2222222222"},
-		{ID: "nosha@mkt-a", SHA: ""},
-		{ID: "notgit@mkt-c", SHA: "4444444444"},
-	}
-	// mkt-c is absent: its marketplace is not a git clone, so nothing to compare.
-	marketplaces := map[string]string{
-		"mkt-a": "1111111111",
-		"mkt-b": "9999999999",
-	}
-	checks := pluginUpdateChecks(installed, marketplaces)
-	states := map[string]string{}
-	for _, c := range checks {
-		states[c.ID] = c.State
-	}
-	want := map[string]string{
-		"current@mkt-a":  "current",
-		"outdated@mkt-b": stepOutdated,
-		"nosha@mkt-a":    stepUnknown,
-		"notgit@mkt-c":   stepUnknown,
-	}
-	for id, state := range want {
-		if states[id] != state {
-			t.Fatalf("%s state = %q, want %q", id, states[id], state)
-		}
+	if got := diffPlugins(nil, after); len(got) != 0 {
+		t.Fatalf("plugins absent before the update are not 'changed', got %v", got)
 	}
 }
 
