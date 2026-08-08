@@ -29,7 +29,7 @@ func testEngine(t *testing.T) (*Engine, string, string) {
 
 func TestBackupRestoreSkipsAuthByDefault(t *testing.T) {
 	eng, home, _ := testEngine(t)
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("model = \"gpt\"\n"))
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("# agents v1\n"))
 	mustWrite(t, filepath.Join(home, ".codex", "auth.json"), []byte(`{"token":"secret"}`))
 	mustWrite(t, filepath.Join(home, ".codex", "skills", "mine", "SKILL.md"), []byte("# mine"))
 
@@ -44,15 +44,15 @@ func TestBackupRestoreSkipsAuthByDefault(t *testing.T) {
 		t.Fatalf("skill directories should be excluded, stat err=%v", err)
 	}
 
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("mutated\n"))
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("mutated\n"))
 	if _, err := eng.Restore(RestoreOptions{Version: snap.Version}); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	got, err := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "model = \"gpt\"\n" {
+	if string(got) != "# agents v1\n" {
 		t.Fatalf("restored config = %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "auth.json")); err != nil {
@@ -62,14 +62,14 @@ func TestBackupRestoreSkipsAuthByDefault(t *testing.T) {
 
 func TestRestoreLatestAlias(t *testing.T) {
 	eng, home, _ := testEngine(t)
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("model = \"gpt\"\n"))
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("# agents v1\n"))
 
 	snap, err := eng.Backup(BackupOptions{})
 	if err != nil {
 		t.Fatalf("backup: %v", err)
 	}
 
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("mutated\n"))
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("mutated\n"))
 	restored, err := eng.Restore(RestoreOptions{Version: "latest"})
 	if err != nil {
 		t.Fatalf("restore latest alias: %v", err)
@@ -77,11 +77,11 @@ func TestRestoreLatestAlias(t *testing.T) {
 	if restored.Version != snap.Version {
 		t.Fatalf("restored version = %q, want %q", restored.Version, snap.Version)
 	}
-	got, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	got, err := os.ReadFile(filepath.Join(home, ".codex", "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "model = \"gpt\"\n" {
+	if string(got) != "# agents v1\n" {
 		t.Fatalf("restored config = %q", got)
 	}
 }
@@ -915,14 +915,14 @@ func TestRestorePreservesExcludedLiveFiles(t *testing.T) {
 
 func TestRestoreUsesSinglePreBackupDir(t *testing.T) {
 	eng, home, _ := testEngine(t)
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("a"))
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), []byte("a"))
 	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("b"))
 
 	sum, err := eng.Backup(BackupOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("a2"))
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), []byte("a2"))
 	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("b2"))
 
 	rsum, err := eng.Restore(RestoreOptions{Version: sum.Version})
@@ -932,7 +932,7 @@ func TestRestoreUsesSinglePreBackupDir(t *testing.T) {
 	if rsum.PreBackupPath == "" {
 		t.Fatal("PreBackupPath not set")
 	}
-	for _, rel := range []string{".codex/config.toml", ".codex/AGENTS.md"} {
+	for _, rel := range []string{".claude/CLAUDE.md", ".codex/AGENTS.md"} {
 		if _, err := os.Stat(filepath.Join(rsum.PreBackupPath, rel)); err != nil {
 			t.Errorf("entry %s missing from the single pre-backup dir: %v", rel, err)
 		}
@@ -1202,14 +1202,76 @@ func TestBackupExistingCrossDeviceFallback(t *testing.T) {
 	}
 }
 
-func TestRestorePreBackupDirIsOwnerOnly(t *testing.T) {
+// TestRestoreKeepsLiveCodexConfig pins the skip-if-live guard: a live
+// ~/.codex/config.toml holds Keychain-hash-keyed MCP server defs and project
+// trust that a whole-file restore would revert to snapshot age (orphaning MCP
+// OAuth credentials), so restore keeps the live copy and only bootstraps a
+// machine without one.
+func TestRestoreKeepsLiveCodexConfig(t *testing.T) {
 	eng, home, _ := testEngine(t)
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("v1"))
+	cfg := filepath.Join(home, ".codex", "config.toml")
+	mustWrite(t, cfg, []byte("snapshot-era\n"))
+
 	sum, err := eng.Backup(BackupOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), []byte("v2"))
+
+	mustWrite(t, cfg, []byte("live-edits\n"))
+	rsum, err := eng.Restore(RestoreOptions{Version: sum.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(cfg)
+	if string(got) != "live-edits\n" {
+		t.Fatalf("live config.toml was clobbered: %q", got)
+	}
+	found := false
+	for _, entry := range rsum.Entries {
+		if entry.Path != ".codex/config.toml" {
+			continue
+		}
+		found = true
+		if entry.Skipped != 1 || entry.Copied != 0 {
+			t.Fatalf("entry = %+v, want Skipped=1 Copied=0", entry)
+		}
+	}
+	if !found {
+		t.Fatal("no summary entry for .codex/config.toml")
+	}
+	if rsum.PreBackupPath != "" {
+		if _, err := os.Stat(filepath.Join(rsum.PreBackupPath, ".codex", "config.toml")); err == nil {
+			t.Fatal("skipped entry must not be moved into the pre-restore backup")
+		}
+	}
+
+	// Fresh machine: no live file, bootstrap restore still works.
+	if err := os.Remove(cfg); err != nil {
+		t.Fatal(err)
+	}
+	rsum, err = eng.Restore(RestoreOptions{Version: sum.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = os.ReadFile(cfg)
+	if string(got) != "snapshot-era\n" {
+		t.Fatalf("fresh-machine restore = %q, want snapshot content", got)
+	}
+	for _, entry := range rsum.Entries {
+		if entry.Path == ".codex/config.toml" && (entry.Copied != 1 || entry.Skipped != 0) {
+			t.Fatalf("fresh-machine entry = %+v, want Copied=1 Skipped=0", entry)
+		}
+	}
+}
+
+func TestRestorePreBackupDirIsOwnerOnly(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("v1"))
+	sum, err := eng.Backup(BackupOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte("v2"))
 
 	rsum, err := eng.Restore(RestoreOptions{Version: sum.Version})
 	if err != nil {
