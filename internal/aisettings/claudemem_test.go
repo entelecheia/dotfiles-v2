@@ -267,13 +267,23 @@ func TestCopilotTranscriptSchemaFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"session.start", "session.end", "tool_call", "tool_result"} {
+	for _, want := range []string{"session.end", "tool_call", "tool_result"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("copilot schema missing %q: %s", want, raw)
 		}
 	}
 	if schema.Name != "copilot" {
 		t.Fatalf("schema.Name = %q, want \"copilot\"", schema.Name)
+	}
+	// user-message should map to session_init (matching kimi/kiro pattern)
+	found := false
+	for _, ev := range schema.Events {
+		if ev.Name == "user-message" && ev.Action == "session_init" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("copilot schema: user-message event must use session_init action")
 	}
 }
 
@@ -287,7 +297,7 @@ func TestBuildTranscriptConfigIncludesCopilotInCounts(t *testing.T) {
 	startEvent := `{"type":"session.start","data":{"context":{"cwd":"` + workspace + `"}}}`
 	mustWriteFile(t, eventsPath, startEvent+"\n")
 
-	mgr := &ClaudeMemManager{HomeDir: home}
+	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
 	cfg, err := mgr.BuildTranscriptConfig()
 	if err != nil {
 		t.Fatal(err)

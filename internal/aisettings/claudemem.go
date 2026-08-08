@@ -1,6 +1,7 @@
 package aisettings
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -317,11 +318,16 @@ func (m *ClaudeMemManager) copilotWatches() []transcriptWatch {
 // (or data.context.gitRoot as a fallback). This avoids opening the live SQLite
 // session-store.db.
 func copilotSessionWorkspace(eventsPath string) string {
-	raw, err := os.ReadFile(eventsPath)
+	f, err := os.Open(eventsPath)
 	if err != nil {
 		return ""
 	}
-	firstLine, _, _ := strings.Cut(string(raw), "\n")
+	defer f.Close()
+	reader := bufio.NewReader(f)
+	firstLine, err := reader.ReadString('\n')
+	if err != nil && firstLine == "" {
+		return ""
+	}
 	var event struct {
 		Type string `json:"type"`
 		Data struct {
@@ -331,7 +337,7 @@ func copilotSessionWorkspace(eventsPath string) string {
 			} `json:"context"`
 		} `json:"data"`
 	}
-	if json.Unmarshal([]byte(firstLine), &event) != nil || event.Type != "session.start" {
+	if json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), &event) != nil || event.Type != "session.start" {
 		return ""
 	}
 	if event.Data.Context.CWD != "" {
@@ -383,7 +389,6 @@ func copilotTranscriptSchema() transcriptSchema {
 	return transcriptSchema{
 		Name: "copilot", Version: "1.0", Description: "GitHub Copilot CLI session events.jsonl per-session log.",
 		Events: []transcriptEvent{
-			{Name: "session-start", Match: equals("type", "session.start"), Action: "session_init", Fields: map[string]any{"prompt": "data.context.cwd"}},
 			{Name: "user-message", Match: equals("type", "user"), Action: "session_init", Fields: map[string]any{"prompt": "data.message"}},
 			{Name: "assistant-message", Match: equals("type", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": "data.message"}},
 			{Name: "tool-call", Match: equals("type", "tool_call"), Action: "tool_use", Fields: map[string]any{"toolId": "data.id", "toolName": "data.name", "toolInput": "data.input"}},
