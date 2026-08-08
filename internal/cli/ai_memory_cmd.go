@@ -16,11 +16,11 @@ import (
 func newAIMemoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "memory",
-		Short: "Manage shared claude-mem integration for Codex, Kimi, and Kiro",
-		Long: `Use one claude-mem store across Codex, Kimi Code, and Kiro CLI.
+		Short: "Manage shared claude-mem integration for Codex, Kimi, Kiro, and Copilot",
+		Long: `Use one claude-mem store across Codex, Kimi Code, Kiro CLI, and GitHub Copilot CLI.
 
-Codex keeps the plugin's native lifecycle hooks. Kimi and Kiro receive the
-same MCP recall server plus a workspace-aware transcript capture bridge.`,
+Codex keeps the plugin's native lifecycle hooks. Kimi, Kiro, and Copilot
+receive the same MCP recall server plus a workspace-aware transcript capture bridge.`,
 	}
 	cmd.AddCommand(newAIMemoryInstallCmd())
 	cmd.AddCommand(newAIMemoryStatusCmd())
@@ -48,10 +48,11 @@ func newAIMemoryInstallCmd() *cobra.Command {
 					return err
 				}
 				p.Header("Claude-mem Integration")
-				p.Line("would merge MCP config for Kimi and Kiro")
+				p.Line("would merge MCP config for Kimi, Kiro, and Copilot")
 				p.Line("would install %s", mgr.LaunchdPlistPath())
 				p.KV("Kimi sessions", fmt.Sprintf("%d", config["kimi"]))
 				p.KV("Kiro sessions", fmt.Sprintf("%d", config["kiro"]))
+				p.KV("Copilot sessions", fmt.Sprintf("%d", config["copilot"]))
 				return nil
 			}
 			if _, err := mgr.LocatePlugin(); err != nil {
@@ -64,7 +65,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				return err
 			}
 			apply, err := agents.Apply(aisettings.ApplyOptions{
-				Tools: []string{"codex", "kimi", "kiro"}, Force: forceAgents,
+				Tools: []string{"codex", "kimi", "kiro", "copilot"}, Force: forceAgents,
 			})
 			if err != nil {
 				return err
@@ -80,6 +81,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				"instructions_changed": instructionsChanged,
 				"kimi_sessions":        result.WatchCount["kimi"],
 				"kiro_sessions":        result.WatchCount["kiro"],
+				"copilot_sessions":     result.WatchCount["copilot"],
 			})
 
 			p.Header("Claude-mem Integration")
@@ -87,22 +89,23 @@ func newAIMemoryInstallCmd() *cobra.Command {
 			p.KV("Bridge", result.BridgePath)
 			p.KV("Kimi sessions", fmt.Sprintf("%d", result.WatchCount["kimi"]))
 			p.KV("Kiro sessions", fmt.Sprintf("%d", result.WatchCount["kiro"]))
+			p.KV("Copilot sessions", fmt.Sprintf("%d", result.WatchCount["copilot"]))
 			if instructionsChanged {
 				p.Line("Persistent-memory policy added to the agents SSOT.")
 			}
 			printAgentsApplyResult(p, apply)
-			p.Success("Codex, Kimi, and Kiro now share claude-mem")
+			p.Success("Codex, Kimi, Kiro, and Copilot now share claude-mem")
 			return nil
 		},
 	}
-	c.Flags().Bool("force-agents", false, "Back up and overwrite externally edited Codex/Kimi/Kiro instruction targets")
+	c.Flags().Bool("force-agents", false, "Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot instruction targets")
 	return c
 }
 
 func newAIMemoryStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show claude-mem integration health for all three CLIs",
+		Short: "Show claude-mem integration health for all four CLIs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			mgr, err := newClaudeMemManagerFromCmd(cmd)
@@ -124,6 +127,7 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			printMemoryState(p, "codex", status.CodexNativeHooks, "native hooks + plugin MCP")
 			printMemoryState(p, "kimi", status.KimiMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["kimi"]))
 			printMemoryState(p, "kiro", status.KiroMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["kiro"]))
+			printMemoryState(p, "copilot", status.CopilotMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["copilot"]))
 			p.Section("Shared runtime")
 			printMemoryState(p, "instructions", status.InstructionsEnabled, "agents SSOT recall policy")
 			printMemoryState(p, "bridge", status.BridgeInstalled && status.BridgeRunning, bridgeStatusDetail(status))
@@ -171,7 +175,7 @@ func newAIMemoryMCPServerCmd() *cobra.Command {
 func newAIMemoryBridgeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "bridge",
-		Short:  "Run the Kimi/Kiro transcript bridge",
+		Short:  "Run the Kimi/Kiro/Copilot transcript bridge",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

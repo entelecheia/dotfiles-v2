@@ -13,8 +13,10 @@ func TestClaudeMemBuildTranscriptConfigUsesSessionWorkspaces(t *testing.T) {
 	home := t.TempDir()
 	kimiWorkspace := filepath.Join(home, "work", "kimi-project")
 	kiroWorkspace := filepath.Join(home, "work", "kiro-project")
+	copilotWorkspace := filepath.Join(home, "work", "copilot-project")
 	mustMkdirAll(t, kimiWorkspace)
 	mustMkdirAll(t, kiroWorkspace)
+	mustMkdirAll(t, copilotWorkspace)
 
 	kimiSession := filepath.Join(home, ".kimi-code", "sessions", "wd_test", "session_11111111-1111-1111-1111-111111111111")
 	mustWriteJSON(t, filepath.Join(kimiSession, "state.json"), map[string]any{"workDir": kimiWorkspace})
@@ -23,17 +25,19 @@ func TestClaudeMemBuildTranscriptConfigUsesSessionWorkspaces(t *testing.T) {
 	kiroSession := filepath.Join(home, ".kiro", "sessions", "workspace", "sess_22222222-2222-2222-2222-222222222222")
 	mustWriteJSON(t, filepath.Join(kiroSession, "session.json"), map[string]any{"workspacePaths": []string{kiroWorkspace}})
 	mustWriteFile(t, filepath.Join(kiroSession, "messages.jsonl"), "{}\n")
+	copilotSession := filepath.Join(home, ".copilot", "session-state", "33333333-3333-3333-3333-333333333333")
+	mustWriteFile(t, filepath.Join(copilotSession, "events.jsonl"), `{"type":"session.start","data":{"context":{"cwd":"`+copilotWorkspace+`","gitRoot":"`+copilotWorkspace+`"}}}`+"\n")
 
 	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
 	config, err := mgr.BuildTranscriptConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Watches) != 2 {
-		t.Fatalf("watches = %d, want 2: %+v", len(config.Watches), config.Watches)
+	if len(config.Watches) != 3 {
+		t.Fatalf("watches = %d, want 3: %+v", len(config.Watches), config.Watches)
 	}
 	counts := countWatches(config.Watches)
-	if counts["kimi"] != 1 || counts["kiro"] != 1 {
+	if counts["kimi"] != 1 || counts["kiro"] != 1 || counts["copilot"] != 1 {
 		t.Fatalf("watch counts = %#v", counts)
 	}
 	byName := map[string]transcriptWatch{}
@@ -43,7 +47,7 @@ func TestClaudeMemBuildTranscriptConfigUsesSessionWorkspaces(t *testing.T) {
 			t.Fatalf("%s watch must replay a newly discovered session from offset zero", watch.Name)
 		}
 	}
-	if byName["kimi"].Workspace != kimiWorkspace || byName["kiro"].Workspace != kiroWorkspace {
+	if byName["kimi"].Workspace != kimiWorkspace || byName["kiro"].Workspace != kiroWorkspace || byName["copilot"].Workspace != copilotWorkspace {
 		t.Fatalf("workspace mapping wrong: %#v", byName)
 	}
 
@@ -51,7 +55,7 @@ func TestClaudeMemBuildTranscriptConfigUsesSessionWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"turn.prompt", "event.toolCallId", "payload.toolCallId", "turn_end"} {
+	for _, want := range []string{"turn.prompt", "event.toolCallId", "payload.toolCallId", "turn_end", "session.start", "session.model_change"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("schemas missing %q: %s", want, raw)
 		}
@@ -68,7 +72,7 @@ func TestClaudeMemMCPMergePreservesOtherServers(t *testing.T) {
 		"custom": true,
 	})
 	dotPath := filepath.Join(home, ".local", "bin", "dot")
-	changed, err := ensureMCPEntry(path, dotPath, false)
+	changed, err := ensureMCPEntry(path, dotPath, mcpTargetKimi)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +96,39 @@ func TestClaudeMemMCPMergePreservesOtherServers(t *testing.T) {
 	if entry.Command != dotPath || strings.Join(entry.Args, " ") != "ai memory mcp-server" {
 		t.Fatalf("claude-mem entry = %#v", entry)
 	}
-	changed, err = ensureMCPEntry(path, dotPath, false)
+	changed, err = ensureMCPEntry(path, dotPath, mcpTargetKimi)
+	if err != nil || changed {
+		t.Fatalf("second merge changed=%v err=%v, want idempotent", changed, err)
+	}
+}
+
+func TestClaudeMemMCPCopilotEntryIncludesTypeAndTools(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".copilot", "mcp-config.json")
+	dotPath := filepath.Join(home, ".local", "bin", "dot")
+	changed, err := ensureMCPEntry(path, dotPath, mcpTargetCopilot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first merge reported no change")
+	}
+	var got struct {
+		MCPServers map[string]struct {
+			Type    string   `json:"type"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+			Tools   []string `json:"tools"`
+		} `json:"mcpServers"`
+	}
+	if !readJSONFile(path, &got) {
+		t.Fatal("merged MCP config did not parse")
+	}
+	entry := got.MCPServers["claude-mem"]
+	if entry.Type != "local" || entry.Command != dotPath || strings.Join(entry.Args, " ") != "ai memory mcp-server" || len(entry.Tools) != 1 || entry.Tools[0] != "*" {
+		t.Fatalf("copilot claude-mem entry = %#v", entry)
+	}
+	changed, err = ensureMCPEntry(path, dotPath, mcpTargetCopilot)
 	if err != nil || changed {
 		t.Fatalf("second merge changed=%v err=%v, want idempotent", changed, err)
 	}

@@ -805,7 +805,7 @@ dot ai skills validate --strict    # fail on invalid, duplicate, or legacy metad
 dot ai skills path                 # show SSOT + detected target roots (no flags needed)
 dot ai skills status               # maru SSOT + detected tools by default (read-only)
 
-dot ai memory install              # share claude-mem across Codex, Kimi, and Kiro
+dot ai memory install              # share claude-mem across Codex, Kimi, Kiro, and Copilot
 dot ai memory status               # verify hooks, MCP recall, and transcript capture
 
 dot ai update --check              # report available CLI/plugin/skill updates
@@ -887,13 +887,15 @@ legacy v1 `.claude/mcp.json` snapshots migrate into `~/.claude.json` MCP state,
 and pre-rename `.anchor/*` snapshot entries restore into their `.maru/*` targets.
 
 `dot ai memory install` keeps claude-mem's existing Codex plugin hooks and
-configures Kimi Code and Kiro CLI to use the same MCP recall server. A macOS
-LaunchAgent runs a workspace-aware transcript bridge for Kimi `wire.jsonl` and
-Kiro `messages.jsonl` sessions, so activity from all three CLIs reaches the same
+configures Kimi Code, Kiro CLI, and GitHub Copilot CLI to use the same MCP
+recall server. A macOS LaunchAgent runs a workspace-aware transcript bridge for
+Kimi `wire.jsonl`, Kiro `messages.jsonl`, and Copilot
+`~/.copilot/session-state/*/events.jsonl` sessions, so activity from all four
+CLIs reaches the same
 `~/.claude-mem` store. Existing transcript offsets are seeded at installation;
 new sessions are discovered and captured automatically without replaying old
 history. The command also adds an idempotent persistent-memory policy to the
-agents SSOT and renders it to Codex, Kimi, and Kiro. Re-run `install` after
+agents SSOT and renders it to Codex, Kimi, Kiro, and Copilot. Re-run `install` after
 moving the `dot` binary; use `dot ai memory status` to verify the LaunchAgent,
 MCP entries, native Codex hooks, and discovered session counts.
 The bridge requires both Node.js (MCP server) and Bun (transcript watcher), as
