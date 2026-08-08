@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 	execrun "github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
@@ -378,7 +379,30 @@ func (u *aiUpdater) updateCodex(ctx context.Context) []updateStep {
 	self := u.withVersionDelta(ctx, u.run(ctx, "codex", "self-update", "codex", "update"), "codex", before, "")
 	// Codex has no per-plugin update; refreshing marketplace snapshots is the
 	// only available upgrade path.
-	return []updateStep{self, u.run(ctx, "codex", "marketplace-upgrade", "codex", "plugin", "marketplace", "upgrade")}
+	return []updateStep{
+		self,
+		u.run(ctx, "codex", "marketplace-upgrade", "codex", "plugin", "marketplace", "upgrade"),
+		codexClaudeMemCacheStep(u.home),
+	}
+}
+
+// codexClaudeMemCacheStep verifies the codex claude-mem plugin cache is still
+// runnable after a marketplace upgrade: a snapshot refresh pulls new plugin
+// code without installing its dependencies, which silently breaks the native
+// hooks. Read-only, so it also runs under --dry-run. Detect-and-instruct only;
+// dot never auto-runs codex plugin remove/add.
+func codexClaudeMemCacheStep(home string) updateStep {
+	step := updateStep{Tool: "codex", Step: "claude-mem-cache"}
+	path, runnable := aisettings.CodexClaudeMemCache(home)
+	switch {
+	case path == "":
+		step.Status, step.Detail = stepSkipped, "no codex claude-mem cache (plugin not installed)"
+	case runnable:
+		step.Status, step.Detail = stepCurrent, "runtime ok: "+path
+	default:
+		step.Status, step.Detail = stepFailed, path+" missing .install-version/node_modules; run: codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local"
+	}
+	return step
 }
 
 func (u *aiUpdater) updateCopilot(ctx context.Context) []updateStep {

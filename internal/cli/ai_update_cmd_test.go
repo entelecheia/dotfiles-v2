@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -232,4 +233,48 @@ func TestAIUpdateAndAuthRegistered(t *testing.T) {
 			t.Fatalf("ai help missing %q subcommand:\n%s", want, out)
 		}
 	}
+}
+
+func TestCodexClaudeMemCacheStep(t *testing.T) {
+	writeCache := func(t *testing.T, home string, runnable bool) string {
+		t.Helper()
+		root := filepath.Join(home, ".codex", "plugins", "cache", "claude-mem-local", "claude-mem", "13.14.0")
+		for _, name := range []string{"mcp-server.cjs", "transcript-watcher.cjs", "bun-runner.js"} {
+			writeCLITestFile(t, filepath.Join(root, "scripts", name), "")
+		}
+		if runnable {
+			writeCLITestFile(t, filepath.Join(root, ".install-version"), `{"version":"13.14.0"}`)
+			if err := os.MkdirAll(filepath.Join(root, "node_modules"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return root
+	}
+	t.Run("no cache is skipped", func(t *testing.T) {
+		step := codexClaudeMemCacheStep(t.TempDir())
+		if step.Status != stepSkipped {
+			t.Fatalf("status = %q, want %q (%s)", step.Status, stepSkipped, step.Detail)
+		}
+	})
+	t.Run("runnable cache is up-to-date", func(t *testing.T) {
+		home := t.TempDir()
+		root := writeCache(t, home, true)
+		step := codexClaudeMemCacheStep(home)
+		if step.Status != stepCurrent || !strings.Contains(step.Detail, root) {
+			t.Fatalf("step = %+v, want %q with path %s", step, stepCurrent, root)
+		}
+	})
+	t.Run("broken cache fails with repair commands", func(t *testing.T) {
+		home := t.TempDir()
+		root := writeCache(t, home, false)
+		step := codexClaudeMemCacheStep(home)
+		if step.Status != stepFailed {
+			t.Fatalf("status = %q, want %q (%s)", step.Status, stepFailed, step.Detail)
+		}
+		for _, want := range []string{root, "codex plugin remove claude-mem", "codex plugin add claude-mem@claude-mem-local"} {
+			if !strings.Contains(step.Detail, want) {
+				t.Fatalf("detail %q missing %q", step.Detail, want)
+			}
+		}
+	})
 }
