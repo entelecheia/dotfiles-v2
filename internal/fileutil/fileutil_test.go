@@ -192,3 +192,27 @@ func TestEnsureFileAtomic_WritesAndReplaces(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureFileAtomic_RejectsSymlinkTarget(t *testing.T) {
+	runner := newTestRunner()
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.toml")
+	if err := os.WriteFile(real, []byte("real\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.toml")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := EnsureFileAtomic(runner, link, []byte("new\n"), 0o600); err == nil {
+		t.Fatal("atomic write over a symlink must error, not replace the link")
+	}
+	got, _ := os.ReadFile(real)
+	if string(got) != "real\n" {
+		t.Errorf("symlink target mutated: %q", got)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Error("symlink was replaced")
+	}
+}

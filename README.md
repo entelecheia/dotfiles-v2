@@ -669,8 +669,12 @@ it still needs - `~/.ssh`, `~/.claude.json`, `~/.config/dotfiles` and friends -
 listed in `<workspace>/.dotfiles/peer/home-paths.txt`. Deliberately excluded, in
 code: `known_hosts` (per-machine trust; overwriting it deletes the host key for
 the channel the sync runs over), `~/.maru/env` (venv console scripts bake an
-absolute interpreter path - rebuild, never copy), plugin caches, and
-`~/.codex/auth.json`. Keychain-backed tokens cannot be moved by any file copy at
+absolute interpreter path - rebuild, never copy), plugin caches,
+`~/.codex/auth.json`, and `~/.codex/config.toml` (machine-local: Codex rewrites
+it continuously, and its MCP server definitions hash-key the Keychain-stored
+MCP OAuth credentials - copying a peer's copy orphans them; the exclusion is
+enforced in code, so a `home-paths.txt` seeded before this entry was removed
+stays safe). Keychain-backed tokens cannot be moved by any file copy at
 all, and cannot even be verified over SSH.
 
 **Conflicts.** Every overwrite is quarantined, so a path edited on both machines
