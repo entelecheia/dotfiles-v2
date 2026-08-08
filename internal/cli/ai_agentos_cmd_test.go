@@ -138,7 +138,7 @@ func TestAIMemoryStatusAndDryRunAreReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("memory status: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(status, "Claude-mem Status") || !strings.Contains(status, "codex") || !strings.Contains(status, "kimi") || !strings.Contains(status, "kiro") {
+	if !strings.Contains(status, "Claude-mem Status") || !strings.Contains(status, "codex") || !strings.Contains(status, "kimi") || !strings.Contains(status, "kiro") || !strings.Contains(status, "copilot") {
 		t.Fatalf("memory status missing tool coverage:\n%s", status)
 	}
 
