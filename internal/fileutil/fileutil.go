@@ -40,6 +40,33 @@ func EnsureFile(runner *exec.Runner, path string, content []byte, perm os.FileMo
 	return true, nil
 }
 
+// EnsureFileAtomic is EnsureFile with a temp-and-rename write, for files that
+// another process rewrites concurrently: a reader must never observe a torn
+// file. Rename replaces a symlink at path instead of writing through it, so
+// use it only on paths owned as regular files.
+func EnsureFileAtomic(runner *exec.Runner, path string, content []byte, perm os.FileMode) (bool, error) {
+	existing, err := runner.ReadFile(path)
+	if err == nil && hashBytes(existing) == hashBytes(content) {
+		return false, nil
+	}
+
+	if err == nil {
+		if backupErr := backup(runner, path); backupErr != nil {
+			runner.Logger.Warn("backup failed", "path", path, "err", backupErr)
+		}
+	}
+
+	dir := filepath.Dir(path)
+	if err := runner.MkdirAll(dir, 0755); err != nil {
+		return false, fmt.Errorf("creating directory %q: %w", dir, err)
+	}
+
+	if err := runner.WriteFileAtomic(path, content, perm); err != nil {
+		return false, fmt.Errorf("writing %q: %w", path, err)
+	}
+	return true, nil
+}
+
 // NeedsUpdate checks if a file needs to be written.
 func NeedsUpdate(runner *exec.Runner, path string, content []byte) bool {
 	existing, err := runner.ReadFile(path)

@@ -2,9 +2,11 @@ package exec
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -174,6 +176,38 @@ func (r *Runner) WriteFile(path string, content []byte, perm os.FileMode) error 
 	}
 	r.Logger.Info("write file", "path", path, "size", len(content))
 	return os.WriteFile(path, content, perm)
+}
+
+// WriteFileAtomic writes content via a same-dir temp file and rename, so a
+// concurrent reader only ever sees the old or the new content, never a torn
+// file. Rename would replace a symlink at path instead of writing through it,
+// so an existing non-regular path is rejected. Respects dry-run.
+func (r *Runner) WriteFileAtomic(path string, content []byte, perm os.FileMode) error {
+	if r.DryRun {
+		r.Logger.Info("dry-run: write file (atomic)", "path", path, "size", len(content))
+		return nil
+	}
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("atomic write target %s exists and is not a regular file", path)
+	}
+	r.Logger.Info("write file (atomic)", "path", path, "size", len(content))
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".dot-write-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // MkdirAll creates directories. Respects dry-run.

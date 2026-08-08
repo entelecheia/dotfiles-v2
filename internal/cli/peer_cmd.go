@@ -60,6 +60,11 @@ const peerHomePathsHeader = `# dot peer home-paths.txt — host-local paths carr
 #   .claude/plugins/cache      cache
 #   .codex/sessions            history
 #   .codex/auth.json           credential; re-auth instead
+#   .codex/config.toml         machine-local: Codex rewrites it continuously
+#                              (per-project trust, hook state, plugin flags),
+#                              and its MCP server definitions hash-key the
+#                              Keychain-stored MCP OAuth credentials — copying
+#                              a peer's config orphans them on both machines
 #
 # Also unreachable by any file copy: tokens in the macOS keychain (gh, for
 # one). They cannot be transferred and cannot even be verified over ssh.
@@ -79,7 +84,6 @@ const peerHomePathsHeader = `# dot peer home-paths.txt — host-local paths carr
 .claude/skills
 .claude/plans
 .agents
-.codex/config.toml
 .codex/hooks.json
 .codex/memories
 .maru/settings.json
@@ -689,6 +693,10 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syn
 	// The exclusions are machine-local trust and runtime state. known_hosts is
 	// per-machine by nature - merging it is meaningless and losing it is
 	// self-inflicted denial of service. Agent sockets are not files worth moving.
+	// .codex/config.toml is excluded in code, not just from the seed template:
+	// home-paths.txt is seed-once, so lists written before the entry was removed
+	// still carry it, and Codex hash-keys its Keychain MCP OAuth credentials to
+	// this file's server definitions - copying a peer's copy orphans them.
 	conflict := NewHomeConflictDir()
 	base := []string{"-aHAX", "--numeric-ids", "-r", "--human-readable", "--stats",
 		"--ignore-missing-args", "--chmod=Du+w",
@@ -696,6 +704,7 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syn
 		"--backup", "--backup-dir=" + conflict,
 		"--exclude=known_hosts", "--exclude=known_hosts.old", "--exclude=known_hosts2",
 		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
+		"--exclude=/.codex/config.toml",
 		"--exclude=.DS_Store",
 		"--files-from=" + list}
 	if cfg.RemoteRsyncPath != "" {
