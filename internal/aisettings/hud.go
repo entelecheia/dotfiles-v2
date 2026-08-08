@@ -242,7 +242,10 @@ func (m *HUDManager) applyCodexHUD(dryRun bool) (HUDItem, error) {
 		item.Detail = "write tui.status_line"
 	}
 	if changed && !dryRun {
-		if _, err := fileutil.EnsureFile(m.runner(), path, []byte(next), 0o600); err != nil {
+		// Codex rewrites config.toml continuously; an atomic rename write
+		// guarantees it never reads a torn file. A write it makes between our
+		// read and rename can still be lost — the next codex write self-heals.
+		if _, err := fileutil.EnsureFileAtomic(m.runner(), path, []byte(next), 0o600); err != nil {
 			return HUDItem{}, err
 		}
 	}

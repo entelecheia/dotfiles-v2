@@ -148,3 +148,47 @@ func TestEnsureFile_UpdatesDifferent(t *testing.T) {
 		t.Errorf("EnsureFile: content after update = %q, want %q", got, newContent)
 	}
 }
+
+func TestEnsureFileAtomic_WritesAndReplaces(t *testing.T) {
+	runner := newTestRunner()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sub", "config.toml")
+	first := []byte("v1\n")
+
+	written, err := EnsureFileAtomic(runner, path, first, 0o600)
+	if err != nil || !written {
+		t.Fatalf("EnsureFileAtomic new file: written=%v err=%v", written, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("perm = %v, want 0600", info.Mode().Perm())
+	}
+
+	written, err = EnsureFileAtomic(runner, path, first, 0o600)
+	if err != nil || written {
+		t.Fatalf("identical content: written=%v err=%v, want skip", written, err)
+	}
+
+	second := []byte("v2\n")
+	written, err = EnsureFileAtomic(runner, path, second, 0o600)
+	if err != nil || !written {
+		t.Fatalf("replace: written=%v err=%v", written, err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "v2\n" {
+		t.Errorf("content = %q, want v2", got)
+	}
+	// No temp file may be left behind next to the target.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.toml" {
+			t.Errorf("leftover file %q in target dir", e.Name())
+		}
+	}
+}
