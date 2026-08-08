@@ -38,7 +38,10 @@ var (
 	shellFlagPattern      = regexp.MustCompile(`(?i)(?:^|\s)(--?[a-z0-9_-]+)(?:=|\s+)["']?([^\s"']+)`)
 )
 
-const claudeStateRelPath = ".claude.json"
+const (
+	claudeStateRelPath = ".claude.json"
+	codexConfigRelPath = ".codex/config.toml"
+)
 
 // Entry describes one home-relative path managed by the AI config archive.
 type Entry struct {
@@ -55,6 +58,7 @@ type EntrySummary struct {
 	Auth    bool   `yaml:"auth,omitempty"`
 	Copied  int    `yaml:"copied"`
 	Missing int    `yaml:"missing"`
+	Skipped int    `yaml:"skipped,omitempty"`
 	Files   int    `yaml:"files"`
 	Bytes   int64  `yaml:"bytes"`
 }
@@ -131,7 +135,7 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "claude", Path: ".claude/hooks", Description: "Claude hooks"},
 		{Tool: "claude", Path: ".claude.json", Description: "Claude Code state and MCP config"},
 		{Tool: "codex", Path: ".codex/AGENTS.md", Description: "Codex global instructions"},
-		{Tool: "codex", Path: ".codex/config.toml", Description: "Codex config and MCP servers"},
+		{Tool: "codex", Path: codexConfigRelPath, Description: "Codex config and MCP servers"},
 		{Tool: "codex", Path: ".codex/prompts", Description: "Codex prompts"},
 		{Tool: "codex", Path: ".codex/rules", Description: "Codex rules"},
 		{Tool: "agents", Path: AgentsSSOTRelPath, Description: "AI agents SSOT"},
@@ -1146,6 +1150,21 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 			sum.Bytes += bytes
 			sum.Entries = append(sum.Entries, es)
 			continue
+		}
+		if restore.target.Path == codexConfigRelPath {
+			if live, statErr := os.Lstat(dst); statErr == nil && live.Mode().IsRegular() {
+				// A live config.toml holds Keychain-hash-keyed MCP server defs,
+				// project trust levels, and plugin state that Codex rewrites
+				// continuously; a whole-file replace reverts them to snapshot
+				// age and orphans MCP OAuth credentials. Restore only onto a
+				// machine without one (fresh bootstrap); to force, move the
+				// live file aside and re-run.
+				// ponytail: MCP-only TOML projection if selective restore is
+				// ever needed.
+				es.Skipped = 1
+				sum.Entries = append(sum.Entries, es)
+				continue
+			}
 		}
 		moved, err := e.backupExisting(dst, restore.target.Path, preRoot)
 		if err != nil {

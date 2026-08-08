@@ -812,7 +812,9 @@ dot ai update --check              # report available CLI/plugin/skill updates
 dot ai update                      # update CLIs, plugins, marketplaces, skills
 
 dot ai auth status                 # list MCP servers and pending re-auth
+dot ai auth status --tool codex    # list codex MCP servers via 'codex mcp list'
 dot ai auth relogin cloudflare-bindings
+dot ai auth relogin --tool codex Neon
 
 dot ai audit summary               # summarize append-only dot ai mutation events
 dot ai audit tail 20               # print recent events as JSONL
@@ -885,6 +887,13 @@ dangling links and links into machine-local paths (plugin caches and the like)
 are skipped, since that wiring is rebuilt per machine. Import manifests are restricted to the built-in entry allowlist;
 legacy v1 `.claude/mcp.json` snapshots migrate into `~/.claude.json` MCP state,
 and pre-rename `.anchor/*` snapshot entries restore into their `.maru/*` targets.
+`~/.codex/config.toml` is always backed up but restored only onto a machine
+with no live copy: Codex rewrites it continuously (MCP server definitions,
+per-project trust, hook state, plugin flags), Codex keys its Keychain-stored
+MCP OAuth credentials to a hash of each server's config, and a whole-file
+replace would revert all of that to snapshot age and orphan fresh credentials.
+The summary reports `kept live copy`; to force-restore, move the live file
+aside and re-run.
 
 `dot ai memory install` keeps claude-mem's existing Codex plugin hooks and
 configures Kimi Code, Kiro CLI, and GitHub Copilot CLI to use the same MCP
@@ -900,6 +909,15 @@ moving the `dot` binary; use `dot ai memory status` to verify the LaunchAgent,
 MCP entries, native Codex hooks, and discovered session counts.
 The bridge requires both Node.js (MCP server) and Bun (transcript watcher), as
 does the upstream claude-mem runtime.
+
+Plugin resolution requires a runnable install: a candidate directory must hold
+claude-mem's `.install-version` marker and `node_modules` in addition to its
+scripts. A bare marketplace git checkout (scripts committed, dependencies never
+installed) is skipped in favor of an installed plugin cache, and when only
+broken candidates exist, commands fail with the exact repair commands
+(`codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local`,
+or `npx claude-mem@latest install`). `dot ai memory status` flags a codex
+plugin cache whose runtime went missing the same way.
 
 `dot ai skills` scans Markdown `SKILL.md` packages without executing them.
 Default roots are `~/.codex/skills`, `~/.claude/skills`, and
@@ -941,7 +959,7 @@ still produces a summary and a non-zero exit code.
 | Phase | What it runs |
 |-------|--------------|
 | `claude` | `claude update`, `claude plugin marketplace update`, then `claude plugin update <id> -s <scope>` for every installed plugin |
-| `codex` | `codex update`, `codex plugin marketplace upgrade` (Codex has no per-plugin update) |
+| `codex` | `codex update`, `codex plugin marketplace upgrade` (Codex has no per-plugin update), then a read-only claude-mem plugin cache health check |
 | `copilot` | `copilot update` (the CLI also auto-updates on startup) |
 | `gemini` | `npm install -g @google/gemini-cli` through `fnm`, falling back to a system `npm` (no self-update subcommand exists) |
 | `skills` | `brew upgrade maru-cli`, then `maru skills update` and `maru skills sync --tools claude,codex` |
@@ -975,6 +993,13 @@ Skills are delegated entirely to `maru` — per `docs/BOUNDARIES.md`, dot never
 writes under `~/.maru/skills` or any tool skill root. `~/.agents/skills` (the
 npm `skills` CLI) is a multi-owner directory and is not managed by dot; the
 command prints a hint instead of touching it.
+
+A codex marketplace upgrade refreshes plugin snapshots without installing
+their dependencies, which can silently break the claude-mem runtime. The codex
+phase therefore ends with a health check of the codex claude-mem plugin cache
+(`.install-version` marker + `node_modules`); a broken cache fails the run and
+prints the repair commands (`codex plugin remove claude-mem && codex plugin
+add claude-mem@claude-mem-local`). dot never auto-reinstalls the plugin.
 
 Claude plugin updates take effect after a Claude Code restart. There is no
 periodic auto-updater — run the command when you want it.
@@ -1011,8 +1036,16 @@ Server names containing spaces must be quoted:
 dot ai auth relogin "claude.ai Canva"
 ```
 
-`--tool codex` swaps the underlying binary to `codex mcp login|logout`. The
-`status` view is Claude-only: Codex exposes no equivalent pending-auth cache.
+`--tool codex` swaps the underlying binary to `codex mcp login|logout`, and
+`status --tool codex` lists servers from `codex mcp list --json` with their
+transport and auth classification (`oauth` for OAuth-backed servers, `ok` for
+stdio, `disabled` with the reason). Codex stores MCP OAuth in the macOS
+Keychain keyed by a hash of each server's config (editing or renaming a
+server orphans its credential) and it exposes no stale-credential state, so
+the `oauth` column cannot distinguish valid from expired: when a codex server
+misbehaves, run `dot ai auth relogin --tool codex <server>`. For the same
+reason `--all-needed` stays claude-only. `--probe` streams `codex doctor`
+instead of `claude mcp list`.
 
 ```yaml
 modules:

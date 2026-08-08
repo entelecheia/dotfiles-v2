@@ -56,7 +56,10 @@ type ClaudeMemInstallResult struct {
 type ClaudeMemStatus struct {
 	PluginRoot          string
 	PluginVersion       string
+	PluginError         string
 	CodexNativeHooks    bool
+	CodexCachePath      string
+	CodexCacheRunnable  bool
 	KimiMCP             bool
 	KiroMCP             bool
 	CopilotMCP          bool
@@ -131,9 +134,17 @@ func (m *ClaudeMemManager) CopilotMCPPath() string {
 	return filepath.Join(m.HomeDir, ".copilot", "mcp-config.json")
 }
 
+// ClaudeMemRepairCommand reinstalls the codex claude-mem plugin cache; shared
+// with the CLI so every surface prints the same repair procedure.
+const ClaudeMemRepairCommand = "codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local"
+
+const claudeMemRepairHint = "repair: " + ClaudeMemRepairCommand + " (or: npx claude-mem@latest install)"
+
 // LocatePlugin resolves an installed claude-mem plugin without pinning a
 // cache version. The Claude marketplace checkout is preferred because Codex,
-// Kimi, and Kiro can all share it.
+// Kimi, and Kiro can all share it — but only when its runtime is actually
+// installed; a bare git checkout (scripts committed, no node_modules) falls
+// through to the installed plugin caches.
 func (m *ClaudeMemManager) LocatePlugin() (string, error) {
 	if m.PluginRoot != "" && isClaudeMemPlugin(m.PluginRoot) {
 		return m.PluginRoot, nil
@@ -165,18 +176,28 @@ func (m *ClaudeMemManager) LocatePlugin() (string, error) {
 		candidates = append(candidates, matches...)
 	}
 
+	broken := ""
 	for _, candidate := range candidates {
-		if isClaudeMemPlugin(candidate) {
-			return candidate, nil
+		for _, root := range []string{candidate, filepath.Join(candidate, "plugin")} {
+			if isClaudeMemPlugin(root) {
+				return root, nil
+			}
+			if broken == "" && hasClaudeMemScripts(root) {
+				broken = root
+			}
 		}
-		if isClaudeMemPlugin(filepath.Join(candidate, "plugin")) {
-			return filepath.Join(candidate, "plugin"), nil
-		}
+	}
+	if broken != "" {
+		return "", fmt.Errorf("claude-mem plugin at %s is missing its runtime (.install-version/node_modules); %s", broken, claudeMemRepairHint)
 	}
 	return "", errors.New("claude-mem plugin not found; install it in Claude Code or Codex first")
 }
 
 func isClaudeMemPlugin(root string) bool {
+	return hasClaudeMemScripts(root) && hasClaudeMemRuntime(root)
+}
+
+func hasClaudeMemScripts(root string) bool {
 	if root == "" {
 		return false
 	}
@@ -186,6 +207,46 @@ func isClaudeMemPlugin(root string) bool {
 		}
 	}
 	return true
+}
+
+// hasClaudeMemRuntime reports whether claude-mem's installer has set up the
+// runtime here: its own .install-version marker plus installed dependencies.
+// Source trees without them (e.g. a marketplace git checkout) cannot run the
+// MCP server or transcript watcher.
+func hasClaudeMemRuntime(root string) bool {
+	if !fileExists(filepath.Join(root, ".install-version")) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(root, "node_modules"))
+	return err == nil && info.IsDir()
+}
+
+// CodexClaudeMemCache returns the newest codex claude-mem plugin cache dir and
+// whether its runtime is installed. path == "" means no cache exists.
+// ponytail: newest-modtime dir approximates codex's active cache version;
+// parse config.toml plugin pins if this ever misfires.
+func CodexClaudeMemCache(homeDir string) (string, bool) {
+	var newest string
+	var newestMod time.Time
+	for _, pattern := range []string{
+		filepath.Join(homeDir, ".codex", "plugins", "cache", "claude-mem-local", "claude-mem", "*"),
+		filepath.Join(homeDir, ".codex", "plugins", "cache", "thedotmack", "claude-mem", "*"),
+	} {
+		matches, _ := filepath.Glob(pattern)
+		for _, match := range matches {
+			info, err := os.Stat(match)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if newest == "" || info.ModTime().After(newestMod) {
+				newest, newestMod = match, info.ModTime()
+			}
+		}
+	}
+	if newest == "" {
+		return "", false
+	}
+	return newest, isClaudeMemPlugin(newest)
 }
 
 // EnsureMemoryInstructions adds the idempotent recall/capture policy to the
@@ -731,16 +792,23 @@ func stopChild(child *exec.Cmd, done <-chan error) {
 
 func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMemStatus {
 	status := ClaudeMemStatus{WatchCount: map[string]int{}}
+	status.CodexCachePath, status.CodexCacheRunnable = CodexClaudeMemCache(m.HomeDir)
 	if pluginRoot, err := m.LocatePlugin(); err == nil {
 		status.PluginRoot = pluginRoot
+		// Codex's native hooks execute from codex's own plugin cache, not from
+		// dot's resolved root, so an absent or broken cache turns the codex
+		// row red even when a healthy claude-side copy resolves.
 		status.CodexNativeHooks = fileExists(filepath.Join(pluginRoot, "hooks", "codex-hooks.json")) &&
-			codexClaudeMemEnabled(filepath.Join(m.HomeDir, ".codex", "config.toml"))
+			codexClaudeMemEnabled(filepath.Join(m.HomeDir, ".codex", "config.toml")) &&
+			status.CodexCacheRunnable
 		var manifest struct {
 			Version string `json:"version"`
 		}
 		if readJSONFile(filepath.Join(pluginRoot, ".claude-plugin", "plugin.json"), &manifest) || readJSONFile(filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"), &manifest) {
 			status.PluginVersion = manifest.Version
 		}
+	} else {
+		status.PluginError = err.Error()
 	}
 	status.KimiMCP = hasManagedMCPEntry(m.KimiMCPPath(), m.DotPath)
 	status.KiroMCP = hasManagedMCPEntry(m.KiroMCPPath(), m.DotPath)

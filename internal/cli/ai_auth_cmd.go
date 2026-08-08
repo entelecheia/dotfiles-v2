@@ -41,21 +41,34 @@ func newAIAuthStatusCmd() *cobra.Command {
 		Short: "Show MCP servers and which ones need re-authentication",
 		Long: `List configured MCP servers and flag the ones needing re-authentication.
 
-The pending set is read from Claude Code's own cache
+For claude, the pending set is read from Claude Code's own cache
 (~/.claude/mcp-needs-auth-cache.json), so it reflects the last state Claude
 recorded: a server re-authenticated outside dot can still appear as pending
-until Claude rewrites the file. Pass --probe for live state.`,
+until Claude rewrites the file. Pass --probe for live state.
+
+For codex (--tool codex), servers come from 'codex mcp list --json'. Codex
+keeps MCP OAuth in the macOS Keychain keyed by server config hash and exposes
+no stale-credential state, so the oauth column only classifies the transport;
+--probe streams 'codex doctor'.`,
 		Args: cobra.NoArgs,
 		RunE: runAIAuthStatus,
 	}
 	c.Flags().Bool("json", false, "Emit machine-readable JSON")
-	c.Flags().Bool("probe", false, "Also stream live connection state from 'claude mcp list'")
+	c.Flags().Bool("probe", false, "Also stream live state ('claude mcp list' / 'codex doctor')")
+	c.Flags().String("tool", "claude", "CLI owning the MCP servers (claude or codex)")
 	return c
 }
 
 // runAIAuthStatus is file-driven by default (no exec) so it stays testable and
 // fast: the pending-auth set comes from Claude's own cache file.
 func runAIAuthStatus(cmd *cobra.Command, _ []string) error {
+	bin, err := authToolBinary(cmd)
+	if err != nil {
+		return err
+	}
+	if bin == "codex" {
+		return runAIAuthStatusCodex(cmd)
+	}
 	home := homeFromCmd(cmd)
 	runner := newAuthRunnerFromCmd(cmd)
 
@@ -139,6 +152,86 @@ func runAIAuthStatus(cmd *cobra.Command, _ []string) error {
 		// RunQuery, not RunAttached: the probe is read-only and must still run
 		// under --dry-run.
 		res, err := runner.RunQuery(ctx, "claude", "mcp", "list")
+		if out := strings.TrimSpace(res.Stdout); out != "" {
+			p.Line("%s", out)
+		}
+		if err != nil {
+			p.Warn("  probe reported errors: %v", err)
+		}
+	}
+	return nil
+}
+
+// runAIAuthStatusCodex lists codex MCP servers via 'codex mcp list --json'.
+// Unlike claude there is no pending-auth cache: codex stores MCP OAuth in the
+// macOS Keychain keyed <server>|<config-hash>, so auth_status only classifies
+// the transport (o_auth vs unsupported) and cannot distinguish valid from
+// stale credentials.
+func runAIAuthStatusCodex(cmd *cobra.Command) error {
+	runner := newAuthRunnerFromCmd(cmd)
+	p := printerFrom(cmd)
+	if !runner.CommandExists("codex") {
+		p.Warn("codex not found in PATH")
+		return nil
+	}
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// RunQuery, not RunAttached: read-only, must still run under --dry-run.
+	res, err := runner.RunQuery(ctx, "codex", "mcp", "list", "--json")
+	if err != nil {
+		return fmt.Errorf("codex mcp list: %w", err)
+	}
+	servers, err := parseCodexMCPList([]byte(res.Stdout))
+	if err != nil {
+		return err
+	}
+
+	if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
+		items := make([]map[string]any, 0, len(servers))
+		for _, s := range servers {
+			items = append(items, map[string]any{
+				"name":            s.Name,
+				"enabled":         s.Enabled,
+				"disabled_reason": s.DisabledReason,
+				"transport":       s.Transport.Type,
+				"url":             s.Transport.URL,
+				"command":         s.Transport.Command,
+				"auth_status":     s.AuthStatus,
+			})
+		}
+		return printJSON(cmd, map[string]any{"tool": "codex", "servers": items})
+	}
+
+	p.Header("MCP Auth Status (codex)")
+	if len(servers) == 0 {
+		p.Bullet(ui.StyleHint.Render(ui.MarkAbsent), "no MCP servers configured")
+	}
+	for _, s := range servers {
+		marker, style := ui.MarkPresent, interface{ Render(...string) string }(ui.StyleSuccess)
+		state := "ok"
+		switch {
+		case !s.Enabled:
+			marker, style, state = ui.MarkWarn, ui.StyleWarning, "disabled"
+		case s.AuthStatus == "o_auth":
+			style, state = ui.StyleHint, "oauth"
+		case s.AuthStatus != "" && s.AuthStatus != "unsupported":
+			marker, style, state = ui.MarkPartial, ui.StyleHint, s.AuthStatus
+		}
+		detail := s.detail()
+		if !s.Enabled && s.DisabledReason != "" {
+			detail = s.DisabledReason + "; " + detail
+		}
+		label := fmt.Sprintf("%-28s %-11s %s", ui.StyleValue.Render(s.Name), state, ui.StyleHint.Render(detail))
+		p.Bullet(style.Render(marker), label)
+	}
+	p.Blank()
+	p.Line("Codex cannot report stale OAuth; if a server misbehaves run 'dot ai auth relogin --tool codex <server>'.")
+
+	if probe, _ := cmd.Flags().GetBool("probe"); probe {
+		p.Section("Live probe (codex doctor)")
+		res, err := runner.RunQuery(ctx, "codex", "doctor")
 		if out := strings.TrimSpace(res.Stdout); out != "" {
 			p.Line("%s", out)
 		}
@@ -324,7 +417,7 @@ func resolveAuthServers(cmd *cobra.Command, runner *execrun.Runner, args []strin
 		return nil, fmt.Errorf("--all-needed cannot be combined with explicit server names")
 	}
 	if bin != "claude" {
-		return nil, fmt.Errorf("--all-needed is claude-only: %s exposes no pending-auth cache", bin)
+		return nil, fmt.Errorf("--all-needed is claude-only: %s reports no stale-credential state; run 'dot ai auth status --tool %s' then 'dot ai auth relogin --tool %s <server>'", bin, bin, bin)
 	}
 	data, err := runner.ReadFile(filepath.Join(homeFromCmd(cmd), ".claude", "mcp-needs-auth-cache.json"))
 	if err != nil {
@@ -399,4 +492,43 @@ func parseMCPServers(claudeJSON []byte) ([]mcpServer, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// codexMCPServer is one entry of 'codex mcp list --json'. disabled_reason is
+// null when unset; unmarshalling null into a plain string leaves it empty.
+type codexMCPServer struct {
+	Name           string `json:"name"`
+	Enabled        bool   `json:"enabled"`
+	DisabledReason string `json:"disabled_reason"`
+	Transport      struct {
+		Type    string   `json:"type"`
+		URL     string   `json:"url"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	} `json:"transport"`
+	AuthStatus string `json:"auth_status"`
+}
+
+func (s codexMCPServer) detail() string {
+	switch {
+	case s.Transport.URL != "":
+		return s.Transport.URL
+	case s.Transport.Command != "":
+		// Include args: bare interpreter commands ("node") are ambiguous.
+		return strings.TrimSpace(s.Transport.Command + " " + strings.Join(s.Transport.Args, " "))
+	default:
+		return s.Transport.Type
+	}
+}
+
+func parseCodexMCPList(data []byte) ([]codexMCPServer, error) {
+	var servers []codexMCPServer
+	if err := json.Unmarshal(data, &servers); err != nil {
+		return nil, fmt.Errorf("parse codex mcp list --json: %w", err)
+	}
+	if len(servers) == 0 {
+		return nil, nil
+	}
+	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
+	return servers, nil
 }

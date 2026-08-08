@@ -124,8 +124,15 @@ func newAIMemoryStatusCmd() *cobra.Command {
 				plugin += " (" + status.PluginVersion + ")"
 			}
 			p.KV("Plugin", plugin)
+			if status.PluginRoot == "" && status.PluginError != "" {
+				p.Warn("  %s", status.PluginError)
+			}
+			codexDetail := "native hooks + plugin MCP"
+			if status.CodexCachePath != "" && !status.CodexCacheRunnable {
+				codexDetail = "codex plugin cache runtime missing; run: " + aisettings.ClaudeMemRepairCommand
+			}
 			p.Section("Tools")
-			printMemoryState(p, "codex", status.CodexNativeHooks, "native hooks + plugin MCP")
+			printMemoryState(p, "codex", status.CodexNativeHooks, codexDetail)
 			printMemoryState(p, "kimi", status.KimiMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["kimi"]))
 			printMemoryState(p, "kiro", status.KiroMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["kiro"]))
 			printMemoryState(p, "copilot", status.CopilotMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["copilot"]))
