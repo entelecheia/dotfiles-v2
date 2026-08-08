@@ -120,6 +120,66 @@ func TestAIAuthAllNeededIsClaudeOnly(t *testing.T) {
 	if err == nil {
 		t.Fatal("--all-needed with --tool codex should error")
 	}
+	if !strings.Contains(err.Error(), "status --tool codex") {
+		t.Fatalf("error should point at the codex status/relogin flow: %v", err)
+	}
+}
+
+func TestAIAuthStatusRejectsUnknownTool(t *testing.T) {
+	_, _, err := runDotForTest("--home", t.TempDir(), "ai", "auth", "status", "--tool", "gemini")
+	if err == nil {
+		t.Fatal("unknown --tool should error")
+	}
+}
+
+// Fixture mirrors live 'codex mcp list --json' output: a remote OAuth server,
+// a disabled stdio server with a null disabled_reason, and a stdio server.
+func TestParseCodexMCPList(t *testing.T) {
+	body := `[
+  {
+    "name": "Neon",
+    "enabled": true,
+    "disabled_reason": null,
+    "transport": {"type": "streamable_http", "url": "https://mcp.neon.tech/mcp"},
+    "auth_status": "o_auth"
+  },
+  {
+    "name": "computer-use",
+    "enabled": false,
+    "disabled_reason": null,
+    "transport": {"type": "stdio", "command": "./client", "args": ["mcp"]},
+    "auth_status": "unsupported"
+  },
+  {
+    "name": "headroom",
+    "enabled": true,
+    "disabled_reason": null,
+    "transport": {"type": "stdio", "command": "/usr/local/bin/headroom", "args": ["mcp", "serve"]},
+    "auth_status": "unsupported"
+  }
+]`
+	servers, err := parseCodexMCPList([]byte(body))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(servers) != 3 || servers[0].Name != "Neon" || servers[1].Name != "computer-use" {
+		t.Fatalf("servers = %+v, want sorted by name", servers)
+	}
+	if servers[0].AuthStatus != "o_auth" || servers[0].detail() != "https://mcp.neon.tech/mcp" {
+		t.Fatalf("oauth server fields lost: %+v", servers[0])
+	}
+	if servers[1].Enabled || servers[1].DisabledReason != "" {
+		t.Fatalf("null disabled_reason must parse to empty string: %+v", servers[1])
+	}
+	if servers[2].detail() != "/usr/local/bin/headroom" {
+		t.Fatalf("stdio detail = %q, want command path", servers[2].detail())
+	}
+	if got, err := parseCodexMCPList([]byte(`[]`)); err != nil || got != nil {
+		t.Fatalf("empty list = (%v,%v), want (nil,nil)", got, err)
+	}
+	if _, err := parseCodexMCPList([]byte(`{"not":"a list"}`)); err == nil {
+		t.Fatal("malformed JSON should error")
+	}
 }
 
 func TestAIAuthAllNeededRejectsExplicitServers(t *testing.T) {
