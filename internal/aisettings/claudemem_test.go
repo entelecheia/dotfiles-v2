@@ -2,11 +2,13 @@ package aisettings
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClaudeMemBuildTranscriptConfigUsesSessionWorkspaces(t *testing.T) {
@@ -115,19 +117,139 @@ func TestClaudeMemInstructionsAreIdempotent(t *testing.T) {
 	}
 }
 
-func TestClaudeMemLocatePluginPrefersMarketplaceCheckout(t *testing.T) {
-	home := t.TempDir()
-	plugin := filepath.Join(home, ".claude", "plugins", "marketplaces", "thedotmack", "plugin")
+// writeClaudeMemTree writes a claude-mem plugin dir: always the three scripts,
+// plus the .install-version marker and node_modules when runnable.
+func writeClaudeMemTree(t *testing.T, root string, runnable bool) {
+	t.Helper()
 	for _, name := range []string{"mcp-server.cjs", "transcript-watcher.cjs", "bun-runner.js"} {
-		mustWriteFile(t, filepath.Join(plugin, "scripts", name), "")
+		mustWriteFile(t, filepath.Join(root, "scripts", name), "")
 	}
+	if runnable {
+		mustWriteFile(t, filepath.Join(root, ".install-version"), `{"version":"13.14.0"}`)
+		mustMkdirAll(t, filepath.Join(root, "node_modules"))
+	}
+}
+
+func marketplaceCheckoutDir(home string) string {
+	return filepath.Join(home, ".claude", "plugins", "marketplaces", "thedotmack", "plugin")
+}
+
+func codexCacheDir(home, version string) string {
+	return filepath.Join(home, ".codex", "plugins", "cache", "claude-mem-local", "claude-mem", version)
+}
+
+func TestClaudeMemLocatePluginRequiresRunnableInstall(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T, home string)
+		want    func(home string) string
+		wantErr string
+	}{
+		{
+			name: "broken checkout falls through to runnable codex cache",
+			setup: func(t *testing.T, home string) {
+				writeClaudeMemTree(t, marketplaceCheckoutDir(home), false)
+				writeClaudeMemTree(t, codexCacheDir(home, "13.14.0"), true)
+			},
+			want: func(home string) string { return codexCacheDir(home, "13.14.0") },
+		},
+		{
+			name: "runnable checkout still preferred",
+			setup: func(t *testing.T, home string) {
+				writeClaudeMemTree(t, marketplaceCheckoutDir(home), true)
+				writeClaudeMemTree(t, codexCacheDir(home, "13.14.0"), true)
+			},
+			want: marketplaceCheckoutDir,
+		},
+		{
+			name: "only broken candidates error with repair command",
+			setup: func(t *testing.T, home string) {
+				writeClaudeMemTree(t, marketplaceCheckoutDir(home), false)
+			},
+			wantErr: "codex plugin remove claude-mem",
+		},
+		{
+			name:    "no candidates",
+			setup:   func(t *testing.T, home string) {},
+			wantErr: "not found",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+			t.Setenv("PLUGIN_ROOT", "")
+			home := t.TempDir()
+			tc.setup(t, home)
+			mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+			got, err := mgr.LocatePlugin()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := tc.want(home); got != want {
+				t.Fatalf("plugin = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestCodexClaudeMemCache(t *testing.T) {
+	t.Run("no cache", func(t *testing.T) {
+		path, runnable := CodexClaudeMemCache(t.TempDir())
+		if path != "" || runnable {
+			t.Fatalf("got (%q, %v), want empty and false", path, runnable)
+		}
+	})
+	t.Run("newest broken wins over older runnable", func(t *testing.T) {
+		home := t.TempDir()
+		older := codexCacheDir(home, "13.13.1")
+		newer := codexCacheDir(home, "13.14.0")
+		writeClaudeMemTree(t, older, true)
+		writeClaudeMemTree(t, newer, false)
+		past := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(older, past, past); err != nil {
+			t.Fatal(err)
+		}
+		path, runnable := CodexClaudeMemCache(home)
+		if path != newer || runnable {
+			t.Fatalf("got (%q, %v), want (%q, false)", path, runnable, newer)
+		}
+	})
+	t.Run("newest runnable", func(t *testing.T) {
+		home := t.TempDir()
+		writeClaudeMemTree(t, codexCacheDir(home, "13.14.0"), true)
+		path, runnable := CodexClaudeMemCache(home)
+		if path != codexCacheDir(home, "13.14.0") || !runnable {
+			t.Fatalf("got (%q, %v), want runnable cache", path, runnable)
+		}
+	})
+}
+
+func TestClaudeMemStatusFlagsBrokenCodexCache(t *testing.T) {
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", "")
+	home := t.TempDir()
+	checkout := marketplaceCheckoutDir(home)
+	writeClaudeMemTree(t, checkout, true)
+	mustWriteFile(t, filepath.Join(checkout, "hooks", "codex-hooks.json"), "{}")
+	mustWriteFile(t, filepath.Join(home, ".codex", "config.toml"), "[plugins.\"claude-mem@claude-mem-local\"]\nenabled = true\n")
+	writeClaudeMemTree(t, codexCacheDir(home, "13.14.0"), false)
+
 	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
-	got, err := mgr.LocatePlugin()
-	if err != nil {
-		t.Fatal(err)
+	status := mgr.Status(context.Background(), filepath.Join(home, "AGENTS.md"))
+	if status.CodexCacheRunnable {
+		t.Fatal("broken codex cache reported runnable")
 	}
-	if got != plugin {
-		t.Fatalf("plugin = %q, want %q", got, plugin)
+	if status.CodexCachePath != codexCacheDir(home, "13.14.0") {
+		t.Fatalf("cache path = %q", status.CodexCachePath)
+	}
+	if status.CodexNativeHooks {
+		t.Fatal("codex row must go red when the codex plugin cache runtime is missing")
 	}
 }
 
