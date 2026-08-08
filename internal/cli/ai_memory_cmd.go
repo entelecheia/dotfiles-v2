@@ -77,12 +77,12 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				return err
 			}
 			auditAIEventBestEffort(cmd, "ai.memory.install", map[string]any{
-				"bridge_path":            result.BridgePath,
-				"config_paths":           result.ConfigPaths,
-				"instructions_changed":   instructionsChanged,
-				"kimi_sessions":          result.WatchCount["kimi"],
-				"kiro_sessions":          result.WatchCount["kiro"],
-				"copilot_sessions":       result.WatchCount["copilot"],
+				"bridge_path":          result.BridgePath,
+				"config_paths":         result.ConfigPaths,
+				"instructions_changed": instructionsChanged,
+				"kimi_sessions":        result.WatchCount["kimi"],
+				"kiro_sessions":        result.WatchCount["kiro"],
+				"copilot_sessions":     result.WatchCount["copilot"],
 			})
 
 			p.Header("Claude-mem Integration")
@@ -99,7 +99,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().Bool("force-agents", false, "Back up and overwrite externally edited Codex/Kimi/Kiro instruction targets")
+	c.Flags().Bool("force-agents", false, "Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot instruction targets")
 	return c
 }
 
@@ -176,7 +176,7 @@ func newAIMemoryMCPServerCmd() *cobra.Command {
 func newAIMemoryBridgeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "bridge",
-		Short:  "Run the Kimi/Kiro transcript bridge",
+		Short:  "Run the Kimi/Kiro/Copilot transcript bridge",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

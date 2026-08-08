@@ -267,7 +267,7 @@ func TestCopilotTranscriptSchemaFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"session.end", "tool_call", "tool_result"} {
+	for _, want := range []string{"user.message", "assistant.message", "tool.execution_start", "tool.execution_complete", "session.shutdown"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("copilot schema missing %q: %s", want, raw)
 		}

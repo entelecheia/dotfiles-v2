@@ -32,7 +32,7 @@ const memoryInstructions = `<!-- dotfiles:claude-mem:start -->
 
 - Before non-trivial work, query the ` + "`claude-mem`" + ` MCP server when prior workspace context may affect the result.
 - Treat retrieved memory as a lead, and verify drift-prone facts against the current workspace or live system.
-- Codex hooks and the Kimi/Kiro transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
+- Codex hooks and the Kimi/Kiro/Copilot transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
 <!-- dotfiles:claude-mem:end -->`
 
 // ClaudeMemManager manages the cross-CLI claude-mem integration. Codex uses
@@ -217,7 +217,8 @@ func HasMemoryInstructions(path string) bool {
 }
 
 // BuildTranscriptConfig discovers concrete session files so each transcript is
-// associated with the workspace recorded in its Kimi/Kiro/Copilot sidecar metadata.
+// associated with its workspace: Kimi/Kiro record it in sidecar metadata, while
+// Copilot sessions carry it in the session.start event's context.
 func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error) {
 	watches := append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...)
 	if watches == nil {
@@ -387,13 +388,13 @@ func kiroTranscriptSchema() transcriptSchema {
 
 func copilotTranscriptSchema() transcriptSchema {
 	return transcriptSchema{
-		Name: "copilot", Version: "1.0", Description: "GitHub Copilot CLI session events.jsonl per-session log.",
+		Name: "copilot", Version: "1.0", Description: "GitHub Copilot CLI session-state events.jsonl per-session log.",
 		Events: []transcriptEvent{
-			{Name: "user-message", Match: equals("type", "user"), Action: "session_init", Fields: map[string]any{"prompt": "data.message"}},
-			{Name: "assistant-message", Match: equals("type", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": "data.message"}},
-			{Name: "tool-call", Match: equals("type", "tool_call"), Action: "tool_use", Fields: map[string]any{"toolId": "data.id", "toolName": "data.name", "toolInput": "data.input"}},
-			{Name: "tool-result", Match: equals("type", "tool_result"), Action: "tool_result", Fields: map[string]any{"toolId": "data.id", "toolResponse": "data.output"}},
-			{Name: "session-end", Match: equals("type", "session.end"), Action: "session_end"},
+			{Name: "user-message", Match: equals("type", "user.message"), Action: "session_init", Fields: map[string]any{"prompt": "data.content"}},
+			{Name: "assistant-message", Match: equals("type", "assistant.message"), Action: "assistant_message", Fields: map[string]any{"message": "data.content"}},
+			{Name: "tool-call", Match: equals("type", "tool.execution_start"), Action: "tool_use", Fields: map[string]any{"toolId": "data.toolCallId", "toolName": "data.toolName", "toolInput": "data.arguments"}},
+			{Name: "tool-result", Match: equals("type", "tool.execution_complete"), Action: "tool_result", Fields: map[string]any{"toolId": "data.toolCallId", "toolResponse": map[string]any{"coalesce": []any{"data.result.content", "data.result"}}}},
+			{Name: "session-end", Match: equals("type", "session.shutdown"), Action: "session_end"},
 		},
 	}
 }
@@ -643,7 +644,7 @@ func (m *ClaudeMemManager) RunMCPServer(ctx context.Context) error {
 }
 
 // RunBridge supervises the claude-mem transcript watcher and reloads it when a
-// newly created Kimi or Kiro session adds a concrete workspace mapping.
+// newly created Kimi, Kiro, or Copilot session adds a concrete workspace mapping.
 func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 	if m.BunPath == "" || !filepath.IsAbs(m.BunPath) {
 		return errors.New("bun executable path must be absolute")
