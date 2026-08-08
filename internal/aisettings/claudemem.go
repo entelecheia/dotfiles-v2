@@ -134,7 +134,11 @@ func (m *ClaudeMemManager) CopilotMCPPath() string {
 	return filepath.Join(m.HomeDir, ".copilot", "mcp-config.json")
 }
 
-const claudeMemRepairHint = "repair: codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local (or: npx claude-mem@latest install)"
+// ClaudeMemRepairCommand reinstalls the codex claude-mem plugin cache; shared
+// with the CLI so every surface prints the same repair procedure.
+const ClaudeMemRepairCommand = "codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local"
+
+const claudeMemRepairHint = "repair: " + ClaudeMemRepairCommand + " (or: npx claude-mem@latest install)"
 
 // LocatePlugin resolves an installed claude-mem plugin without pinning a
 // cache version. The Claude marketplace checkout is preferred because Codex,
@@ -792,11 +796,11 @@ func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMe
 	if pluginRoot, err := m.LocatePlugin(); err == nil {
 		status.PluginRoot = pluginRoot
 		// Codex's native hooks execute from codex's own plugin cache, not from
-		// dot's resolved root, so a broken cache turns the codex row red even
-		// when a healthy claude-side copy resolves.
+		// dot's resolved root, so an absent or broken cache turns the codex
+		// row red even when a healthy claude-side copy resolves.
 		status.CodexNativeHooks = fileExists(filepath.Join(pluginRoot, "hooks", "codex-hooks.json")) &&
 			codexClaudeMemEnabled(filepath.Join(m.HomeDir, ".codex", "config.toml")) &&
-			(status.CodexCachePath == "" || status.CodexCacheRunnable)
+			status.CodexCacheRunnable
 		var manifest struct {
 			Version string `json:"version"`
 		}

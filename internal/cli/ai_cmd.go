@@ -1107,7 +1107,7 @@ func printAISummary(p *Printer, title string, sum *aisettings.Summary) {
 	p.Section("Entries")
 	for _, entry := range sum.Entries {
 		if entry.Skipped > 0 {
-			p.Bullet(ui.StyleHint.Render(ui.MarkPartial), fmt.Sprintf("%-8s kept live copy (delete ~/%s first to restore from snapshot)",
+			p.Bullet(ui.StyleHint.Render(ui.MarkPartial), fmt.Sprintf("%-8s kept live copy (move ~/%s aside first to restore from snapshot)",
 				ui.StyleValue.Render(entry.Tool), entry.Path))
 			continue
 		}

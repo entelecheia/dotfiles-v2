@@ -129,7 +129,7 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			}
 			codexDetail := "native hooks + plugin MCP"
 			if status.CodexCachePath != "" && !status.CodexCacheRunnable {
-				codexDetail = "codex plugin cache runtime missing; run: codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local"
+				codexDetail = "codex plugin cache runtime missing; run: " + aisettings.ClaudeMemRepairCommand
 			}
 			p.Section("Tools")
 			printMemoryState(p, "codex", status.CodexNativeHooks, codexDetail)

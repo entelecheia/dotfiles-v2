@@ -501,9 +501,10 @@ type codexMCPServer struct {
 	Enabled        bool   `json:"enabled"`
 	DisabledReason string `json:"disabled_reason"`
 	Transport      struct {
-		Type    string `json:"type"`
-		URL     string `json:"url"`
-		Command string `json:"command"`
+		Type    string   `json:"type"`
+		URL     string   `json:"url"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
 	} `json:"transport"`
 	AuthStatus string `json:"auth_status"`
 }
@@ -513,7 +514,8 @@ func (s codexMCPServer) detail() string {
 	case s.Transport.URL != "":
 		return s.Transport.URL
 	case s.Transport.Command != "":
-		return s.Transport.Command
+		// Include args: bare interpreter commands ("node") are ambiguous.
+		return strings.TrimSpace(s.Transport.Command + " " + strings.Join(s.Transport.Args, " "))
 	default:
 		return s.Transport.Type
 	}

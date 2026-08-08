@@ -1152,7 +1152,7 @@ func (e *Engine) restoreFromSnapshotRoot(root string, includeAuth bool) (*Summar
 			continue
 		}
 		if restore.target.Path == codexConfigRelPath {
-			if _, statErr := os.Lstat(dst); statErr == nil {
+			if live, statErr := os.Lstat(dst); statErr == nil && live.Mode().IsRegular() {
 				// A live config.toml holds Keychain-hash-keyed MCP server defs,
 				// project trust levels, and plugin state that Codex rewrites
 				// continuously; a whole-file replace reverts them to snapshot

@@ -171,8 +171,8 @@ func TestParseCodexMCPList(t *testing.T) {
 	if servers[1].Enabled || servers[1].DisabledReason != "" {
 		t.Fatalf("null disabled_reason must parse to empty string: %+v", servers[1])
 	}
-	if servers[2].detail() != "/usr/local/bin/headroom" {
-		t.Fatalf("stdio detail = %q, want command path", servers[2].detail())
+	if servers[2].detail() != "/usr/local/bin/headroom mcp serve" {
+		t.Fatalf("stdio detail = %q, want command with args", servers[2].detail())
 	}
 	if got, err := parseCodexMCPList([]byte(`[]`)); err != nil || got != nil {
 		t.Fatalf("empty list = (%v,%v), want (nil,nil)", got, err)

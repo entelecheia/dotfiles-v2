@@ -253,6 +253,28 @@ func TestClaudeMemStatusFlagsBrokenCodexCache(t *testing.T) {
 	}
 }
 
+// The plugin can be enabled in config.toml with no codex cache at all (deleted
+// or never snapshotted); native hooks execute from that cache, so the codex
+// row must not report ready on the strength of a healthy claude-side copy.
+func TestClaudeMemStatusRequiresCodexCache(t *testing.T) {
+	t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+	t.Setenv("PLUGIN_ROOT", "")
+	home := t.TempDir()
+	checkout := marketplaceCheckoutDir(home)
+	writeClaudeMemTree(t, checkout, true)
+	mustWriteFile(t, filepath.Join(checkout, "hooks", "codex-hooks.json"), "{}")
+	mustWriteFile(t, filepath.Join(home, ".codex", "config.toml"), "[plugins.\"claude-mem@claude-mem-local\"]\nenabled = true\n")
+
+	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+	status := mgr.Status(context.Background(), filepath.Join(home, "AGENTS.md"))
+	if status.CodexCachePath != "" {
+		t.Fatalf("cache path = %q, want none", status.CodexCachePath)
+	}
+	if status.CodexNativeHooks {
+		t.Fatal("codex row must not report ready without a codex plugin cache")
+	}
+}
+
 func TestCodexClaudeMemEnabledAcceptsAnyMarketplaceAlias(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	mustWriteFile(t, path, `[plugins."claude-mem@thedotmack"]
