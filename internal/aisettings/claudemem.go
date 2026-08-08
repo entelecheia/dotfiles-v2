@@ -35,8 +35,8 @@ const memoryInstructions = `<!-- dotfiles:claude-mem:start -->
 <!-- dotfiles:claude-mem:end -->`
 
 // ClaudeMemManager manages the cross-CLI claude-mem integration. Codex uses
-// the plugin's native hooks; Kimi and Kiro use MCP for recall and a transcript
-// bridge for capture.
+// the plugin's native hooks; Kimi, Kiro, and GitHub Copilot CLI use MCP for
+// recall and a transcript bridge for capture.
 type ClaudeMemManager struct {
 	HomeDir    string
 	DotPath    string
@@ -58,6 +58,7 @@ type ClaudeMemStatus struct {
 	CodexNativeHooks    bool
 	KimiMCP             bool
 	KiroMCP             bool
+	CopilotMCP          bool
 	InstructionsEnabled bool
 	BridgeInstalled     bool
 	BridgeRunning       bool
@@ -123,6 +124,10 @@ func (m *ClaudeMemManager) KimiMCPPath() string {
 
 func (m *ClaudeMemManager) KiroMCPPath() string {
 	return filepath.Join(m.HomeDir, ".kiro", "settings", "mcp.json")
+}
+
+func (m *ClaudeMemManager) CopilotMCPPath() string {
+	return filepath.Join(m.HomeDir, ".copilot", "mcp-config.json")
 }
 
 // LocatePlugin resolves an installed claude-mem plugin without pinning a
@@ -211,9 +216,9 @@ func HasMemoryInstructions(path string) bool {
 }
 
 // BuildTranscriptConfig discovers concrete session files so each transcript is
-// associated with the workspace recorded in its Kimi/Kiro sidecar metadata.
+// associated with the workspace recorded in its Kimi/Kiro/Copilot sidecar metadata.
 func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error) {
-	watches := append(m.kimiWatches(), m.kiroWatches()...)
+	watches := append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...)
 	if watches == nil {
 		// A machine with no Kimi/Kiro sessions yet leaves this nil, and a nil
 		// slice marshals to `null`, which the plugin's watcher rejects as an
@@ -225,8 +230,9 @@ func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error
 	return transcriptWatchConfig{
 		Version: 1,
 		Schemas: map[string]transcriptSchema{
-			"kimi": kimiTranscriptSchema(),
-			"kiro": kiroTranscriptSchema(),
+			"kimi":    kimiTranscriptSchema(),
+			"kiro":    kiroTranscriptSchema(),
+			"copilot": copilotTranscriptSchema(),
 		},
 		Watches:   watches,
 		StateFile: m.TranscriptStatePath(),
@@ -287,6 +293,53 @@ func (m *ClaudeMemManager) kiroWatches() []transcriptWatch {
 	return watches
 }
 
+func (m *ClaudeMemManager) copilotWatches() []transcriptWatch {
+	pattern := filepath.Join(m.HomeDir, ".copilot", "session-state", "*", "events.jsonl")
+	eventsFiles, _ := filepath.Glob(pattern)
+	var watches []transcriptWatch
+	for _, eventsPath := range eventsFiles {
+		if info, err := os.Stat(eventsPath); err != nil || info.IsDir() {
+			continue
+		}
+		workspace := copilotSessionWorkspace(eventsPath)
+		if !isAbsoluteDirectory(workspace) {
+			continue
+		}
+		watches = append(watches, transcriptWatch{
+			Name: "copilot", Path: eventsPath, Schema: "copilot", Workspace: workspace, StartAtEnd: false,
+		})
+	}
+	return watches
+}
+
+// copilotSessionWorkspace reads the first line of a Copilot events.jsonl and
+// extracts the workspace path from the session.start event's data.context.cwd
+// (or data.context.gitRoot as a fallback). This avoids opening the live SQLite
+// session-store.db.
+func copilotSessionWorkspace(eventsPath string) string {
+	raw, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return ""
+	}
+	firstLine, _, _ := strings.Cut(string(raw), "\n")
+	var event struct {
+		Type string `json:"type"`
+		Data struct {
+			Context struct {
+				CWD     string `json:"cwd"`
+				GitRoot string `json:"gitRoot"`
+			} `json:"context"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(firstLine), &event) != nil || event.Type != "session.start" {
+		return ""
+	}
+	if event.Data.Context.CWD != "" {
+		return event.Data.Context.CWD
+	}
+	return event.Data.Context.GitRoot
+}
+
 func readJSONFile(path string, target any) bool {
 	raw, err := os.ReadFile(path)
 	return err == nil && json.Unmarshal(raw, target) == nil
@@ -326,6 +379,20 @@ func kiroTranscriptSchema() transcriptSchema {
 	}
 }
 
+func copilotTranscriptSchema() transcriptSchema {
+	return transcriptSchema{
+		Name: "copilot", Version: "1.0", Description: "GitHub Copilot CLI session events.jsonl per-session log.",
+		Events: []transcriptEvent{
+			{Name: "session-start", Match: equals("type", "session.start"), Action: "session_init", Fields: map[string]any{"prompt": "data.context.cwd"}},
+			{Name: "user-message", Match: equals("type", "user"), Action: "session_init", Fields: map[string]any{"prompt": "data.message"}},
+			{Name: "assistant-message", Match: equals("type", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": "data.message"}},
+			{Name: "tool-call", Match: equals("type", "tool_call"), Action: "tool_use", Fields: map[string]any{"toolId": "data.id", "toolName": "data.name", "toolInput": "data.input"}},
+			{Name: "tool-result", Match: equals("type", "tool_result"), Action: "tool_result", Fields: map[string]any{"toolId": "data.id", "toolResponse": "data.output"}},
+			{Name: "session-end", Match: equals("type", "session.end"), Action: "session_end"},
+		},
+	}
+}
+
 func equals(path string, value any) map[string]any {
 	return map[string]any{"path": path, "equals": value}
 }
@@ -358,8 +425,18 @@ func (m *ClaudeMemManager) seedTranscriptState(config transcriptWatchConfig) err
 	return atomicWriteFile(m.TranscriptStatePath(), append(raw, '\n'), 0o600)
 }
 
-// Install wires recall into Kimi/Kiro, prepares transcript capture, and loads
-// the macOS user LaunchAgent that keeps new sessions discovered.
+// mcpEntryVariant controls which extra fields are emitted when writing a
+// claude-mem entry into an MCP configuration file.
+type mcpEntryVariant int
+
+const (
+	mcpVariantStandard mcpEntryVariant = iota // kimi: command + args only
+	mcpVariantKiro                            // kiro: adds "disabled": false
+	mcpVariantCopilot                         // copilot: adds "type": "local", "tools": ["*"]
+)
+
+// Install wires recall into Kimi/Kiro/Copilot, prepares transcript capture,
+// and loads the macOS user LaunchAgent that keeps new sessions discovered.
 func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult, error) {
 	pluginRoot, err := m.LocatePlugin()
 	if err != nil {
@@ -380,10 +457,14 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 
 	var changedPaths []string
 	for _, target := range []struct {
-		path string
-		kiro bool
-	}{{m.KimiMCPPath(), false}, {m.KiroMCPPath(), true}} {
-		changed, err := ensureMCPEntry(target.path, m.DotPath, target.kiro)
+		path    string
+		variant mcpEntryVariant
+	}{
+		{m.KimiMCPPath(), mcpVariantStandard},
+		{m.KiroMCPPath(), mcpVariantKiro},
+		{m.CopilotMCPPath(), mcpVariantCopilot},
+	} {
+		changed, err := ensureMCPEntry(target.path, m.DotPath, target.variant)
 		if err != nil {
 			return ClaudeMemInstallResult{}, err
 		}
@@ -411,7 +492,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 	}, nil
 }
 
-func ensureMCPEntry(path, dotPath string, kiro bool) (bool, error) {
+func ensureMCPEntry(path, dotPath string, variant mcpEntryVariant) (bool, error) {
 	doc := map[string]json.RawMessage{}
 	if raw, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(raw, &doc); err != nil {
@@ -427,8 +508,12 @@ func ensureMCPEntry(path, dotPath string, kiro bool) (bool, error) {
 		}
 	}
 	entry := map[string]any{"command": dotPath, "args": []string{"ai", "memory", "mcp-server"}}
-	if kiro {
+	switch variant {
+	case mcpVariantKiro:
 		entry["disabled"] = false
+	case mcpVariantCopilot:
+		entry["type"] = "local"
+		entry["tools"] = []string{"*"}
 	}
 	entryRaw, _ := json.Marshal(entry)
 	var currentEntry map[string]any
@@ -653,6 +738,7 @@ func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMe
 	}
 	status.KimiMCP = hasManagedMCPEntry(m.KimiMCPPath(), m.DotPath)
 	status.KiroMCP = hasManagedMCPEntry(m.KiroMCPPath(), m.DotPath)
+	status.CopilotMCP = hasManagedCopilotMCPEntry(m.CopilotMCPPath(), m.DotPath)
 	status.InstructionsEnabled = HasMemoryInstructions(ssotPath)
 	status.BridgeInstalled = fileExists(m.LaunchdPlistPath())
 	if config, err := m.BuildTranscriptConfig(); err == nil {
@@ -698,8 +784,27 @@ func hasManagedMCPEntry(path, dotPath string) bool {
 	return ok && entry.Command == dotPath && len(entry.Args) == 3 && entry.Args[0] == "ai" && entry.Args[1] == "memory" && entry.Args[2] == "mcp-server"
 }
 
+func hasManagedCopilotMCPEntry(path, dotPath string) bool {
+	var doc struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+			Type    string   `json:"type"`
+			Tools   []string `json:"tools"`
+		} `json:"mcpServers"`
+	}
+	if !readJSONFile(path, &doc) {
+		return false
+	}
+	entry, ok := doc.MCPServers["claude-mem"]
+	return ok && entry.Command == dotPath &&
+		len(entry.Args) == 3 && entry.Args[0] == "ai" && entry.Args[1] == "memory" && entry.Args[2] == "mcp-server" &&
+		entry.Type == "local" &&
+		len(entry.Tools) == 1 && entry.Tools[0] == "*"
+}
+
 func countWatches(watches []transcriptWatch) map[string]int {
-	counts := map[string]int{"kimi": 0, "kiro": 0}
+	counts := map[string]int{"kimi": 0, "kiro": 0, "copilot": 0}
 	for _, watch := range watches {
 		counts[watch.Name]++
 	}
