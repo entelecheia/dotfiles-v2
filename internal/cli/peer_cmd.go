@@ -60,6 +60,11 @@ const peerHomePathsHeader = `# dot peer home-paths.txt — host-local paths carr
 #   .claude/plugins/cache      cache
 #   .codex/sessions            history
 #   .codex/auth.json           credential; re-auth instead
+#   .codex/config.toml         machine-local: Codex rewrites it continuously
+#                              (per-project trust, hook state, plugin flags),
+#                              and its MCP server definitions hash-key the
+#                              Keychain-stored MCP OAuth credentials — copying
+#                              a peer's config orphans them on both machines
 #
 # Also unreachable by any file copy: tokens in the macOS keychain (gh, for
 # one). They cannot be transferred and cannot even be verified over ssh.
@@ -79,7 +84,6 @@ const peerHomePathsHeader = `# dot peer home-paths.txt — host-local paths carr
 .claude/skills
 .claude/plans
 .agents
-.codex/config.toml
 .codex/hooks.json
 .codex/memories
 .maru/settings.json
