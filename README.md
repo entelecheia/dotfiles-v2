@@ -669,7 +669,9 @@ and are never treated as deletions. After an upgrade or peer-target change, the
 first successful full additive transaction establishes a target-bound baseline;
 deletion starts on a later run. Run peer transfers and scheduling through `dot peer`; generic
 `dot sync push/pull/setup --profile=peer` is refused because it bypasses the
-tombstone transaction.
+tombstone transaction. The Go planner also implements rsync's leading `**/`
+any-depth semantics, so nested allowed secrets are inventoried instead of being
+deleted and recreated each run.
 
 ```bash
 dot peer init --host user@host        # write the peer profile
@@ -714,7 +716,10 @@ simultaneous conflict or propagated deletion enables a scoped backup. For an
 edit/edit conflict, the peer's losing payload is saved once under
 `.sync-conflicts/<timestamp>/`; edit/delete decisions without two payloads are
 still retained in `.dotfiles/peer/peer-conflicts.log`. `dot peer diff` uses the
-same three-way plan as the next sync.
+same three-way plan as the next sync. The code-owned volatile layer excludes
+`.maru/runs/` event streams and top-level `.maru/desk-pipeline/*.out` process
+outputs because they are written continuously by each machine and are not
+transferable workspace state.
 
 If the peer's edit exists when the delete pass runs, the coordinator's delete
 wins and the edited copy moves into `.sync-conflicts/` rather than being pulled
