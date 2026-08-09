@@ -399,37 +399,42 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *syncer.C
 
 	args := []string{"-r", "--dry-run", "--no-links", "--out-format=@@%l\t%M\t%n"}
 	args = append(args, syncer.PeerFilterArgs(cfg)...)
-	if cfg.RemoteRsyncPath != "" {
-		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
+	remoteRsync := cfg.RemoteRsyncPath
+	if remoteRsync == "" {
+		remoteRsync = "rsync"
 	}
-	args = append(args, "-e", "ssh", cfg.Target.RsyncDest(), root+"/")
-	res, runErr := runner.Run(ctx, "rsync", args...)
+	// Force both rsync processes to render %M in UTC. A fixed offset obtained
+	// from `date +%z` is wrong for historical timestamps across DST changes.
+	args = append(args, "--rsync-path=env TZ=UTC "+remoteRsync)
+	args = append(args, "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", cfg.Target.RsyncDest(), root+"/")
+	res, runErr := runner.Run(ctx, "env", append([]string{"TZ=UTC", "rsync"}, args...)...)
 	if runErr != nil {
 		return nil, fmt.Errorf("peer inventory: %w", runErr)
 	}
-
-	remoteLoc, err := peerRemoteLocation(ctx, runner, cfg)
-	if err != nil {
-		return nil, err
-	}
 	requireNFD := syncer.NFDMigrationMarked(cfg.LocalPaths.WorkspaceRoot)
-	return parsePeerRemoteInventory(res.Stdout, remoteLoc, baseline, requireNFD)
+	return parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
 }
 
-const remotePeerStatusCommand = `set -eu
-dot_bin="$HOME/.local/bin/dot"
-if [ ! -x "$dot_bin" ]; then
-  echo "peer dot binary is missing: $dot_bin" >&2
-  exit 127
+const remotePeerDotResolver = `set -eu
+dot_bin=
+for candidate in "$HOME/.local/bin/dot" /opt/homebrew/bin/dot /usr/local/bin/dot /home/linuxbrew/.linuxbrew/bin/dot; do
+  if [ -x "$candidate" ]; then
+    dot_bin=$candidate
+    break
+  fi
+done
+if [ -z "$dot_bin" ]; then
+  dot_bin=$(command -v dot 2>/dev/null || true)
 fi
+if [ -z "$dot_bin" ] || [ ! -x "$dot_bin" ]; then
+  echo "peer dot binary is missing from supported install locations" >&2
+  exit 127
+fi`
+
+const remotePeerStatusCommand = remotePeerDotResolver + `
 exec "$dot_bin" peer status --json`
 
-const remotePeerNormalizeCommand = `set -eu
-dot_bin="$HOME/.local/bin/dot"
-if [ ! -x "$dot_bin" ]; then
-  echo "peer dot binary is missing: $dot_bin" >&2
-  exit 127
-fi
+const remotePeerNormalizeCommand = remotePeerDotResolver + `
 exec "$dot_bin" sync names normalize --profile=peer --yes`
 
 // checkRemotePeerOwner makes the single-coordinator invariant bilateral. A
@@ -442,7 +447,7 @@ func checkRemotePeerOwner(ctx context.Context, runner *exec.Runner, cfg *syncer.
 	if strings.TrimSpace(cfg.Owner) == "" {
 		return fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
 	}
-	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", cfg.Target.Host, remotePeerStatusCommand)
+	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand)
 	if err != nil {
 		return fmt.Errorf("peer coordinator check: reading remote peer status: %w", err)
 	}
@@ -477,7 +482,7 @@ func validateRemotePeerStatus(cfg *syncer.Config, raw string) error {
 }
 
 func normalizeRemotePeerNames(ctx context.Context, runner *exec.Runner, cfg *syncer.Config) error {
-	if _, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", cfg.Target.Host, remotePeerNormalizeCommand); err != nil {
+	if _, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerNormalizeCommand); err != nil {
 		return fmt.Errorf("normalizing peer workspace names: %w", err)
 	}
 	return nil
@@ -573,30 +578,6 @@ func cleanPeerInventoryRel(raw string, isDir bool) (string, error) {
 		return "", fmt.Errorf("peer inventory: unsafe path %q", raw)
 	}
 	return clean, nil
-}
-
-func peerRemoteLocation(ctx context.Context, runner *exec.Runner, cfg *syncer.Config) (*time.Location, error) {
-	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", cfg.Target.Host, "date +%z")
-	if err != nil {
-		return nil, fmt.Errorf("peer inventory: reading remote timezone: %w", err)
-	}
-	raw := strings.TrimSpace(res.Stdout)
-	if len(raw) != 5 || (raw[0] != '+' && raw[0] != '-') {
-		return nil, fmt.Errorf("peer inventory: unsupported remote timezone %q", raw)
-	}
-	hours, err := strconv.Atoi(raw[1:3])
-	if err != nil {
-		return nil, fmt.Errorf("peer inventory: unsupported remote timezone %q", raw)
-	}
-	minutes, err := strconv.Atoi(raw[3:5])
-	if err != nil || hours > 23 || minutes > 59 {
-		return nil, fmt.Errorf("peer inventory: unsupported remote timezone %q", raw)
-	}
-	offset := (hours*60 + minutes) * 60
-	if raw[0] == '-' {
-		offset = -offset
-	}
-	return time.FixedZone("peer", offset), nil
 }
 
 func parsePeerRsyncTime(raw string, loc *time.Location) (time.Time, error) {
@@ -921,6 +902,26 @@ on a laptop.`,
 					complete = false
 					p.Warn("local deletes held: peer baseline provenance is not established")
 				}
+				if len(plan.Push) > len(plan.QuarantineRemote) {
+					baseline, err := syncer.LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
+					if err != nil {
+						return fmt.Errorf("peer push revalidation: loading baseline: %w", err)
+					}
+					// Treat every planned push path as type-sensitive during this
+					// inventory, including baseline-unknown creates that became links.
+					for _, rel := range plan.Push {
+						if _, ok := baseline[rel]; !ok {
+							baseline[rel] = syncer.Fingerprint{}
+						}
+					}
+					remoteNow, err := peerRemoteInventory(ctx, probe, cfg, baseline)
+					if err != nil {
+						return err
+					}
+					if err := syncer.ValidatePeerPushRemoteStable(plan, remoteNow); err != nil {
+						return err
+					}
+				}
 				p.Section("push to peer")
 				pushErr := syncer.PushPeerPlan(ctx, runner, cfg, plan, conflict, dryRun)
 				if err := reportPartial(p, pushErr); err != nil {
@@ -950,7 +951,7 @@ on a laptop.`,
 				}
 			}
 			if complete && !dryRun && !pushOnly && !pullOnly && canCommitBaseline {
-				if err := syncer.CommitPeerBaseline(cfg); err != nil {
+				if err := syncer.CommitPeerBaseline(cfg, plan.NextBaseline); err != nil {
 					return err
 				}
 			}

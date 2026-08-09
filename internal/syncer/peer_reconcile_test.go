@@ -139,6 +139,71 @@ func TestValidatePeerPlanSafetyRefusesEmptyOrMassDeletingPeer(t *testing.T) {
 	}
 }
 
+func TestPlanPeerReconcileCountsOnlyObservableBaselinePayloads(t *testing.T) {
+	base := map[string]Fingerprint{
+		"visible.txt": peerTestFP(1, "visible"),
+		"retired.txt": peerTestFP(1, "retired"),
+	}
+	local := PeerSnapshot{"visible.txt": peerTestFile(1, "visible")}
+	plan, err := PlanPeerReconcile(base, local, PeerSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.BaselineCount != 1 {
+		t.Fatalf("BaselineCount = %d, want only the observable key", plan.BaselineCount)
+	}
+}
+
+func TestValidatePeerPushRemoteStableRefusesLateUnquarantinedEdit(t *testing.T) {
+	plan := &PeerPlan{
+		Push:             []string{"ordinary.txt", "conflict.txt", "new.txt"},
+		RemoteBefore:     PeerSnapshot{"ordinary.txt": peerTestFile(1, "old"), "conflict.txt": peerTestFile(1, "old-conflict")},
+		QuarantineRemote: []string{"conflict.txt"},
+	}
+	stable := PeerSnapshot{"ordinary.txt": peerTestFile(1, "old"), "conflict.txt": peerTestFile(1, "new-conflict")}
+	if err := ValidatePeerPushRemoteStable(plan, stable); err != nil {
+		t.Fatalf("stable ordinary path rejected (quarantined drift is safe): %v", err)
+	}
+	lateEdit := clonePeerSnapshot(stable)
+	lateEdit["ordinary.txt"] = peerTestFile(2, "late")
+	if err := ValidatePeerPushRemoteStable(plan, lateEdit); err == nil || !strings.Contains(err.Error(), "changed after planning") {
+		t.Fatalf("late ordinary edit error = %v", err)
+	}
+	lateCreate := clonePeerSnapshot(stable)
+	lateCreate["new.txt"] = peerTestFile(1, "late-create")
+	if err := ValidatePeerPushRemoteStable(plan, lateCreate); err == nil || !strings.Contains(err.Error(), "changed after planning") {
+		t.Fatalf("late remote create error = %v", err)
+	}
+}
+
+func TestCommitPeerBaselinePersistsProvenSnapshotNotLiveDrift(t *testing.T) {
+	root := t.TempDir()
+	paths := ResolveLocalPathsForProfile(root, PeerProfile)
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{
+		Profile:    PeerProfile,
+		LocalPath:  root + "/",
+		LocalPaths: paths,
+		Target:     Target{Kind: TargetSSH, Host: "peer", Path: root},
+	}
+	proven := peerTestFP(3, "planned")
+	if err := os.WriteFile(filepath.Join(root, "doc.txt"), []byte("late local edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitPeerBaseline(cfg, PeerSnapshot{"doc.txt": {Present: true, FP: proven}}); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := LoadBaselineManifest(paths.BaselineFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := baseline["doc.txt"]; got.Sha != proven.Sha || got.Size != proven.Size {
+		t.Fatalf("baseline = %+v, want proven plan fingerprint %+v", got, proven)
+	}
+}
+
 func TestPlanPeerReconcile_CoordinatorWinsAndQuarantinesRemoteOnce(t *testing.T) {
 	base := map[string]Fingerprint{"shared.txt": peerTestFP(4, "baseline")}
 	local := PeerSnapshot{"shared.txt": peerTestFile(4, "coordinator")}

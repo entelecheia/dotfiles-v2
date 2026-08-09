@@ -49,6 +49,7 @@ type PeerPlan struct {
 	QuarantineRemote []string
 	Conflicts        []PeerConflict
 	NextBaseline     PeerSnapshot
+	RemoteBefore     PeerSnapshot
 	BaselineCount    int
 	LocalCount       int
 	RemoteCount      int
@@ -69,10 +70,10 @@ func (p *PeerPlan) HasConflicts() bool {
 // coordinator, including remote-only deletes.
 func PlanPeerReconcile(baseline map[string]Fingerprint, local, remote PeerSnapshot) (*PeerPlan, error) {
 	plan := &PeerPlan{
-		NextBaseline:  PeerSnapshot{},
-		BaselineCount: len(baseline),
-		LocalCount:    len(local),
-		RemoteCount:   len(remote),
+		NextBaseline: PeerSnapshot{},
+		RemoteBefore: clonePeerSnapshot(remote),
+		LocalCount:   len(local),
+		RemoteCount:  len(remote),
 	}
 	keys := make(map[string]struct{}, len(baseline)+len(local)+len(remote))
 	for rel := range baseline {
@@ -98,6 +99,12 @@ func PlanPeerReconcile(baseline map[string]Fingerprint, local, remote PeerSnapsh
 		base, baseOK := baseline[rel]
 		l, lOK := local[rel]
 		r, rOK := remote[rel]
+		// Baseline keys filtered out on both sides are no longer observable
+		// payloads. Excluding them from this denominator prevents retired cache
+		// or policy entries from masking a real reset/mass-delete signature.
+		if baseOK && (peerPresent(l, lOK) || peerPresent(r, rOK)) {
+			plan.BaselineCount++
+		}
 		localChanged := !peerMatchesBaseline(l, lOK, base, baseOK)
 		remoteChanged := !peerMatchesBaseline(r, rOK, base, baseOK)
 
@@ -157,6 +164,16 @@ func PlanPeerReconcile(baseline map[string]Fingerprint, local, remote PeerSnapsh
 	return plan, nil
 }
 
+func clonePeerSnapshot(in PeerSnapshot) PeerSnapshot {
+	out := make(PeerSnapshot, len(in))
+	for rel, file := range in {
+		out[rel] = file
+	}
+	return out
+}
+
+func peerPresent(file PeerFile, ok bool) bool { return ok && file.Present }
+
 // ValidatePeerPlanSafety caps destructive transitions in both directions and
 // refuses the characteristic signature of an empty/reset peer. The existing
 // outgoing tombstone cap alone cannot protect the coordinator from accepting
@@ -185,6 +202,31 @@ func ValidatePeerPlanSafety(cfg *Config, plan *PeerPlan) error {
 	}
 	if cfg.MaxDelete > 0 && len(plan.DeleteRemote) > cfg.MaxDelete {
 		return fmt.Errorf("peer plan safety: refusing %d outbound deletion(s): over max_delete=%d", len(plan.DeleteRemote), cfg.MaxDelete)
+	}
+	return nil
+}
+
+// ValidatePeerPushRemoteStable prevents a stale plan from overwriting an edit
+// made on the peer after its first inventory. Conflict paths are excluded: the
+// dedicated backup-enabled pass intentionally preserves their latest remote
+// payload before the coordinator copy wins.
+func ValidatePeerPushRemoteStable(plan *PeerPlan, current PeerSnapshot) error {
+	if plan == nil {
+		return fmt.Errorf("peer push revalidation: missing plan")
+	}
+	quarantine := make(map[string]bool, len(plan.QuarantineRemote))
+	for _, rel := range plan.QuarantineRemote {
+		quarantine[rel] = true
+	}
+	for _, rel := range plan.Push {
+		if quarantine[rel] {
+			continue
+		}
+		before, beforeOK := plan.RemoteBefore[rel]
+		now, nowOK := current[rel]
+		if !peerFilesEqual(before, beforeOK, now, nowOK) {
+			return fmt.Errorf("peer push revalidation: remote path %q changed after planning; refusing backup-free overwrite", rel)
+		}
 	}
 	return nil
 }
@@ -411,19 +453,22 @@ func isPeerVolatileRel(rel string) bool {
 // push, so callers can fail closed before applying deletes.
 func PeerBaselineReady(cfg *Config) (bool, error) { return peerBaselineMatchesTarget(cfg) }
 
-// CommitPeerBaseline records the coordinator's final filtered local payload
-// and target provenance. Call only after every transfer in the peer
-// transaction completed without a partial or fatal error.
-func CommitPeerBaseline(cfg *Config) error {
+// CommitPeerBaseline records the plan's proven converged snapshot and target
+// provenance. It deliberately does not re-scan the live local tree: an edit
+// made after its transfer must remain a change against this baseline on the
+// next run, rather than being recorded as if it reached the peer.
+func CommitPeerBaseline(cfg *Config, snapshot PeerSnapshot) error {
 	if cfg == nil || cfg.Profile != PeerProfile || !cfg.Target.IsSSH() {
 		return fmt.Errorf("commit peer baseline: requires SSH peer profile")
 	}
-	inventory, err := InventoryPeer(cfg)
-	if err != nil {
-		return err
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("commit peer baseline: local paths unresolved")
 	}
-	entries := make(map[string]Fingerprint, len(inventory))
-	for rel, f := range inventory {
+	entries := make(map[string]Fingerprint, len(snapshot))
+	for rel, f := range snapshot {
+		if err := validateTombstoneRel(rel); err != nil {
+			return fmt.Errorf("commit peer baseline: %w", err)
+		}
 		if f.Present {
 			entries[rel] = f.FP
 		}

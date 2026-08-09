@@ -82,3 +82,16 @@ func TestValidateRemotePeerStatusRequiresSameCoordinatorAndPair(t *testing.T) {
 		}
 	}
 }
+
+func TestRemotePeerCommandsResolveLocalAndHomebrewInstalls(t *testing.T) {
+	for _, want := range []string{
+		`$HOME/.local/bin/dot`,
+		`/opt/homebrew/bin/dot`,
+		`/usr/local/bin/dot`,
+		`command -v dot`,
+	} {
+		if !strings.Contains(remotePeerStatusCommand, want) || !strings.Contains(remotePeerNormalizeCommand, want) {
+			t.Fatalf("remote dot resolver missing %q", want)
+		}
+	}
+}
