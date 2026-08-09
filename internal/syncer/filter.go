@@ -229,6 +229,26 @@ func (p excludePattern) matches(rel string, isDir bool) bool {
 	if dirOnly && !isDir {
 		return false
 	}
+	// rsync treats a leading **/ as "at any depth", including the root.
+	// filepath.Match does not: on Go, ** has the same slash-boundary behavior
+	// as *, so an allow such as **/.env.* never matches sites/app/.env.local.
+	// Test the pattern tail against every component-aligned suffix to mirror
+	// rsync before the ordinary filepath.Match cases below.
+	if strings.HasPrefix(raw, "**/") {
+		tail := strings.TrimPrefix(raw, "**/")
+		candidate := subRel
+		for tail != "" {
+			if ok, _ := filepath.Match(tail, candidate); ok {
+				return true
+			}
+			slash := strings.IndexByte(candidate, '/')
+			if slash < 0 {
+				break
+			}
+			candidate = candidate[slash+1:]
+		}
+		return false
+	}
 	if strings.HasSuffix(raw, "/**") {
 		prefix := strings.TrimSuffix(raw, "/**")
 		return subRel == prefix || strings.HasPrefix(subRel, prefix+"/")

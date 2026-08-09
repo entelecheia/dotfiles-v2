@@ -443,8 +443,12 @@ func isPeerVolatileRel(rel string) bool {
 			return true
 		}
 	}
+	deskOutput := strings.TrimPrefix(rel, ".maru/desk-pipeline/")
+	isDeskOutput := deskOutput != rel && !strings.Contains(deskOutput, "/") && strings.HasSuffix(deskOutput, ".out")
 	return rel == ".maru/cache" || strings.HasPrefix(rel, ".maru/cache/") ||
 		rel == ".maru/desk-pipeline/logs" || strings.HasPrefix(rel, ".maru/desk-pipeline/logs/") ||
+		isDeskOutput ||
+		rel == ".maru/runs" || strings.HasPrefix(rel, ".maru/runs/") ||
 		rel == "scratchpad/temp" || strings.HasPrefix(rel, "scratchpad/temp/")
 }
 

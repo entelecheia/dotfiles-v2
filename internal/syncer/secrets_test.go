@@ -97,6 +97,28 @@ func TestSyncFilter_SecretsDenyByDefaultAndAllowOptIn(t *testing.T) {
 	}
 }
 
+func TestSyncFilter_DoubleStarSecretAllowMatchesAtAnyDepth(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.FilterMode = FilterModeExclude
+	cfg.AllowPatterns = []string{"**/.env", "**/.env.*"}
+
+	f, err := newSyncFilter(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{
+		".env",
+		".env.local",
+		"sites/ax/.env",
+		"sites/ax/.env.local",
+		"sites/ax/.vercel/.env.production.local",
+	} {
+		if f.shouldSkipFileOrAncestor(rel) {
+			t.Errorf("double-star allowed secret %q was skipped", rel)
+		}
+	}
+}
+
 func TestSyncFilter_SubmodulesAlwaysSkipped(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.FilterMode = FilterModeExclude

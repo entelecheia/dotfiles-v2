@@ -269,6 +269,9 @@ func TestPeerNormalArgs_NoRoutineBackupsAndVolatileLayer(t *testing.T) {
 			"--exclude=/.maru/cache/",
 			"--exclude=/.maru/desk-pipeline/logs",
 			"--exclude=/.maru/desk-pipeline/logs/",
+			"--exclude=/.maru/desk-pipeline/*.out",
+			"--exclude=/.maru/runs",
+			"--exclude=/.maru/runs/",
 			"--exclude=test-results",
 			"--exclude=test-results/",
 			"--exclude=playwright-report",
@@ -373,16 +376,19 @@ func TestInventoryPeer_DeniesVolatileButKeepsGraphifyOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	for rel := range map[string]bool{
-		".cache/a.bin":                     true,
-		".maru/cache/a.bin":                true,
-		".maru/desk-pipeline/logs/run.log": true,
-		"test-results/result.txt":          true,
-		"playwright-report/index.html":     true,
-		".astro/types.d.ts":                true,
-		"build/app.tsbuildinfo":            true,
-		"scratchpad/temp/session.log":      true,
-		"docs/.metadata_never_index":       true,
-		"analysis/graphify-out/graph.json": true,
+		".cache/a.bin":                        true,
+		".maru/cache/a.bin":                   true,
+		".maru/desk-pipeline/logs/run.log":    true,
+		".maru/desk-pipeline/run.out":         true,
+		".maru/desk-pipeline/candidates.json": true,
+		".maru/runs/skills/run/events.jsonl":  true,
+		"test-results/result.txt":             true,
+		"playwright-report/index.html":        true,
+		".astro/types.d.ts":                   true,
+		"build/app.tsbuildinfo":               true,
+		"scratchpad/temp/session.log":         true,
+		"docs/.metadata_never_index":          true,
+		"analysis/graphify-out/graph.json":    true,
 	} {
 		path := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -409,6 +415,9 @@ func TestInventoryPeer_DeniesVolatileButKeepsGraphifyOut(t *testing.T) {
 	}
 	if _, ok := got["analysis/graphify-out/graph.json"]; !ok {
 		t.Errorf("graphify-out was denied: %v", got)
+	}
+	if _, ok := got[".maru/desk-pipeline/candidates.json"]; !ok {
+		t.Errorf("desk-pipeline candidates were denied: %v", got)
 	}
 	for rel := range got {
 		if IsPeerVolatile(rel) {
