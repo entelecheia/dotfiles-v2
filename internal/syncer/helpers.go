@@ -79,9 +79,10 @@ func ResolvePathsForHome(home string) (*Paths, error) {
 }
 
 // ResolvePathsForProfile builds the artifact layout for one sync profile.
-// The lock and the launchd unit must be per-profile: a shared lock would make
-// a peer sync block a mirror push for no reason, and a shared unit would mean
-// installing one scheduler uninstalls the other.
+// Scheduler units are per-profile, but the peer profile deliberately shares
+// the default lock: peer and cloud runs can both mutate the same workspace
+// tree, so they must never overlap. Other custom profiles keep independent
+// locks.
 //
 // The default profile is unchanged by construction - "sync.lock" and
 // "com.dotfiles.sync.plist" are exactly what the templated names produce when
@@ -109,7 +110,9 @@ func withProfile(p *Paths, profile string) *Paths {
 		return p
 	}
 	out := *p
-	out.LockDir = filepath.Join(filepath.Dir(p.LockDir), prof+".lock")
+	if prof != PeerProfile {
+		out.LockDir = filepath.Join(filepath.Dir(p.LockDir), prof+".lock")
+	}
 	out.LaunchdPlist = filepath.Join(filepath.Dir(p.LaunchdPlist), "com.dotfiles."+prof+".plist")
 	out.SystemdService = filepath.Join(filepath.Dir(p.SystemdService), "dotfiles-"+prof+".service")
 	out.SystemdTimer = filepath.Join(filepath.Dir(p.SystemdTimer), "dotfiles-"+prof+".timer")

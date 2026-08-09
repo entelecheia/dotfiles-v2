@@ -503,9 +503,31 @@ dot sync status                           # target, filters, secrets allows, sch
 dot sync status --json                    # stable schemaVersion=1 status API
 dot sync log --tail=200 --json            # bounded machine-readable log tail
 dot sync conflicts / conflicts prune      # inspect / prune .sync-conflicts backups
+dot sync conflicts prune --profile=peer --all --remote-only
+                                          # remove peer stores, preserve local backups
+dot sync names normalize --profile=peer --dry-run
+dot sync names normalize --profile=peer --yes
+                                          # one-time NFD migration; enables auto-normalize
 dot sync pause / resume                   # paused gate for all operations
 dot sync shared                           # manual shared-folder exclusions
 ```
+
+**Filename normalization.** macOS commonly stores filenames in decomposed
+Unicode (NFD), while downloads can continuously introduce precomposed NFC
+names. Run `dot sync names normalize --profile=peer --dry-run` and then
+`--yes` once for the broad peer payload. The command preflights the complete
+rename set, refuses invalid UTF-8, symlinks, or canonical collisions, applies
+deepest paths first through sibling temporary names, and rolls back completed
+moves if an operation fails. The successful migration writes the excluded
+workspace marker `.dotfiles/nfd-normalized`. From then on, every real cloud or
+peer workspace push automatically renames newly arrived selected NFC path
+components to NFD before planning, tombstones, baselines, or rsync filters are
+built. A peer run invokes the same released `dot` binary on the receiving Mac
+to normalize its selected names before remote inventory, then rejects any
+remaining non-NFD payload path. This prevents a pull from reintroducing NFC
+spellings. Before that marker exists, a push that discovers a selected non-NFD
+name refuses and prints the migration command; it does not silently transmit
+or rename the path. `--dry-run` never renames or writes the marker.
 
 **SSH targets** push and pull with the same union filters but without plan
 previews or intake (the remote tree is not walkable): push is direct rsync
@@ -590,9 +612,11 @@ Files in baseline that are missing from mirror become tombstones — recorded in
 > Automatic sync is disabled by default. Scheduler units are `com.dotfiles.sync` (push) and `com.dotfiles.sync-intake` (pull) on macOS, `dotfiles-sync.*` / `dotfiles-sync-intake.*` on Linux.
 
 **Profiles.** `--profile=<name>` selects an independent store under
-`<workspace>/.dotfiles/<name>/` - its own target, filter files, baseline, lock
-and scheduler unit. The default profile is `sync` (the cloud mirror) and behaves
-exactly as before. A non-default profile is machine-local: the managed
+`<workspace>/.dotfiles/<name>/` - its own target, filter files, baseline, and
+scheduler unit. The peer profile deliberately shares the default workspace
+lock so cloud and peer jobs cannot mutate the same tree concurrently; other
+custom profiles keep separate locks. The default profile is `sync` (the cloud
+mirror) and behaves exactly as before. A non-default profile is machine-local: the managed
 `.gitignore` block ignores `/.dotfiles/*` and whitelists only `sync/`, so its
 baseline never enters Git. That matters because two machines writing one shared
 baseline would produce merge conflicts in the very file that coordinates them.
@@ -618,7 +642,7 @@ questions:
 | | `dot sync` | `dot peer` |
 |---|---|---|
 | direction | workspace to cloud mirror | both ways with another machine |
-| writers | exactly one | both |
+| writers | exactly one | changes originate on both; one configured coordinator reconciles |
 | secrets | excluded | included (own `allow.txt`) |
 | submodule working trees | excluded (they travel via Git) | included |
 | deletes | propagated if configured | baseline-recorded paths quarantined on the peer (enabled by `peer init`) |
@@ -636,9 +660,14 @@ and `peer init` sets `max_delete: 100` for new profiles. Set
 version on both machines before enabling the scheduler; an older peer does not
 understand tombstones and can send a retained copy back. Deletion propagation
 applies to the workspace pass only; the explicit host-path pass remains
-additive. After an upgrade or peer-target change, the first successful full
-create/update push establishes a target-bound baseline; deletion starts on a
-later run. Run peer transfers and scheduling through `dot peer`; generic
+additive. The coordinator compares local and remote inventories with the last
+target-bound baseline. One-sided edits and deletes flow in their originating
+direction. For simultaneous differences the coordinator copy wins, the losing
+peer payload is quarantined once when it exists, and the decision is appended
+to the machine-local `peer-conflicts.log`. Unknown peer-created paths are pulled
+and are never treated as deletions. After an upgrade or peer-target change, the
+first successful full additive transaction establishes a target-bound baseline;
+deletion starts on a later run. Run peer transfers and scheduling through `dot peer`; generic
 `dot sync push/pull/setup --profile=peer` is refused because it bypasses the
 tombstone transaction.
 
@@ -675,24 +704,35 @@ it continuously, and its MCP server definitions hash-key the Keychain-stored
 MCP OAuth credentials - copying a peer's copy orphans them; the exclusion is
 enforced in code, so a `home-paths.txt` seeded before this entry was removed
 stays safe). Keychain-backed tokens cannot be moved by any file copy at
-all, and cannot even be verified over SSH.
+all, and cannot even be verified over SSH. This pass uses newer-wins updates
+without routine backups; it has no home-path baseline, so simultaneous edits
+there are not given workspace-style conflict quarantine.
 
-**Conflicts.** Every overwrite is quarantined, so a path edited on both machines
-keeps both versions. When timestamps do not order cleanly rsync skips it in both
-directions - nothing is lost, but the machines quietly stop agreeing, which is
-what `dot peer diff` surfaces.
+**Conflicts.** Routine one-sided creates and updates transfer without backups,
+so normal churn does not create timestamp directories. Only a baseline-proven
+simultaneous conflict or propagated deletion enables a scoped backup. For an
+edit/edit conflict, the peer's losing payload is saved once under
+`.sync-conflicts/<timestamp>/`; edit/delete decisions without two payloads are
+still retained in `.dotfiles/peer/peer-conflicts.log`. `dot peer diff` uses the
+same three-way plan as the next sync.
 
-If the peer's edit exists when the delete pass runs, local delete wins and the
-edited copy moves into `.sync-conflicts/` rather than being pulled back. A peer
-recreation after that pass can return on a later cycle because there is no
-distributed lock; avoid overlapping manual/scheduled peer runs and review
-conflicts before pruning them.
+If the peer's edit exists when the delete pass runs, the coordinator's delete
+wins and the edited copy moves into `.sync-conflicts/` rather than being pulled
+back. Partial transfers fail the transaction and never advance the baseline.
+The peer profile shares the cloud-sync workspace lock, and owner checks refuse
+both sync and scheduler installation on a non-coordinator. The check is
+bilateral: both peer profiles must name the same coordinator and point back to
+the expected workspace pair. Two independently initialized Macs that each name
+themselves are both refused until the remote profile owner is changed with
+`dot sync owner --profile=peer --set <coordinator>`. Keep only the coordinator's
+scheduler enabled and review conflicts before pruning them.
 
 **Offline peers.** An unreachable peer exits 0. That is what makes the scheduled
 job safe on a laptop that comes and goes.
 
-> Scheduler unit is `com.dotfiles.peer`. Peer sync takes its own lock, so a
-> scheduled run and a manual one cannot overlap.
+> Scheduler unit is `com.dotfiles.peer`. It remains distinct from the cloud
+> scheduler, but both jobs share the workspace lock. Only the profile owner may
+> install or run the peer scheduler.
 
 ### `dot version`
 

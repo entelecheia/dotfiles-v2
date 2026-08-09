@@ -577,6 +577,14 @@ func TestRemoteQuarantineCommand_RejectsSymlinkAndQuotesPaths(t *testing.T) {
 	}
 }
 
+func TestRemoteQuarantineCommandRejectsBroadWorkspaceRoots(t *testing.T) {
+	for _, root := range []string{"", "/", "~", "~/../work", "/tmp/../work", "bad\nroot"} {
+		if _, err := remoteQuarantineCommand(root, "TS", true); err == nil {
+			t.Errorf("accepted unsafe remote workspace root %q", root)
+		}
+	}
+}
+
 func TestPropagateDeletes_DoesNotSwallowPartialTransfer(t *testing.T) {
 	fakeBin := t.TempDir()
 	fakeRsync := filepath.Join(fakeBin, "rsync")

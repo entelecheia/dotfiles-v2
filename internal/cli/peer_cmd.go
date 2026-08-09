@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -110,8 +111,9 @@ questions:
              uncommitted work inside a submodule is exactly what Git has
              not seen and what a second machine still needs.
 
-Nothing is ever unlinked. Every overwrite is quarantined under
-.sync-conflicts/, so a file edited on both machines keeps both versions.
+Routine one-sided changes transfer directly. A path changed differently on
+both machines is resolved by the configured coordinator, and the losing peer
+payload is quarantined once under .sync-conflicts/ when it exists.
 
 With propagation.delete on, a file removed here is removed on the peer too,
 into that same quarantine, and "dot sync conflicts prune" expires it later.
@@ -314,89 +316,295 @@ func newPeerDiffCmd() *cobra.Command {
 				return err
 			}
 			cfg.RemoteRsyncPath = rp
+			release, err := syncer.AcquireLock(cfg.LockDir)
+			if err != nil {
+				return fmt.Errorf("another sync is already running: %w", err)
+			}
+			defer release()
 
-			outgoing, err := peerPendingPaths(ctx, probe, cfg, true)
+			plan, err := peerPlanForRun(ctx, probe, cfg)
 			if err != nil {
 				return err
 			}
-			incoming, err := peerPendingPaths(ctx, probe, cfg, false)
-			if err != nil {
+			if err := syncer.ValidatePeerPlanSafety(cfg, plan); err != nil {
 				return err
 			}
-
-			var both []string
-			for path := range outgoing {
-				if incoming[path] {
-					both = append(both, path)
-				}
-			}
-			sort.Strings(both)
 
 			p.Section("peer divergence")
-			p.KV("would send", strconv.Itoa(len(outgoing)))
-			p.KV("would receive", strconv.Itoa(len(incoming)))
-			if len(both) == 0 {
+			p.KV("would send", strconv.Itoa(len(plan.Push)+len(plan.DeleteRemote)))
+			p.KV("would receive", strconv.Itoa(len(plan.Pull)+len(plan.DeleteLocal)))
+			if !plan.HasConflicts() {
 				p.Success("no path is contested")
 				return nil
 			}
-			p.Warn("%d path(s) changed on BOTH machines:", len(both))
-			for i, path := range both {
+			p.Warn("%d path(s) changed on BOTH machines:", len(plan.Conflicts))
+			for i, conflict := range plan.Conflicts {
 				if i >= 40 {
-					p.Line("  ... and %d more", len(both)-i)
+					p.Line("  ... and %d more", len(plan.Conflicts)-i)
 					break
 				}
-				p.Line("  %s", path)
+				p.Line("  %s", conflict.RelPath)
 			}
 			p.Blank()
-			p.Line("Each machine currently keeps its own version. Reconcile by hand, or")
-			p.Line("force one direction for a specific path:")
-			p.Line("  dot sync fetch --profile=%s <path>   # take the peer's copy", PeerProfile)
+			p.Line("The profile owner is the coordinator; its version wins on the next peer sync.")
+			p.Line("The losing peer payload is quarantined once under .sync-conflicts/.")
 			return nil
 		},
 	}
 }
 
-// peerPendingPaths lists what one direction would transfer, using a
-// metadata-only dry run. --update is deliberately omitted: the question is
-// "does this side have something different", not "is it newer".
-func peerPendingPaths(ctx context.Context, runner *exec.Runner, cfg *syncer.Config, outgoing bool) (map[string]bool, error) {
-	// A distinctive prefix so rsync's own messages ("skipping non-regular
-	// file ...", warnings, the stats block) cannot be mistaken for paths. The
-	// runner returns combined output, so filtering by prefix is the only
-	// reliable way to read a file list back out.
-	args := []string{"-a", "--no-links", "--dry-run", "--out-format=@@%n",
-		"--exclude=/.dotfiles/", "--exclude=/inbox/gdrive/", "--exclude=.git",
-		"--exclude-from=" + cfg.ExcludesFile,
-		"--exclude-from=" + cfg.IgnoreFile,
+// peerPlanForRun builds the coordinator plan from one local inventory, one
+// read-only remote inventory, and the last committed common baseline. The
+// same helper is used by `peer sync` and `peer diff`; a displayed divergence
+// therefore cannot disagree with the transaction that follows it.
+func peerPlanForRun(ctx context.Context, runner *exec.Runner, cfg *syncer.Config) (*syncer.PeerPlan, error) {
+	if cfg == nil || cfg.LocalPaths == nil {
+		return nil, fmt.Errorf("peer plan: local paths unresolved")
 	}
-	if cfg.RemoteRsyncPath != "" {
-		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
-	}
-	args = append(args, "-e", "ssh")
-	if outgoing {
-		args = append(args, cfg.LocalPath, cfg.Target.RsyncDest())
-	} else {
-		args = append(args, cfg.Target.RsyncDest(), cfg.LocalPath)
-	}
-	res, err := runner.Run(ctx, "rsync", args...)
+	baseline, err := syncer.LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
 	if err != nil {
-		if !syncer.IsPartialTransfer(err) {
+		return nil, fmt.Errorf("peer plan: loading baseline: %w", err)
+	}
+	if err := syncer.ValidatePeerBaselineLocalTypes(cfg, baseline); err != nil {
+		return nil, err
+	}
+	if err := syncer.PreparePeerPlanFilters(cfg); err != nil {
+		return nil, fmt.Errorf("peer plan: preparing filters: %w", err)
+	}
+	local, err := syncer.InventoryPeer(cfg)
+	if err != nil {
+		return nil, err
+	}
+	remote, err := peerRemoteInventory(ctx, runner, cfg, baseline)
+	if err != nil {
+		return nil, err
+	}
+	return syncer.PlanPeerReconcile(baseline, local, remote)
+}
+
+// peerRemoteInventory uses an empty dry-run destination as a portable remote
+// listing. `rsync --list-only` ignores --out-format on Apple's rsync, while a
+// dry-run against an empty destination emits every remote file through the
+// same rsync implementation used by the real transfer. No remote state is
+// changed and paths omitted from the listing are unambiguously absent.
+func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *syncer.Config, baseline map[string]syncer.Fingerprint) (syncer.PeerSnapshot, error) {
+	if cfg == nil || !cfg.Target.IsSSH() {
+		return nil, fmt.Errorf("peer inventory: target is not SSH")
+	}
+	root, err := os.MkdirTemp("", "dot-peer-inventory-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(root)
+
+	args := []string{"-r", "--dry-run", "--no-links", "--out-format=@@%l\t%M\t%n"}
+	args = append(args, syncer.PeerFilterArgs(cfg)...)
+	remoteRsync := cfg.RemoteRsyncPath
+	if remoteRsync == "" {
+		remoteRsync = "rsync"
+	}
+	// Force both rsync processes to render %M in UTC. A fixed offset obtained
+	// from `date +%z` is wrong for historical timestamps across DST changes.
+	args = append(args, "--rsync-path=env TZ=UTC "+remoteRsync)
+	args = append(args, "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", cfg.Target.RsyncDest(), root+"/")
+	res, runErr := runner.Run(ctx, "env", append([]string{"TZ=UTC", "rsync"}, args...)...)
+	if runErr != nil {
+		return nil, fmt.Errorf("peer inventory: %w", runErr)
+	}
+	requireNFD := syncer.NFDMigrationMarked(cfg.LocalPaths.WorkspaceRoot)
+	return parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
+}
+
+const remotePeerDotResolver = `set -eu
+dot_bin=
+for candidate in "$HOME/.local/bin/dot" /opt/homebrew/bin/dot /usr/local/bin/dot /home/linuxbrew/.linuxbrew/bin/dot; do
+  if [ -x "$candidate" ]; then
+    dot_bin=$candidate
+    break
+  fi
+done
+if [ -z "$dot_bin" ]; then
+  dot_bin=$(command -v dot 2>/dev/null || true)
+fi
+if [ -z "$dot_bin" ] || [ ! -x "$dot_bin" ]; then
+  echo "peer dot binary is missing from supported install locations" >&2
+  exit 127
+fi`
+
+const remotePeerStatusCommand = remotePeerDotResolver + `
+exec "$dot_bin" peer status --json`
+
+const remotePeerNormalizeCommand = remotePeerDotResolver + `
+exec "$dot_bin" sync names normalize --profile=peer --yes`
+
+// checkRemotePeerOwner makes the single-coordinator invariant bilateral. A
+// local owner guard alone is insufficient: two independently initialized Macs
+// can each name themselves and both scheduled jobs would pass their own guard.
+func checkRemotePeerOwner(ctx context.Context, runner *exec.Runner, cfg *syncer.Config) error {
+	if cfg == nil || !cfg.Target.IsSSH() {
+		return fmt.Errorf("peer coordinator check: target is not SSH")
+	}
+	if strings.TrimSpace(cfg.Owner) == "" {
+		return fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+	}
+	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand)
+	if err != nil {
+		return fmt.Errorf("peer coordinator check: reading remote peer status: %w", err)
+	}
+	return validateRemotePeerStatus(cfg, res.Stdout)
+}
+
+func validateRemotePeerStatus(cfg *syncer.Config, raw string) error {
+	var status peerStatusJSON
+	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+		return fmt.Errorf("peer coordinator check: invalid remote status JSON: %w", err)
+	}
+	if status.SchemaVersion != peerStatusSchemaVersion || status.Kind != "peer" || !status.Profile.Configured {
+		return fmt.Errorf("peer coordinator check: remote peer profile is not configured with the supported schema")
+	}
+	wantOwner := syncer.NormalizeHostname(cfg.Owner)
+	gotOwner := syncer.NormalizeHostname(status.Profile.Owner)
+	if wantOwner == "" || gotOwner != wantOwner {
+		return fmt.Errorf(
+			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
+			cfg.Owner, status.Profile.Owner, cfg.Owner)
+	}
+	remoteWorkspace := filepath.Clean(status.Profile.WorkspacePath)
+	wantRemoteWorkspace := filepath.Clean(cfg.Target.Path)
+	remoteTarget := filepath.Clean(status.Profile.Target.Path)
+	wantRemoteTarget := filepath.Clean(strings.TrimRight(cfg.LocalPath, "/"))
+	if remoteWorkspace != wantRemoteWorkspace || remoteTarget != wantRemoteTarget {
+		return fmt.Errorf(
+			"peer coordinator check: remote profile does not point back to this workspace (remote workspace %q target %q; expected %q -> %q)",
+			status.Profile.WorkspacePath, status.Profile.Target.Path, wantRemoteWorkspace, wantRemoteTarget)
+	}
+	return nil
+}
+
+func normalizeRemotePeerNames(ctx context.Context, runner *exec.Runner, cfg *syncer.Config) error {
+	if _, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerNormalizeCommand); err != nil {
+		return fmt.Errorf("normalizing peer workspace names: %w", err)
+	}
+	return nil
+}
+
+func parsePeerRemoteInventory(stdout string, remoteLoc *time.Location, baseline map[string]syncer.Fingerprint, requireNFD bool) (syncer.PeerSnapshot, error) {
+	out := syncer.PeerSnapshot{}
+	for _, raw := range strings.Split(stdout, "\n") {
+		if raw == "" {
+			continue
+		}
+		if !strings.HasPrefix(raw, "@@") {
+			const skippedPrefix = "skipping non-regular file "
+			if strings.HasPrefix(raw, skippedPrefix) {
+				skipped, err := strconv.Unquote(strings.TrimPrefix(raw, skippedPrefix))
+				if err != nil {
+					return nil, fmt.Errorf("peer inventory: malformed non-regular warning %q", raw)
+				}
+				rel, err := cleanPeerInventoryRel(skipped, false)
+				if err != nil {
+					return nil, err
+				}
+				if _, tracked := baseline[rel]; tracked {
+					return nil, fmt.Errorf("peer inventory: baseline path %q is non-regular on the peer", rel)
+				}
+				// Unknown symlinks and sockets were never payloads. --no-links
+				// deliberately omits them, so they cannot be edits or deletions.
+				continue
+			}
+			// Stdout is reserved for the machine-readable --out-format. Treat a
+			// continuation from a newline-bearing filename, or any other surprise,
+			// as an incomplete inventory and fail closed.
+			return nil, fmt.Errorf("peer inventory: unexpected rsync output %q", raw)
+		}
+		parts := strings.SplitN(strings.TrimPrefix(raw, "@@"), "\t", 3)
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("peer inventory: malformed rsync record %q", raw)
+		}
+		rawRel := parts[2]
+		isDir := strings.HasSuffix(rawRel, "/")
+		rel, err := cleanPeerInventoryRel(rawRel, isDir)
+		if err != nil {
 			return nil, err
 		}
-	}
-	out := map[string]bool{}
-	for _, line := range strings.Split(res.Stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "@@") {
+		if requireNFD && rel != "" && !syncer.NFDPathNormalized(rel) {
+			return nil, fmt.Errorf("peer inventory: path %q is not NFD-normalized; normalize the peer before retrying", rel)
+		}
+		// The dry-run listing includes directory traversal records. Inventory is
+		// file-only, so skip them before trimming the rsync directory marker.
+		// Keeping this check before TrimSuffix is important: treating a directory
+		// as a zero-byte file would manufacture a peer change for every subtree.
+		if isDir || rel == "" {
 			continue
 		}
-		line = strings.TrimPrefix(line, "@@")
-		if line == "" || strings.HasSuffix(line, "/") {
-			continue
+		size, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("peer inventory: malformed size %q: %w", parts[0], err)
 		}
-		out[line] = true
+		if size < 0 {
+			return nil, fmt.Errorf("peer inventory: malformed negative size %q", parts[0])
+		}
+		mtime, err := parsePeerRsyncTime(parts[1], remoteLoc)
+		if err != nil {
+			return nil, fmt.Errorf("peer inventory: malformed mtime for %q: %w", rel, err)
+		}
+		if _, duplicate := out[rel]; duplicate {
+			return nil, fmt.Errorf("peer inventory: duplicate path %q", rel)
+		}
+		out[filepath.ToSlash(rel)] = syncer.PeerFile{
+			Present: true,
+			FP:      syncer.Fingerprint{Size: size, Mtime: mtime},
+		}
 	}
 	return out, nil
+}
+
+func cleanPeerInventoryRel(raw string, isDir bool) (string, error) {
+	if strings.ContainsAny(raw, "\x00\r\n\t") {
+		return "", fmt.Errorf("peer inventory: unsafe path %q", raw)
+	}
+	rel := strings.TrimPrefix(raw, "./")
+	if isDir {
+		rel = strings.TrimSuffix(rel, "/")
+	}
+	if rel == "" || rel == "." {
+		return "", nil
+	}
+	if filepath.IsAbs(filepath.FromSlash(rel)) {
+		return "", fmt.Errorf("peer inventory: unsafe path %q", raw)
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean != filepath.ToSlash(rel) {
+		return "", fmt.Errorf("peer inventory: unsafe path %q", raw)
+	}
+	return clean, nil
+}
+
+func parsePeerRsyncTime(raw string, loc *time.Location) (time.Time, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	for _, layout := range []string{"2006/01/02-15:04:05", "2006/01/02 15:04:05"} {
+		if t, err := time.ParseInLocation(layout, strings.TrimSpace(raw), loc); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unsupported rsync time %q", raw)
+}
+
+func intersectPeerPaths(a, b []string) []string {
+	want := make(map[string]bool, len(b))
+	for _, rel := range b {
+		want[rel] = true
+	}
+	out := make([]string, 0, len(a))
+	for _, rel := range a {
+		if want[rel] {
+			out = append(out, rel)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func newPeerSetupCmd() *cobra.Command {
@@ -442,11 +650,21 @@ walks the whole tree.`,
 				p.Success("peer sync job removed")
 				return nil
 			}
+			if err := syncer.CheckOwner(cfg); err != nil {
+				return fmt.Errorf("refusing peer scheduler on a non-coordinator: %w", err)
+			}
 			if interval < time.Minute {
 				return fmt.Errorf("--interval must be at least 1m (got %s)", interval)
 			}
 			if !cfg.Target.IsSSH() {
 				return fmt.Errorf("peer target is not configured; run dot peer init first")
+			}
+			probe := probeRunner()
+			if err := syncer.CheckSSH(ctx, probe, cfg.Target.Host); err != nil {
+				return fmt.Errorf("checking peer coordinator before scheduler setup: %w", err)
+			}
+			if err := checkRemotePeerOwner(ctx, probe, cfg); err != nil {
+				return err
 			}
 			exe, err := os.Executable()
 			if err != nil {
@@ -564,16 +782,14 @@ func newPeerSyncCmd() *cobra.Command {
 		Use:   "sync",
 		Short: "Exchange workspace and host paths with the peer (both directions)",
 		Args:  cobra.NoArgs,
-		Long: `Pull the peer's changes, then push this machine's.
+		Long: `Build one baseline-aware plan, accept one-sided peer changes, then
+publish coordinator changes. Routine updates are backup-free; only simultaneous
+conflicts and propagated deletes create quarantine copies.
 
-Pull first on purpose: it is the direction that can only add, so a conflict is
-recorded before this machine's version goes out. The pull never deletes
-anything locally.
-
-When propagation.delete is on, deletions are detected before the pull runs and
-applied to the peer before the push. Both halves of that order matter: the pull
-would otherwise restore the deleted file, and the push ends by rewriting the
-baseline the detection depends on.
+When propagation.delete is on, baseline-proven deletes can flow in either
+direction. Unknown peer-created paths are pulled and never classified as local
+deletions. The common baseline advances only after the complete workspace and
+host-path transaction succeeds.
 
 Exits 0 when the peer is unreachable. That is what makes this safe to schedule
 on a laptop.`,
@@ -585,6 +801,12 @@ on a laptop.`,
 			}
 			if !cfg.Target.IsSSH() {
 				return fmt.Errorf("peer target is not an ssh target; run: dot peer init --host <user@host>")
+			}
+			// The profile owner is the coordinator. This guard is intentionally
+			// before any probe or transfer: a second machine must not perform a
+			// half-run and then leave a different baseline behind.
+			if err := syncer.CheckOwner(cfg); err != nil {
+				return err
 			}
 			ctx := context.Background()
 
@@ -607,40 +829,102 @@ on a laptop.`,
 				return err
 			}
 			cfg.RemoteRsyncPath = rp
+			if err := checkRemotePeerOwner(ctx, probe, cfg); err != nil {
+				return err
+			}
 
 			dryRun, _ := c.Flags().GetBool("dry-run")
+			if !dryRun {
+				// Normalize opted-in NFD names before tombstones, inventory, plans,
+				// and rsync filters materialize. The helper is marker-gated, so an
+				// unmarked workspace remains unchanged until its explicit migration.
+				if err := syncer.NormalizeWorkspaceNamesBeforePush(cfg); err != nil {
+					return fmt.Errorf("normalizing workspace names: %w", err)
+				}
+				if syncer.NFDMigrationMarked(cfg.LocalPaths.WorkspaceRoot) {
+					if err := normalizeRemotePeerNames(ctx, runner, cfg); err != nil {
+						return err
+					}
+				}
+			}
 
-			// Deletions are detected before the pull and applied before the
-			// push, and the order is load-bearing in both directions. The pull
-			// uses --update, so it would restore anything deleted here and
-			// erase the evidence. The push ends with RefreshBaseline, which
-			// walks the local tree and retires these keys, so a delete pass
-			// that ran after it and failed would lose the tombstone and let the
-			// peer's copy return on the next pull.
-			//
-			// Empty unless the profile is SSH with propagation.delete on.
+			// Compute deletion evidence before any pull mutates the coordinator
+			// tree, then build the same three-way plan used by `peer diff`.
 			tombstones, err := syncer.ComputeTombstones(cfg)
 			if err != nil {
 				return err
 			}
 			cfg.Tombstones = tombstones
+			plan, err := peerPlanForRun(ctx, probe, cfg)
+			if err != nil {
+				return err
+			}
+			if err := syncer.ValidatePeerPlanSafety(cfg, plan); err != nil {
+				return err
+			}
 			conflict := syncer.NewConflictDir()
+			complete := true
+			baselineReady, err := syncer.PeerBaselineReady(cfg)
+			if err != nil {
+				return err
+			}
+			// A target marker authorizes destructive transitions. An initial
+			// additive bootstrap remains allowed, but an unproven local/remote
+			// deletion must stay pending and must not retire the baseline.
+			deletesAuthorized := baselineReady
 
 			if !pushOnly {
 				p.Section("pull from peer")
-				if err := reportPartial(p, syncer.PullDirect(ctx, runner, cfg, dryRun)); err != nil {
+				pullErr := syncer.PullPeerPlan(ctx, runner, cfg, plan, dryRun)
+				if err := reportPartial(p, pullErr); err != nil {
 					return err
+				}
+				if cfg.Propagation.Delete && deletesAuthorized && len(plan.DeleteLocal) > 0 {
+					if err := syncer.DeletePeerLocal(cfg, conflict, plan.DeleteLocal, dryRun); err != nil {
+						return err
+					}
+				} else if len(plan.DeleteLocal) > 0 {
+					complete = false
+					p.Warn("remote-only deletes held: peer baseline provenance is not established")
 				}
 			}
 			if !pullOnly {
-				if len(tombstones) > 0 {
+				deleteSet := intersectPeerPaths(tombstones, plan.DeleteRemote)
+				if !cfg.Propagation.Delete {
+					deleteSet = nil
+				}
+				if len(deleteSet) > 0 && deletesAuthorized {
 					p.Section("propagate deletions")
-					if err := syncer.PropagateDeletes(ctx, runner, cfg, conflict, tombstones, dryRun); err != nil {
+					if err := syncer.PropagateDeletes(ctx, runner, cfg, conflict, deleteSet, dryRun); err != nil {
+						return err
+					}
+				} else if len(plan.DeleteRemote) > 0 {
+					complete = false
+					p.Warn("local deletes held: peer baseline provenance is not established")
+				}
+				if len(plan.Push) > len(plan.QuarantineRemote) {
+					baseline, err := syncer.LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
+					if err != nil {
+						return fmt.Errorf("peer push revalidation: loading baseline: %w", err)
+					}
+					// Treat every planned push path as type-sensitive during this
+					// inventory, including baseline-unknown creates that became links.
+					for _, rel := range plan.Push {
+						if _, ok := baseline[rel]; !ok {
+							baseline[rel] = syncer.Fingerprint{}
+						}
+					}
+					remoteNow, err := peerRemoteInventory(ctx, probe, cfg, baseline)
+					if err != nil {
+						return err
+					}
+					if err := syncer.ValidatePeerPushRemoteStable(plan, remoteNow); err != nil {
 						return err
 					}
 				}
 				p.Section("push to peer")
-				if err := reportPartial(p, syncer.Push(ctx, runner, cfg, dryRun)); err != nil {
+				pushErr := syncer.PushPeerPlan(ctx, runner, cfg, plan, conflict, dryRun)
+				if err := reportPartial(p, pushErr); err != nil {
 					return err
 				}
 			}
@@ -651,12 +935,32 @@ on a laptop.`,
 			// the peer: 16 of its 19 submodule remotes are SSH.
 			if !skipHome {
 				p.Section("host paths")
-				if err := reportPartial(p, peerHomeSync(ctx, runner, p, cfg, dryRun, pushOnly, pullOnly)); err != nil {
+				homeErr := peerHomeSync(ctx, runner, p, cfg, dryRun, pushOnly, pullOnly)
+				if err := reportPartial(p, homeErr); err != nil {
+					return err
+				}
+			}
+			// A first successful additive run establishes provenance. A target
+			// marker is not required for that bootstrap, but any held deletion is
+			// enough to keep the baseline unchanged until a later verified run.
+			canCommitBaseline := baselineReady ||
+				(len(plan.DeleteLocal) == 0 && len(plan.DeleteRemote) == 0)
+			if complete && !dryRun && !pullOnly {
+				if err := syncer.AppendPeerConflictAudit(cfg, plan); err != nil {
+					return err
+				}
+			}
+			if complete && !dryRun && !pushOnly && !pullOnly && canCommitBaseline {
+				if err := syncer.CommitPeerBaseline(cfg, plan.NextBaseline); err != nil {
 					return err
 				}
 			}
 			p.Blank()
-			p.Success("peer sync complete")
+			if complete {
+				p.Success("peer sync complete")
+			} else {
+				p.Warn("peer sync held destructive transitions; baseline unchanged")
+			}
 			p.Line("Conflicting edits keep both versions; list them with:")
 			p.Line("  dot sync conflicts --profile=%s", PeerProfile)
 			return nil
@@ -683,9 +987,13 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syn
 	if err != nil {
 		return err
 	}
-	// --update and --backup are not optional here. Without them this pass
-	// overwrites host config unconditionally in both directions, and the first
-	// real run did exactly that: it replaced this machine's
+	// --update keeps a peer's newer host config from being overwritten by a
+	// stale coordinator copy. Ordinary host-path updates are deliberately not
+	// backed up: they are not workspace conflicts, and an unconditional backup
+	// on every run made `.dot-peer-conflicts` grow with routine state churn. A
+	// future verified host-baseline conflict can opt into a scoped backup.
+	// Without --update this pass overwrites host config unconditionally, and the
+	// first real run did exactly that: it replaced this machine's
 	// ~/.ssh/known_hosts with the peer's copy, deleting the host key entry for
 	// the very channel the sync runs over. The next ssh failed with "Host key
 	// verification failed".
@@ -697,11 +1005,9 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syn
 	// home-paths.txt is seed-once, so lists written before the entry was removed
 	// still carry it, and Codex hash-keys its Keychain MCP OAuth credentials to
 	// this file's server definitions - copying a peer's copy orphans them.
-	conflict := NewHomeConflictDir()
 	base := []string{"-aHAX", "--numeric-ids", "-r", "--human-readable", "--stats",
 		"--ignore-missing-args", "--chmod=Du+w",
 		"--update",
-		"--backup", "--backup-dir=" + conflict,
 		"--exclude=known_hosts", "--exclude=known_hosts.old", "--exclude=known_hosts2",
 		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
 		"--exclude=/.codex/config.toml",
@@ -733,12 +1039,6 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, p *Printer, cfg *syn
 	return nil
 }
 
-// NewHomeConflictDir names the quarantine directory for the host-path pass.
-// Destination-relative, so each side keeps its own displaced copies.
-func NewHomeConflictDir() string {
-	return ".dot-peer-conflicts/" + time.Now().UTC().Format("2006-01-02T15-04-05Z")
-}
-
 func runPeerRsync(ctx context.Context, runner *exec.Runner, cfg *syncer.Config, args []string) error {
 	if cfg.Verbose {
 		return syncer.ClassifyRsyncError(runner.RunAttached(ctx, "rsync", args...))
@@ -747,17 +1047,17 @@ func runPeerRsync(ctx context.Context, runner *exec.Runner, cfg *syncer.Config, 
 	return syncer.ClassifyRsyncError(err)
 }
 
-// reportPartial turns rsync's partial-transfer outcome into a warning instead of
-// a hard stop. Exit 23/24 mean "moved almost everything"; treating them as fatal
-// is what once aborted a run before its second pass while reporting success.
+// reportPartial annotates rsync's partial-transfer outcome, then returns it as
+// a hard transaction failure. Exit 23/24 can mean a scoped conflict or delete
+// did not finish; later passes and baseline publication must stop immediately.
 func reportPartial(p *Printer, err error) error {
 	if err == nil {
 		return nil
 	}
 	if syncer.IsPartialTransfer(err) {
 		p.Warn("partial transfer: %v", err)
-		p.Line("  Some files were skipped; the rest arrived. Re-run to retry them.")
-		return nil
+		p.Line("  Peer transaction stopped; baseline unchanged. Re-run to retry it.")
+		return fmt.Errorf("peer sync incomplete: %w", err)
 	}
 	return err
 }
