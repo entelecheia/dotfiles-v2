@@ -17,16 +17,22 @@ on:
       - ".goreleaser.yaml"
       - ".golangci.yml"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: "go.mod"
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12
@@ -36,20 +42,21 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: "go.mod"
       - name: Unit tests with coverage
         run: go test ./... -race -count=1 -coverprofile=coverage.out
       - name: Build binary
         run: go build -o bin/dot ./cmd/dot/
       - run: ./bin/dot --help
       - run: ./bin/dot version
-      - name: Install shellcheck (macOS)
+      - name: Ensure shellcheck (macOS)
         if: runner.os == 'macOS'
-        run: brew install shellcheck
+        run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck install script
         run: shellcheck scripts/install.sh
       - run: bash -n scripts/install.sh
@@ -59,6 +66,7 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+          retention-days: 7
 
   integration:
     needs: unit
@@ -72,23 +80,30 @@ jobs:
           - dockerfile: server
             profile: server
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: "go.mod"
       - run: go build -o dot ./cmd/dot/
+      - uses: docker/setup-buildx-action@v3
       - name: Build image + run profile
         env:
           TAG: dotfiles-test:${{ matrix.dockerfile }}
+          SCOPE: integration-${{ matrix.dockerfile }}
         run: |
-          docker build -t "$TAG" -f "tests/Dockerfile.${{ matrix.dockerfile }}" .
+          docker buildx build --load \
+            --cache-from "type=gha,scope=$SCOPE" \
+            --cache-to "type=gha,mode=max,scope=$SCOPE" \
+            -t "$TAG" -f "tests/Dockerfile.${{ matrix.dockerfile }}" .
           docker run --rm "$TAG" /tests/run-profile.sh "${{ matrix.profile }}"
 
   linux:
     # Combined module + scenario suite: one image build, N fresh-container runs.
     needs: unit
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       TAG: dotfiles-test:linux
       MODULES: "packages shell node git ssh terminal tmux ai conda"
@@ -97,9 +112,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: "go.mod"
       - run: go build -o dot ./cmd/dot/
-      - run: docker build -t "$TAG" -f tests/Dockerfile.ubuntu-22.04 .
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        env:
+          SCOPE: linux-ubuntu-22.04
+        run: |
+          docker buildx build --load \
+            --cache-from "type=gha,scope=$SCOPE" \
+            --cache-to "type=gha,mode=max,scope=$SCOPE" \
+            -t "$TAG" -f tests/Dockerfile.ubuntu-22.04 .
       - name: Modules
         run: |
           failed=()
@@ -140,7 +163,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: "go.mod"
       - run: go build -o bin/dot ./cmd/dot/
       - name: Ensure jq is present
         run: command -v jq >/dev/null || brew install jq
