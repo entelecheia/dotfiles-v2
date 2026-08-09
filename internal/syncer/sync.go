@@ -80,6 +80,10 @@ type Config struct {
 	// them to the target.
 	Tombstones []string
 
+	// NamesNormalized avoids a second full workspace scan when a CLI caller
+	// already ran the marker-gated NFD preflight under the shared lock.
+	NamesNormalized bool
+
 	// LocalPaths exposes the resolved per-workspace layout for
 	// callers (status, init, manifest readers) that need granular
 	// access beyond what the convenience fields above expose.
@@ -303,14 +307,21 @@ func expandHome(path, home string) string {
 
 // pullArgs builds the rsync argv for the pull (target → local) pass.
 // Uses --update (workspace-authoritative) so workspace-only files are
-// never deleted. --backup snapshots overwrites into the conflict dir.
+// never deleted. Non-peer profiles snapshot overwrites into the conflict dir;
+// peer conflicts are handled by their scoped reconciliation pass.
 func pullArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool) []string {
-	args := commonArgs(cfg, rf)
-	args = append(args,
-		"--update",
-		"--backup",
-		"--backup-dir="+conflict.PullBackupRel(),
-	)
+	// Put the code-owned deny layer before editable allow/include rules. Rsync
+	// uses the first matching filter, so appending these after commonArgs would
+	// let an allow.txt entry re-admit a cache or generated log.
+	args := append([]string{}, peerVolatileExcludeArgs(cfg)...)
+	args = append(args, commonArgs(cfg, rf)...)
+	args = append(args, "--update")
+	if !peerNormalTransfer(cfg) {
+		args = append(args,
+			"--backup",
+			"--backup-dir="+conflict.PullBackupRel(),
+		)
+	}
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
@@ -325,7 +336,10 @@ func pullArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 // --max-delete cap for delete) and always excludes the workspace's
 // staging dirs so they never bounce back to mirror.
 func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool) []string {
-	args := commonArgs(cfg, rf)
+	// See pullArgs: the immutable peer deny layer must precede editable
+	// includes, otherwise an operator could opt a volatile tree back in.
+	args := append([]string{}, peerVolatileExcludeArgs(cfg)...)
+	args = append(args, commonArgs(cfg, rf)...)
 	prop := cfg.Propagation
 	if cfg.Target.IsSSH() && cfg.Profile == PeerProfile {
 		// Blanket --delete removes every target path absent locally. Against a
@@ -339,16 +353,54 @@ func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 	// Skip directories that would be empty on the target after filtering, so
 	// gitignored leaves do not leave behind shells of folder structure.
 	args = append(args, "--prune-empty-dirs")
-	args = append(args,
-		"--backup",
-		"--backup-dir="+conflict.PushBackupRel(),
-	)
+	if !peerNormalTransfer(cfg) {
+		args = append(args,
+			"--backup",
+			"--backup-dir="+conflict.PushBackupRel(),
+		)
+	}
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
 	args = append(args, rsyncTransportArgs(cfg)...)
 	args = append(args, cfg.LocalPath, cfg.Target.RsyncDest())
 	return args
+}
+
+// peerNormalTransfer identifies the ordinary SSH peer create/update pass.
+// It is already scoped by a baseline-aware PeerPlan, so a blanket backup would
+// quarantine every expected update. Losing remote payloads are handled by the
+// separate, explicitly scoped conflict pass.
+func peerNormalTransfer(cfg *Config) bool {
+	return cfg != nil && cfg.Profile == PeerProfile && cfg.Target.IsSSH()
+}
+
+// peerVolatileExcludeArgs is code-owned rather than part of editable
+// exclude.txt. These generated caches/logs must not enter a peer payload when
+// an operator broadens the editable filter policy. graphify-out is deliberately
+// absent because it is a shareable analysis artifact.
+func peerVolatileExcludeArgs(cfg *Config) []string {
+	if cfg == nil || cfg.Profile != PeerProfile {
+		return nil
+	}
+	return []string{
+		"--exclude=.cache",
+		"--exclude=.cache/",
+		"--exclude=/.maru/cache",
+		"--exclude=/.maru/cache/",
+		"--exclude=/.maru/desk-pipeline/logs",
+		"--exclude=/.maru/desk-pipeline/logs/",
+		"--exclude=test-results",
+		"--exclude=test-results/",
+		"--exclude=playwright-report",
+		"--exclude=playwright-report/",
+		"--exclude=.astro",
+		"--exclude=.astro/",
+		"--exclude=*.tsbuildinfo",
+		"--exclude=/scratchpad/temp",
+		"--exclude=/scratchpad/temp/",
+		"--exclude=.metadata_never_index",
+	}
 }
 
 // rsyncTransportArgs returns transport flags for the configured target
@@ -480,6 +532,18 @@ func refuseSharedDriveMirror(cfg *Config) error {
 func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("push refused: %w", err)
+	}
+	// CLI callers normalize under the shared workspace lock before planning.
+	// Keep the same marker-gated check here so library callers cannot bypass
+	// automatic NFD normalization on a real push.
+	namesNormalized := cfg.NamesNormalized
+	// The flag is a one-call handoff from a CLI plan. A Config can be reused by
+	// library callers, and a later download may introduce another NFC name.
+	cfg.NamesNormalized = false
+	if !dryRun && !namesNormalized {
+		if err := NormalizeWorkspaceNamesBeforePush(cfg); err != nil {
+			return fmt.Errorf("normalizing workspace names: %w", err)
+		}
 	}
 	if err := ensureLogDir(cfg.LogFile); err != nil {
 		return err

@@ -87,8 +87,8 @@ func TestProfilePathsKeepDefaultUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if peer.LockDir == base.LockDir {
-		t.Error("peer shares the mirror lock; a peer sync would block a mirror push for no reason")
+	if peer.LockDir != base.LockDir {
+		t.Errorf("peer must share the default lock to serialize workspace mutations: %s vs %s", peer.LockDir, base.LockDir)
 	}
 	if peer.LaunchdPlist == base.LaunchdPlist {
 		t.Error("peer shares the launchd unit; installing one scheduler would uninstall the other")

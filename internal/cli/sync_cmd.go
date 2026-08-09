@@ -54,6 +54,7 @@ files still stage into inbox/gdrive for manual routing.
 	  dot sync status      Show filters, last pull/push/intake, conflicts, paused state, scheduler
 	  dot sync filters     Show effective filter layers or reset them from templates
 	  dot sync conflicts   List or prune timestamped backup directories
+	  dot sync names       Plan or apply staged NFD filename normalization
 	  dot sync pause       Stop managed schedulers + set paused gate
 	  dot sync resume      Clear paused gate and re-arm installed schedulers
 
@@ -91,6 +92,7 @@ Deprecated aliases: 'dot gsync', 'dot gdrive-sync'.`,
 		newSyncTargetCmd(),
 		newSyncMirrorCmd(),
 		newSyncFiltersCmd(),
+		newSyncNamesCmd(),
 		newSyncFetchCmd(),
 	)
 	return cmd
@@ -1028,6 +1030,16 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 	defer release()
 
+	// Once the explicit workspace migration has written its marker, every real
+	// push canonicalizes newly downloaded or created NFC names before either a
+	// preview plan or rsync filter is materialized. Dry-runs remain read-only.
+	if !dryRun {
+		if err := syncer.NormalizeWorkspaceNamesBeforePush(cfg); err != nil {
+			return fmt.Errorf("normalizing workspace names: %w", err)
+		}
+		cfg.NamesNormalized = true
+	}
+
 	// SSH targets cannot be plan-previewed (the remote tree is not
 	// walkable); push runs rsync directly, like the retired SSH-only sync.
 	if cfg.Target.IsSSH() {
@@ -1381,10 +1393,30 @@ func boolStr(b bool) string {
 // .sync-conflicts/ backups: pull backups land in the workspace tree,
 // push backups land in the mirror tree.
 func conflictTrees(cfg *syncer.Config) [][2]string {
-	return [][2]string{
-		{"workspace", stripTrailingSlash(cfg.LocalPath)},
-		{"mirror", stripTrailingSlash(cfg.MirrorPath)},
+	trees := [][2]string{{"workspace", stripTrailingSlash(cfg.LocalPath)}}
+	// SSH targets have no local mirror tree: ResolveConfig intentionally leaves
+	// MirrorPath empty for them. Never turn that empty value into "/" and scan
+	// the invoking machine's root; remote conflicts are handled below through
+	// cfg.Target.Path.
+	if !cfg.Target.IsSSH() {
+		trees = append(trees, [2]string{"mirror", stripTrailingSlash(cfg.MirrorPath)})
 	}
+	return trees
+}
+
+func remoteConflictTrees(cfg *syncer.Config) ([][2]string, error) {
+	if !cfg.Target.IsSSH() {
+		return nil, nil
+	}
+	root, err := syncer.RemoteTargetConflictRoot(cfg.Target)
+	if err != nil {
+		return nil, err
+	}
+	trees := [][2]string{{"remote target", root}}
+	if cfg.Profile == syncer.PeerProfile {
+		trees = append(trees, [2]string{"remote home", syncer.PeerHomeConflictRoot})
+	}
+	return trees, nil
 }
 
 func newSyncConflictsCmd() *cobra.Command {
@@ -1392,23 +1424,28 @@ func newSyncConflictsCmd() *cobra.Command {
 		Use:   "conflicts",
 		Short: "List or prune .sync-conflicts/ backup directories",
 		Long: `Conflict backups accumulate in both trees: pull backups under the
-workspace, push backups under the mirror.
+workspace, push backups under the mirror. For SSH targets, push backups are
+listed and pruned on the remote target under <target>/.sync-conflicts; the
+peer profile also includes ~/.dot-peer-conflicts from its host-path pass.
 
   dot sync conflicts                       # alias for list
   dot sync conflicts list
   dot sync conflicts prune                 # remove backups older than 30 days
   dot sync conflicts prune --older-than 7
-  dot sync conflicts prune --all           # remove every backup`,
+  dot sync conflicts prune --all           # remove every backup
+  dot sync conflicts prune --all --remote-only --profile=peer
+                                             # preserve this machine's backups`,
 		RunE: runSyncConflictsList,
 	}
 	prune := &cobra.Command{
 		Use:          "prune",
-		Short:        "Remove old conflict backups from both trees",
+		Short:        "Remove old conflict backups from selected local/remote trees",
 		RunE:         runSyncConflictsPrune,
 		SilenceUsage: true,
 	}
 	prune.Flags().Int("older-than", 30, "prune backups older than this many days")
 	prune.Flags().Bool("all", false, "prune every backup regardless of age")
+	prune.Flags().Bool("remote-only", false, "prune only SSH target backups; preserve local workspace backups")
 	cmd.AddCommand(
 		&cobra.Command{
 			Use:   "list",
@@ -1421,7 +1458,7 @@ workspace, push backups under the mirror.
 }
 
 func runSyncConflictsList(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	_, cfg, runner, err := syncBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}
@@ -1448,6 +1485,31 @@ func runSyncConflictsList(cmd *cobra.Command, _ []string) error {
 		}
 		p.Blank()
 	}
+	remoteTrees, err := remoteConflictTrees(cfg)
+	if err != nil {
+		return err
+	}
+	for _, tree := range remoteTrees {
+		label, root := tree[0], tree[1]
+		confs, err := syncer.ListRemoteConflicts(cmd.Context(), runner, cfg.Target, root)
+		if err != nil {
+			return err
+		}
+		if len(confs) == 0 {
+			p.Line("No conflict backups under %s/ (%s)", root, label)
+			continue
+		}
+		p.Header(fmt.Sprintf("Conflict backups under %s/ (%s)", root, label))
+		for _, c := range confs {
+			age := now.Sub(c.ModTime).Truncate(time.Hour)
+			marker := "•"
+			if age > 30*24*time.Hour {
+				marker = "▲" // older than 30 days — candidate for cleanup
+			}
+			p.Bullet(marker, fmt.Sprintf("%s (%s ago, %s) — %s", c.Timestamp, age, ws.FormatSize(c.Size), c.Path))
+		}
+		p.Blank()
+	}
 	p.Line("Prune candidates (▲) with: dot sync conflicts prune")
 	return nil
 }
@@ -1469,7 +1531,7 @@ func resolvePruneCutoff(olderDays int, all, olderChanged bool) (time.Time, error
 }
 
 func runSyncConflictsPrune(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	_, cfg, runner, err := syncBootstrap(cmd)
 	if err != nil {
 		return err
 	}
@@ -1478,6 +1540,10 @@ func runSyncConflictsPrune(cmd *cobra.Command, _ []string) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	olderDays, _ := cmd.Flags().GetInt("older-than")
 	all, _ := cmd.Flags().GetBool("all")
+	remoteOnly, _ := cmd.Flags().GetBool("remote-only")
+	if remoteOnly && !cfg.Target.IsSSH() {
+		return fmt.Errorf("--remote-only requires an SSH target")
+	}
 
 	cutoff, err := resolvePruneCutoff(olderDays, all, cmd.Flags().Changed("older-than"))
 	if err != nil {
@@ -1494,6 +1560,9 @@ func runSyncConflictsPrune(cmd *cobra.Command, _ []string) error {
 	defer release()
 
 	trees := conflictTrees(cfg)
+	if remoteOnly {
+		trees = nil
+	}
 	plans := make([]*syncer.PruneResult, len(trees))
 	var candidates int
 	var reclaim int64
@@ -1506,11 +1575,37 @@ func runSyncConflictsPrune(cmd *cobra.Command, _ []string) error {
 		candidates += len(plan.Pruned)
 		reclaim += plan.Reclaimed
 	}
+	remoteTrees, err := remoteConflictTrees(cfg)
+	if err != nil {
+		return err
+	}
+	remotePlans := make([]*syncer.PruneResult, len(remoteTrees))
+	for i, tree := range remoteTrees {
+		plan, err := syncer.PruneRemoteConflicts(cmd.Context(), runner, cfg.Target, tree[1], cutoff, true)
+		if err != nil {
+			return err
+		}
+		remotePlans[i] = plan
+		candidates += len(plan.Pruned)
+		reclaim += plan.Reclaimed
+	}
 
 	now := time.Now()
 	for i, tree := range trees {
 		label := tree[0]
 		plan := plans[i]
+		if len(plan.Pruned) == 0 {
+			continue
+		}
+		p.Section(fmt.Sprintf("%s — %s", label, plan.Root))
+		for _, c := range plan.Pruned {
+			age := now.Sub(c.ModTime).Truncate(time.Hour)
+			p.Bullet("▲", fmt.Sprintf("%s (%s ago, %s)", c.Timestamp, age, ws.FormatSize(c.Size)))
+		}
+	}
+	for i, tree := range remoteTrees {
+		label := tree[0]
+		plan := remotePlans[i]
 		if len(plan.Pruned) == 0 {
 			continue
 		}
@@ -1551,6 +1646,20 @@ func runSyncConflictsPrune(cmd *cobra.Command, _ []string) error {
 		p.Success("pruned %d backup dir(s) (freed %s) under %s/.sync-conflicts/", len(res.Pruned), ws.FormatSize(res.Reclaimed), root)
 		if label == "mirror" {
 			p.Line("  The Drive sync client will propagate these deletions and reclaim cloud quota.")
+		}
+	}
+	for i, tree := range remoteTrees {
+		label, root := tree[0], tree[1]
+		res, err := syncer.ApplyRemoteConflictPrune(cmd.Context(), runner, cfg.Target, root, remotePlans[i].Pruned)
+		if err != nil {
+			return err
+		}
+		if len(res.Pruned) == 0 {
+			continue
+		}
+		p.Success("pruned %d backup dir(s) (freed %s) under %s/", len(res.Pruned), ws.FormatSize(res.Reclaimed), root)
+		if label == "remote target" {
+			p.Line("  The peer target now has the selected conflict backups removed.")
 		}
 	}
 	return nil

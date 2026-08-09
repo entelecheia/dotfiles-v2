@@ -363,6 +363,9 @@ create=$3
 case "$root" in
   "~/"*) root=$HOME/${root#\~/} ;;
 esac
+case "$root" in
+  ""|"/") echo "unsafe peer workspace root: $root" >&2; exit 40 ;;
+esac
 if [ ! -d "$root" ] || [ -L "$root" ]; then
   echo "unsafe peer workspace root: $root" >&2
   exit 40
@@ -389,6 +392,9 @@ func shellQuote(s string) string {
 }
 
 func remoteQuarantineCommand(root, stamp string, create bool) (string, error) {
+	if err := validateRemoteWorkspaceRoot(root); err != nil {
+		return "", err
+	}
 	if stamp == "" || strings.ContainsAny(stamp, "/\\\r\n\x00") || stamp == "." || stamp == ".." {
 		return "", fmt.Errorf("unsafe conflict timestamp %q", stamp)
 	}
@@ -398,6 +404,19 @@ func remoteQuarantineCommand(root, stamp string, create bool) (string, error) {
 	}
 	return "sh -c " + shellQuote(quarantinePreflightScript) + " sh " +
 		shellQuote(root) + " " + shellQuote(stamp) + " " + createArg, nil
+}
+
+func validateRemoteWorkspaceRoot(root string) error {
+	root = strings.TrimSpace(strings.TrimRight(root, "/"))
+	if root == "" || root == "/" || root == "~" || strings.ContainsAny(root, "\x00\r\n") {
+		return fmt.Errorf("unsafe peer workspace root %q", root)
+	}
+	for _, component := range strings.Split(filepath.ToSlash(root), "/") {
+		if component == "." || component == ".." {
+			return fmt.Errorf("unsafe peer workspace root %q", root)
+		}
+	}
+	return nil
 }
 
 // preflightPeerQuarantine refuses a receiver-side symlink before rsync uses
