@@ -14,11 +14,18 @@ import (
 	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
-func nfdTestConfig(root string) *Config {
+func nfdTestConfig(t *testing.T, root string) *Config {
+	t.Helper()
+	paths := ResolveLocalPathsForProfile(root, DefaultProfile)
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatal(err)
+	}
 	return &Config{
-		LocalPath:  root,
-		FilterMode: FilterModeExclude,
-		LocalPaths: ResolveLocalPathsForProfile(root, DefaultProfile),
+		LocalPath:    root,
+		FilterMode:   FilterModeExclude,
+		ExcludesFile: paths.ExcludeFile,
+		IgnoreFile:   paths.IgnoreFile,
+		LocalPaths:   paths,
 	}
 }
 
@@ -58,7 +65,7 @@ func TestPlanWorkspaceNameNormalization_DeepestFirstAndApply(t *testing.T) {
 	writeNFDTestFile(t, root, nfcDir+"/"+nfcFile, "payload")
 	oldDir := filepath.Join(root, nfcDir)
 
-	plan, err := PlanWorkspaceNameNormalization(nfdTestConfig(root))
+	plan, err := PlanWorkspaceNameNormalization(nfdTestConfig(t, root))
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -72,7 +79,7 @@ func TestPlanWorkspaceNameNormalization_DeepestFirstAndApply(t *testing.T) {
 		t.Errorf("child target = %q, want %q", plan.Renames[0].NewRel, nfdDir+"/"+nfdFile)
 	}
 
-	result, err := NormalizeWorkspaceNames(nfdTestConfig(root), false)
+	result, err := NormalizeWorkspaceNames(nfdTestConfig(t, root), false)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -107,7 +114,7 @@ func TestNormalizeWorkspaceNames_DryRunAndMarkerGate(t *testing.T) {
 	root := t.TempDir()
 	nfc := "caf\u00e9.txt"
 	old := writeNFDTestFile(t, root, nfc, "payload")
-	cfg := nfdTestConfig(root)
+	cfg := nfdTestConfig(t, root)
 
 	result, err := NormalizeWorkspaceNames(cfg, true)
 	if err != nil {
@@ -211,7 +218,7 @@ func TestPlanWorkspaceNameNormalization_PreflightCollisionIsAtomic(t *testing.T)
 		t.Skip("filesystem normalizes sibling names; cannot represent a collision fixture")
 	}
 
-	_, err := PlanWorkspaceNameNormalization(nfdTestConfig(root))
+	_, err := PlanWorkspaceNameNormalization(nfdTestConfig(t, root))
 	if err == nil {
 		t.Fatal("collision plan unexpectedly succeeded")
 	}
@@ -245,7 +252,7 @@ func TestPlanWorkspaceNameNormalization_InvalidUTF8AndExcludedTrees(t *testing.T
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	_, err := PlanWorkspaceNameNormalization(nfdTestConfig(root))
+	_, err := PlanWorkspaceNameNormalization(nfdTestConfig(t, root))
 	if err == nil || !strings.Contains(err.Error(), "invalid UTF-8") {
 		t.Fatalf("invalid UTF-8 error = %v", err)
 	}
@@ -254,7 +261,7 @@ func TestPlanWorkspaceNameNormalization_InvalidUTF8AndExcludedTrees(t *testing.T
 	if err := os.Remove(filepath.Join(root, string([]byte{0xff}))); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PlanWorkspaceNameNormalization(nfdTestConfig(root))
+	plan, err := PlanWorkspaceNameNormalization(nfdTestConfig(t, root))
 	if err != nil {
 		t.Fatalf("excluded plan: %v", err)
 	}
