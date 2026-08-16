@@ -144,6 +144,12 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "kiro", Path: ".kiro/settings/mcp.json", Description: "Kiro CLI MCP servers"},
 		{Tool: "kimi", Path: ".kimi-code/AGENTS.md", Description: "Kimi Code global instructions"},
 		{Tool: "kimi", Path: ".kimi-code/mcp.json", Description: "Kimi Code MCP servers"},
+		// Unlike .codex/config.toml this needs no restore guard: kimi stores
+		// api_key = "" and points at its credentials by path
+		// (storage = "file", key = "oauth/kimi-code") rather than hash-keying
+		// them to the server definitions, so a whole-file restore orphans
+		// nothing.
+		{Tool: "kimi", Path: ".kimi-code/config.toml", Description: "Kimi Code config, providers, and models"},
 		{Tool: "antigravity", Path: ".gemini/GEMINI.md", Description: "Antigravity/Gemini global instructions"},
 		{Tool: "antigravity", Path: ".gemini/config/mcp_config.json", Description: "Antigravity shared MCP config"},
 		{Tool: "antigravity", Path: ".gemini/config/hooks.json", Description: "Antigravity global hooks"},
@@ -170,6 +176,7 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "claude", Path: ".claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},
 		{Tool: "claude", Path: ".config/claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},
 		{Tool: "codex", Path: ".codex/auth.json", Description: "Codex auth credentials", Auth: true},
+		{Tool: "kimi", Path: ".kimi-code/credentials", Description: "Kimi Code credentials", Auth: true},
 		{Tool: "antigravity", Path: ".gemini/oauth_creds.json", Description: "Antigravity/Gemini OAuth credentials", Auth: true},
 		{Tool: "antigravity", Path: ".gemini/google_accounts.json", Description: "Antigravity/Gemini account cache", Auth: true},
 	}

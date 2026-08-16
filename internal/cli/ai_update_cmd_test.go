@@ -166,8 +166,29 @@ func TestResolveUpdateToolsDefaultsToAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if strings.Join(got, ",") != "claude,codex,copilot,gemini,skills" {
+	if strings.Join(got, ",") != "claude,codex,copilot,gemini,kimi,kiro,cursor,skills" {
 		t.Fatalf("default tools = %v", got)
+	}
+}
+
+func TestToolBinaryResolvesRenamedCLIs(t *testing.T) {
+	// kiro and cursor ship under a different executable name than their phase
+	// id. Getting this wrong makes both phases permanently "not in PATH"
+	// instead of failing loudly.
+	for tool, want := range map[string]string{
+		"kiro":   "kiro-cli",
+		"cursor": "cursor-agent",
+		"kimi":   "kimi",
+		"claude": "claude",
+	} {
+		if got := toolBinary(tool); got != want {
+			t.Errorf("toolBinary(%q) = %q, want %q", tool, got, want)
+		}
+	}
+	for tool := range updateToolBinary {
+		if !containsString(updateTools, tool) {
+			t.Errorf("updateToolBinary has %q, which is not an update phase", tool)
+		}
 	}
 }
 

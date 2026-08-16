@@ -65,7 +65,10 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 	p.KV("Installs apps", "no — use `dot apps install`")
 
 	p.Section("Detected CLI tools")
-	for _, name := range []string{"claude", "codex", "agy", "gemini", "gh", "fabric"} {
+	for _, name := range []string{
+		"claude", "codex", "copilot", "kimi", "kiro-cli", "cursor-agent",
+		"agy", "gemini", "gh", "fabric",
+	} {
 		path, err := exec.LookPath(name)
 		marker := ui.StyleHint.Render(ui.MarkAbsent)
 		value := "(not found)"
@@ -73,7 +76,7 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 			marker = ui.StyleSuccess.Render(ui.MarkPresent)
 			value = path
 		}
-		p.Bullet(marker, fmt.Sprintf("%-8s %s", ui.StyleValue.Render(name), ui.StyleHint.Render(value)))
+		p.Bullet(marker, fmt.Sprintf("%-13s %s", ui.StyleValue.Render(name), ui.StyleHint.Render(value)))
 	}
 
 	p.Section("Portable settings")

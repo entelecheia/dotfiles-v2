@@ -17,7 +17,22 @@ import (
 )
 
 // updateTools is the fixed phase order of `dot ai update`.
-var updateTools = []string{"claude", "codex", "copilot", "gemini", "skills"}
+var updateTools = []string{"claude", "codex", "copilot", "gemini", "kimi", "kiro", "cursor", "skills"}
+
+// updateToolBinary maps a phase id to its CLI binary where the two differ.
+// Every other phase id is the binary name.
+var updateToolBinary = map[string]string{
+	"kiro":   "kiro-cli",
+	"cursor": "cursor-agent",
+}
+
+// toolBinary resolves the executable to probe and run for a phase id.
+func toolBinary(tool string) string {
+	if bin, ok := updateToolBinary[tool]; ok {
+		return bin
+	}
+	return tool
+}
 
 // updateStep records the outcome of one step within a tool phase. Status is
 // one of updated, up-to-date, failed, or skipped.
@@ -42,9 +57,9 @@ func newAIUpdateCmd() *cobra.Command {
 		Short: "Update AI CLIs, plugins, marketplaces, and skills",
 		Long: `Bring managed AI tooling current in one pass.
 
-Phases run in a fixed order (claude, codex, copilot, gemini, skills) and are
-partial-failure tolerant: one tool failing never aborts the rest. Missing
-binaries are skipped, not errors.
+Phases run in a fixed order (claude, codex, copilot, gemini, kimi, kiro,
+cursor, skills) and are partial-failure tolerant: one tool failing never aborts
+the rest. Missing binaries are skipped, not errors.
 
 Skills are delegated to 'maru skills update/sync' — dot never writes under a
 tool skill root (see docs/BOUNDARIES.md). Plugin updates take effect after a
@@ -53,7 +68,7 @@ Claude Code restart.`,
 		RunE: runAIUpdate,
 	}
 	c.Flags().Bool("check", false, "Report available updates without changing anything")
-	c.Flags().StringSlice("tool", nil, "Limit to specific tools (claude,codex,copilot,gemini,skills)")
+	c.Flags().StringSlice("tool", nil, "Limit to specific tools ("+strings.Join(updateTools, ",")+")")
 	c.Flags().Bool("json", false, "Emit machine-readable JSON")
 	return c
 }
@@ -86,9 +101,15 @@ func runAIUpdate(cmd *cobra.Command, _ []string) error {
 		case "codex":
 			steps = append(steps, u.updateCodex(ctx)...)
 		case "copilot":
-			steps = append(steps, u.updateCopilot(ctx)...)
+			steps = append(steps, u.selfUpdate(ctx, "copilot", "update", " (also auto-updates on startup)")...)
 		case "gemini":
 			steps = append(steps, u.updateGemini(ctx)...)
+		case "kimi":
+			steps = append(steps, u.selfUpdate(ctx, "kimi", "upgrade", "")...)
+		case "kiro":
+			steps = append(steps, u.selfUpdate(ctx, "kiro", "update", "")...)
+		case "cursor":
+			steps = append(steps, u.selfUpdate(ctx, "cursor", "update", "")...)
 		case "skills":
 			steps = append(steps, u.updateSkills(ctx)...)
 		}
@@ -276,7 +297,7 @@ func (u *aiUpdater) skip(tool, step, detail string) updateStep {
 // toolVersion probes `<bin> --version`, returning "(not installed)" when the
 // binary is absent. Probes always run, even under --dry-run.
 func (u *aiUpdater) toolVersion(ctx context.Context, tool string) string {
-	bin := tool
+	bin := toolBinary(tool)
 	if !u.runner.CommandExists(bin) {
 		return "(not installed)"
 	}
@@ -405,13 +426,17 @@ func codexClaudeMemCacheStep(home string) updateStep {
 	return step
 }
 
-func (u *aiUpdater) updateCopilot(ctx context.Context) []updateStep {
-	if !u.runner.CommandExists("copilot") {
-		return []updateStep{u.skip("copilot", "self-update", "copilot not in PATH")}
+// selfUpdate runs a tool's native self-update subcommand and reports the
+// version delta around it. suffix is appended to the delta detail. A missing
+// binary is skipped, not an error.
+func (u *aiUpdater) selfUpdate(ctx context.Context, tool, subcmd, suffix string) []updateStep {
+	bin := toolBinary(tool)
+	if !u.runner.CommandExists(bin) {
+		return []updateStep{u.skip(tool, "self-update", bin+" not in PATH")}
 	}
-	before := u.toolVersion(ctx, "copilot")
-	self := u.run(ctx, "copilot", "self-update", "copilot", "update")
-	return []updateStep{u.withVersionDelta(ctx, self, "copilot", before, " (also auto-updates on startup)")}
+	before := u.toolVersion(ctx, tool)
+	self := u.run(ctx, tool, "self-update", bin, subcmd)
+	return []updateStep{u.withVersionDelta(ctx, self, tool, before, suffix)}
 }
 
 // updateGemini reinstalls the npm package: gemini has no self-update
