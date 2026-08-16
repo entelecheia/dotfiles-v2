@@ -190,6 +190,18 @@ func TestToolBinaryResolvesRenamedCLIs(t *testing.T) {
 			t.Errorf("updateToolBinary has %q, which is not an update phase", tool)
 		}
 	}
+
+	// `dot ai list` derives its probe list from the same source, so a rename
+	// cannot leave it reporting "(not found)" forever.
+	names := detectedCLINames()
+	for _, want := range []string{"kiro-cli", "cursor-agent", "kimi", "copilot"} {
+		if !containsString(names, want) {
+			t.Errorf("detectedCLINames() missing %q: %v", want, names)
+		}
+	}
+	if containsString(names, "skills") {
+		t.Errorf("skills is maru-delegated, not a probeable CLI: %v", names)
+	}
 }
 
 func TestResolveUpdateToolsRejectsEmptyFilter(t *testing.T) {

@@ -57,9 +57,9 @@ func newAIUpdateCmd() *cobra.Command {
 		Short: "Update AI CLIs, plugins, marketplaces, and skills",
 		Long: `Bring managed AI tooling current in one pass.
 
-Phases run in a fixed order (claude, codex, copilot, gemini, kimi, kiro,
-cursor, skills) and are partial-failure tolerant: one tool failing never aborts
-the rest. Missing binaries are skipped, not errors.
+Phases run in a fixed order (` + strings.Join(updateTools, ", ") + `) and are
+partial-failure tolerant: one tool failing never aborts the rest. Missing
+binaries are skipped, not errors.
 
 Skills are delegated to 'maru skills update/sync' — dot never writes under a
 tool skill root (see docs/BOUNDARIES.md). Plugin updates take effect after a
