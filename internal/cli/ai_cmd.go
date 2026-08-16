@@ -55,6 +55,25 @@ func newAIListCmd() *cobra.Command {
 	return c
 }
 
+// extraDetectedCLIs are probed by `dot ai list` but are not `dot ai update`
+// phases: agy has no self-update path dot drives, and gh/fabric are helpers
+// the 30-ai.sh aliases depend on.
+var extraDetectedCLIs = []string{"agy", "gh", "fabric"}
+
+// detectedCLINames derives the probe list from the update phases so a binary
+// rename in updateToolBinary cannot leave this list silently reporting
+// "(not found)".
+func detectedCLINames() []string {
+	names := make([]string, 0, len(updateTools)+len(extraDetectedCLIs))
+	for _, tool := range updateTools {
+		if tool == "skills" {
+			continue // maru-delegated, not a CLI of its own
+		}
+		names = append(names, toolBinary(tool))
+	}
+	return append(names, extraDetectedCLIs...)
+}
+
 func runAIList(cmd *cobra.Command, _ []string) error {
 	includeAuth, _ := cmd.Flags().GetBool("include-auth")
 	p := printerFrom(cmd)
@@ -65,7 +84,7 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 	p.KV("Installs apps", "no — use `dot apps install`")
 
 	p.Section("Detected CLI tools")
-	for _, name := range []string{"claude", "codex", "agy", "gemini", "gh", "fabric"} {
+	for _, name := range detectedCLINames() {
 		path, err := exec.LookPath(name)
 		marker := ui.StyleHint.Render(ui.MarkAbsent)
 		value := "(not found)"
@@ -73,7 +92,7 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 			marker = ui.StyleSuccess.Render(ui.MarkPresent)
 			value = path
 		}
-		p.Bullet(marker, fmt.Sprintf("%-8s %s", ui.StyleValue.Render(name), ui.StyleHint.Render(value)))
+		p.Bullet(marker, fmt.Sprintf("%-13s %s", ui.StyleValue.Render(name), ui.StyleHint.Render(value)))
 	}
 
 	p.Section("Portable settings")

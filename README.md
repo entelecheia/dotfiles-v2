@@ -871,13 +871,15 @@ dot ai audit tail 20               # print recent events as JSONL
 codex-yolo                         # run Codex without approval prompts or sandboxing
 claude-yolo                        # run Claude Code without permission prompts
 kiro-yolo                          # run Kiro chat with all tools trusted
+copilot-yolo                       # run Copilot CLI with all tools/paths/URLs allowed
+kimi-yolo                          # run Kimi Code with tool calls auto-approved
 ```
 
 The `ai` module writes shell/config helper files:
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/shell/30-ai.sh` | Claude Code env, yolo helpers (Codex/Claude/Kiro/Copilot), GitHub Models aliases, Fabric alias, GPU helper aliases |
+| `~/.config/shell/30-ai.sh` | Claude Code env, yolo helpers (Codex/Claude/Kiro/Copilot/Kimi), GitHub Models aliases, Fabric alias, GPU helper aliases |
 | `~/.config/claude/settings.json` | Minimal dot-managed Claude settings |
 
 The yolo helpers are thin wrappers that forward all arguments to the underlying
@@ -889,6 +891,7 @@ CLI with its full-access flag:
 | `claude-yolo [args...]` | `claude --dangerously-skip-permissions` |
 | `kiro-yolo [args...]` | `kiro-cli chat --trust-all-tools` |
 | `copilot-yolo [args...]` | `copilot --allow-all` |
+| `kimi-yolo [args...]` | `kimi --yolo` |
 
 They run with the current user's full host permissions and skip every approval
 prompt, so use them only in trusted workspaces.
@@ -899,6 +902,11 @@ only opt-in needed for a full-access session. Note that Kiro CLI does not read
 surfaces, and a file placed there has no effect. Persistent Kiro tool policy
 lives in agent configs (`~/.kiro/agents/*.json`, `.kiro/agents/*.json`) under
 `permissions.rules` / `allowedTools`; dot does not manage those.
+
+Kimi Code has two levels and `kimi-yolo` deliberately takes the lower one:
+`--yolo` auto-approves tool calls but still lets the agent ask you questions,
+matching what the other four helpers do. `kimi --auto` is fully autonomous and
+never asks — run it explicitly when that is what you want.
 
 `dot ai hud apply` installs dot-native status lines:
 
@@ -1011,6 +1019,9 @@ still produces a summary and a non-zero exit code.
 | `codex` | `codex update`, `codex plugin marketplace upgrade` (Codex has no per-plugin update), then a read-only claude-mem plugin cache health check |
 | `copilot` | `copilot update` (the CLI also auto-updates on startup) |
 | `gemini` | `npm install -g @google/gemini-cli` through `fnm`, falling back to a system `npm` (no self-update subcommand exists) |
+| `kimi` | `kimi upgrade` |
+| `kiro` | `kiro-cli update` (phase id `kiro`, binary `kiro-cli`) |
+| `cursor` | `cursor-agent update` (phase id `cursor`, binary `cursor-agent`) |
 | `skills` | `brew upgrade maru-cli`, then `maru skills update` and `maru skills sync --tools claude,codex` |
 
 ```bash
@@ -1338,7 +1349,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **terminal** | minimal | starship prompt, Orca auto-install (macOS/Arch), Warp theme |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (cloud mirror, vault, inbox). Vault location is selectable at init and auto-detected from existing `<workspace>/work/vault` or `<workspace>/vault`; the separate vault repo entry is skipped when the vault lives inside work (e.g. as a submodule). Cloud mirror is selected at init from detected mounts (Dropbox preferred, Google Drive accounts are listed); shell exports `CLOUD_WORKSPACE`/`CLOUD_WORK`, alias `cwork`, and the `ws()` jumper (formerly `GDRIVE_*`/`gwork`) |
-| **ai** | full | AI CLI/config helpers, Claude/Codex/Antigravity settings backup, optional HUD |
+| **ai** | full | AI CLI/config helpers, Claude/Codex/Copilot/Cursor/Kiro/Kimi/Antigravity/Aider/Maru settings backup, optional HUD |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |
 | **conda** | full | Conda/Mamba `.condarc` defaults; shell hooks live in managed shell init |

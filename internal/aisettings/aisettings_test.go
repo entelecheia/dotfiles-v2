@@ -285,6 +285,25 @@ func TestEntriesCoverCopilotCLI(t *testing.T) {
 	}
 }
 
+func TestEntriesCoverKimiCode(t *testing.T) {
+	entries := Entries(false)
+	for _, path := range []string{
+		".kimi-code/AGENTS.md",
+		".kimi-code/mcp.json",
+		".kimi-code/config.toml",
+	} {
+		if !hasEntry(entries, "kimi", path) {
+			t.Errorf("kimi entry %s missing: %+v", path, entries)
+		}
+	}
+	if hasEntryPath(entries, ".kimi-code/credentials") {
+		t.Error("kimi credentials are auth-only and must not be backed up by default")
+	}
+	if !hasEntry(Entries(true), "kimi", ".kimi-code/credentials") {
+		t.Error("kimi credentials missing with IncludeAuth")
+	}
+}
+
 func TestEntriesExcludeSkillRuntimeDirectories(t *testing.T) {
 	entries := Entries(true)
 	excluded := []string{

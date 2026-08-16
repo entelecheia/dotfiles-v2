@@ -184,6 +184,8 @@ func TestRender_AIYoloHelpers(t *testing.T) {
 		`command kiro-cli chat --trust-all-tools "$@"`,
 		"copilot-yolo() {",
 		`command copilot --allow-all "$@"`,
+		"kimi-yolo() {",
+		`command kimi --yolo "$@"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Render shell/30-ai.sh.tmpl: expected %q in output, got:\n%s", want, content)

@@ -166,8 +166,41 @@ func TestResolveUpdateToolsDefaultsToAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if strings.Join(got, ",") != "claude,codex,copilot,gemini,skills" {
+	if strings.Join(got, ",") != "claude,codex,copilot,gemini,kimi,kiro,cursor,skills" {
 		t.Fatalf("default tools = %v", got)
+	}
+}
+
+func TestToolBinaryResolvesRenamedCLIs(t *testing.T) {
+	// kiro and cursor ship under a different executable name than their phase
+	// id. Getting this wrong makes both phases permanently "not in PATH"
+	// instead of failing loudly.
+	for tool, want := range map[string]string{
+		"kiro":   "kiro-cli",
+		"cursor": "cursor-agent",
+		"kimi":   "kimi",
+		"claude": "claude",
+	} {
+		if got := toolBinary(tool); got != want {
+			t.Errorf("toolBinary(%q) = %q, want %q", tool, got, want)
+		}
+	}
+	for tool := range updateToolBinary {
+		if !containsString(updateTools, tool) {
+			t.Errorf("updateToolBinary has %q, which is not an update phase", tool)
+		}
+	}
+
+	// `dot ai list` derives its probe list from the same source, so a rename
+	// cannot leave it reporting "(not found)" forever.
+	names := detectedCLINames()
+	for _, want := range []string{"kiro-cli", "cursor-agent", "kimi", "copilot"} {
+		if !containsString(names, want) {
+			t.Errorf("detectedCLINames() missing %q: %v", want, names)
+		}
+	}
+	if containsString(names, "skills") {
+		t.Errorf("skills is maru-delegated, not a probeable CLI: %v", names)
 	}
 }
 
