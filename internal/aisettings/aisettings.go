@@ -689,8 +689,12 @@ func isSecretName(name string) bool {
 // isCodeExpressionValue reports whether an unquoted matched value is a code
 // expression or a self-reference (`api_key=api_key`) rather than a credential
 // literal; hook and vendored plugin scripts are full of both.
+// isCodeExpressionValue reports whether an unquoted assignment value is a code
+// expression rather than a literal credential. Brackets count because a
+// subscript such as `const token = tokens[j]` is source, not a secret: real
+// credential literals (base64, hex, JWT, sk-*) never contain them.
 func isCodeExpressionValue(name, value string) bool {
-	if strings.ContainsAny(value, "()'\"`{}") {
+	if strings.ContainsAny(value, "()'\"`{}[]") {
 		return true
 	}
 	return strings.EqualFold(strings.TrimLeft(name, "-"), value)

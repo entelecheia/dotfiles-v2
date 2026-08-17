@@ -392,7 +392,8 @@ func newAIHudApplyCmd() *cobra.Command {
 			persist, _ := cmd.Flags().GetBool("persist")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			mgr := newHUDManagerFromCmd(cmd)
-			result, err := mgr.Apply(aisettings.HUDOptions{Tools: parseAgentToolIDs(tools), DryRun: dryRun})
+			force, _ := cmd.Flags().GetBool("force")
+			result, err := mgr.Apply(aisettings.HUDOptions{Tools: parseAgentToolIDs(tools), DryRun: dryRun, Force: force})
 			if err != nil {
 				return err
 			}
@@ -415,6 +416,7 @@ func newAIHudApplyCmd() *cobra.Command {
 	}
 	c.Flags().String("tool", "", "Comma-separated tool IDs (claude,codex)")
 	c.Flags().Bool("persist", false, "Persist modules.ai.hud=true for future dot apply runs")
+	c.Flags().Bool("force", false, "Take over a statusLine currently owned by another tool")
 	return c
 }
 
