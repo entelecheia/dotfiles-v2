@@ -10,10 +10,15 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 ## dotfiles-v2 May Write
 
 - `~/.claude/CLAUDE.md`
-- `~/.claude/settings.json` (HUD statusLine block; `dot guard` PreToolUse hook
-  entries tagged `# dot-guard`; entries owned by other tools are never touched)
+- `~/.claude/settings.json` (HUD statusLine block tagged `# dot-hud`, and only
+  when dot owns the existing entry or `--force` is passed; `dot guard`
+  PreToolUse hook entries tagged `# dot-guard`; entries owned by other tools
+  are never touched). Notably NOT dotfiles-managed: `skillOverrides`,
+  `permissions`, `enabledPlugins`, `hooks` outside the `# dot-guard` entries.
+  Those belong to Claude Code's own UI (`/skills`, `/config`) or to whichever
+  tool installed them.
 - `~/.claude/settings.local.json` when explicitly included in auth/local flows
-- `~/.claude/hooks/**`
+- `~/.claude/statusline-dot.py`
 - `~/.claude/keybindings.json`
 - `~/.config/claude/**`
 - `~/.config/shell/30-ai.sh`

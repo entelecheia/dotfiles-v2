@@ -171,6 +171,53 @@ func TestSecretScanCoversManagedTextAndPositionalArgs(t *testing.T) {
 	}
 }
 
+func TestSecretScanAllowsCodeSubscriptValues(t *testing.T) {
+	// A hook that tokenizes shell input assigns `token` from a subscript.
+	// That is source, not a credential, and must not block backup.
+	tests := []struct {
+		name string
+		rel  string
+		data string
+	}{
+		{name: "js subscript", rel: ".claude/hooks/guard.js", data: "const tokens = split(cmd);\nconst token = tokens[j];\n"},
+		{name: "python subscript", rel: ".claude/hooks/guard.py", data: "token = parts[0]\n"},
+		{name: "js strict equality", rel: ".claude/hooks/eq.js", data: "if (token === '-C' && next) {\n  return 1;\n}\n"},
+		{name: "shell equality", rel: ".claude/hooks/eq.sh", data: "if [ \"$token\" == \"-C\" ]; then :; fi\n"},
+		{name: "js bare identifier", rel: ".claude/hooks/id.js", data: "const token = incoming;\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, home, _ := testEngine(t)
+			mustWrite(t, filepath.Join(home, tt.rel), []byte(tt.data))
+			if _, err := eng.Backup(BackupOptions{}); err != nil {
+				t.Fatalf("code expression must not trigger scanner: %v", err)
+			}
+		})
+	}
+}
+
+func TestSecretScanCatchesBracketedCredentialInConfig(t *testing.T) {
+	// Brackets only mean "code" in expression-only languages. A shell or TOML
+	// file can hold a real unquoted credential that happens to contain one.
+	tests := []struct {
+		name string
+		rel  string
+		data string
+	}{
+		{name: "shell bracket password", rel: ".claude/hooks/env.sh", data: "password=p@ss[word]\n"},
+		{name: "toml bracket api key", rel: ".codex/config.toml", data: "api_key=abc[123]\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, home, _ := testEngine(t)
+			mustWrite(t, filepath.Join(home, tt.rel), []byte(tt.data))
+			if _, err := eng.Backup(BackupOptions{}); err == nil {
+				t.Fatal("bracketed credential in a config file must still be rejected")
+			}
+		})
+	}
+}
+
 func TestSecretScanSkipsOpaqueExtensionlessBinary(t *testing.T) {
 	eng, home, _ := testEngine(t)
 	mustWrite(t, filepath.Join(home, ".claude", "hooks", "helper"), []byte{0, 1, 2, 3, 0xff})

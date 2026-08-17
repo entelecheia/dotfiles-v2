@@ -14,6 +14,24 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
+// HUDMarker tags the statusLine command dot writes into
+// ~/.claude/settings.json. Claude Code runs the statusLine command through a
+// shell, so a trailing comment is inert and lets us tell our own entry from
+// one another tool installed (GSD ships gsd-statusline.js, for example).
+// Same discipline as guard.HookMarker.
+const HUDMarker = "# dot-hud"
+
+// claudeStatusLineCommand is the marked command dot installs.
+const claudeStatusLineCommand = "~/.claude/statusline-dot.py " + HUDMarker
+
+// isDotStatusLine reports whether an existing statusLine command belongs to
+// dot. The unmarked legacy spelling counts so upgrades adopt their own entry
+// instead of treating it as a foreign owner.
+func isDotStatusLine(command string) bool {
+	return strings.Contains(command, HUDMarker) ||
+		strings.TrimSpace(command) == "~/.claude/statusline-dot.py"
+}
+
 var defaultCodexStatusLine = []string{
 	"model-with-reasoning",
 	"git-branch",
@@ -119,6 +137,9 @@ type HUDManager struct {
 type HUDOptions struct {
 	Tools  []string
 	DryRun bool
+	// Force takes over a statusLine currently owned by another tool.
+	// Without it a foreign statusLine is preserved and reported as drift.
+	Force bool
 }
 
 // HUDResult summarizes HUD Apply.
@@ -177,7 +198,7 @@ func (m *HUDManager) Apply(opts HUDOptions) (*HUDResult, error) {
 		case "codex":
 			item, err = m.applyCodexHUD(effectiveDryRun)
 		case "claude":
-			item, err = m.applyClaudeHUD(effectiveDryRun)
+			item, err = m.applyClaudeHUD(effectiveDryRun, opts.Force)
 		}
 		if err != nil {
 			return nil, err
@@ -252,12 +273,17 @@ func (m *HUDManager) applyCodexHUD(dryRun bool) (HUDItem, error) {
 	return item, nil
 }
 
-func (m *HUDManager) applyClaudeHUD(dryRun bool) (HUDItem, error) {
+func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 	settingsPath := m.claudeSettingsPath()
 	scriptPath := m.claudeScriptPath()
-	settings, err := m.mergedClaudeSettings()
+	settings, refused, err := m.mergedClaudeSettings(force)
 	if err != nil {
 		return HUDItem{}, err
+	}
+	if refused != "" {
+		// Another tool owns statusLine. Leave it and report, rather than
+		// silently replacing an entry dot does not own.
+		return HUDItem{ToolID: "claude", TargetPath: settingsPath, Changed: false, Drift: "out-of-sync", Detail: refused}, nil
 	}
 	settingsChanged := true
 	if current, err := os.ReadFile(settingsPath); err == nil {
@@ -313,32 +339,62 @@ func (m *HUDManager) claudeSettingsStatus() (bool, string, error) {
 	if !ok {
 		return false, "statusLine missing", nil
 	}
-	if sl["type"] != "command" || sl["command"] != "~/.claude/statusline-dot.py" {
+	command, _ := sl["command"].(string)
+	if !isDotStatusLine(command) {
+		return false, foreignStatusLineReason(command), nil
+	}
+	if sl["type"] != "command" || command != claudeStatusLineCommand {
 		return false, "statusLine command differs", nil
 	}
 	return true, "", nil
 }
 
-func (m *HUDManager) mergedClaudeSettings() ([]byte, error) {
+// foreignStatusLineReason names the tool that currently owns statusLine so the
+// drift report is actionable rather than a bare "differs".
+func foreignStatusLineReason(command string) string {
+	owner := strings.TrimSpace(command)
+	if owner == "" {
+		return "statusLine owned by another tool"
+	}
+	if fields := strings.Fields(owner); len(fields) > 0 {
+		owner = filepath.Base(strings.Trim(fields[len(fields)-1], `"'`))
+	}
+	return fmt.Sprintf("statusLine owned by another tool (%s); rerun with --force to take it over", owner)
+}
+
+// mergedClaudeSettings returns the settings file with dot's statusLine block
+// applied. A statusLine installed by another tool is left alone unless force
+// is set; the second return value reports that refusal.
+func (m *HUDManager) mergedClaudeSettings(force bool) ([]byte, string, error) {
 	path := m.claudeSettingsPath()
 	settings := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil && len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, &settings); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
+			return nil, "", fmt.Errorf("parse %s: %w", path, err)
 		}
 	} else if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, "", fmt.Errorf("read %s: %w", path, err)
+	}
+	if existing, ok := settings["statusLine"].(map[string]any); ok && !force {
+		command, _ := existing["command"].(string)
+		if !isDotStatusLine(command) {
+			data, err := json.MarshalIndent(settings, "", "  ")
+			if err != nil {
+				return nil, "", err
+			}
+			return append(data, '\n'), foreignStatusLineReason(command), nil
+		}
 	}
 	settings["statusLine"] = map[string]any{
 		"type":            "command",
-		"command":         "~/.claude/statusline-dot.py",
+		"command":         claudeStatusLineCommand,
 		"refreshInterval": float64(5),
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return append(data, '\n'), nil
+	return append(data, '\n'), "", nil
 }
 
 func patchCodexStatusLine(content string) string {

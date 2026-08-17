@@ -568,7 +568,7 @@ func inlineSecretField(path string, data []byte, size int64) (string, bool, erro
 			if isSecretPlaceholder(value) {
 				continue
 			}
-			if !quoted && isCodeExpressionValue(match[1], value) {
+			if !quoted && isCodeExpressionValue(ext, match[1], value) {
 				continue
 			}
 			return match[1], true, nil
@@ -686,11 +686,41 @@ func isSecretName(name string) bool {
 	return n == "token" || n == "secret"
 }
 
-// isCodeExpressionValue reports whether an unquoted matched value is a code
-// expression or a self-reference (`api_key=api_key`) rather than a credential
-// literal; hook and vendored plugin scripts are full of both.
-func isCodeExpressionValue(name, value string) bool {
+// isExpressionOnlyExtension reports whether an unquoted assignment value in
+// this file type is necessarily an expression rather than a string literal.
+// In these languages a bare credential cannot be written without quotes, so an
+// unquoted value is always source. Shell, TOML, ini, env and markdown are
+// deliberately excluded: `API_KEY=abc123` is a real credential there.
+func isExpressionOnlyExtension(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py", ".rb", ".go", ".java", ".rs":
+		return true
+	default:
+		return false
+	}
+}
+
+// isCodeExpressionValue reports whether an unquoted assignment value is a code
+// expression rather than a literal credential.
+//
+// A value with no letters or digits cannot be a credential. This matters for
+// comparisons: assignmentPattern matches the first `=` of `token === '-C'` and
+// yields the value `==`, an operator fragment.
+//
+// In expression-only languages an unquoted value is source by construction, so
+// subscripts such as `const token = tokens[j]` are exempt. The exemption is
+// scoped to those extensions on purpose: applying it everywhere would let a
+// real `api_key=abc[123]` in a shell or TOML file through.
+func isCodeExpressionValue(ext, name, value string) bool {
 	if strings.ContainsAny(value, "()'\"`{}") {
+		return true
+	}
+	if strings.IndexFunc(value, func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+	}) < 0 {
+		return true
+	}
+	if isExpressionOnlyExtension(ext) {
 		return true
 	}
 	return strings.EqualFold(strings.TrimLeft(name, "-"), value)
