@@ -889,17 +889,25 @@ func printHUDItems(p *Printer, items []aisettings.HUDItem) {
 }
 
 func printHUDApplyResult(p *Printer, result *aisettings.HUDResult) {
-	changed := 0
+	changed, conflicts := 0, 0
 	for _, item := range result.Items {
 		marker := ui.StyleSuccess.Render(ui.MarkPresent)
 		state := "in-sync"
-		if item.Changed {
+		switch {
+		case item.Changed:
 			changed++
 			marker = ui.StyleHint.Render(ui.MarkPending)
 			state = "wrote"
 			if result.DryRun {
 				state = "would write"
 			}
+		case item.Drift == "out-of-sync":
+			// Not written and still drifted: the target is owned by another
+			// tool. Rendering this as in-sync would report success for a
+			// change that did not happen.
+			conflicts++
+			marker = ui.StyleWarning.Render(ui.MarkWarn)
+			state = "conflict"
 		}
 		label := fmt.Sprintf("%-8s %-12s %s", ui.StyleValue.Render(item.ToolID), state, item.TargetPath)
 		if item.Detail != "" {
@@ -907,7 +915,10 @@ func printHUDApplyResult(p *Printer, result *aisettings.HUDResult) {
 		}
 		p.Bullet(marker, label)
 	}
-	if changed == 0 {
+	switch {
+	case conflicts > 0:
+		p.Warn("%d HUD target(s) left untouched: owned by another tool. Rerun with --force to take over.", conflicts)
+	case changed == 0:
 		p.Success("all selected HUD targets already match")
 	}
 }

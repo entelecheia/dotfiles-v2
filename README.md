@@ -845,6 +845,7 @@ dot ai import ~/workspace/secrets/ai-config.tar.gz
 
 dot ai hud status                  # inspect Claude Code + Codex HUD setup
 dot ai hud apply --tool claude,codex --persist
+dot ai hud apply --tool claude --force   # take over a statusLine another tool owns
 
 dot ai coauthor-guard status       # inspect AGENTS + Git commit-msg guard
 dot ai coauthor-guard apply --mode warn --persist
@@ -881,6 +882,17 @@ The `ai` module writes shell/config helper files:
 |------|---------|
 | `~/.config/shell/30-ai.sh` | Claude Code env, yolo helpers (Codex/Claude/Kiro/Copilot/Kimi), GitHub Models aliases, Fabric alias, GPU helper aliases |
 | `~/.config/claude/settings.json` | Minimal dot-managed Claude settings |
+| `~/.claude/statusline-dot.py` | HUD status line script (written by `dot ai hud apply`) |
+
+`dot ai hud apply` tags the Claude `statusLine` command it installs with
+`# dot-hud`. If `~/.claude/settings.json` already carries a `statusLine` from
+another tool (GSD installs `gsd-statusline.js`, for example), apply leaves it
+in place and reports a `conflict` naming the owner rather than replacing it.
+Pass `--force` to take ownership. An untagged `~/.claude/statusline-dot.py`
+from an earlier release still counts as dot-owned, so upgrades re-tag it
+without needing `--force`. Only the `statusLine` key is touched; every other
+key in that file, including `skillOverrides` and `permissions`, belongs to
+Claude Code or to whichever tool wrote it (see `docs/BOUNDARIES.md`).
 
 The yolo helpers are thin wrappers that forward all arguments to the underlying
 CLI with its full-access flag:
