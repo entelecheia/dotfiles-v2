@@ -181,6 +181,8 @@ func TestSecretScanAllowsCodeSubscriptValues(t *testing.T) {
 	}{
 		{name: "js subscript", rel: ".claude/hooks/guard.js", data: "const tokens = split(cmd);\nconst token = tokens[j];\n"},
 		{name: "python subscript", rel: ".claude/hooks/guard.py", data: "token = parts[0]\n"},
+		{name: "js strict equality", rel: ".claude/hooks/eq.js", data: "if (token === '-C' && next) {\n  return 1;\n}\n"},
+		{name: "shell equality", rel: ".claude/hooks/eq.sh", data: "if [ \"$token\" == \"-C\" ]; then :; fi\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
