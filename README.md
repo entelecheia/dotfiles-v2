@@ -750,7 +750,7 @@ dot version
 ```
 dot v0.20.0 (1e5900a)        # release build
 dot dev (d1877ee-dirty)      # dev build with uncommitted changes
-  go:   go1.23.0
+  go:   go1.25.8
   os:   darwin/arm64
 ```
 
@@ -1697,6 +1697,8 @@ Detection: `nvidia-smi` (GPU model), `/usr/local/cuda` (CUDA home), `/etc/dgx-re
 ---
 
 ## Development
+
+Source builds require Go 1.25.8 or newer.
 
 ```bash
 make build      # build binary

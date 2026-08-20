@@ -1,12 +1,11 @@
 package ui
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
@@ -17,15 +16,15 @@ const kvKeyWidth = 22 // width of "Pull+intake scheduler:"
 // The title is rendered with a single space of horizontal padding so the
 // blue StyleHeader background frames the text cleanly.
 func WriteHeader(w io.Writer, title string) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, StyleHeader.Render(" "+title+" "))
+	_, _ = lipgloss.Fprintln(w)
+	_, _ = lipgloss.Fprintln(w, StyleHeader.Render(" "+title+" "))
 }
 
 // WriteSection writes a section divider with one leading blank line and the
 // canonical "▸ " prefix. Callers pass the section name only.
 func WriteSection(w io.Writer, title string) {
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, StyleSection.Render("▸ "+title))
+	_, _ = lipgloss.Fprintln(w)
+	_, _ = lipgloss.Fprintln(w, StyleSection.Render("▸ "+title))
 }
 
 // WriteKV writes a styled key/value row at the 2-space top-level indent.
@@ -41,7 +40,7 @@ func WriteKV(w io.Writer, key, value string) {
 	if labelWidth := lipgloss.Width(label); labelWidth > width {
 		width = labelWidth
 	}
-	fmt.Fprintf(w, "  %s  %s\n", StyleKey.Width(width).Render(label), value)
+	_, _ = lipgloss.Fprintf(w, "  %s  %s\n", StyleKey.Width(width).Render(label), value)
 }
 
 // printSection emits a section divider to os.Stdout. Ui-internal wrapper over

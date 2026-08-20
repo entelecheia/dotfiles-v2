@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
@@ -41,7 +42,7 @@ func printerFrom(cmd *cobra.Command) *Printer {
 
 // Line prints a formatted line to Out with a trailing newline.
 func (p *Printer) Line(format string, a ...any) {
-	fmt.Fprintf(p.Out, format+"\n", a...)
+	_, _ = lipgloss.Fprintf(p.Out, format+"\n", a...)
 }
 
 // Blank emits a single blank line. Prefer this over p.Line("") at call sites.
@@ -51,7 +52,7 @@ func (p *Printer) Blank() {
 
 // Raw prints to Out without adding a newline (for progress dots, prompts).
 func (p *Printer) Raw(format string, a ...any) {
-	fmt.Fprintf(p.Out, format, a...)
+	_, _ = lipgloss.Fprintf(p.Out, format, a...)
 }
 
 // Header renders a top-level report title. One blank line precedes the
@@ -69,7 +70,7 @@ func (p *Printer) Section(title string) { ui.WriteSection(p.Out, title) }
 // Marker comes from ui.Mark* constants; caller-provided style (if any) is
 // applied to marker via lipgloss Render before calling.
 func (p *Printer) Bullet(marker, text string) {
-	fmt.Fprintf(p.Out, "  %s  %s\n", marker, text)
+	_, _ = lipgloss.Fprintf(p.Out, "  %s  %s\n", marker, text)
 }
 
 // KV renders a styled key/value line. Empty values render as "(unset)" in
@@ -79,18 +80,18 @@ func (p *Printer) KV(key, value string) { ui.WriteKV(p.Out, key, value) }
 // Success prints a formatted line to Out styled with StyleSuccess.
 // Use for "✓ done" style confirmations.
 func (p *Printer) Success(format string, a ...any) {
-	fmt.Fprintln(p.Out, ui.StyleSuccess.Render(fmt.Sprintf(format, a...)))
+	_, _ = lipgloss.Fprintln(p.Out, ui.StyleSuccess.Render(fmt.Sprintf(format, a...)))
 }
 
 // Warn prints a formatted line to Err styled with StyleWarning (orange).
 // Use for recoverable / attention-needed conditions.
 func (p *Printer) Warn(format string, a ...any) {
-	fmt.Fprintln(p.Err, ui.StyleWarning.Render(fmt.Sprintf(format, a...)))
+	_, _ = lipgloss.Fprintln(p.Err, ui.StyleWarning.Render(fmt.Sprintf(format, a...)))
 }
 
 // Fail prints a formatted line to Err styled with StyleError (red).
 // Use for hard failures that precede a non-zero exit. Named Fail rather
 // than Err to avoid collision with the Err field.
 func (p *Printer) Fail(format string, a ...any) {
-	fmt.Fprintln(p.Err, ui.StyleError.Render(fmt.Sprintf(format, a...)))
+	_, _ = lipgloss.Fprintln(p.Err, ui.StyleError.Render(fmt.Sprintf(format, a...)))
 }
