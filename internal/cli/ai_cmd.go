@@ -823,7 +823,7 @@ func newAIAgentsPathCmd() *cobra.Command {
 
 func printAgentsApplyResult(p *Printer, result *aisettings.ApplyResult) {
 	for _, warning := range result.Warnings {
-		p.Warn(warning)
+		p.Warn("%s", warning)
 	}
 	changed := 0
 	for _, item := range result.Items {
@@ -944,7 +944,7 @@ func printCoauthorGuardStatus(p *Printer, st aisettings.CoauthorGuardStatus) {
 		p.KV("Current hooksPath", st.HooksPath)
 	}
 	if st.Conflict != "" {
-		p.Warn(st.Conflict)
+		p.Warn("%s", st.Conflict)
 	}
 }
 

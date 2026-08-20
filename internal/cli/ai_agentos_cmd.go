@@ -227,7 +227,7 @@ func printSkillsStatus(p *Printer, report *aisettings.SkillsStatusReport) {
 		}
 	}
 	for _, warning := range report.Warnings {
-		p.Warn(warning)
+		p.Warn("%s", warning)
 	}
 }
 
@@ -289,7 +289,7 @@ func printSkillReport(p *Printer, report *aisettings.SkillScanReport, strict boo
 		}
 	}
 	for _, err := range report.Errors {
-		p.Warn(err)
+		p.Warn("%s", err)
 	}
 }
 
