@@ -91,8 +91,8 @@ jobs:
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
@@ -140,13 +140,51 @@ jobs:
     env:
       TAG: dotfiles-test:linux
       MODULES: "packages shell node git ssh terminal tmux ai conda"
-      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script guard dry-run-empty-home"
+      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script guard dry-run-empty-home differential"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
-      - run: go build -o dot ./cmd/dot/
+      # Both binaries are built through the same Makefile variables with
+      # VERSION=diff COMMIT=diff and the same explicit GOTOOLCHAIN, so
+      # `dot version` is identical on both and the differential scenario proves
+      # that normalization on every run instead of registering it as a diff.
+      # BIN is a simple `:=` assignment in the Makefile, so it only takes effect
+      # as a command-line variable; it must land at the build-context root
+      # because .dockerignore excludes bin/.
+      - name: Build current binary
+        env:
+          GOTOOLCHAIN: go1.25.14
+        run: make build BIN=./dot VERSION=diff COMMIT=diff
+      # actions/checkout defaults to fetch-depth 1, which does not contain the
+      # pinned commit, and the baseline build would fail with a not-a-tree error
+      # that reproduces only in CI. Targeted fetch rather than fetch-depth: 0 —
+      # cheaper, and it states the pin in the workflow, which is where D-02 says
+      # the pin moves by hand.
+      - name: Fetch the pinned differential baseline
+        run: git fetch --depth=1 origin db057e7ebbd21e0a7256dcd7c1b26ff3870a5478
+      # Every component of this key is a constant, so after the first run it is
+      # a permanent hit. That is what keeps the scenario's one-minute budget
+      # scoped to the comparison rather than to a cold go build.
+      - name: Cache the baseline binary
+        id: baseline-cache
+        uses: actions/cache@v4
+        with:
+          path: dot-baseline
+          key: baseline-${{ runner.os }}-db057e7ebbd21e0a7256dcd7c1b26ff3870a5478-go1.25.14
+      - name: Build baseline binary
+        if: steps.baseline-cache.outputs.cache-hit != 'true'
+        env:
+          GOTOOLCHAIN: go1.25.14
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/baseline" db057e7ebbd21e0a7256dcd7c1b26ff3870a5478
+          make -C "$RUNNER_TEMP/baseline" build BIN="$GITHUB_WORKSPACE/dot-baseline" VERSION=diff COMMIT=diff
+          git worktree remove --force "$RUNNER_TEMP/baseline"
+      # A cache that restored nothing while the build step was skipped would
+      # otherwise surface as an opaque COPY failure inside the image build.
+      - name: Both binaries are at the build-context root
+        run: ls -l ./dot ./dot-baseline
       - uses: docker/setup-buildx-action@v3
       - name: Build image
         env:
