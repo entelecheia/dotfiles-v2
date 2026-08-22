@@ -31,6 +31,49 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 - global AGENTS fan-out targets for Claude, Codex, Cursor, Antigravity,
   Copilot, and Aider
 
+Dot-owned state trees:
+
+- `~/.config/dotfiles/agents` — the shared agents instruction SSOT
+  (`AGENTS.md`) and its apply-state file (`.state.json`), written by
+  `dot ai agents init|apply` and by the coauthor-guard instruction block
+  (`dot ai coauthor-guard`)
+- `~/.local/share/dotfiles` — dot's data tree: the append-only AI audit
+  log (`ai/events.jsonl`, one record per `dot ai` mutation) and the
+  timestamped backup trees (`backup/agents*/<timestamp>/…`) taken before
+  agents SSOT and target edits
+
+Third-party files dot edits (each entry states what dot writes there and
+under what condition; everything else in the file belongs to its owning
+tool):
+
+- `~/.config/git/config` — the `hooksPath = ~/.config/git/hooks` line
+  inside the `[core]` table, and only when `dot ai coauthor-guard`
+  applies a warn or block mode; an existing `core.hooksPath` dot does not
+  manage is a conflict that refuses the write unless `--force-hooks-path`
+  is passed. No other table or key is touched.
+- `~/.config/git/hooks/commit-msg` — the coauthor-guard hook script,
+  written by `dot ai coauthor-guard` when the guard mode is warn or
+  block
+- `~/.claude-mem` — the cross-CLI transcript watch config and state files
+  (`cross-cli-transcript-watch.json`,
+  `cross-cli-transcript-watch-state.json`) and the bridge log directory,
+  written by `dot ai memory install`
+- `~/Library/LaunchAgents/com.dotfiles.claude-mem-bridge.plist` — the
+  user LaunchAgent that keeps the claude-mem bridge alive, written and
+  bootstrapped by `dot ai memory install` (macOS only)
+- `~/.kimi-code/mcp.json` — the `claude-mem` entry under `mcpServers`
+  (command and args only), written by `dot ai memory install`; every
+  other server entry is preserved
+- `~/.kiro/settings/mcp.json` — the `claude-mem` entry under
+  `mcpServers` plus `"disabled": false`, written by `dot ai memory
+  install`; every other server entry is preserved
+- `~/.copilot/mcp-config.json` — the `claude-mem` entry under
+  `mcpServers` plus `"type": "local"` and `"tools": ["*"]`, written by
+  `dot ai memory install`; every other server entry is preserved
+- `~/.codex/config.toml` — the `tui.status_line` setting, patched by
+  `dot ai hud apply`; the write is an atomic rename because Codex
+  rewrites this file continuously. No other key is touched.
+
 ## dotfiles-v2 Must Not Write
 
 - anything under any tool skill root (`~/.claude/skills/**`,
