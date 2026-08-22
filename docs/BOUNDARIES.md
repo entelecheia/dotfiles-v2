@@ -18,6 +18,10 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
   Those belong to Claude Code's own UI (`/skills`, `/config`) or to whichever
   tool installed them.
 - `~/.claude/settings.local.json` when explicitly included in auth/local flows
+- `~/.claude/.dot-lock` — a PID lock directory serializing writers of
+  `~/.claude/settings.json`, held only for the duration of a
+  `claudecfg.Mutate` call and removed on every exit path; never taken on a
+  read
 - `~/.claude/statusline-dot.py`
 - `~/.claude/keybindings.json`
 - `~/.config/claude/**`
