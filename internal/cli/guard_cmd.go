@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
+	"github.com/entelecheia/dotfiles-v2/internal/claudecfg"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/guard"
@@ -57,7 +58,7 @@ func newGuardEnableCmd() *cobra.Command {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			home := homeFromCmd(cmd)
 			hookCmd := guard.HookCommand(resolveGuardDotPath(home))
-			settingsPath := guard.ClaudeSettingsPath(home)
+			settingsPath := claudecfg.SettingsPath(home)
 
 			p.Header("dot guard enable")
 			if dryRun {
@@ -107,7 +108,7 @@ func newGuardDisableCmd() *cobra.Command {
 			p := printerFrom(cmd)
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			home := homeFromCmd(cmd)
-			settingsPath := guard.ClaudeSettingsPath(home)
+			settingsPath := claudecfg.SettingsPath(home)
 
 			if dryRun {
 				entries, err := guard.InspectHookEntries(home)
@@ -189,7 +190,7 @@ func newGuardFreezeCmd() *cobra.Command {
 				if _, err := guard.EnsureHookEntries(guardRunner(false), home, hookCmd); err != nil {
 					return err
 				}
-				p.Success("registered PreToolUse hooks in %s", guard.ClaudeSettingsPath(home))
+				p.Success("registered PreToolUse hooks in %s", claudecfg.SettingsPath(home))
 				p.Line("Note: hooks take effect in NEW Claude Code sessions.")
 			}
 			state.Modules.Guard.FreezeDir = dir
@@ -260,7 +261,7 @@ func newGuardStatusCmd() *cobra.Command {
 
 			p.Header("dot guard status")
 			if len(entries) > 0 {
-				p.KV("Hooks", fmt.Sprintf("registered (%d entries in %s)", len(entries), guard.ClaudeSettingsPath(home)))
+				p.KV("Hooks", fmt.Sprintf("registered (%d entries in %s)", len(entries), claudecfg.SettingsPath(home)))
 			} else {
 				p.KV("Hooks", "not registered")
 			}
