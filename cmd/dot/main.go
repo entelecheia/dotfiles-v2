@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,7 +15,12 @@ var (
 
 func main() {
 	if err := cli.Execute(version, commit); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+		// The unknown-command gate has already written its own guidance;
+		// printing "Error: unknown command" behind it would add a seventh
+		// line. Every other error keeps the existing format.
+		if !errors.Is(err, cli.ErrUnknownCommand) {
+			fmt.Fprintln(os.Stderr, "Error:", err)
+		}
 		os.Exit(1)
 	}
 }
