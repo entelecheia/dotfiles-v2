@@ -465,11 +465,11 @@ func propagateDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, con
 	}
 	defer os.RemoveAll(sourceRoot)
 	args := deletePassArgs(cfg, conflict, listFile, sourceRoot, dryRun)
-	fmt.Printf("  Delete: %d path(s) → %s (quarantined under %s)\n",
+	fmt.Fprintf(cfg.out(), "  Delete: %d path(s) → %s (quarantined under %s)\n",
 		len(tombstones), cfg.Target.RsyncDest(), conflictsDirName)
 	if dryRun {
 		for _, rel := range tombstones {
-			fmt.Printf("    %q → %q\n", rel, filepath.ToSlash(filepath.Join(conflict.PushBackupRel(), rel)))
+			fmt.Fprintf(cfg.out(), "    %q → %q\n", rel, filepath.ToSlash(filepath.Join(conflict.PushBackupRel(), rel)))
 		}
 	}
 	if err := runDeleteRsync(ctx, runner, cfg, args); err != nil {
@@ -504,7 +504,7 @@ func runDeleteRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args 
 			return fmt.Errorf("rsync delete pass left a requested path in place: %s", strings.TrimSpace(result.Stderr))
 		}
 		if cfg.Verbose {
-			fmt.Print(result.Stdout)
+			fmt.Fprint(cfg.out(), result.Stdout)
 			fmt.Fprint(os.Stderr, result.Stderr)
 		}
 	}
