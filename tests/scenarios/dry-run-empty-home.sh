@@ -97,6 +97,11 @@ SNAPSHOT_HOME() {
       if [ "$ENTRY_TYPE" = "f" ]; then
         printf '%s\t%s\t%s\t%s\n' "$ENTRY_PATH" "$ENTRY_TYPE" "$ENTRY_MODE" \
           "$(sha256sum "$DIR/$ENTRY_PATH" | cut -d' ' -f1)"
+      elif [ "$ENTRY_TYPE" = "l" ]; then
+        # A symlink's payload is its target. Without it, a dry-run that created
+        # a symlink pointing somewhere new would compare as identical.
+        printf '%s\t%s\t%s\t-> %s\n' "$ENTRY_PATH" "$ENTRY_TYPE" "$ENTRY_MODE" \
+          "$(readlink "$DIR/$ENTRY_PATH")"
       else
         printf '%s\t%s\t%s\n' "$ENTRY_PATH" "$ENTRY_TYPE" "$ENTRY_MODE"
       fi

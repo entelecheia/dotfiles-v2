@@ -86,6 +86,18 @@ func snapshotTree(t *testing.T, root string) string {
 			}
 			line += "\t" + fmt.Sprintf("%x", sha256.Sum256(b))
 		}
+		// A symlink's payload is its target, just as a regular file's payload is
+		// its bytes. Mode().String() carries the L type bit but not where the link
+		// points, so without this a retargeted symlink compares as unchanged --
+		// the blind spot that matters most for a tool whose main artifact is a
+		// symlink. WalkDir's DirEntry is lstat-based, so this never follows.
+		if info.Mode()&fs.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			line += "\t-> " + target
+		}
 		lines = append(lines, line)
 		return nil
 	})

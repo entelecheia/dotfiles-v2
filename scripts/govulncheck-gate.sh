@@ -57,6 +57,19 @@ elif [[ ! -f "$input_file" ]]; then
   exit 1
 fi
 
+# Non-vacuity guard on the gate itself. Without it, a govulncheck that exits 0
+# while emitting nothing -- a broken wrapper, an upstream output-format change,
+# a truncated redirect -- makes `jq -s` read [] and this script report
+# "0 finding(s) seen" and pass, having never seen evidence that a scan ran.
+# Every finding stream begins with a `config` record naming the scanner; require
+# it, the same way the CI import-graph and scenario-list assertions require a
+# non-empty input before they are allowed to report green.
+if ! jq -s -e 'any(has("config"))' "$input_file" >/dev/null 2>&1; then
+  echo "govulncheck gate: scan output carries no scanner config record, so no scan is proven to have run" >&2
+  echo "govulncheck gate:   refusing to report success on unverified input: $input_file" >&2
+  exit 1
+fi
+
 total=$(jq -s 'map(select(has("finding"))) | length' "$input_file")
 
 # D-07: a finding is CALLED when some trace frame carries a function key.
@@ -88,6 +101,17 @@ if [[ -n "$called" ]]; then
     expires=$(jq -r --arg id "$osv" 'first(.allow[] | select(.id == $id) | .expires // "") // ""' "$allow_file")
     if [[ -z "$expires" ]]; then
       echo "govulncheck gate: $osv is called in $module and is not allowlisted (fixed in $fixed_version)" >&2
+      fatal=$((fatal + 1))
+      continue
+    fi
+
+    # The string compare below is only sound on a real ISO date. A mistyped
+    # value such as "never" or "2026-13-01" sorts above any YYYY-MM-DD and would
+    # suppress the finding forever, silently defeating the expiry requirement
+    # this file advertises. Reject the shape before trusting the comparison.
+    if [[ ! "$expires" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]]; then
+      echo "govulncheck gate: $osv allowlist entry has a malformed expires value: '$expires'" >&2
+      echo "govulncheck gate:   expires must be an exact YYYY-MM-DD calendar date" >&2
       fatal=$((fatal + 1))
       continue
     fi
