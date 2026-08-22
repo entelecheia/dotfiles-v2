@@ -42,6 +42,12 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           bash scripts/govulncheck-gate.sh
+      # Runs here, not in the linux container: this exercises a REPO script and
+      # its fixtures, and /tests/scenarios in the image has no repo above it.
+      # Placed after the real gate so a bug in the scenario cannot mask a real
+      # vulnerability finding.
+      - name: Dependency vulnerability gate is not a no-op
+        run: bash tests/scenarios/govulncheck-gate.sh
       - name: cmd/dot must not depend on the man-page toolchain
         run: |
           deps=$(go list -deps ./cmd/dot)
@@ -159,7 +165,7 @@ jobs:
     env:
       TAG: dotfiles-test:linux
       MODULES: "packages shell node git ssh terminal tmux ai conda"
-      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script guard dry-run-empty-home differential govulncheck-gate"
+      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script guard dry-run-empty-home differential"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

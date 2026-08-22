@@ -31,17 +31,27 @@ fail() {
 
 echo "=== Scenario: govulncheck-gate ==="
 
+# This scenario tests a REPO script, not the installed binary, so it needs the
+# repo checked out. It runs in the `lint` job rather than in the ubuntu:22.04
+# container, where /tests/scenarios has no repo above it.
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-GATE="$REPO_ROOT/scripts/govulncheck-gate.sh"
 FIXTURES="$REPO_ROOT/tests/fixtures/govulncheck"
-ALLOW="$REPO_ROOT/.govulncheck-allow.json"
 
-# The gate reads the allowlist relative to its own directory, so exercising the
-# allowlist branches means writing the real file. Restore it unconditionally.
-ALLOW_BACKUP=$(mktemp "${TMPDIR:-/tmp}/govulncheck-allow-backup-XXXXXX")
-cp "$ALLOW" "$ALLOW_BACKUP"
-restore_allow() { cp "$ALLOW_BACKUP" "$ALLOW"; rm -f "$ALLOW_BACKUP"; }
-trap restore_allow EXIT
+# The gate resolves its allowlist relative to its OWN directory, so exercising
+# the allowlist branches means controlling that file. Copy the gate into a temp
+# dir and write allowlists next to the copy: the committed
+# .govulncheck-allow.json is never touched, so this scenario cannot leave a
+# mutated policy file behind if it dies mid-run, and it is safe to run
+# alongside the real gate in the same job.
+# The gate resolves the allowlist as <its own dir>/../.govulncheck-allow.json,
+# so the temp tree has to mirror the repo's shape: gate under scripts/, policy
+# file one level up.
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/govulncheck-gate-scenario-XXXXXX")
+trap 'rm -rf "$WORK_DIR"' EXIT
+mkdir -p "$WORK_DIR/scripts"
+cp "$REPO_ROOT/scripts/govulncheck-gate.sh" "$WORK_DIR/scripts/govulncheck-gate.sh"
+GATE="$WORK_DIR/scripts/govulncheck-gate.sh"
+ALLOW="$WORK_DIR/.govulncheck-allow.json"
 
 # run_gate <fixture> -> prints combined output, sets GATE_EXIT
 run_gate() {
@@ -69,7 +79,16 @@ $GATE_OUT"
 }
 
 echo "--- preflight ---"
-if [ -f "$GATE" ]; then pass "gate script exists"; else fail "gate script missing at $GATE"; fi
+if [ -f "$REPO_ROOT/scripts/govulncheck-gate.sh" ]; then
+  pass "gate script exists"
+else
+  fail "gate script missing at $REPO_ROOT/scripts/govulncheck-gate.sh"
+fi
+if [ -f "$REPO_ROOT/.govulncheck-allow.json" ]; then
+  pass "committed allowlist exists"
+else
+  fail "committed allowlist missing"
+fi
 for f in clean.json called-unallowed.json empty.json no-config.json; do
   if [ -f "$FIXTURES/$f" ]; then pass "fixture present: $f"; else fail "fixture missing: $f"; fi
 done
