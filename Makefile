@@ -1,4 +1,4 @@
-.PHONY: build test lint clean install
+.PHONY: build test lint clean install docs
 
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
@@ -13,6 +13,9 @@ test:
 
 lint:
 	golangci-lint run ./...
+
+docs:
+	go run ./tools/gendocs docs/commands
 
 clean:
 	rm -rf bin/
