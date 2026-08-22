@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -214,6 +215,7 @@ func TestJSONGoldens(t *testing.T) {
 
 			path := tc.goldenPath()
 			if *goldenUpdate {
+				assertNonDegenerateGolden(t, tc.surface, got)
 				if err := os.MkdirAll(goldenDir, 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -296,4 +298,37 @@ func normalizeMachineNames(raw string) string {
 	}
 	b.WriteString(raw)
 	return b.String()
+}
+
+// assertNonDegenerateGolden stops a degenerate capture from becoming the
+// baseline. T-01-11's mitigation was recorded as shipped but only its human
+// halves existed: -update wrote whatever the surface produced.
+//
+// The failure it closes runs opposite to the drift check. Overwriting a golden
+// with `{}` already fails, because live output disagrees with it. The unguarded
+// direction is a surface that STARTS emitting a degenerate document -- an empty
+// object, a bare null, an error string -- at the moment somebody runs -update.
+// That capture becomes the reference, and every later run compares degenerate
+// against degenerate and passes. The guard then reports green while protecting
+// nothing, which is T-01-11 itself and this phase's central prohibition.
+//
+// Deliberately narrow: this asserts a golden is a JSON document carrying at
+// least one key, not that its contents are correct. Judging correctness is what
+// review before commit is for.
+func assertNonDegenerateGolden(t *testing.T, surface, got string) {
+	t.Helper()
+	var doc any
+	if err := json.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatalf("refusing to capture a golden for %q: output is not valid JSON: %v\ngot:\n%s",
+			surface, err, got)
+	}
+	obj, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("refusing to capture a golden for %q: output is %T, not a JSON object\ngot:\n%s",
+			surface, doc, got)
+	}
+	if len(obj) == 0 {
+		t.Fatalf("refusing to capture a golden for %q: output is an empty JSON object, which would pin nothing\ngot:\n%s",
+			surface, got)
+	}
 }
