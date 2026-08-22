@@ -45,7 +45,10 @@ if [[ -z "$input_file" ]]; then
     echo "govulncheck gate: govulncheck is required (go install golang.org/x/vuln/cmd/govulncheck@v1.7.0)" >&2
     exit 1
   fi
-  scan_file=$(mktemp -t govulncheck-gate)
+  # Not `mktemp -t PREFIX`: BSD mktemp accepts a bare prefix, GNU mktemp treats
+  # -t's argument as a template and rejects it with "too few X's". An explicit
+  # path template with trailing X's is the form both accept.
+  scan_file=$(mktemp "${TMPDIR:-/tmp}/govulncheck-gate-XXXXXX")
   # -format json always exits 0, so this script's exit code is the gate.
   govulncheck -format json ./... >"$scan_file"
   input_file="$scan_file"
