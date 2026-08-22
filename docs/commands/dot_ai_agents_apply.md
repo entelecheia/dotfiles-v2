@@ -1,0 +1,31 @@
+## dot ai agents apply
+
+Copy-render the SSOT to agent tool targets
+
+```
+dot ai agents apply [flags]
+```
+
+### Options
+
+```
+      --force         Overwrite a target changed outside the last dot-managed apply after backing it up
+  -h, --help          help for apply
+      --tool string   Comma-separated tool IDs to apply
+```
+
+### Options inherited from parent commands
+
+```
+      --config string    Path to custom config YAML
+      --dry-run          Show what would be done without executing
+      --home string      Override home directory (for admin setup of other users)
+      --module strings   Run specific modules only
+      --profile string   Profile name (minimal, full, server)
+      --yes              Unattended mode (skip all prompts)
+```
+
+### SEE ALSO
+
+* [dot ai agents](dot_ai_agents.md)	 - Manage the shared AI agents instruction SSOT
+

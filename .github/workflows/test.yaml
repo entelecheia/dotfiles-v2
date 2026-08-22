@@ -13,6 +13,8 @@ on:
       - "Makefile"
       - "scripts/**"
       - "tests/**"
+      - "tools/**"
+      - "docs/commands/**"
       - ".github/workflows/**"
       - ".goreleaser.yaml"
       - ".golangci.yml"
@@ -52,6 +54,17 @@ jobs:
           if printf '%s\n' "$deps" | grep -qE 'go-md2man|blackfriday'; then
             echo "::error::go-md2man or blackfriday reached ./cmd/dot's import graph"
             printf '%s\n' "$deps" | grep -E 'go-md2man|blackfriday'
+            exit 1
+          fi
+      - name: Command docs drift check
+        run: |
+          go run ./tools/gendocs docs/commands
+          # --porcelain, not `git diff`: git diff reports only tracked paths, so
+          # a page for a newly added command that nobody committed passes it
+          # green. --porcelain sees untracked, deleted and modified alike.
+          if [ -n "$(git status --porcelain docs/commands)" ]; then
+            echo "::error::docs/commands is out of date - run 'make docs' and commit the result"
+            git status --porcelain docs/commands
             exit 1
           fi
 
