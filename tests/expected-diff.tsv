@@ -1,0 +1,51 @@
+# tests/expected-diff.tsv — the registry of INTENTIONAL behavior changes (D-04)
+#
+# tests/scenarios/differential.sh runs a binary built from the pinned
+# milestone-start commit db057e7ebbd21e0a7256dcd7c1b26ff3870a5478 and a binary
+# built from the current tree over the same read and --dry-run command matrix,
+# each against its own fresh temp HOME, and compares four fields: stdout,
+# stderr, exit_code, and the resulting filesystem tree. Any difference fails the
+# scenario unless a row in this file names it.
+#
+# FORMAT — three tab-separated columns, no quoting:
+#
+#   command<TAB>field<TAB>reason
+#
+#   command   the matrix entry verbatim, exactly as differential.sh lists it,
+#             e.g. `sync status --json` (no leading `dot`, no --home)
+#   field     one of: stdout  stderr  exit_code  tree
+#   reason    free prose — what changed, and why someone decided to change it
+#
+# Lines beginning with # are comments. Blank lines are ignored.
+#
+# WHAT THIS FILE IS
+#
+# A changelog of intentional behavior changes across a milestone whose declared
+# default is behavior preservation. Its length is itself the signal: this file
+# is meant to stay short, and a long one means the milestone has drifted from
+# its own premise. Read it top to bottom before trusting a green differential.
+#
+# WHAT THIS FILE IS NOT
+#
+# It is not a suppression list. A row added to turn a red build green — rather
+# than to record a change someone deliberately made — has inverted this file's
+# purpose. If the harness goes red and nobody decided to change that behavior,
+# the finding is a regression: fix the code, do not add a row.
+#
+# TWO RULES THE SCENARIO ENFORCES, SO THEY CANNOT ROT INTO CONVENTION
+#
+#   1. `version` must never appear here. Both binaries are built with identical
+#      -ldflags (VERSION=diff COMMIT=diff) and an explicitly pinned GOTOOLCHAIN,
+#      so their version output is normalized at the build step. A version diff
+#      means that normalization broke — a build problem, not a behavior change.
+#      The scenario rejects a `version` row outright.
+#
+#   2. A row whose difference stops occurring fails the scenario with a
+#      remove-this-row message. When the change a row records is reverted or
+#      superseded, the row goes with it; the registry prunes itself instead of
+#      accumulating dead excuses.
+#
+# This file ships with zero data rows: the milestone starts from a stated
+# position of full behavior preservation.
+#
+# command	field	reason
