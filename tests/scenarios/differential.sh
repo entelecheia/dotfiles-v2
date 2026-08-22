@@ -22,6 +22,36 @@ EXCERPT_LINES=40
 # what `dot-baseline` actually is.
 BASELINE_COMMIT="db057e7ebbd21e0a7256dcd7c1b26ff3870a5478"
 
+# Captured before any run is isolated, so CHECK_ISOLATION has something to
+# assert against. Every comparison below must be blind to this path.
+HOST_HOME="${HOME:-}"
+
+# BUG-06 internal/exec/brew.go:293 - RefreshPath re-opens the PATH sandbox from
+# an os.Stat, so read-only probes run real third-party binaries that write into
+# HOME and reach the network. Once HOME is the sandbox (see ISOLATE), those
+# writes land INSIDE the compared tree: `brew` refetches Homebrew's API and the
+# two runs, seconds apart, record different payload hashes under
+# Library/Caches/Homebrew. That is a host escape, not a behavior difference
+# between the two binaries.
+#
+# Same runtime probe and same two prefixes as the Go half
+# (internal/cli/dryrun_property_test.go:146), so the two surfaces agree on what
+# "this host is contaminated" means. It disables the TREE field only; stdout,
+# stderr and exit code stay unconditional.
+#
+# Deliberately NOT an expected-diff.tsv row. That file records intentional
+# behavior changes, and a row for this would go red in CI where the escape never
+# fires - the registry would assert both "this must differ" and "this must not
+# differ" at once. This is the same call 01-03 made for the same defect.
+TREE_COMPARISON=enabled
+TREE_SKIP_REASON=""
+for BREW_PREFIX in /opt/homebrew/bin /home/linuxbrew/.linuxbrew/bin; do
+  if [ -d "$BREW_PREFIX" ]; then
+    TREE_COMPARISON=disabled
+    TREE_SKIP_REASON="host homebrew at $BREW_PREFIX defeats the PATH sandbox: BUG-06 internal/exec/brew.go:293 - read-only probes run real third-party binaries that write into HOME and refetch over the network, so the tree field cannot carry a claim on this host. CI runs this scenario in a clean ubuntu:22.04 container where neither prefix exists and the tree field is compared unconditionally."
+  fi
+done
+
 # Local helpers on top of assert.sh counters (no generic pass/fail there).
 # Both append to ERRORS: a variant that only bumps the counter drops the failure
 # detail from the terminal report.
@@ -175,6 +205,32 @@ NORMALIZE_OUTPUT() {
       -e "s|time=${STAMP}Z|time=@TIMESTAMP@|g"
 }
 
+# ISOLATE runs a command with the environment stripped to nothing but PATH and a
+# HOME pointing at the sandbox. `--home` alone is NOT enough and this is not a
+# precaution: `dot status` ignores `--home` entirely for config and state
+# resolution (`internal/cli/status_cmd.go:37` calls the bare `config.LoadState()`
+# where `apply.go:39-62` threads the flag through `config.LoadStateForHome`), so
+# a `--home`-only harness reads the invoking developer's real
+# ~/.config/dotfiles — real name, email, hostname, and live sync timestamps that
+# tick between the two binaries' runs. Recorded as BUG-07.
+#
+# `env -i` with a two-entry passthrough rather than a list of variables to
+# override, because the list is the thing that rots: XDG_CONFIG_HOME
+# (`internal/config/state.go:410`, `internal/syncer/helpers.go:125`) outranks
+# $HOME and defeats a HOME-only fix; XDG_CACHE_HOME, DOTFILES_HOME,
+# DOTFILES_NAME, DOTFILES_EMAIL, DOTFILES_WORKSPACE_PATH, USER, GITHUB_USER and
+# TZ all reach the resolution chain too, and the next one nobody has written yet
+# would reach it silently. Naming what survives closes the class; naming what to
+# clear closes today's members of it.
+#
+# Both binaries get the identical stripped environment, so this removes a
+# nondeterminism source rather than introducing a difference.
+ISOLATE() {
+  local RUN_HOME="$1"
+  shift
+  env -i HOME="$RUN_HOME" PATH="$PATH" "$@"
+}
+
 # RUN_ONE runs one matrix entry with one binary against a HOME nobody else has
 # touched, and leaves four artifacts behind: normalized stdout, normalized
 # stderr, the exit code, and the tree the run left in that HOME. A fresh HOME
@@ -190,13 +246,31 @@ RUN_ONE() {
   RUN_HOME=$(mktemp -d "$WORK_DIR/home-$TAG-XXXX")
   RUN_PHYSICAL=$(cd "$RUN_HOME" && pwd -P)
   CODE=0
-  "$BINARY" "${ARGS[@]}" --home "$RUN_HOME" \
+  ISOLATE "$RUN_HOME" "$BINARY" "${ARGS[@]}" --home "$RUN_HOME" \
     >"$WORK_DIR/$TAG.stdout.raw" 2>"$WORK_DIR/$TAG.stderr.raw" || CODE=$?
   printf '%s\n' "$CODE" >"$WORK_DIR/$TAG.exit_code"
   NORMALIZE_OUTPUT "$WORK_DIR/$TAG.stdout.raw" "$RUN_HOME" "$RUN_PHYSICAL" >"$WORK_DIR/$TAG.stdout"
   NORMALIZE_OUTPUT "$WORK_DIR/$TAG.stderr.raw" "$RUN_HOME" "$RUN_PHYSICAL" >"$WORK_DIR/$TAG.stderr"
   SNAPSHOT_TREE "$RUN_HOME" >"$WORK_DIR/$TAG.tree"
+  CHECK_ISOLATION "$COMMAND" "$TAG"
   rm -rf "$RUN_HOME"
+}
+
+# CHECK_ISOLATION fails when a run's output names the invoking user's real home.
+# Without it the isolation is a claim in a comment; with it, a command that
+# escapes the sandbox is reported as an escape rather than as a mysterious diff
+# on whatever live value it leaked. This is the assertion that would have caught
+# BUG-07 on the first run instead of on a lucky clock tick.
+CHECK_ISOLATION() {
+  local COMMAND="$1"
+  local TAG="$2"
+  # A HOST_HOME of / or empty would match everything; nothing to assert then.
+  if [ -z "$HOST_HOME" ] || [ "$HOST_HOME" = "/" ]; then
+    return 0
+  fi
+  if grep -qF "$HOST_HOME" "$WORK_DIR/$TAG.stdout" "$WORK_DIR/$TAG.stderr" 2>/dev/null; then
+    fail "dot $COMMAND ($TAG) escaped its sandbox: output names the invoking user's home ($HOST_HOME). The comparison for this command is reading live host state, so its verdict means nothing."
+  fi
 }
 
 # COMPARE_FIELD is the verdict: identical passes, a registered difference passes
@@ -245,6 +319,12 @@ else
   fail "expected-diff.tsv not found at $REGISTRY — without the registry every difference would fail, including the ones somebody deliberately registered"
 fi
 
+if [ "$TREE_COMPARISON" = enabled ]; then
+  pass "tree comparison enabled (no host package-manager prefix found)"
+else
+  echo "  ~ tree comparison SKIPPED on this host - $TREE_SKIP_REASON"
+fi
+
 if [ "$PREFLIGHT_FAILED" -ne 0 ]; then
   echo ""
   echo "Preflight failed — the comparison was not run."
@@ -262,7 +342,9 @@ for COMMAND in "${MATRIX[@]}"; do
   COMPARE_FIELD "$COMMAND" stdout "$WORK_DIR/baseline.stdout" "$WORK_DIR/current.stdout"
   COMPARE_FIELD "$COMMAND" stderr "$WORK_DIR/baseline.stderr" "$WORK_DIR/current.stderr"
   COMPARE_FIELD "$COMMAND" exit_code "$WORK_DIR/baseline.exit_code" "$WORK_DIR/current.exit_code"
-  COMPARE_FIELD "$COMMAND" tree "$WORK_DIR/baseline.tree" "$WORK_DIR/current.tree"
+  if [ "$TREE_COMPARISON" = enabled ]; then
+    COMPARE_FIELD "$COMMAND" tree "$WORK_DIR/baseline.tree" "$WORK_DIR/current.tree"
+  fi
 done
 
 echo ""
@@ -271,7 +353,7 @@ echo "--- dry-run applies still succeed on the current binary ---"
 # equally broken binaries agree perfectly, so assert the absolute contract too.
 for PROFILE in minimal full server; do
   ASSERT_HOME=$(mktemp -d "$WORK_DIR/assert-XXXX")
-  assert_exit_code 0 dot apply --profile "$PROFILE" --yes --dry-run --home "$ASSERT_HOME"
+  assert_exit_code 0 ISOLATE "$ASSERT_HOME" dot apply --profile "$PROFILE" --yes --dry-run --home "$ASSERT_HOME"
   rm -rf "$ASSERT_HOME"
 done
 
@@ -295,7 +377,12 @@ echo ""
 echo "--- budget ---"
 ELAPSED=$((SECONDS - START_SECONDS))
 echo "  comparison elapsed: ${ELAPSED}s (the baseline BUILD is outside this budget and is cached in CI)"
-if [ "$ELAPSED" -le "$BUDGET_SECONDS" ]; then
+if [ "$TREE_COMPARISON" != enabled ]; then
+  # BUG-06's probes refetch over the network into each fresh sandbox HOME, which
+  # dominates the wall clock on a contaminated host. Asserting the budget here
+  # would measure Homebrew, not the harness.
+  echo "  ~ budget NOT asserted: the same host escape that disabled the tree field also inflates the clock"
+elif [ "$ELAPSED" -le "$BUDGET_SECONDS" ]; then
   pass "comparison finished in ${ELAPSED}s, within the ${BUDGET_SECONDS}s budget"
 else
   fail "comparison took ${ELAPSED}s, over the ${BUDGET_SECONDS}s budget"
