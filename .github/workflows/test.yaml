@@ -127,7 +127,7 @@ jobs:
     env:
       TAG: dotfiles-test:linux
       MODULES: "packages shell node git ssh terminal tmux ai conda"
-      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script"
+      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script guard"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -161,6 +161,12 @@ jobs:
       - name: Scenarios
         if: always()
         run: |
+          # An empty list makes the loop below run zero iterations and exit 0,
+          # silently retiring every scenario while the job stays green.
+          if [ "$(echo $SCENARIOS | wc -w)" -eq 0 ]; then
+            echo "::error::SCENARIOS resolved to zero entries; no scenario would have run"
+            exit 1
+          fi
           failed=()
           for s in $SCENARIOS; do
             echo "::group::scenario $s"
