@@ -40,6 +40,20 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           bash scripts/govulncheck-gate.sh
+      - name: cmd/dot must not depend on the man-page toolchain
+        run: |
+          deps=$(go list -deps ./cmd/dot)
+          count=$(printf '%s\n' "$deps" | grep -c . || true)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::go list -deps ./cmd/dot produced no packages, so the import-graph assertion would have been vacuous"
+            exit 1
+          fi
+          echo "import-graph assertion: examined $count packages"
+          if printf '%s\n' "$deps" | grep -qE 'go-md2man|blackfriday'; then
+            echo "::error::go-md2man or blackfriday reached ./cmd/dot's import graph"
+            printf '%s\n' "$deps" | grep -E 'go-md2man|blackfriday'
+            exit 1
+          fi
 
   unit:
     strategy:
