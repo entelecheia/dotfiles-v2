@@ -148,7 +148,7 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		})
 		messages = append(messages, initMsgs...)
 		if err != nil {
-			fmt.Printf("  ⚠ workspace: ws.Init: %v (continuing)\n", err)
+			fmt.Fprintf(rc.out(), "  ⚠ workspace: ws.Init: %v (continuing)\n", err)
 		}
 	}
 

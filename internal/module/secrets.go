@@ -40,6 +40,6 @@ func (m *SecretsModule) Check(ctx context.Context, rc *RunContext) (*CheckResult
 
 func (m *SecretsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	msg := "secrets are managed via the CLI — run: dot secrets restore"
-	fmt.Printf("  ℹ %s: %s\n", m.Name(), msg)
+	fmt.Fprintf(rc.out(), "  ℹ %s: %s\n", m.Name(), msg)
 	return &ApplyResult{Changed: false, Messages: []string{msg}}, nil
 }

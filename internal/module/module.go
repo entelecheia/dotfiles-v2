@@ -3,6 +3,8 @@ package module
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
@@ -25,6 +27,17 @@ type RunContext struct {
 	DryRun   bool
 	Yes      bool
 	HomeDir  string
+	// Out receives module progress output; nil means os.Stdout.
+	Out io.Writer
+}
+
+// out returns the writer progress output goes to: rc.Out when set,
+// os.Stdout when rc or rc.Out is nil.
+func (rc *RunContext) out() io.Writer {
+	if rc == nil || rc.Out == nil {
+		return os.Stdout
+	}
+	return rc.Out
 }
 
 // CheckResult holds the result of a module's Check operation.
@@ -131,16 +144,16 @@ func RunAll(ctx context.Context, modules []Module, rc *RunContext) error {
 	for _, m := range modules {
 		check, err := m.Check(ctx, rc)
 		if err != nil {
-			fmt.Printf("  ⚠ %s: check error: %v\n", m.Name(), err)
+			fmt.Fprintf(rc.out(), "  ⚠ %s: check error: %v\n", m.Name(), err)
 			continue
 		}
 		if check.Satisfied {
-			fmt.Printf("  ✓ %s: already satisfied\n", m.Name())
+			fmt.Fprintf(rc.out(), "  ✓ %s: already satisfied\n", m.Name())
 			continue
 		}
 
 		for _, c := range check.Changes {
-			fmt.Printf("  → %s: %s\n", m.Name(), c.Description)
+			fmt.Fprintf(rc.out(), "  → %s: %s\n", m.Name(), c.Description)
 		}
 
 		if rc.DryRun {
@@ -149,13 +162,13 @@ func RunAll(ctx context.Context, modules []Module, rc *RunContext) error {
 
 		result, err := m.Apply(ctx, rc)
 		if err != nil {
-			fmt.Printf("  ✗ %s: %v\n", m.Name(), err)
+			fmt.Fprintf(rc.out(), "  ✗ %s: %v\n", m.Name(), err)
 			errors = append(errors, fmt.Sprintf("%s: %v", m.Name(), err))
 			continue
 		}
 		if result.Changed {
 			for _, msg := range result.Messages {
-				fmt.Printf("  ✓ %s: %s\n", m.Name(), msg)
+				fmt.Fprintf(rc.out(), "  ✓ %s: %s\n", m.Name(), msg)
 			}
 		}
 	}
