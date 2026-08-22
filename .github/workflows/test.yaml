@@ -38,6 +38,12 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12
+      # Runs here, not in the linux container: this exercises the REPO lint
+      # config against fixtures written into the tree, and /tests/scenarios in
+      # the image has no repo above it. Placed after the real gate so a bug in
+      # the scenario cannot mask a real lint finding.
+      - name: Seam lint rules are not a no-op
+        run: bash tests/scenarios/lint-seams-gate.sh
       - name: Dependency vulnerability gate
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
@@ -116,8 +122,8 @@ jobs:
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
