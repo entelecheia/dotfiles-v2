@@ -6,8 +6,6 @@
 # each proven by hand at authoring time -- and a one-time proof does not survive
 # a refactor, which is exactly how two of them silently broke:
 #
-#   - `mktemp -t <bare prefix>` was rejected by GNU mktemp, so the gate exited 1
-#     on every Linux run without evaluating a single finding (fixed in 5fea20d)
 #   - an empty scan file made `jq -s` read [] and the gate report
 #     "0 finding(s) seen" and pass, never having seen evidence a scan ran
 #   - `expires: "never"` sorted above every ISO date under bash lexical
@@ -15,6 +13,11 @@
 #
 # This scenario is the standing version of those proofs. A gate that has only
 # ever been observed passing is indistinguishable from a gate that does not run.
+#
+# Scope, stated so it is not overclaimed: every case here feeds the gate a
+# fixture, so none exercises the live-scan path. The `mktemp` defect that made
+# the gate exit 1 on every Linux run lived on that path and is covered by the
+# real `Dependency vulnerability gate` step in the same job, not by this file.
 # shellcheck source=tests/assert.sh disable=SC1091
 set -euo pipefail
 source "$(dirname "$0")/../assert.sh"
@@ -109,8 +112,17 @@ run_gate empty.json
 expect_exit 1 "empty scanner output is refused, not read as zero findings"
 expect_says "no scanner config record" "the refusal says why"
 
+# Seed a LIVE allowlist entry for the finding this fixture carries, so the
+# called-finding path cannot supply the exit code. Without it the case passes
+# for the wrong reason: no-config.json holds a called, unallowlisted
+# GO-2026-5970, so the gate exits 1 on the finding whether or not the
+# config-record guard exists -- and the guard could be degraded to a bare
+# `length > 0` check with this scenario still green. Assert the REASON, not
+# just the exit code.
+printf '{"allow":[{"id":"GO-2026-5970","module":"golang.org/x/text","expires":"2099-01-01","reason":"scenario: isolate the config-record guard"}]}\n' > "$ALLOW"
 run_gate no-config.json
 expect_exit 1 "a findings stream with no config record is refused"
+expect_says "no scanner config record" "the refusal is about the missing config record, not about the finding"
 
 echo "--- allowlist suppresses only a live, well-formed entry ---"
 printf '{"allow":[{"id":"GO-2026-5970","module":"golang.org/x/text","expires":"2099-01-01","reason":"scenario"}]}\n' > "$ALLOW"

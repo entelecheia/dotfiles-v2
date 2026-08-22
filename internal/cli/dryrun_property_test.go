@@ -246,3 +246,38 @@ func addedSnapshotLines(before, after string) []string {
 func snapshotLinePath(line string) string {
 	return strings.SplitN(line, "\t", 2)[0]
 }
+
+// TestSnapshotTree_CatchesSymlinkRetarget is the internal/cli twin of the
+// identical assertion in internal/exec. Both copies of snapshotTree recorded a
+// symlink's path, type and mode but not its target, so a retargeted symlink
+// compared as identical (T-01-18, T-01-30).
+//
+// This copy is tested separately rather than relying on the exec one because
+// Phase 3 moves 16,387 lines out of internal/cli: this is the copy most likely
+// to be edited, and "the other file has a test" is not a property the compiler
+// enforces.
+func TestSnapshotTree_CatchesSymlinkRetarget(t *testing.T) {
+	build := func(target string) string {
+		dir := t.TempDir()
+		for _, name := range []string{"real-one", "real-two"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("same bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(target, filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	before := snapshotTree(t, build("real-one"))
+	after := snapshotTree(t, build("real-two"))
+
+	if before == after {
+		t.Errorf("snapshotTree reported two trees as identical when their symlink points elsewhere;\n"+
+			"a retargeted symlink must be visible (T-01-18, T-01-30)\nsnapshot:\n%s", before)
+	}
+	if !strings.Contains(before, "-> real-one") || !strings.Contains(after, "-> real-two") {
+		t.Errorf("snapshotTree did not record link targets;\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
