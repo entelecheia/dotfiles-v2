@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "profile": "sync",
+  "path": "@ROOT@/.dotfiles/sync/log/sync.log",
+  "content": ""
+}

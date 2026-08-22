@@ -1,0 +1,17 @@
+{
+  "pending_count": 1,
+  "servers": [
+    {
+      "name": "golden-connector",
+      "needs_auth": true,
+      "type": "connector",
+      "url": ""
+    },
+    {
+      "name": "golden-http",
+      "needs_auth": false,
+      "type": "http",
+      "url": "https://mcp.golden.invalid/sse"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "_comment": "Allowlist for scripts/govulncheck-gate.sh. Standard-library findings are never allowlistable: an entry whose module is \"stdlib\" is rejected as malformed, and a called stdlib finding is fatal regardless of this file. Close those by raising the go directive in go.mod instead. Third-party entries need id, module, reason (naming the upstream tracking issue), and expires (YYYY-MM-DD); the default expiry window is 60 days from the date the entry is added, and an expired entry fails the build again.",
+  "allow": []
+}

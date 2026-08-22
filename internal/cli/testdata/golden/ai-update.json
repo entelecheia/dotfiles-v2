@@ -1,0 +1,63 @@
+{
+  "failed": 0,
+  "steps": [
+    {
+      "tool": "claude",
+      "step": "self-update",
+      "status": "skipped",
+      "detail": "claude not in PATH"
+    },
+    {
+      "tool": "codex",
+      "step": "self-update",
+      "status": "skipped",
+      "detail": "codex not in PATH"
+    },
+    {
+      "tool": "copilot",
+      "step": "self-update",
+      "status": "skipped",
+      "detail": "copilot not in PATH"
+    },
+    {
+      "tool": "gemini",
+      "step": "npm-install",
+      "status": "skipped",
+      "detail": "neither fnm nor npm in PATH"
+    },
+    {
+      "tool": "kimi",
+      "step": "self-update",
+      "status": "skipped",
+      "detail": "kimi not in PATH"
+    },
+    {
+      "tool": "kiro",
+      "step": "self-update",
+      "status": "skipped",
+      "detail": "kiro-cli not in PATH"
+    },
+    {
+      "tool": "cursor",
+      "step": "self-update",
+      "status": "skipped",
+      "detail": "cursor-agent not in PATH"
+    },
+    {
+      "tool": "skills",
+      "step": "maru",
+      "status": "skipped",
+      "detail": "maru not in PATH"
+    }
+  ],
+  "tools": [
+    "claude",
+    "codex",
+    "copilot",
+    "gemini",
+    "kimi",
+    "kiro",
+    "cursor",
+    "skills"
+  ]
+}

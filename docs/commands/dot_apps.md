@@ -1,0 +1,41 @@
+## dot apps
+
+macOS app install and settings backup/restore
+
+### Synopsis
+
+Manage macOS cask applications and their user settings.
+
+Subcommands:
+  list     Show the embedded cask catalog (groups, defaults).
+  install  Install the selected casks (uses saved state, brew install --cask).
+  status   Report install + backup presence for each tracked app.
+  backup   Copy app settings to the host-scoped backup archive.
+  restore  Copy app settings back from the archive.
+
+### Options
+
+```
+  -h, --help   help for apps
+```
+
+### Options inherited from parent commands
+
+```
+      --config string    Path to custom config YAML
+      --dry-run          Show what would be done without executing
+      --home string      Override home directory (for admin setup of other users)
+      --module strings   Run specific modules only
+      --profile string   Profile name (minimal, full, server)
+      --yes              Unattended mode (skip all prompts)
+```
+
+### SEE ALSO
+
+* [dot](dot.md)	 - User environment & workspace management tool
+* [dot apps backup](dot_apps_backup.md)	 - Snapshot macOS app settings to the backup archive
+* [dot apps install](dot_apps_install.md)	 - Install macOS cask apps (interactive by default; args skip the picker)
+* [dot apps list](dot_apps_list.md)	 - Show the cask catalog (groups + defaults)
+* [dot apps restore](dot_apps_restore.md)	 - Restore macOS app settings from the backup archive
+* [dot apps status](dot_apps_status.md)	 - Show install + backup presence for tracked apps
+

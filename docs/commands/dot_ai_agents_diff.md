@@ -1,0 +1,30 @@
+## dot ai agents diff
+
+Show rendered-vs-live diff for agents targets
+
+```
+dot ai agents diff [flags]
+```
+
+### Options
+
+```
+  -h, --help          help for diff
+      --tool string   Comma-separated tool IDs to diff
+```
+
+### Options inherited from parent commands
+
+```
+      --config string    Path to custom config YAML
+      --dry-run          Show what would be done without executing
+      --home string      Override home directory (for admin setup of other users)
+      --module strings   Run specific modules only
+      --profile string   Profile name (minimal, full, server)
+      --yes              Unattended mode (skip all prompts)
+```
+
+### SEE ALSO
+
+* [dot ai agents](dot_ai_agents.md)	 - Manage the shared AI agents instruction SSOT
+

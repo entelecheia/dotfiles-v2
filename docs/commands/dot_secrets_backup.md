@@ -1,0 +1,36 @@
+## dot secrets backup
+
+Copy encrypted secrets to a destination directory
+
+### Synopsis
+
+Copy the encrypted *.age files from the local store to a destination.
+
+With no destination, defaults to <backup-root>/secrets-age/<host> — the
+same cloud root (Dropbox-preferred) the rest of dot backs up to.
+
+```
+dot secrets backup [destination] [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for backup
+```
+
+### Options inherited from parent commands
+
+```
+      --config string    Path to custom config YAML
+      --dry-run          Show what would be done without executing
+      --home string      Override home directory (for admin setup of other users)
+      --module strings   Run specific modules only
+      --profile string   Profile name (minimal, full, server)
+      --yes              Unattended mode (skip all prompts)
+```
+
+### SEE ALSO
+
+* [dot secrets](dot_secrets.md)	 - Manage encrypted secrets
+

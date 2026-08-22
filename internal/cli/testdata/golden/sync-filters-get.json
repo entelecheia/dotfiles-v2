@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "profile": "sync",
+  "kind": "include",
+  "path": "@ROOT@/.dotfiles/sync/include.txt",
+  "activeCount": 0,
+  "content": ""
+}

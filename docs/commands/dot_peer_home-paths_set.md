@@ -1,0 +1,30 @@
+## dot peer home-paths set
+
+Replace the peer host-path list from stdin
+
+```
+dot peer home-paths set [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for set
+      --json   print the updated document
+```
+
+### Options inherited from parent commands
+
+```
+      --config string    Path to custom config YAML
+      --dry-run          Show what would be done without executing
+      --home string      Override home directory (for admin setup of other users)
+      --module strings   Run specific modules only
+      --profile string   Profile name (minimal, full, server)
+      --yes              Unattended mode (skip all prompts)
+```
+
+### SEE ALSO
+
+* [dot peer home-paths](dot_peer_home-paths.md)	 - Read or replace the peer host-path allowlist
+

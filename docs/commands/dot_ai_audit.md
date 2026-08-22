@@ -1,0 +1,27 @@
+## dot ai audit
+
+Inspect append-only dot ai audit events
+
+### Options
+
+```
+  -h, --help   help for audit
+```
+
+### Options inherited from parent commands
+
+```
+      --config string    Path to custom config YAML
+      --dry-run          Show what would be done without executing
+      --home string      Override home directory (for admin setup of other users)
+      --module strings   Run specific modules only
+      --profile string   Profile name (minimal, full, server)
+      --yes              Unattended mode (skip all prompts)
+```
+
+### SEE ALSO
+
+* [dot ai](dot_ai.md)	 - AI CLI/config helpers and settings backup/restore
+* [dot ai audit summary](dot_ai_audit_summary.md)	 - Summarize dot ai audit events by type
+* [dot ai audit tail](dot_ai_audit_tail.md)	 - Print the last N dot ai audit events as JSONL
+

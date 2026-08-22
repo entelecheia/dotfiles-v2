@@ -6,7 +6,8 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -s /bin/bash testuser \
     && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 COPY dot /usr/local/bin/dot
-RUN chmod +x /usr/local/bin/dot && ln -sf /usr/local/bin/dot /usr/local/bin/dotfiles
+COPY dot-baseline /usr/local/bin/dot-baseline
+RUN chmod +x /usr/local/bin/dot /usr/local/bin/dot-baseline && ln -sf /usr/local/bin/dot /usr/local/bin/dotfiles
 COPY scripts/ /scripts/
 COPY tests/ /tests/
 RUN chmod +x /tests/*.sh && find /tests/scenarios -name '*.sh' -exec chmod +x {} +
