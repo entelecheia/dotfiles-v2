@@ -45,6 +45,17 @@ type AgentsManager struct {
 	HomeDir string
 	SSOTDir string
 	Tools   []AgentTool
+	// Out receives progress and prompt output; nil means os.Stdout.
+	Out io.Writer
+}
+
+// out returns the writer progress and prompt output goes to: m.Out when set,
+// os.Stdout when m or m.Out is nil.
+func (m *AgentsManager) out() io.Writer {
+	if m == nil || m.Out == nil {
+		return os.Stdout
+	}
+	return m.Out
 }
 
 // AgentStatus describes one rendered target's sync state.
@@ -634,19 +645,19 @@ func (m *AgentsManager) authorInteractive() (*AuthorResult, error) {
 	var changed []string
 	for _, section := range defaultAgentSections {
 		current := strings.TrimSpace(markdownSection(doc, section))
-		fmt.Printf("\n## %s\n", section)
+		fmt.Fprintf(m.out(), "\n## %s\n", section)
 		if current == "" {
-			fmt.Println("(empty)")
+			fmt.Fprintln(m.out(), "(empty)")
 		} else {
-			fmt.Println(current)
+			fmt.Fprintln(m.out(), current)
 		}
-		fmt.Print("[k]eep, [r]eplace line, [e]dit in $EDITOR, [d]elete: ")
+		fmt.Fprint(m.out(), "[k]eep, [r]eplace line, [e]dit in $EDITOR, [d]elete: ")
 		answer, _ := reader.ReadString('\n')
 		switch strings.ToLower(strings.TrimSpace(answer)) {
 		case "", "k", "keep":
 			continue
 		case "r", "replace":
-			fmt.Print("New value: ")
+			fmt.Fprint(m.out(), "New value: ")
 			value, _ := reader.ReadString('\n')
 			doc = setMarkdownSection(doc, section, strings.TrimRight(value, "\r\n"))
 			changed = append(changed, section)
@@ -661,7 +672,7 @@ func (m *AgentsManager) authorInteractive() (*AuthorResult, error) {
 			doc = deleteMarkdownSection(doc, section)
 			changed = append(changed, section)
 		default:
-			fmt.Println("unrecognized action; keeping section")
+			fmt.Fprintln(m.out(), "unrecognized action; keeping section")
 		}
 	}
 	didChange := normalizedHash(data) != normalizedHash([]byte(doc))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -24,6 +25,17 @@ type InitOptions struct {
 	// empty means the legacy <workspacePath>/vault. ~-form is expanded
 	// against the process home — callers honoring --home must pre-expand.
 	VaultPath string
+	// Out receives progress and prompt output; nil means os.Stdout.
+	Out io.Writer
+}
+
+// out returns the writer progress output goes to: o.Out when set, os.Stdout
+// otherwise. Value receiver because Init takes opts by value.
+func (o InitOptions) out() io.Writer {
+	if o.Out == nil {
+		return os.Stdout
+	}
+	return o.Out
 }
 
 // targetState classifies the current state of a clone target.
@@ -72,12 +84,12 @@ func Init(ctx context.Context, runner *exec.Runner, workspacePath string,
 
 	// Ensure gh is authenticated if we will clone (private repos need auth).
 	if needsClone && runner.CommandExists("gh") && !ghauth.Authenticated(runner) {
-		fmt.Println("  GitHub authentication required for private repos.")
+		fmt.Fprintln(opts.out(), "  GitHub authentication required for private repos.")
 		if opts.Yes {
-			fmt.Println("  ⚠ Skipping gh auth in --yes mode (run 'gh auth login' manually if clone fails)")
+			fmt.Fprintln(opts.out(), "  ⚠ Skipping gh auth in --yes mode (run 'gh auth login' manually if clone fails)")
 		} else if !runner.DryRun {
 			if err := ghauth.Login(ctx, runner); err != nil {
-				fmt.Printf("  ⚠ gh auth login failed: %v (clone may fail for private repos)\n", err)
+				fmt.Fprintf(opts.out(), "  ⚠ gh auth login failed: %v (clone may fail for private repos)\n", err)
 			}
 		}
 	}
@@ -110,7 +122,7 @@ func Init(ctx context.Context, runner *exec.Runner, workspacePath string,
 		}
 
 		if state == statePopulated && opts.Force && !opts.Yes && !runner.DryRun {
-			fmt.Printf("Re-clone %s? This will DELETE existing contents.\n", target)
+			fmt.Fprintf(opts.out(), "Re-clone %s? This will DELETE existing contents.\n", target)
 			ok, err := ui.ConfirmBool("Continue?", false, false)
 			if err != nil {
 				return msgs, err
