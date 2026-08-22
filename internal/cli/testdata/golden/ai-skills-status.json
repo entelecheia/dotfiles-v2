@@ -1,0 +1,24 @@
+{
+  "provider": "maru",
+  "ssot_path": "@HOME@/.maru/skills",
+  "tools": [
+    "claude"
+  ],
+  "sources": [
+    {
+      "name": "golden-skill",
+      "path": "@HOME@/.maru/skills/golden-skill"
+    }
+  ],
+  "items": [
+    {
+      "tool_id": "claude",
+      "tool_root": "@HOME@/.claude/skills",
+      "skill_name": "golden-skill",
+      "source_path": "@HOME@/.maru/skills/golden-skill",
+      "target_path": "@HOME@/.claude/skills/golden-skill",
+      "status": "conflict",
+      "message": "target exists and is not a symlink"
+    }
+  ]
+}

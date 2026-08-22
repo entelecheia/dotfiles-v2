@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "profile": "sync",
+  "kind": "exclude",
+  "path": "@ROOT@/.dotfiles/sync/exclude.txt",
+  "activeCount": 2,
+  "content": "*.tmp\nbuild/\n"
+}

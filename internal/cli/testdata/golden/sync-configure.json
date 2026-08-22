@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "kind": "mirror",
+  "profile": "sync",
+  "configured": true,
+  "workspacePath": "@ROOT@",
+  "storeDir": "@ROOT@/.dotfiles/sync",
+  "target": {
+    "kind": "local",
+    "spec": "local:@HOME@/gdrive-workspace/work/",
+    "path": "@HOME@/gdrive-workspace/work/"
+  },
+  "localExists": true,
+  "targetExists": true,
+  "paused": false,
+  "lockHeld": false,
+  "owner": "golden-machine",
+  "canPush": false,
+  "machineNames": ["@MACHINE@"],
+  "filterMode": "include",
+  "allowCount": 0,
+  "submoduleCount": 0,
+  "propagation": {
+    "create": true,
+    "update": true,
+    "delete": false
+  },
+  "maxDelete": 1000,
+  "lastPullAt": null,
+  "lastPushAt": null,
+  "lastIntakeAt": null,
+  "conflictCount": 0,
+  "logPath": "@ROOT@/.dotfiles/sync/log/sync.log",
+  "includePath": "@ROOT@/.dotfiles/sync/include.txt",
+  "excludePath": "@ROOT@/.dotfiles/sync/exclude.txt",
+  "ignorePath": "@ROOT@/.dotfiles/sync/ignore.txt",
+  "allowPath": "@ROOT@/.dotfiles/sync/allow.txt",
+  "jobs": [
+    {
+      "id": "mirror-push",
+      "action": "push",
+      "label": "com.dotfiles.sync",
+      "intervalSeconds": 600,
+      "mode": "clean",
+      "state": "not installed",
+      "lastRunAt": null
+    },
+    {
+      "id": "mirror-pull",
+      "action": "pull",
+      "label": "com.dotfiles.sync-intake",
+      "intervalSeconds": 0,
+      "mode": "clean",
+      "state": "not installed",
+      "lastRunAt": null
+    }
+  ]
+}

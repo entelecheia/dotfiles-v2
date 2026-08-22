@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "kind": "peer",
+  "profile": {
+    "schemaVersion": 1,
+    "kind": "peer-profile",
+    "profile": "peer",
+    "configured": true,
+    "workspacePath": "@ROOT@",
+    "storeDir": "@ROOT@/.dotfiles/peer",
+    "target": {
+      "kind": "local",
+      "spec": "local:@HOME@/gdrive-workspace/work/",
+      "path": "@HOME@/gdrive-workspace/work/"
+    },
+    "localExists": true,
+    "targetExists": true,
+    "paused": false,
+    "lockHeld": false,
+    "owner": "golden-machine",
+    "canPush": false,
+    "machineNames": ["@MACHINE@"],
+    "filterMode": "include",
+    "allowCount": 0,
+    "submoduleCount": 0,
+    "propagation": {
+      "create": true,
+      "update": true,
+      "delete": false
+    },
+    "maxDelete": 1000,
+    "lastPullAt": null,
+    "lastPushAt": null,
+    "lastIntakeAt": null,
+    "conflictCount": 0,
+    "logPath": "@ROOT@/.dotfiles/peer/log/sync.log",
+    "includePath": "@ROOT@/.dotfiles/peer/include.txt",
+    "excludePath": "@ROOT@/.dotfiles/peer/exclude.txt",
+    "ignorePath": "@ROOT@/.dotfiles/peer/ignore.txt",
+    "allowPath": "@ROOT@/.dotfiles/peer/allow.txt",
+    "jobs": []
+  },
+  "job": {
+    "id": "peer-sync",
+    "action": "peer-sync",
+    "label": "com.dotfiles.peer",
+    "intervalSeconds": 0,
+    "mode": "safe-bidirectional",
+    "state": "not installed",
+    "lastRunAt": null
+  },
+  "lastExitCode": null,
+  "runCount": null,
+  "homePathsPath": "@ROOT@/.dotfiles/peer/home-paths.txt"
+}

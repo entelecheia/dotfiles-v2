@@ -1,0 +1,51 @@
+{
+  "roots": [
+    {
+      "tool": "codex",
+      "path": "@HOME@/.codex/skills"
+    },
+    {
+      "tool": "claude",
+      "path": "@HOME@/.claude/skills"
+    },
+    {
+      "tool": "agents",
+      "path": "@HOME@/.agents/skills"
+    },
+    {
+      "tool": "antigravity",
+      "path": "@HOME@/.gemini/antigravity/skills"
+    },
+    {
+      "tool": "gemini",
+      "path": "@HOME@/.gemini/skills"
+    },
+    {
+      "tool": "antigravity",
+      "path": "@HOME@/.gemini/config/plugins"
+    },
+    {
+      "tool": "antigravity",
+      "path": "@HOME@/.gemini/antigravity-cli/plugins"
+    }
+  ],
+  "items": [
+    {
+      "tool": "claude",
+      "root": "@HOME@/.claude/skills",
+      "path": "@HOME@/.claude/skills/golden-skill/SKILL.md",
+      "rel_path": "golden-skill/SKILL.md",
+      "status": "valid",
+      "frontmatter": {
+        "name": "golden-skill",
+        "description": "A seeded skill so the scan report has one real item.",
+        "schema_version": "v1"
+      }
+    }
+  ],
+  "counts": {
+    "invalid": 0,
+    "legacy": 0,
+    "valid": 1
+  }
+}
