@@ -195,3 +195,40 @@ func snapshotTree(t *testing.T, root string) string {
 	sort.Strings(lines) // WalkDir is lexical per directory; sort makes it total
 	return strings.Join(lines, "\n")
 }
+
+// TestSnapshotTree_CatchesSymlinkRetarget keeps snapshotTree honest about the
+// one artifact this tool primarily creates.
+//
+// The register recorded symlinks as covered (T-01-18, T-01-30) while every
+// snapshot implementation stored a link's path, type and mode but not its
+// target, so a retargeted symlink compared as identical. That was fixed, but
+// the fix was proven once by hand -- and a one-time proof does not survive a
+// refactor. This is the standing version.
+//
+// Both trees hold byte-identical regular files, so the ONLY difference is
+// where the link points. Before the fix this assertion failed.
+func TestSnapshotTree_CatchesSymlinkRetarget(t *testing.T) {
+	build := func(target string) string {
+		dir := t.TempDir()
+		for _, name := range []string{"real-one", "real-two"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("same bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(target, filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	before := snapshotTree(t, build("real-one"))
+	after := snapshotTree(t, build("real-two"))
+
+	if before == after {
+		t.Errorf("snapshotTree reported two trees as identical when their symlink points elsewhere;\n"+
+			"a retargeted symlink must be visible (T-01-18, T-01-30)\nsnapshot:\n%s", before)
+	}
+	if !strings.Contains(before, "-> real-one") || !strings.Contains(after, "-> real-two") {
+		t.Errorf("snapshotTree did not record link targets;\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}

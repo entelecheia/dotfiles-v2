@@ -110,8 +110,8 @@ jobs:
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
@@ -159,7 +159,7 @@ jobs:
     env:
       TAG: dotfiles-test:linux
       MODULES: "packages shell node git ssh terminal tmux ai conda"
-      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script guard dry-run-empty-home differential"
+      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script guard dry-run-empty-home differential govulncheck-gate"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

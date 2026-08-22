@@ -332,3 +332,56 @@ func assertNonDegenerateGolden(t *testing.T, surface, got string) {
 			surface, got)
 	}
 }
+
+// TestAssertNonDegenerateGolden pins the guard that stops a degenerate capture
+// from becoming a baseline (T-01-11).
+//
+// The register recorded that guard as shipped when only its human halves
+// existed. It now exists, but the three injections that proved it were run by
+// hand -- and a one-time proof does not survive a refactor, which is the same
+// mistake T-01-11 was. This is the standing version.
+//
+// The helper calls t.Fatalf, so each case runs in a subtest whose failure is
+// the expected outcome; the assertion is on WHICH cases fail, not on the call
+// returning.
+func TestAssertNonDegenerateGolden(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		got       string
+		wantFatal bool
+	}{
+		{name: "empty object pins nothing", got: "{}\n", wantFatal: true},
+		{name: "bare null", got: "null\n", wantFatal: true},
+		{name: "not JSON at all", got: "error: store unavailable\n", wantFatal: true},
+		{name: "empty output", got: "", wantFatal: true},
+		{name: "JSON array is not an object", got: "[]\n", wantFatal: true},
+		{name: "one key is enough", got: `{"conflictCount":0}` + "\n", wantFatal: false},
+		{name: "a real document", got: `{"owner":"golden-machine","canPush":true}` + "\n", wantFatal: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotFatal := didFatal(func(sub *testing.T) {
+				assertNonDegenerateGolden(sub, "test surface", tc.got)
+			})
+			if gotFatal != tc.wantFatal {
+				t.Errorf("assertNonDegenerateGolden(%q): fatal=%v, want fatal=%v",
+					tc.got, gotFatal, tc.wantFatal)
+			}
+		})
+	}
+}
+
+// didFatal runs fn on a throwaway *testing.T and reports whether it failed.
+// t.Fatalf unwinds via runtime.Goexit, so fn runs on its own goroutine and the
+// helper waits for it to finish either way.
+func didFatal(fn func(*testing.T)) bool {
+	var inner *testing.T
+	done := make(chan struct{})
+	t2 := &testing.T{}
+	go func() {
+		defer close(done)
+		fn(t2)
+	}()
+	<-done
+	inner = t2
+	return inner.Failed()
+}
