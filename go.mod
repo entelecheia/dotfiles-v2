@@ -1,12 +1,12 @@
 module github.com/entelecheia/dotfiles-v2
 
-go 1.25.8
+go 1.25.14
 
 require (
 	charm.land/huh/v2 v2.0.3
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/text v0.23.0
+	golang.org/x/text v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
