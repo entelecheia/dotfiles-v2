@@ -81,6 +81,25 @@ jobs:
           go-version-file: "go.mod"
       - name: Unit tests with coverage
         run: go test ./... -race -count=1 -coverprofile=coverage.out
+      # `go test ./...` prints `ok` for a package whose test skipped, so a guard
+      # that never runs is indistinguishable from one that passed. GUARD-03's Go
+      # half skips on any host carrying a Homebrew prefix, which is every hosted
+      # macOS runner and possibly every hosted Ubuntu one. Without this step
+      # nobody can tell from a CI log whether it contributes coverage at all.
+      # Reporting is not enough: the else branch fails rather than letting an
+      # unrecognised state pass as good news.
+      - name: GUARD-03 Go half - did it run or skip?
+        run: |
+          go test ./internal/cli -run TestApply_DryRunLeavesEmptyHomeUntouched \
+            -count=1 -v 2>&1 | tee guard03.log
+          if grep -q '^ *--- SKIP' guard03.log; then
+            echo "::notice title=GUARD-03 Go half::SKIPPED on ${{ runner.os }} - a Homebrew prefix defeats the PATH sandbox (BUG-06). GUARD-03 is enforced by the dry-run-empty-home container scenario in the linux job, not here."
+          elif grep -q '^ *--- PASS' guard03.log; then
+            echo "::notice title=GUARD-03 Go half::RAN and PASSED on ${{ runner.os }} - this runner has no Homebrew prefix."
+          else
+            echo "::error title=GUARD-03 Go half::neither PASS nor SKIP was observed, so the guard's status is unknown"
+            exit 1
+          fi
       - name: Build binary
         run: go build -o bin/dot ./cmd/dot/
       - run: ./bin/dot --help
