@@ -16,15 +16,21 @@ import (
 // shared backup root (which now prefers Dropbox via DetectCloudCandidate),
 // matching the one-stop wizard's <root>/secrets-age/<host> layout. Used when
 // `dot secrets backup` is called without an explicit destination.
-func defaultSecretsBackupDest(cmd *cobra.Command, ses *secretsSession) string {
+func defaultSecretsBackupDest(cmd *cobra.Command, ses *secretsSession) (string, error) {
+	// Only this branch needs state: it is what names the root. An explicit
+	// destination is resolved without ever reading the state file.
+	state, err := ses.requireState()
+	if err != nil {
+		return "", err
+	}
 	// resolveBackupRoot reads --to/--from (not registered here — the guards
 	// skip them safely), then state.BackupRoot, then cloud-detect, then local.
-	root := resolveBackupRoot(cmd, ses.State, ses.Home)
+	root := resolveBackupRoot(cmd, state, ses.Home)
 	host, _ := os.Hostname()
 	if i := strings.Index(host, "."); i > 0 {
 		host = host[:i]
 	}
-	return filepath.Join(root, "secrets-age", host)
+	return filepath.Join(root, "secrets-age", host), nil
 }
 
 // newSecretsBackupCmd copies *.age files to a destination directory.
@@ -51,7 +57,10 @@ same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
 			if len(args) == 1 {
 				dest = args[0]
 			} else {
-				dest = defaultSecretsBackupDest(cmd, ses)
+				dest, err = defaultSecretsBackupDest(cmd, ses)
+				if err != nil {
+					return err
+				}
 				p.Line("Destination (default): %s", dest)
 			}
 
