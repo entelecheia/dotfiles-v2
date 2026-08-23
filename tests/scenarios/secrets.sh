@@ -100,6 +100,13 @@ YAML
 # GNU findutils and coreutils are installed in the image.
 SNAPSHOT_HOME() {
   local DIR="$1"
+  # `-printf` is a GNU extension. BSD find (macOS, the BSDs) does not have it,
+  # and under `set -euo pipefail` the pipeline would die before `report` ran —
+  # so the scenario would exit non-zero with NO assertion output at all, which
+  # reads as a product failure rather than a missing dependency. Say so instead.
+  if ! find . -maxdepth 0 -printf '' 2>/dev/null; then
+    ABORT "SNAPSHOT_HOME needs GNU findutils for 'find -printf'; this host has BSD find. The CI image installs findutils; to run this scenario locally, put a GNU find first on PATH."
+  fi
   find "$DIR" -mindepth 1 -printf '%P\t%y\t%m\n' |
     while IFS=$'\t' read -r ENTRY_PATH ENTRY_TYPE ENTRY_MODE; do
       if [ "$ENTRY_TYPE" = "f" ]; then
