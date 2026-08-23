@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/secrets"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
@@ -98,9 +97,13 @@ func newSecretsInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Encrypt SSH key and shell secrets with age",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			state, err := config.LoadState()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
-				return fmt.Errorf("loading state: %w", err)
+				return err
+			}
+			state, err := ses.requireState()
+			if err != nil {
+				return err
 			}
 
 			// Checked before any path lookup: a state with no recipients
@@ -109,21 +112,12 @@ func newSecretsInitCmd() *cobra.Command {
 				return fmt.Errorf("no age recipients configured; set secrets.age_recipients in state")
 			}
 
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return err
-			}
-			storeDir, err := secrets.StorePath()
-			if err != nil {
-				return err
-			}
-
 			p := printerFrom(cmd)
 			if err := secrets.Init(context.Background(), secrets.InitOptions{
 				Runner:   secretsRunner(cmd),
 				State:    state,
-				Home:     home,
-				StoreDir: storeDir,
+				Home:     ses.Home,
+				StoreDir: ses.StoreDir,
 				Scaffold: scaffold,
 				Progress: renderSecretsEvent(p),
 			}); err != nil {
@@ -145,11 +139,11 @@ func newSecretsRestoreCmd() *cobra.Command {
 		Short: "Decrypt secrets from a source directory",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			state, err := config.LoadState()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
-				return fmt.Errorf("loading state: %w", err)
+				return err
 			}
-			home, err := os.UserHomeDir()
+			state, err := ses.requireState()
 			if err != nil {
 				return err
 			}
@@ -160,7 +154,7 @@ func newSecretsRestoreCmd() *cobra.Command {
 			if _, err := secrets.Restore(context.Background(), secrets.RestoreOptions{
 				Runner:   secretsRunner(cmd),
 				State:    state,
-				Home:     home,
+				Home:     ses.Home,
 				Src:      args[0],
 				Confirm:  confirmSecrets(yes),
 				Progress: renderSecretsEvent(p),
@@ -179,17 +173,11 @@ func newSecretsStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Check status of secrets files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			state, err := config.LoadState()
-			if err != nil {
-				return fmt.Errorf("loading state: %w", err)
-			}
-
-			home, err := os.UserHomeDir()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
 				return err
 			}
-
-			storeDir, err := secrets.StorePath()
+			state, err := ses.requireState()
 			if err != nil {
 				return err
 			}
@@ -197,8 +185,8 @@ func newSecretsStatusCmd() *cobra.Command {
 			res, err := secrets.Status(secrets.StatusOptions{
 				Runner:   secretsRunner(cmd),
 				State:    state,
-				Home:     home,
-				StoreDir: storeDir,
+				Home:     ses.Home,
+				StoreDir: ses.StoreDir,
 			})
 			if err != nil {
 				return err
@@ -273,12 +261,12 @@ func newSecretsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List encrypted secrets files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			storeDir, err := secrets.StorePath()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
 				return err
 			}
 
-			res, err := secrets.List(secrets.ListOptions{StoreDir: storeDir})
+			res, err := secrets.List(secrets.ListOptions{StoreDir: ses.StoreDir})
 			p := printerFrom(cmd)
 			if err != nil {
 				return err
@@ -288,7 +276,7 @@ func newSecretsListCmd() *cobra.Command {
 				return nil
 			}
 
-			p.Line("Secrets store: %s\n", storeDir)
+			p.Line("Secrets store: %s\n", ses.StoreDir)
 			for _, e := range res.Entries {
 				p.Line("  %-30s  %d bytes", e.Name, e.Size)
 			}

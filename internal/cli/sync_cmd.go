@@ -115,6 +115,7 @@ func syncBootstrapOptions(cmd *cobra.Command, readOnly bool) syncer.BootstrapOpt
 		Verbose:       verbose,
 		FilterMode:    filterMode,
 		FilterModeSet: cmd.Flags().Changed("filter-mode"),
+		Home:          homeOverrideFrom(cmd),
 	}
 }
 

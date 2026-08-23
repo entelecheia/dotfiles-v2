@@ -27,7 +27,9 @@ func TestApplyLocalConfigPreviewProjectsPendingChanges(t *testing.T) {
 		PushMode:     syncer.ModeForce,
 		PullMode:     syncer.ModeClean,
 	}
-	if err := applyLocalConfigPreview(cfg, local); err != nil {
+	// The home only matters for a local target's ~ expansion; this row's
+	// target is an ssh spec, so any home leaves the projection unchanged.
+	if err := applyLocalConfigPreview(cfg, local, t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Target.Kind != syncer.TargetSSH || cfg.MirrorPath != "" || cfg.Owner != "new" {

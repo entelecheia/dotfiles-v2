@@ -60,7 +60,21 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	return loadConfigAt(p)
+}
 
+// LoadConfigForHome is like LoadConfig but resolves the registry against an
+// explicit home directory instead of os.UserHomeDir(). Commands that honor
+// --home must use it so they list the target user's projects rather than the
+// invoking user's. An empty home falls back to the current user's.
+func LoadConfigForHome(home string) (*Config, error) {
+	if home == "" {
+		return LoadConfig()
+	}
+	return loadConfigAt(filepath.Join(home, ".config", "dot", "workspace.yaml"))
+}
+
+func loadConfigAt(p string) (*Config, error) {
 	cfg := &Config{
 		DefaultLayout: "dev",
 		DefaultTheme:  "default",

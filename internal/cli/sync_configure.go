@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -59,8 +58,7 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 		if target.Kind == syncer.TargetLocal {
-			home, _ := os.UserHomeDir()
-			target.Path = appsettings.ExpandHome(target.Path, home)
+			target.Path = appsettings.ExpandHome(target.Path, homeFor(cmd))
 			local.MirrorPath = target.Path
 		}
 		local.Target = target.String()
@@ -145,7 +143,10 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 		if err := syncer.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
 			return err
 		}
-		cfg, err = syncer.ResolveConfigForProfile(state, cfg.Profile)
+		// The same home Bootstrap resolved with: re-resolving through the
+		// process home would install a scheduler for the invoking user after
+		// writing the config into the target home's store.
+		cfg, err = syncer.ResolveConfigForHomeProfile(state, homeOverrideFrom(cmd), cfg.Profile)
 		if err != nil {
 			return err
 		}
@@ -158,7 +159,7 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 				return err
 			}
 		}
-	} else if err := applyLocalConfigPreview(cfg, local); err != nil {
+	} else if err := applyLocalConfigPreview(cfg, local, homeFor(cmd)); err != nil {
 		return err
 	}
 	jsonOutput, _ := cmd.Flags().GetBool("json")
@@ -186,7 +187,7 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 // applyLocalConfigPreview projects validated edits onto a resolved config so
 // --dry-run --json describes the configuration that would be persisted. It
 // intentionally touches no files or schedulers.
-func applyLocalConfigPreview(cfg *syncer.Config, local *syncer.LocalConfig) error {
+func applyLocalConfigPreview(cfg *syncer.Config, local *syncer.LocalConfig, home string) error {
 	if cfg == nil || local == nil {
 		return fmt.Errorf("sync configuration unresolved")
 	}
@@ -197,7 +198,6 @@ func applyLocalConfigPreview(cfg *syncer.Config, local *syncer.LocalConfig) erro
 		}
 		cfg.MirrorPath = ""
 		if target.Kind == syncer.TargetLocal {
-			home, _ := os.UserHomeDir()
 			target.Path = appsettings.ExpandHome(target.Path, home)
 			if !strings.HasSuffix(target.Path, "/") {
 				target.Path += "/"

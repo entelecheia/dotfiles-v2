@@ -22,19 +22,12 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
-// StoreDirRel is the encrypted store's path relative to a user home.
-// Exported for callers that resolve it against a session home of their own
-// (a --home override) rather than through StorePath.
+// StoreDirRel is the encrypted store's path relative to a user home. Callers
+// join it against the home for the run in hand — a --home override or the
+// process home. There is deliberately no process-home resolver beside it:
+// one is how every standalone `dot secrets` subcommand came to operate on the
+// invoking user's store no matter which home it was pointed at (BUG-08).
 const StoreDirRel = ".local/share/dotfiles-secrets"
-
-// StorePath returns the encrypted store directory under the process home.
-func StorePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, StoreDirRel), nil
-}
 
 // sshKeyName returns the configured SSH key name, rejecting values that
 // would escape ~/.ssh or the secrets store when interpolated into paths.

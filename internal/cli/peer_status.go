@@ -50,12 +50,20 @@ func newPeerStatusCmd() *cobra.Command {
 
 // peerBootstrapReadOnly resolves the peer profile without creating its store.
 // The runner is deliberately live: reading status must work under --dry-run.
-func peerBootstrapReadOnly() (*syncer.BootstrapResult, error) {
-	return syncer.Bootstrap(syncer.BootstrapOptions{Profile: PeerProfile, ReadOnly: true})
+//
+// It takes the command because it must read --home: this is the path
+// `dot peer status --json` and `dot peer home-paths get` take, and neither
+// goes through peerBootstrapOptions (BUG-07).
+func peerBootstrapReadOnly(cmd *cobra.Command) (*syncer.BootstrapResult, error) {
+	return syncer.Bootstrap(syncer.BootstrapOptions{
+		Profile:  PeerProfile,
+		ReadOnly: true,
+		Home:     homeOverrideFrom(cmd),
+	})
 }
 
 func runPeerStatus(cmd *cobra.Command, _ []string) error {
-	bs, err := peerBootstrapReadOnly()
+	bs, err := peerBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}
@@ -64,7 +72,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	snapshot := inspectPeerScheduler(cmd.Context(), runner)
+	snapshot := inspectPeerScheduler(cmd.Context(), runner, homeFor(cmd))
 	base := buildSyncStatusJSON(cfg, st, &syncer.Scheduler{Paths: cfgPathsForStatus(cfg)})
 	base.Kind = "peer-profile"
 	base.Jobs = []syncJobJSON{}
@@ -126,11 +134,14 @@ func newestTimeJSON(values ...time.Time) *string {
 	return timeJSON(newest)
 }
 
-func inspectPeerScheduler(ctx context.Context, runner *exec.Runner) peerSchedulerSnapshot {
+// inspectPeerScheduler reads the peer agent's plist under the home the run is
+// pointed at. It takes the home rather than resolving one: a --home run that
+// reported the invoking user's agent state would be the same disclosure the
+// workspace fields above carry (BUG-07).
+func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string) peerSchedulerSnapshot {
 	const label = "com.dotfiles.peer"
 	snapshot := peerSchedulerSnapshot{Label: label, State: syncer.SchedulerNotInstalled.String()}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	if home == "" {
 		return snapshot
 	}
 	plist := filepath.Join(home, "Library", "LaunchAgents", label+".plist")

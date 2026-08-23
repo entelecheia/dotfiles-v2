@@ -68,7 +68,7 @@ first and exits cleanly when the other machine is away.`,
 func peerBootstrapOptions(cmd *cobra.Command) syncer.BootstrapOptions {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	verbose, _ := cmd.Flags().GetBool("verbose")
-	return syncer.BootstrapOptions{Profile: PeerProfile, DryRun: dryRun, Verbose: verbose}
+	return syncer.BootstrapOptions{Profile: PeerProfile, DryRun: dryRun, Verbose: verbose, Home: homeOverrideFrom(cmd)}
 }
 
 // probeRunner is always live, even under --dry-run.

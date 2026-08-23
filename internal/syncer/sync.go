@@ -89,10 +89,28 @@ type Config struct {
 	// same way RemoteRsyncPath is; nil means process stdout.
 	Out io.Writer
 
+	// Home is the raw --home override this config was resolved for; empty
+	// means the process home. Every path an engine entry derives from "the
+	// user's home" must come from HomeDir() rather than os.UserHomeDir(),
+	// or one command operates on two different homes at once (BUG-07).
+	Home string
+
 	// LocalPaths exposes the resolved per-workspace layout for
 	// callers (status, init, manifest readers) that need granular
 	// access beyond what the convenience fields above expose.
 	LocalPaths *LocalPaths
+}
+
+// HomeDir is the home this run operates on: the --home target when one was
+// given, the process home otherwise. Engine entries that derive a path from
+// "the user's home" call this instead of os.UserHomeDir, so a command cannot
+// resolve its profile from one home and transfer against another.
+func (c *Config) HomeDir() string {
+	if c != nil && c.Home != "" {
+		return c.Home
+	}
+	home, _ := os.UserHomeDir()
+	return home
 }
 
 // outOrStdout normalizes a nil writer to os.Stdout, so the package states
@@ -140,9 +158,20 @@ func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
 	return resolveConfig(state, false, "", DefaultProfile)
 }
 
-// ResolveConfigReadOnlyForProfile is ResolveConfigReadOnly for one profile.
-func ResolveConfigReadOnlyForProfile(state *config.UserState, profile string) (*Config, error) {
-	return resolveConfig(state, false, "", profile)
+// ResolveConfigForHomeProfile is ResolveConfigForProfile with an explicit home
+// directory instead of os.UserHomeDir(). Commands that honor --home must use it
+// so they operate on the target user's workspace rather than the invoking
+// user's. An empty home falls back to the current user's.
+func ResolveConfigForHomeProfile(state *config.UserState, home, profile string) (*Config, error) {
+	return resolveConfig(state, true, home, profile)
+}
+
+// ResolveConfigReadOnlyForHomeProfile is ResolveConfigForHomeProfile without
+// creating the local store, migrating global config, or healing .gitignore.
+// It is what a status or preview run under --home resolves through. An empty
+// home falls back to the current user's.
+func ResolveConfigReadOnlyForHomeProfile(state *config.UserState, home, profile string) (*Config, error) {
+	return resolveConfig(state, false, home, profile)
 }
 
 // ResolveConfigReadOnlyForHome is like ResolveConfigReadOnly but resolves all
@@ -160,6 +189,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		return nil, err
 	}
 	profile = NormalizeProfile(profile)
+	override := home
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
@@ -281,6 +311,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 
 	return &Config{
 		Profile:           profile,
+		Home:              override,
 		Owner:             localCfg.Owner,
 		IncludeSubmodules: localCfg.IncludeSubmodules,
 		LocalPath:         localPath,

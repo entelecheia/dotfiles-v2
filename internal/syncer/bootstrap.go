@@ -44,6 +44,12 @@ type BootstrapOptions struct {
 	// wording on this side of the seam.
 	FilterMode    string
 	FilterModeSet bool
+
+	// Home is the raw --home override, empty for the process home. It reaches
+	// state loading and profile resolution together: a run pointed at another
+	// user's home must read that user's state file and resolve that user's
+	// workspace paths, never the invoking user's (BUG-07).
+	Home string
 }
 
 // BootstrapResult is what every sync and peer subcommand needs before it can
@@ -68,15 +74,21 @@ type BootstrapResult struct {
 // Bootstrap loads state, resolves the requested profile and builds the runner
 // the caller's side effects go through.
 func Bootstrap(opts BootstrapOptions) (*BootstrapResult, error) {
-	state, err := config.LoadState()
+	var state *config.UserState
+	var err error
+	if opts.Home != "" {
+		state, err = config.LoadStateForHome(opts.Home)
+	} else {
+		state, err = config.LoadState()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("loading state: %w", err)
 	}
-	resolve := ResolveConfigForProfile
+	resolve := ResolveConfigForHomeProfile
 	if opts.ReadOnly || opts.DryRun {
-		resolve = ResolveConfigReadOnlyForProfile
+		resolve = ResolveConfigReadOnlyForHomeProfile
 	}
-	cfg, err := resolve(state, opts.Profile)
+	cfg, err := resolve(state, opts.Home, opts.Profile)
 	if err != nil {
 		return nil, err
 	}

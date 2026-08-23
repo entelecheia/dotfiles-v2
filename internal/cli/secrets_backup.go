@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,23 +16,16 @@ import (
 // shared backup root (which now prefers Dropbox via DetectCloudCandidate),
 // matching the one-stop wizard's <root>/secrets-age/<host> layout. Used when
 // `dot secrets backup` is called without an explicit destination.
-func defaultSecretsBackupDest(cmd *cobra.Command) (string, error) {
-	homeOverride, _ := cmd.Flags().GetString("home")
-	home, _ := os.UserHomeDir()
-	var state *config.UserState
-	var err error
-	if homeOverride != "" {
-		home = homeOverride
-		state, err = config.LoadStateForHome(homeOverride)
-	} else {
-		state, err = config.LoadState()
-	}
+func defaultSecretsBackupDest(cmd *cobra.Command, ses *secretsSession) (string, error) {
+	// Only this branch needs state: it is what names the root. An explicit
+	// destination is resolved without ever reading the state file.
+	state, err := ses.requireState()
 	if err != nil {
-		return "", fmt.Errorf("load user state for default secrets backup destination: %w", err)
+		return "", err
 	}
 	// resolveBackupRoot reads --to/--from (not registered here — the guards
 	// skip them safely), then state.BackupRoot, then cloud-detect, then local.
-	root := resolveBackupRoot(cmd, state, home)
+	root := resolveBackupRoot(cmd, state, ses.Home)
 	host, _ := os.Hostname()
 	if i := strings.Index(host, "."); i > 0 {
 		host = host[:i]
@@ -52,10 +44,11 @@ With no destination, defaults to <backup-root>/secrets-age/<host> — the
 same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			storeDir, err := secrets.StorePath()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
 				return err
 			}
+			storeDir := ses.StoreDir
 
 			runner := secretsRunner(cmd)
 			p := printerFrom(cmd)
@@ -64,7 +57,7 @@ same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
 			if len(args) == 1 {
 				dest = args[0]
 			} else {
-				dest, err = defaultSecretsBackupDest(cmd)
+				dest, err = defaultSecretsBackupDest(cmd, ses)
 				if err != nil {
 					return err
 				}
@@ -99,7 +92,10 @@ same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
 			if err != nil {
 				absDest = dest
 			}
-			state, err := config.LoadState()
+			// Re-read and write back through the session: a backup run under
+			// --home must record in the TARGET home's state file, not the
+			// invoking user's (BUG-08).
+			state, err := ses.loadState()
 			if err != nil {
 				p.Warn("warning: could not load state to record backup: %v", err)
 				return nil
@@ -109,7 +105,7 @@ same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
 				Time:  time.Now(),
 				Files: res.Copied,
 			}
-			if err := config.SaveState(state); err != nil {
+			if err := ses.saveState(state); err != nil {
 				p.Warn("warning: could not save last-backup record: %v", err)
 			}
 			return nil

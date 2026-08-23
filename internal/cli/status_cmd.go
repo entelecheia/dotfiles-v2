@@ -14,6 +14,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/module"
+	"github.com/entelecheia/dotfiles-v2/internal/secrets"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
@@ -33,8 +34,27 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	p := printerFrom(cmd)
 	p.Header("dot Status")
 
+	// ── resolve the home every section reports on ──────────────────────
+	// The same four steps check.go:30-51, apply.go and diff.go already take.
+	// Precedence: --home wins, $DOTFILES_HOME is the fallback, the process
+	// home is last — and the override outranks XDG_CONFIG_HOME, because
+	// config.StatePathForHome joins the home directly without consulting the
+	// variable, which is what those three commands already do when the flag
+	// is set. This follows that precedent rather than inventing an ordering.
+	homeOverride := homeOverrideFrom(cmd)
+	home := homeOverride
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+
 	// ── load shared state ──────────────────────────────────────────────
-	state, err := config.LoadState()
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
@@ -67,26 +87,32 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	p.KV("Email", state.Email)
 	p.KV("GitHub", state.GithubUser)
 	p.KV("Profile", state.Profile)
-	p.KV("Config", config.StatePath())
+	statePath := config.StatePath()
+	if homeOverride != "" {
+		statePath = config.StatePathForHome(homeOverride)
+	}
+	p.KV("Config", statePath)
 
 	// ── Modules ────────────────────────────────────────────────────────
-	statusPrintModules(p, cmd, state, sysInfo)
+	statusPrintModules(p, cmd, state, sysInfo, home)
 
 	// ── Secrets ────────────────────────────────────────────────────────
-	statusPrintSecrets(p, state)
+	statusPrintSecrets(p, state, home)
 
 	// ── Sync ───────────────────────────────────────────────────────────
-	statusPrintSync(p, state)
+	statusPrintSync(p, state, home)
 
 	// ── Workspace ──────────────────────────────────────────────────────
-	statusPrintWorkspace(p)
+	statusPrintWorkspace(p, home)
 
 	p.Blank()
 	return nil
 }
 
 // statusPrintModules checks all enabled modules and prints a compact summary.
-func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState, sysInfo *config.SystemInfo) {
+// home is the caller's resolved --home target: the RunContext every module
+// check reads must point at it, not at the invoking user.
+func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState, sysInfo *config.SystemInfo, home string) {
 	profileName, _ := cmd.Flags().GetString("profile")
 	configPath, _ := cmd.Flags().GetString("config")
 	if profileName == "" {
@@ -113,7 +139,6 @@ func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState,
 	runner := exec.NewRunner(true, logger)
 	brew := exec.NewBrew(runner)
 	tmplEngine := template.NewEngine()
-	home, _ := os.UserHomeDir()
 
 	registry := module.NewRegistry()
 	modules := registry.Resolve(cfg, nil)
@@ -160,12 +185,11 @@ func statusPrintModules(p *Printer, cmd *cobra.Command, state *config.UserState,
 	}
 }
 
-// statusPrintSecrets prints a compact secrets summary.
-func statusPrintSecrets(p *Printer, state *config.UserState) {
+// statusPrintSecrets prints a compact secrets summary for the given home.
+func statusPrintSecrets(p *Printer, state *config.UserState, home string) {
 	p.Section("Secrets")
 
-	home, err := os.UserHomeDir()
-	if err != nil {
+	if home == "" {
 		p.Line("  %s", ui.StyleHint.Render("(cannot resolve home dir)"))
 		return
 	}
@@ -185,8 +209,9 @@ func statusPrintSecrets(p *Printer, state *config.UserState) {
 	p.KV("SSH key", fileStatus(filepath.Join(home, ".ssh", keyName)))
 	p.KV("Shell secrets", fileStatus(filepath.Join(home, ".config", "shell", "90-secrets.sh")))
 
-	// Count .age files
-	storeDir := filepath.Join(home, ".local", "share", "dotfiles-secrets")
+	// Count .age files. The store-relative constant is the single spelling
+	// of that path: onestop.go joins it against its session home too.
+	storeDir := filepath.Join(home, secrets.StoreDirRel)
 	ageCount := 0
 	if entries, err := os.ReadDir(storeDir); err == nil {
 		for _, e := range entries {
@@ -211,16 +236,17 @@ func statusPrintSecrets(p *Printer, state *config.UserState) {
 	}
 }
 
-// statusPrintSync prints a compact workspace sync (mirror) summary.
-func statusPrintSync(p *Printer, state *config.UserState) {
+// statusPrintSync prints a compact workspace sync (mirror) summary for the
+// given home.
+func statusPrintSync(p *Printer, state *config.UserState, home string) {
 	p.Section("Sync")
 
-	cfg, err := syncer.ResolveConfigReadOnly(state)
+	cfg, err := syncer.ResolveConfigReadOnlyForHome(state, home)
 	if err != nil {
 		p.Line("  %s", ui.StyleHint.Render("(config error: "+err.Error()+")"))
 		return
 	}
-	paths, err := syncer.ResolvePaths()
+	paths, err := syncer.ResolvePathsForHome(home)
 	if err != nil {
 		p.Line("  %s", ui.StyleHint.Render("(cannot resolve paths)"))
 		return
@@ -246,9 +272,10 @@ func statusPrintSync(p *Printer, state *config.UserState) {
 	p.KV("Last pull", formatLastSync(st.LastPull))
 }
 
-// statusPrintWorkspace lists registered projects and active tmux sessions.
-func statusPrintWorkspace(p *Printer) {
-	cfg, err := workspace.LoadConfig()
+// statusPrintWorkspace lists the given home's registered projects and the
+// active tmux sessions.
+func statusPrintWorkspace(p *Printer, home string) {
+	cfg, err := workspace.LoadConfigForHome(home)
 	if err != nil {
 		p.Section("Workspace")
 		p.Line("  %s", ui.StyleHint.Render("(could not load config: "+err.Error()+")"))
