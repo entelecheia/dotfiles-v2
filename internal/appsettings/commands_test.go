@@ -72,3 +72,63 @@ func TestStampLastBackup_ReportsWhetherTheWriteLanded(t *testing.T) {
 		})
 	}
 }
+
+// stubBrew installs a fake `brew` on an otherwise EMPTY PATH and returns a
+// Brew wired to it. The PATH must hold nothing else: brewProgram asks PATH
+// first and falls back to stat-ing /opt/homebrew/bin, so a developer machine
+// with a real Homebrew would otherwise answer these rows with live state.
+func stubBrew(t *testing.T, script string) *exec.Brew {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "brew"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	b := exec.NewBrew(exec.NewRunner(false, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))))
+	if !b.IsAvailable() {
+		t.Fatal("the stub brew is not reachable, so this row would exercise the brew-absent path instead of the one under test")
+	}
+	return b
+}
+
+// TestStatusReport_InstallStateHasThreeCases pins the signal BUG-10's third
+// glyph rests on. StatusApp.InstallKnown is what tells the operator whether
+// dot could ask Homebrew at all, and a failed `brew list --cask -1` must not
+// be reported as a confident "not installed" -- which is what it became once
+// the not-installed arm started rendering MarkAbsent instead of MarkPartial.
+//
+// The failing-query row is red before the fix: InstalledCasks returned an
+// empty non-nil map on error, so `installed != nil` was always true.
+func TestStatusReport_InstallStateHasThreeCases(t *testing.T) {
+	for _, row := range []struct {
+		name          string
+		script        string
+		wantInstalled bool
+		wantKnown     bool
+	}{
+		{"brew healthy and the cask is installed", "#!/bin/sh\necho moom\n", true, true},
+		{"brew healthy and the cask is not installed", "#!/bin/sh\nexit 0\n", false, true},
+		{"brew query fails", "#!/bin/sh\nexit 1\n", false, false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			home := t.TempDir()
+			mf := &Manifest{Apps: []AppEntry{{
+				Token: "moom",
+				Paths: []PathEntry{{Type: "pref", Path: "Preferences/com.test.moom.plist"}},
+			}}}
+			eng := newRoundtripEngine(t, home, mf)
+
+			res := eng.StatusReport(StatusOptions{Brew: stubBrew(t, row.script)})
+			if len(res.Apps) != 1 {
+				t.Fatalf("expected one app in the report, got %d", len(res.Apps))
+			}
+			got := res.Apps[0]
+			if got.Installed != row.wantInstalled {
+				t.Errorf("Installed = %v, want %v", got.Installed, row.wantInstalled)
+			}
+			if got.InstallKnown != row.wantKnown {
+				t.Errorf("InstallKnown = %v, want %v -- a failed brew query must not be reported as a confident install state (BUG-10)", got.InstallKnown, row.wantKnown)
+			}
+		})
+	}
+}
