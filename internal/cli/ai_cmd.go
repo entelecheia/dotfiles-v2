@@ -105,7 +105,7 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 		if entry.Auth {
 			label += "  (auth)"
 		}
-		if aiEntryManagedByAgents(entry.Path) {
+		if aisettings.ManagedByAgents(entry.Path) {
 			label += "  (agents SSOT)"
 		}
 		p.Bullet(marker, fmt.Sprintf("%-8s %s", ui.StyleValue.Render(entry.Tool), label))
@@ -142,17 +142,18 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	eng.Hostname = host
+	report := eng.StatusReport(aisettings.StatusOptions{IncludeAuth: includeAuth})
 	p := printerFrom(cmd)
 	p.Header("AI Config Status")
-	p.KV("Host", eng.Hostname)
-	p.KV("Backup", eng.HostRoot())
-	if latest, err := eng.ResolveLatest(); err == nil {
-		p.KV("Latest", latest)
+	p.KV("Host", report.Hostname)
+	p.KV("Backup", report.HostRoot)
+	if report.LatestKnown {
+		p.KV("Latest", report.Latest)
 	} else {
 		p.KV("Latest", "(none)")
 	}
 	p.Section("Paths")
-	for _, st := range eng.Status(includeAuth) {
+	for _, st := range report.Entries {
 		live := "·"
 		backup := "·"
 		if st.PresentLive {
@@ -169,7 +170,7 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 			marker = ui.StyleWarning.Render(ui.MarkWarn)
 		}
 		label := st.Entry.Path
-		if aiEntryManagedByAgents(st.Entry.Path) {
+		if st.ManagedByAgents {
 			label += "  (agents SSOT)"
 		}
 		p.Bullet(marker, fmt.Sprintf("%-8s live:%s backup:%s  %s",
@@ -1018,19 +1019,6 @@ func shortHash(hash string) string {
 	return hash[:12]
 }
 
-func aiEntryManagedByAgents(path string) bool {
-	if path == aisettings.AgentsSSOTRelPath {
-		return true
-	}
-	for _, tool := range aisettings.RegisteredAgentTools() {
-		target := strings.TrimPrefix(tool.TargetPath, "~/")
-		if path == target {
-			return true
-		}
-	}
-	return false
-}
-
 // auditAIEventBestEffort appends to the audit log but never fails the
 // command: the operation already succeeded, and an unwritable audit log
 // must not turn that success into an error.
@@ -1067,17 +1055,17 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 	eng.Hostname = host
 	p := printerFrom(cmd)
 
-	all, err := eng.List()
+	opts := aisettings.PruneOptions{Keep: keep}
+	plan, err := eng.PlanPrune(opts)
 	if err != nil {
 		return err
 	}
-	if len(all) <= keep {
-		p.Line("Nothing to prune (%d snapshots <= keep=%d).", len(all), keep)
+	if plan.Delete <= 0 {
+		p.Line("Nothing to prune (%d snapshots <= keep=%d).", plan.Total, plan.Keep)
 		return nil
 	}
-	toDelete := len(all) - keep
 	if !yes {
-		p.Line("About to delete %d snapshot(s) under %s.", toDelete, eng.HostRoot())
+		p.Line("About to delete %d snapshot(s) under %s.", plan.Delete, plan.HostRoot)
 		ok, err := ui.ConfirmBool("Continue?", false, false)
 		if err != nil {
 			return err
@@ -1087,7 +1075,7 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 			return nil
 		}
 	}
-	removed, err := eng.Prune(keep)
+	removed, err := eng.Prune(opts)
 	if err != nil {
 		return err
 	}
