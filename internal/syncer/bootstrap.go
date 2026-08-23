@@ -28,7 +28,11 @@ type BootstrapOptions struct {
 	// runner, and `dot sync status --dry-run` is both.
 	ReadOnly bool
 
-	// DryRun is handed to the runner, not to config resolution.
+	// DryRun reaches BOTH the runner and config resolution: it selects the
+	// read-only resolver alongside ReadOnly, because a preview that creates the
+	// per-workspace store has already written before the runner sees anything.
+	// The fields stay separate because their meanings do: `dot peer status` is
+	// read-only with a live runner.
 	DryRun bool
 
 	// Verbose becomes Config.Verbose, which turns rsync's output on.
@@ -47,11 +51,14 @@ type BootstrapOptions struct {
 // runner external commands go through.
 //
 // Runner covers command execution only, and its DryRun flag suppresses only
-// that. It is NOT a blanket dry-run guarantee: engine entries that mutate
-// files directly — PeerInit via SaveLocalConfig, PeerSchedule via os.MkdirAll
-// and os.WriteFile — bypass it entirely, and profile resolution creates the
-// per-workspace store before any entry runs (BUG-13). A caller must not read
-// a dry-run runner as "nothing was written".
+// that. It is NOT a blanket dry-run guarantee: engine entries that mutate files
+// directly — PeerInit via SaveLocalConfig, PeerSchedule via os.MkdirAll and
+// os.WriteFile — bypass it entirely, so each of those carries its own dry-run
+// arm and returns a flag the caller renders. A caller must not read a dry-run
+// runner as "nothing was written".
+//
+// Profile resolution is no longer among the things that slip past it: Bootstrap
+// takes the read-only resolver under DryRun.
 type BootstrapResult struct {
 	State  *config.UserState
 	Config *Config
@@ -66,7 +73,7 @@ func Bootstrap(opts BootstrapOptions) (*BootstrapResult, error) {
 		return nil, fmt.Errorf("loading state: %w", err)
 	}
 	resolve := ResolveConfigForProfile
-	if opts.ReadOnly {
+	if opts.ReadOnly || opts.DryRun {
 		resolve = ResolveConfigReadOnlyForProfile
 	}
 	cfg, err := resolve(state, opts.Profile)

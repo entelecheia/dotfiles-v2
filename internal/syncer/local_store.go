@@ -246,13 +246,41 @@ func ValidateProfile(profile string) error {
 // exists to keep pre-rename workspaces truthful, and a new profile has no
 // legacy twin to fall back to.
 func ResolveLocalPathsForProfile(localPath, profile string) *LocalPaths {
+	return resolveLocalPaths(localPath, profile, true)
+}
+
+// ResolveLocalPathsPostMigration is ResolveLocalPathsForProfile WITHOUT the
+// pre-rename fallback: the layout a MUTATING command operates on, because such
+// a command runs MigrateLegacyStore before it touches anything.
+//
+// The fallback above must stay for read-only callers - it is what keeps
+// `dot sync status` truthful on a workspace that has not migrated yet - so this
+// is a second view, not a replacement. Use it to PREVIEW a mutating command,
+// and pair it with pendingLegacyStore so the preview names the rename too.
+func ResolveLocalPathsPostMigration(localPath, profile string) *LocalPaths {
+	return resolveLocalPaths(localPath, profile, false)
+}
+
+// pendingLegacyStore returns the pre-rename store MigrateLegacyStore would
+// rename, or "" when there is nothing to migrate. MigrateLegacyStore itself
+// asks the same function, so a preview and the run it previews cannot disagree
+// about whether a rename is coming.
+func pendingLegacyStore(localPath string) string {
+	root := strings.TrimRight(localPath, "/")
+	old := filepath.Join(root, legacyStoreDirRel)
+	if pathExists(filepath.Join(root, localStoreDirRel)) || !pathExists(old) {
+		return ""
+	}
+	return old
+}
+
+func resolveLocalPaths(localPath, profile string, legacyFallback bool) *LocalPaths {
 	root := strings.TrimRight(localPath, "/")
 	prof := NormalizeProfile(profile)
 	storeRel := filepath.Join(".dotfiles", prof)
 	if prof == DefaultProfile {
 		storeRel = localStoreDirRel
-		if !pathExists(filepath.Join(root, localStoreDirRel)) &&
-			pathExists(filepath.Join(root, legacyStoreDirRel)) {
+		if legacyFallback && pendingLegacyStore(root) != "" {
 			storeRel = legacyStoreDirRel
 		}
 	}
@@ -293,8 +321,8 @@ func ResolveLocalPathsForProfile(localPath, profile string) *LocalPaths {
 func MigrateLegacyStore(localPath string) (bool, error) {
 	root := strings.TrimRight(localPath, "/")
 	newDir := filepath.Join(root, localStoreDirRel)
-	oldDir := filepath.Join(root, legacyStoreDirRel)
-	if pathExists(newDir) || !pathExists(oldDir) {
+	oldDir := pendingLegacyStore(root)
+	if oldDir == "" {
 		return false, nil
 	}
 	if err := os.Rename(oldDir, newDir); err != nil {

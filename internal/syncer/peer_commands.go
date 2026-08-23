@@ -180,12 +180,26 @@ type PeerInitOptions struct {
 	Config     *Config
 	Host       string
 	RemotePath string
+
+	// Runner is read for its own DryRun flag only — PeerInit writes files
+	// directly and routes nothing through it. It is here so a caller that set
+	// the flag on the runner and not on the option still gets a preview, the
+	// same reconciliation the three aisettings managers make.
+	Runner *exec.Runner
+
+	// DryRun computes the profile and reports the files without writing any.
+	DryRun bool
 }
 
-// PeerInitResult is what the operator is told about the profile just written.
+// PeerInitResult is what the operator is told about the profile just written,
+// or — when DryRun is set — about the one that would have been.
 type PeerInitResult struct {
+	// DryRun reports that none of the three files below were written. The
+	// engine returns the flag and the paths; cli owns every string.
+	DryRun        bool
 	Target        string
 	StoreDir      string
+	ConfigFile    string
 	AllowFile     string
 	HomePathsFile string
 	Propagation   PropagationPolicy
@@ -240,24 +254,34 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 	if name := PreferredMachineName(); name != "" {
 		local.Owner = name
 	}
+
+	result := &PeerInitResult{
+		DryRun:        opts.DryRun || (opts.Runner != nil && opts.Runner.DryRun),
+		Target:        local.Target,
+		StoreDir:      paths.StoreDir,
+		ConfigFile:    paths.ConfigFile,
+		AllowFile:     paths.AllowFile,
+		HomePathsFile: PeerHomePathsFile(paths),
+		Propagation:   local.Propagation,
+		MaxDelete:     local.MaxDelete,
+	}
+	// The three writes below bypass the runner entirely, so the flag has to be
+	// honored here or a preview writes twelve files (BUG-13, D-03). Everything
+	// the operator is shown was computed above and is identical either way.
+	if result.DryRun {
+		return result, nil
+	}
+
 	if err := SaveLocalConfig(paths, local); err != nil {
 		return nil, err
 	}
-
 	if err := seedFileIfAbsent(paths.AllowFile, peerAllowHeader); err != nil {
 		return nil, err
 	}
 	if err := seedFileIfAbsent(PeerHomePathsFile(paths), peerHomePathsHeader); err != nil {
 		return nil, err
 	}
-	return &PeerInitResult{
-		Target:        local.Target,
-		StoreDir:      paths.StoreDir,
-		AllowFile:     paths.AllowFile,
-		HomePathsFile: PeerHomePathsFile(paths),
-		Propagation:   local.Propagation,
-		MaxDelete:     local.MaxDelete,
-	}, nil
+	return result, nil
 }
 
 // PeerDiffOptions controls PeerDiff. Probe is the always-live runner: a
@@ -540,6 +564,19 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	}
 	if err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
 		return nil, err
+	}
+	// Mirror the off-arm above. The write below bypasses the runner entirely
+	// (os.MkdirAll + os.WriteFile), so without this a preview leaves a plist on
+	// disk with no loaded job behind it — the same inconsistent state the
+	// off-arm refuses to create (BUG-14).
+	//
+	// The guard sits AFTER the whole validation chain on purpose: a preview that
+	// skipped validation would be a different lie from the one being fixed. The
+	// off-arm above keeps reading opts.DryRun alone, so its behavior is
+	// untouched; only this arm reconciles the option with the runner's own flag,
+	// the way the three aisettings managers do.
+	if opts.DryRun || (runner != nil && runner.DryRun) {
+		return &PeerScheduleResult{DryRun: true, Plist: plist, LogFile: cfg.LogFile, Interval: opts.Interval}, nil
 	}
 	exe, err := os.Executable()
 	if err != nil {

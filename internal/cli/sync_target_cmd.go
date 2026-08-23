@@ -137,10 +137,23 @@ func runSyncInit(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	p := printerFrom(cmd)
-	res, err := syncer.InitStore(bs.Config)
+	res, err := syncer.InitStore(bs.Config, dryRun)
 	if err != nil {
 		return err
+	}
+	if res.DryRun {
+		if res.LegacyStoreDir != "" {
+			p.Line("dry-run: would rename %s to %s", res.LegacyStoreDir, res.StoreDir)
+		}
+		p.Line("dry-run: would create %s", res.StoreDir)
+		for _, f := range []string{res.ConfigFile, res.IncludeFile, res.IgnoreFile} {
+			p.Line("dry-run: would create %s", f)
+		}
+		p.Line("dry-run: would create %s", res.InboxDir)
+		p.Line("dry-run: would append the managed block to %s", res.WorkspaceIgnore)
+		return nil
 	}
 
 	p.Header("gsync workspace initialized")

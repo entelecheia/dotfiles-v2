@@ -119,8 +119,19 @@ func SetLocalTarget(cfg *Config, target Target) error {
 	return nil
 }
 
-// InitResult describes the store `dot sync init` just healed.
+// InitResult describes the store `dot sync init` just healed, or — when DryRun
+// is set — the one it would have healed.
 type InitResult struct {
+	// DryRun reports that nothing below was created. The engine returns the
+	// flag and the paths; cli owns the wording it renders them with.
+	DryRun bool
+
+	// LegacyStoreDir names the pre-rename store the run would migrate to
+	// StoreDir before doing anything else. Set only under DryRun, and only when
+	// one is actually pending: a real run performs the rename and reports it on
+	// stderr from resolveConfig, so there is nothing left to preview.
+	LegacyStoreDir string
+
 	StoreDir    string
 	Workspace   string
 	Mirror      string
@@ -130,35 +141,65 @@ type InitResult struct {
 	ConfigFile  string
 	IncludeFile string
 	IgnoreFile  string
+
+	// WorkspaceIgnore is the one WORKSPACE-level file EnsureLocalLayout
+	// touches: it ends with appendGitignoreBlock. Everything else it creates
+	// lives under StoreDir.
+	WorkspaceIgnore string
 }
 
 // InitStore heals the per-workspace store and creates the intake staging dir.
 //
-// Bootstrap has already triggered LoadOrMigrateLocalConfig, so the
-// .dotfiles/<profile>/ tree exists by the time this runs. Heal anything
+// Under dryRun it computes the same fully-populated result from the resolved
+// paths and creates nothing. Creating the store is what this command is for, but
+// a preview of that creation is still a preview (D-03), and since Bootstrap now
+// takes the read-only resolver under --dry-run the tree this would heal may not
+// exist at all.
+//
+// Without dryRun, Bootstrap has already triggered LoadOrMigrateLocalConfig, so
+// the .dotfiles/<profile>/ tree exists by the time this runs. Heal anything
 // missing (the operator may have deleted files) and create inbox/gdrive.
-func InitStore(cfg *Config) (*InitResult, error) {
+func InitStore(cfg *Config, dryRun bool) (*InitResult, error) {
 	paths := cfg.LocalPaths
 	if paths == nil {
 		return nil, fmt.Errorf("local paths unresolved — bug in ResolveConfig")
 	}
-	if err := EnsureLocalLayout(paths); err != nil {
-		return nil, fmt.Errorf("ensure layout: %w", err)
+	var legacyStore string
+	if dryRun {
+		// Bootstrap hands a dry run the READ-ONLY resolver, which keeps the
+		// pre-rename fallback. That is right for a read-only command and wrong
+		// for this one: a real `dot sync init` migrates first and then operates
+		// under .dotfiles/sync, so previewing the pre-migration paths describes
+		// a world the run will have left behind. Re-resolve past the fallback
+		// and name the rename as work this command would do. The two resolvers
+		// agree when nothing is pending, so this is a no-op on a migrated
+		// workspace.
+		legacyStore = pendingLegacyStore(cfg.LocalPath)
+		paths = ResolveLocalPathsPostMigration(cfg.LocalPath, cfg.Profile)
 	}
 	inboxGdrive := trimTrailingSlash(cfg.LocalPath) + "/inbox/gdrive"
-	if err := os.MkdirAll(inboxGdrive, 0755); err != nil {
-		return nil, fmt.Errorf("create inbox/gdrive: %w", err)
+	if !dryRun {
+		if err := EnsureLocalLayout(paths); err != nil {
+			return nil, fmt.Errorf("ensure layout: %w", err)
+		}
+		if err := os.MkdirAll(inboxGdrive, 0755); err != nil {
+			return nil, fmt.Errorf("create inbox/gdrive: %w", err)
+		}
 	}
 	return &InitResult{
-		StoreDir:    paths.StoreDir,
-		Workspace:   trimTrailingSlash(cfg.LocalPath),
-		Mirror:      trimTrailingSlash(cfg.MirrorPath),
-		Propagation: cfg.Propagation,
-		FilterMode:  cfg.FilterMode,
-		InboxDir:    inboxGdrive,
-		ConfigFile:  paths.ConfigFile,
-		IncludeFile: paths.IncludeFile,
-		IgnoreFile:  paths.IgnoreFile,
+		DryRun:         dryRun,
+		LegacyStoreDir: legacyStore,
+		StoreDir:       paths.StoreDir,
+		Workspace:      trimTrailingSlash(cfg.LocalPath),
+		Mirror:         trimTrailingSlash(cfg.MirrorPath),
+		Propagation:    cfg.Propagation,
+		FilterMode:     cfg.FilterMode,
+		InboxDir:       inboxGdrive,
+		ConfigFile:     paths.ConfigFile,
+		IncludeFile:    paths.IncludeFile,
+		IgnoreFile:     paths.IgnoreFile,
+
+		WorkspaceIgnore: paths.WorkspaceIgnore,
 	}, nil
 }
 

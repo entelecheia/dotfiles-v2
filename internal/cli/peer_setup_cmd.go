@@ -33,13 +33,23 @@ inbound port, which is what a laptop needs.`,
 			if err != nil {
 				return err
 			}
+			dryRun, _ := c.Flags().GetBool("dry-run")
 			res, err := syncer.PeerInit(syncer.PeerInitOptions{
 				Config:     bs.Config,
 				Host:       host,
 				RemotePath: remotePath,
+				Runner:     bs.Runner,
+				DryRun:     dryRun,
 			})
 			if err != nil {
 				return err
+			}
+			if res.DryRun {
+				p.Line("dry-run: would write %s", res.ConfigFile)
+				p.Line("dry-run: would create %s", res.AllowFile)
+				p.Line("dry-run: would create %s", res.HomePathsFile)
+				p.KV("target", res.Target)
+				return nil
 			}
 
 			p.Success("peer profile ready")
@@ -103,6 +113,10 @@ walks the whole tree.`,
 					return nil
 				}
 				p.Success("peer sync job removed")
+				return nil
+			}
+			if res.DryRun {
+				p.Line("dry-run: would write %s", res.Plist)
 				return nil
 			}
 			p.Success("peer sync scheduled every %s", res.Interval)
