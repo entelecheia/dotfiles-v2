@@ -14,6 +14,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/profilesnap"
+	"github.com/entelecheia/dotfiles-v2/internal/secrets"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
@@ -156,9 +157,9 @@ func (o *onestopCtx) secretsArchiveDir() string {
 
 // secretsStoreDir is the local encrypted store, resolved against the
 // session home so --home overrides reach the secrets domain too
-// (secretsStorePath always uses os.UserHomeDir).
+// (secrets.StorePath always uses os.UserHomeDir).
 func (o *onestopCtx) secretsStoreDir() string {
-	return filepath.Join(o.home, secretsDir)
+	return filepath.Join(o.home, secrets.StoreDirRel)
 }
 
 // rootSource explains where the initial root came from, for the wizard's
