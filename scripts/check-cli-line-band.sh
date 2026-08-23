@@ -18,6 +18,7 @@ band_max=350
 files=(
   "internal/cli/tunnel_cmd.go"
   "internal/cli/secrets.go"
+  "internal/cli/apps_cmd.go"
 )
 
 if [[ ${#files[@]} -eq 0 ]]; then

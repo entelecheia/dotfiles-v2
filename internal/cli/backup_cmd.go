@@ -281,20 +281,13 @@ func (o *onestopCtx) backupAppsStep(tag string) onestopStep {
 	}
 	// Mirror `dot apps backup --yes`: re-resolve saved display-name tokens
 	// before the manifest intersection drops them.
-	for _, t := range o.state.Modules.MacApps.BackupApps {
-		if eng.Manifest.App(t) != nil {
-			continue
-		}
-		if discovered := appsettings.DiscoverApp(eng.HomeDir, t); discovered != nil {
-			eng.Manifest.Apps = append(eng.Manifest.Apps, *discovered)
-		}
-	}
+	eng.AdoptSavedApps(o.state.Modules.MacApps.BackupApps)
 	eng.AdoptArchivedApps()
 	tokens := resolveBackupTokens(o.cmd, eng)
 	if len(tokens) == 0 {
 		return onestopStep{Name: "apps", Err: fmt.Errorf("nothing to back up")}
 	}
-	sum, err := eng.Backup(context.Background(), tokens)
+	sum, err := eng.Backup(context.Background(), appsettings.BackupOptions{Tokens: tokens})
 	if err != nil {
 		return onestopStep{Name: "apps", Err: err}
 	}

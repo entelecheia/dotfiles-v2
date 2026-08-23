@@ -194,15 +194,21 @@ func isExcluded(rel string) bool {
 
 // --- Backup ---
 
-// Backup copies the listed apps (or all manifest apps when tokens is empty)
+// BackupOptions selects what Backup copies. An empty Tokens list means every
+// manifest app.
+type BackupOptions struct {
+	Tokens []string
+}
+
+// Backup copies the listed apps (or all manifest apps when Tokens is empty)
 // into the host-scoped archive. Missing sources are reported but do not
 // abort; copy errors are counted in Failed. Each app is staged into
 // <HostRoot>/.staging/ and swapped into place only when every attempted copy
 // succeeded, so a failed backup never corrupts the previous (and only)
 // archived copy. Paths whose live source is gone are seeded from the
 // existing archive so the swap preserves them.
-func (e *Engine) Backup(ctx context.Context, tokens []string) (*Summary, error) {
-	targets := e.selectTokens(tokens)
+func (e *Engine) Backup(ctx context.Context, opts BackupOptions) (*Summary, error) {
+	targets := e.selectTokens(opts.Tokens)
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("no apps selected for backup")
 	}
@@ -391,20 +397,26 @@ func (e *Engine) recoverStaging() {
 
 // --- Restore ---
 
+// RestoreOptions selects what Restore copies back. An empty Tokens list
+// means every manifest app.
+type RestoreOptions struct {
+	Tokens []string
+}
+
 // Restore copies from the host-scoped archive back to $HOME/Library.
 // Missing sources (not yet backed up) are skipped; copy errors are counted
 // in Failed. Existing live paths are snapshotted to
 // <HomeDir>/.local/share/dotfiles/backup/app-settings/<ts>/<token>/ before
 // being overwritten; the location is reported via Summary.PreBackupPath.
 // A path whose pre-restore snapshot fails is left untouched.
-func (e *Engine) Restore(ctx context.Context, tokens []string) (*Summary, error) {
+func (e *Engine) Restore(ctx context.Context, opts RestoreOptions) (*Summary, error) {
 	if _, err := os.Stat(e.HostRoot()); err != nil {
 		return nil, fmt.Errorf("no backup at %s (hostname=%s)", e.HostRoot(), e.Hostname)
 	}
 	if !e.Runner.DryRun {
 		e.recoverStaging()
 	}
-	targets := e.selectTokens(tokens)
+	targets := e.selectTokens(opts.Tokens)
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("no apps selected for restore")
 	}

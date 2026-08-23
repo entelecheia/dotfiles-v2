@@ -3,20 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
-	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
-	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
@@ -42,6 +35,40 @@ Subcommands:
 	cmd.AddCommand(newAppsBackupCmd())
 	cmd.AddCommand(newAppsRestoreCmd())
 	return cmd
+}
+
+// renderAppsEvent turns engine progress into the lines the apps commands
+// have always printed. One renderer for every call site, so the wording
+// cannot drift apart between install and backup.
+func renderAppsEvent(p *Printer) func(appsettings.Event) {
+	return func(e appsettings.Event) {
+		switch e.Kind {
+		case appsettings.EventAllInstalled:
+			p.Line("%s", ui.StyleSuccess.Render("✓ all selected casks already installed"))
+		case appsettings.EventSkippedExisting:
+			p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
+				"↷ skipping %d already-present app(s): %s  (use --force to reinstall)",
+				len(e.Tokens), strings.Join(e.Tokens, ", "))))
+		case appsettings.EventNothingToInstall:
+			p.Line("%s", ui.StyleSuccess.Render("✓ nothing to install"))
+		case appsettings.EventDryRunTap:
+			p.Line("dry-run: would tap %d Homebrew repo(s): %s", len(e.Tokens), strings.Join(e.Tokens, ", "))
+		case appsettings.EventDryRunInstall:
+			p.Line("dry-run: would install %d cask(s): %s", len(e.Tokens), strings.Join(e.Tokens, ", "))
+		case appsettings.EventTapping:
+			p.Line("Tapping %d Homebrew repo(s): %s", len(e.Tokens), strings.Join(e.Tokens, ", "))
+		case appsettings.EventInstalling:
+			p.Line("Installing %d cask(s): %s", len(e.Tokens), strings.Join(e.Tokens, ", "))
+		case appsettings.EventInstallComplete:
+			p.Line("%s", ui.StyleSuccess.Render("✓ install complete"))
+		case appsettings.EventAppDiscovered:
+			p.Line("%s", ui.StyleSuccess.Render(fmt.Sprintf(
+				"  ✓ %q — discovered %d backup path(s)", e.Token, e.Paths)))
+		case appsettings.EventAppNotFound:
+			p.Line("%s", ui.StyleWarning.Render(fmt.Sprintf(
+				"  ⚠ %q — not in manifest and .app bundle not found; will be ignored", e.Token)))
+		}
+	}
 }
 
 // --- list ---
@@ -131,7 +158,6 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		p.Line("%s", ui.StyleWarning.Render("not macOS — apps install is a no-op"))
 		return nil
 	}
-	ctx := context.Background()
 	yes, _ := cmd.Flags().GetBool("yes")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	useDefaults, _ := cmd.Flags().GetBool("defaults")
@@ -153,50 +179,27 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("homebrew not available")
 	}
 
-	cat, err := catalog.LoadMacApps()
+	sel, err := appsettings.SelectInstall(appsettings.InstallSelectOptions{
+		Args:              args,
+		All:               useAll,
+		Defaults:          useDefaults,
+		Recommended:       useRecommended,
+		ForceSelect:       forceSelect,
+		Yes:               yes,
+		SavedCasks:        state.Modules.MacApps.Casks,
+		SavedCasksExtra:   state.Modules.MacApps.CasksExtra,
+		SavedTerminalApps: state.Modules.TerminalApps.Apps,
+	})
 	if err != nil {
 		return err
 	}
 
-	// Source of truth for `want`:
-	var want []string
-	interactive := false
+	want := sel.Tokens
 	saveAfter := false
-
-	switch {
-	case useAll:
-		want = cat.AllTokens()
-	case useDefaults:
-		want = cat.Defaults
-	case useRecommended:
-		want = cat.Recommended
-	case len(args) > 0:
-		// Trust explicit args; merge with user's stored extras if asked later.
-		want = sliceutil.Dedupe(args)
-	case forceSelect || (!yes):
-		interactive = true
-	default:
-		// --yes without args: use saved state, fall back to recommended.
-		want = append([]string(nil), state.Modules.MacApps.Casks...)
-		if len(want) == 0 {
-			want = cat.Recommended
-		}
-		want = append(want, state.Modules.TerminalApps.Apps...)
-		want = append(want, state.Modules.MacApps.CasksExtra...)
-		want = sliceutil.Dedupe(want)
-	}
-
-	if interactive {
-		tokens := cat.AllTokens()
-		sort.Strings(tokens)
-		preselect := append([]string(nil), state.Modules.MacApps.Casks...)
-		if len(preselect) == 0 {
-			preselect = cat.Recommended
-		}
-		preselect = sliceutil.Dedupe(append(preselect, state.Modules.TerminalApps.Apps...))
+	if sel.Interactive {
 		p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
-			"  Catalog: %d apps across %d groups  (★ defaults, ✓ installed)", len(tokens), len(cat.Groups))))
-		selected, err := ui.MultiSelect("Pick apps to install", tokens, preselect, false)
+			"  Catalog: %d apps across %d groups  (★ defaults, ✓ installed)", len(sel.PickTokens), sel.CatalogGroups)))
+		selected, err := ui.MultiSelect("Pick apps to install", sel.PickTokens, sel.Preselect, false)
 		if err != nil {
 			return err
 		}
@@ -222,80 +225,15 @@ func runAppsInstall(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if len(want) == 0 {
-		return fmt.Errorf("nothing to install")
+	if err := appsettings.Install(context.Background(), appsettings.InstallOptions{
+		Brew:     brew,
+		Tokens:   want,
+		Force:    force,
+		DryRun:   dryRun,
+		Progress: renderAppsEvent(p),
+	}); err != nil {
+		return err
 	}
-
-	// Rewrite legacy tokens from pre-rename state (anchor -> maru-workspace)
-	// before any brew call, same as the macapps module does.
-	want = catalog.NormalizeCaskTokens(want)
-
-	missing := brew.MissingCasks(want)
-	if len(missing) == 0 {
-		p.Line("%s", ui.StyleSuccess.Render("✓ all selected casks already installed"))
-		if saveAfter {
-			return persistUserState(cmd, state)
-		}
-		return nil
-	}
-
-	// Filter out casks whose .app already exists under /Applications (e.g.
-	// installed via the App Store). Without this, brew aborts the whole batch
-	// on the first conflict. --force bypasses the skip and reinstalls.
-	if !force {
-		existing := brew.ExistingCaskTargets(missing)
-		for _, cask := range missing {
-			if app := cat.AppBundle(cask); app != "" {
-				if _, err := os.Stat(filepath.Join("/Applications", app)); err == nil {
-					existing[cask] = true
-				}
-			}
-		}
-		if len(existing) > 0 {
-			var toInstall, skipped []string
-			for _, c := range missing {
-				if existing[c] {
-					skipped = append(skipped, c)
-				} else {
-					toInstall = append(toInstall, c)
-				}
-			}
-			p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
-				"↷ skipping %d already-present app(s): %s  (use --force to reinstall)",
-				len(skipped), strings.Join(skipped, ", "))))
-			missing = toInstall
-		}
-	}
-
-	if len(missing) == 0 {
-		p.Line("%s", ui.StyleSuccess.Render("✓ nothing to install"))
-		if saveAfter {
-			return persistUserState(cmd, state)
-		}
-		return nil
-	}
-	missingTaps := brew.MissingTaps(cat.TapsForTokens(missing))
-	if dryRun {
-		if len(missingTaps) > 0 {
-			p.Line("dry-run: would tap %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", "))
-		}
-		p.Line("dry-run: would install %d cask(s): %s", len(missing), strings.Join(missing, ", "))
-		if saveAfter {
-			return persistUserState(cmd, state)
-		}
-		return nil
-	}
-	if len(missingTaps) > 0 {
-		p.Line("Tapping %d Homebrew repo(s): %s", len(missingTaps), strings.Join(missingTaps, ", "))
-		if err := brew.Tap(ctx, missingTaps); err != nil {
-			return fmt.Errorf("tap homebrew repositories: %w", err)
-		}
-	}
-	p.Line("Installing %d cask(s): %s", len(missing), strings.Join(missing, ", "))
-	if err := brew.InstallCask(ctx, missing, force); err != nil {
-		return fmt.Errorf("install casks: %w", err)
-	}
-	p.Line("%s", ui.StyleSuccess.Render("✓ install complete"))
 	if saveAfter {
 		return persistUserState(cmd, state)
 	}
@@ -307,21 +245,6 @@ func splitTokenList(s string) []string {
 	replacer := strings.NewReplacer(",", " ", "\t", " ")
 	parts := strings.Fields(replacer.Replace(s))
 	return sliceutil.Dedupe(parts)
-}
-
-// splitCommaList parses a strictly comma-separated list into trimmed entries.
-// Unlike splitTokenList it preserves internal whitespace, so values like
-// "Moom Classic" survive intact.
-func splitCommaList(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		out = append(out, trimmed)
-	}
-	return sliceutil.Dedupe(out)
 }
 
 // persistUserState writes user state honoring the --home override.
@@ -389,547 +312,4 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 			ui.StyleValue.Render(s.Token), live, bak))
 	}
 	return nil
-}
-
-// --- backup ---
-
-func newAppsBackupCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "backup [token...]",
-		Short: "Snapshot macOS app settings to the backup archive",
-		Long: `Back up macOS application settings listed in the embedded manifest.
-
-Modes:
-  - positional args       : back up exactly those tokens.
-  - --all                 : back up every manifest entry.
-  - --select              : open the checkbox picker even when state has a list.
-  - no args + interactive : open the checkbox picker. The list shows the
-                            installed casks that also have a manifest entry,
-                            plus any custom tokens you added previously.
-                            Apps with an existing backup snapshot (or in your
-                            saved selection) come pre-ticked. You can also
-                            type extra tokens; each is validated against the
-                            manifest before being accepted.
-  - no args + --yes       : use saved state (falls back to manifest ∩ installed).`,
-		Args: cobra.ArbitraryArgs,
-		RunE: runAppsBackup,
-	}
-	c.Flags().String("to", "", "Backup root (overrides configured BackupDir)")
-	c.Flags().Bool("all", false, "Back up every manifest entry (default: manifest ∩ installed casks)")
-	c.Flags().Bool("select", false, "Force the interactive picker even when state has a list")
-	c.Flags().Bool("no-save", false, "Do not persist the interactive selection back to state")
-	return c
-}
-
-func runAppsBackup(cmd *cobra.Command, args []string) error {
-	p := printerFrom(cmd)
-	if runtime.GOOS != "darwin" {
-		p.Line("%s", ui.StyleWarning.Render("not macOS — apps backup is a no-op"))
-		return nil
-	}
-	yes, _ := cmd.Flags().GetBool("yes")
-	useAll, _ := cmd.Flags().GetBool("all")
-	forceSelect, _ := cmd.Flags().GetBool("select")
-	noSave, _ := cmd.Flags().GetBool("no-save")
-
-	eng, err := newAppsEngine(cmd)
-	if err != nil {
-		return err
-	}
-
-	state, brew, _, err := appsBrewCtx(cmd)
-	if err != nil {
-		return err
-	}
-
-	var tokens []string
-	saveAfter := false
-
-	switch {
-	case len(args) > 0:
-		tokens = sliceutil.Dedupe(args)
-		// Try to discover any positional arg that isn't already in the
-		// manifest (e.g. a display name like "Moom Classic"). Without this
-		// the engine silently drops unknown tokens during selectTokens.
-		for _, t := range tokens {
-			if eng.Manifest.App(t) != nil {
-				continue
-			}
-			discovered := appsettings.DiscoverApp(eng.HomeDir, t)
-			if discovered == nil {
-				p.Line("%s", ui.StyleWarning.Render(fmt.Sprintf(
-					"  ⚠ %q — not in manifest and .app bundle not found; will be ignored", t)))
-				continue
-			}
-			eng.Manifest.Apps = append(eng.Manifest.Apps, *discovered)
-			p.Line("%s", ui.StyleSuccess.Render(fmt.Sprintf(
-				"  ✓ %q — discovered %d backup path(s)", t, len(discovered.Paths))))
-		}
-	case useAll:
-		tokens = eng.Manifest.Tokens()
-	case forceSelect || !yes:
-		tokens, saveAfter, err = pickBackupTokens(p, eng, state, brew, noSave)
-		if err != nil {
-			return err
-		}
-	default:
-		// Saved selections may contain display-name tokens that aren't in
-		// the embedded manifest (apps discovered in earlier interactive
-		// runs). Re-resolve them before the manifest intersection inside
-		// resolveBackupTokens silently drops them; fall back to the archive
-		// layout when the app is no longer on disk.
-		for _, t := range state.Modules.MacApps.BackupApps {
-			if eng.Manifest.App(t) != nil {
-				continue
-			}
-			if discovered := appsettings.DiscoverApp(eng.HomeDir, t); discovered != nil {
-				eng.Manifest.Apps = append(eng.Manifest.Apps, *discovered)
-			}
-		}
-		eng.AdoptArchivedApps()
-		tokens = resolveBackupTokens(cmd, eng)
-	}
-
-	if len(tokens) == 0 {
-		return fmt.Errorf("nothing to back up")
-	}
-
-	sum, err := eng.Backup(context.Background(), tokens)
-	if err != nil {
-		return err
-	}
-	printAppSummary(p, "Backup", sum)
-
-	// Record last backup on the in-memory state so a later persist (e.g.
-	// the interactive save-selection path) can't overwrite the stamp with
-	// a stale pre-backup snapshot of the state file.
-	stamped := false
-	if !eng.Runner.DryRun && sum.Failed == 0 {
-		state.Modules.MacApps.LastBackup = &config.BackupRecord{
-			Path:  eng.HostRoot(),
-			Time:  time.Now(),
-			Files: sum.Files,
-		}
-		stamped = true
-		if err := eng.WriteLastBackupStamp(appsettings.BackupStamp{
-			CreatedAt: time.Now().UTC(),
-			Tokens:    tokens,
-			Files:     sum.Files,
-		}); err != nil {
-			eng.Runner.Logger.Warn("write last-backup stamp", "err", err)
-		}
-	}
-	if saveAfter {
-		if err := persistUserState(cmd, state); err != nil {
-			return err
-		}
-	} else if stamped {
-		if err := persistUserState(cmd, state); err != nil {
-			eng.Runner.Logger.Warn("record last backup", "err", err)
-		}
-	}
-	if sum.Failed > 0 {
-		return fmt.Errorf("%d path(s) failed to back up — their previous archive copies were kept (other paths refreshed)", sum.Failed)
-	}
-	return nil
-}
-
-// pickBackupTokens runs the interactive backup picker.
-//
-// List construction:
-//   - Base options = manifest tokens ∩ installed casks (the apps that are
-//     present on this machine AND have backup paths defined).
-//   - Options are union-ed with the user's previously saved selection
-//     (state.BackupApps), so any custom tokens added in earlier runs remain
-//     visible.
-//   - All options must exist in the manifest — a token without backup paths
-//     would yield an empty snapshot.
-//
-// Pre-selection: apps whose archive directory already contains files (a prior
-// successful backup) OR apps present in state.BackupApps.
-//
-// Extras: a single comma-separated input so tokens containing spaces
-// (e.g. "Moom Classic") work without escaping. Each entry is trimmed and
-// rejected unless it appears in the manifest. A warning is shown when the
-// entered token isn't currently installed, but the entry is kept (so a
-// machine-less backup is still possible).
-func pickBackupTokens(p *Printer, eng *appsettings.Engine, state *config.UserState, brew *exec.Brew, noSave bool) ([]string, bool, error) {
-	manifestTokens := eng.Manifest.Tokens()
-	inManifest := make(map[string]bool, len(manifestTokens))
-	for _, t := range manifestTokens {
-		inManifest[t] = true
-	}
-
-	var installed map[string]bool
-	if brew != nil && brew.IsAvailable() {
-		installed = brew.InstalledCasks()
-	}
-
-	// Apps with an existing archive directory (prior successful backup).
-	successSet := make(map[string]bool)
-	for _, s := range eng.Status(manifestTokens) {
-		if s.PresentBak > 0 {
-			successSet[s.Token] = true
-		}
-	}
-
-	// User's prior selection (includes any custom tokens).
-	priorSet := make(map[string]bool)
-	for _, t := range state.Modules.MacApps.BackupApps {
-		priorSet[t] = true
-	}
-
-	// Build option list: installed∩manifest first (manifest order), then
-	// additional prior/success entries that weren't installed at query time.
-	optionsSet := make(map[string]bool)
-	var options []string
-	for _, t := range manifestTokens {
-		if installed == nil || installed[t] {
-			optionsSet[t] = true
-			options = append(options, t)
-		}
-	}
-	for _, t := range manifestTokens {
-		if optionsSet[t] {
-			continue
-		}
-		if priorSet[t] || successSet[t] {
-			optionsSet[t] = true
-			options = append(options, t)
-		}
-	}
-	if len(options) == 0 {
-		// No brew or no installed matches → fall back to the full manifest so
-		// the user still has something to tick.
-		options = manifestTokens
-	}
-
-	// Preselect: prior selection ∪ prior successful backups (intersected
-	// with options so huh doesn't complain about unknown values).
-	var preselect []string
-	for _, t := range options {
-		if priorSet[t] || successSet[t] {
-			preselect = append(preselect, t)
-		}
-	}
-
-	p.Line("%s", ui.StyleHint.Render(fmt.Sprintf(
-		"  %d candidate app(s) — pre-ticked: saved selection + previously backed-up",
-		len(options))))
-
-	selected, err := ui.MultiSelect("Select apps to back up", options, preselect, false)
-	if err != nil {
-		return nil, false, err
-	}
-
-	// Prior custom entries — tokens the user added by hand in a previous run
-	// that aren't surfaced by the checkbox list (either not installed as a
-	// cask, or only discoverable by display name like "Moom Classic"). Carry
-	// them forward as the default for the free-form input so they don't have
-	// to be retyped; the validation loop below will re-resolve each one.
-	selectedSet := make(map[string]bool, len(selected))
-	for _, t := range selected {
-		selectedSet[t] = true
-	}
-	var priorCustoms []string
-	for _, t := range state.Modules.MacApps.BackupApps {
-		if selectedSet[t] {
-			continue
-		}
-		if inManifest[t] && installed != nil && installed[t] {
-			continue // already in the checkbox list
-		}
-		priorCustoms = append(priorCustoms, t)
-	}
-
-	// Prefill the input with the user's prior custom entries (comma-separated)
-	// so they can be edited rather than retyped; the comma separator keeps
-	// multi-word tokens like "Moom Classic" intact.
-	extraDefault := strings.Join(priorCustoms, ", ")
-	p.Line("%s", ui.StyleHint.Render(
-		"  Separate multiple entries with commas; spaces inside an entry are kept (e.g. Moom Classic, Hazel)."))
-	extraRaw, err := ui.Input("Additional apps", extraDefault, false)
-	if err != nil {
-		return nil, false, err
-	}
-
-	var validExtras []string
-	for _, entry := range splitCommaList(extraRaw) {
-		if selectedSet[entry] || sliceutil.Contains(validExtras, entry) {
-			continue
-		}
-		if inManifest[entry] {
-			if installed != nil && !installed[entry] {
-				p.Line("%s", ui.StyleWarning.Render(fmt.Sprintf(
-					"  ⚠ %q — not currently installed; backup will skip missing paths", entry)))
-			}
-			validExtras = append(validExtras, entry)
-			continue
-		}
-		// Not in the embedded manifest — try to discover the app on disk by
-		// name (e.g. "Moom Classic") and synthesize a runtime entry. Accept
-		// it only if we can read its bundle identifier and find at least one
-		// standard Library location.
-		discovered := appsettings.DiscoverApp(eng.HomeDir, entry)
-		if discovered == nil {
-			p.Line("%s", ui.StyleError.Render(fmt.Sprintf(
-				"  ✗ %q — .app bundle not found and not in manifest; skipped", entry)))
-			continue
-		}
-		eng.Manifest.Apps = append(eng.Manifest.Apps, *discovered)
-		inManifest[entry] = true
-		p.Line("%s", ui.StyleSuccess.Render(fmt.Sprintf(
-			"  ✓ %q — discovered %d backup path(s)", entry, len(discovered.Paths))))
-		validExtras = append(validExtras, entry)
-	}
-
-	tokens := sliceutil.Dedupe(append(append([]string(nil), selected...), validExtras...))
-	if len(tokens) == 0 {
-		return nil, false, fmt.Errorf("no apps selected for backup")
-	}
-
-	if noSave {
-		return tokens, false, nil
-	}
-	save, err := ui.ConfirmBool("Save this selection to state?", true, false)
-	if err != nil {
-		return nil, false, err
-	}
-	if !save {
-		return tokens, false, nil
-	}
-	state.Modules.MacApps.Enabled = true
-	state.Modules.MacApps.BackupApps = tokens
-	return tokens, true, nil
-}
-
-// --- restore ---
-
-func newAppsRestoreCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "restore [token...]",
-		Short: "Restore macOS app settings from the backup archive",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  runAppsRestore,
-	}
-	c.Flags().String("from", "", "Backup root (overrides configured BackupDir)")
-	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
-	c.Flags().Bool("all", false, "Restore every manifest entry")
-	return c
-}
-
-func runAppsRestore(cmd *cobra.Command, args []string) error {
-	p := printerFrom(cmd)
-	if runtime.GOOS != "darwin" {
-		p.Line("%s", ui.StyleWarning.Render("not macOS — apps restore is a no-op"))
-		return nil
-	}
-	yes, _ := cmd.Flags().GetBool("yes")
-	eng, err := newAppsEngine(cmd)
-	if err != nil {
-		return err
-	}
-	host, err := hostOverride(cmd, eng.Hostname)
-	if err != nil {
-		return err
-	}
-	eng.Hostname = host
-
-	// Apps captured by name discovery on the source machine live only in
-	// the archive — synthesize entries for them so they restore too.
-	adopted := eng.AdoptArchivedApps()
-
-	tokens := args
-	if len(tokens) == 0 {
-		tokens = resolveBackupTokens(cmd, eng)
-		tokens = sliceutil.Dedupe(append(tokens, adopted...))
-	}
-
-	if !yes {
-		p.Line("%s", ui.StyleWarning.Render("This overwrites local app settings. Quit target apps first."))
-		p.Line("%s", ui.StyleHint.Render("  (existing files are snapshotted under ~/.local/share/dotfiles/backup/app-settings/ first)"))
-		ok, err := ui.ConfirmBool("Continue with restore?", false, false)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			p.Line("aborted")
-			return nil
-		}
-	}
-
-	sum, err := eng.Restore(context.Background(), tokens)
-	if err != nil {
-		return err
-	}
-	printAppSummary(p, "Restore", sum)
-	if sum.PreBackupPath != "" {
-		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(sum.PreBackupPath))
-	}
-	if !eng.Runner.DryRun {
-		eng.FlushCFPrefsd(context.Background())
-	}
-	if sum.Failed > 0 {
-		return fmt.Errorf("%d path(s) failed to restore", sum.Failed)
-	}
-	return nil
-}
-
-// --- helpers ---
-
-// appsBrewCtx loads user state and constructs a Brew wrapper + Runner.
-func appsBrewCtx(cmd *cobra.Command) (*config.UserState, *exec.Brew, *exec.Runner, error) {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	homeOverride, _ := cmd.Flags().GetString("home")
-
-	var state *config.UserState
-	var err error
-	if homeOverride != "" {
-		state, err = config.LoadStateForHome(homeOverride)
-	} else {
-		state, err = config.LoadState()
-	}
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load state: %w", err)
-	}
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	runner := exec.NewRunner(dryRun, logger)
-	brew := exec.NewBrew(runner)
-	return state, brew, runner, nil
-}
-
-// appsBrewForQuery returns a Brew handle for read-only cask queries, or nil
-// off macOS where no cask can be installed. A state-load failure also yields
-// nil: the catalog listings degrade to "install state unknown" rather than
-// failing the command.
-func appsBrewForQuery(cmd *cobra.Command) *exec.Brew {
-	if runtime.GOOS != "darwin" {
-		return nil
-	}
-	_, brew, _, _ := appsBrewCtx(cmd)
-	return brew
-}
-
-// newAppsEngine constructs an appsettings.Engine from flags + state.
-// Resolution precedence for the backup root: --to / --from > state.BackupRoot
-// > auto-detected Drive > default local dir.
-func newAppsEngine(cmd *cobra.Command) (*appsettings.Engine, error) {
-	state, _, runner, err := appsBrewCtx(cmd)
-	if err != nil {
-		return nil, err
-	}
-
-	home, _ := os.UserHomeDir()
-	if over, _ := cmd.Flags().GetString("home"); over != "" {
-		home = over
-	}
-
-	root := resolveBackupRoot(cmd, state, home)
-
-	hostname, _ := os.Hostname()
-	if idx := strings.Index(hostname, "."); idx > 0 {
-		hostname = hostname[:idx]
-	}
-
-	mf, err := appsettings.LoadManifest()
-	if err != nil {
-		return nil, err
-	}
-
-	return &appsettings.Engine{
-		Runner:   runner,
-		HomeDir:  home,
-		Root:     root,
-		Hostname: hostname,
-		Manifest: mf,
-	}, nil
-}
-
-// resolveBackupRoot centralizes the flag → state → detect → default chain.
-func resolveBackupRoot(cmd *cobra.Command, state *config.UserState, home string) string {
-	if v, err := cmd.Flags().GetString("to"); err == nil && v != "" {
-		return appsettings.ExpandHome(v, home)
-	}
-	if v, err := cmd.Flags().GetString("from"); err == nil && v != "" {
-		return appsettings.ExpandHome(v, home)
-	}
-	if state.Modules.MacApps.BackupRoot != "" {
-		return appsettings.ExpandHome(state.Modules.MacApps.BackupRoot, home)
-	}
-	if cloud := appsettings.DetectCloudCandidate(home); cloud != "" {
-		return cloud
-	}
-	return appsettings.DefaultBackupRoot(home)
-}
-
-// resolveBackupTokens picks which manifest entries should be backed up / restored.
-// Precedence:
-//  1. explicit tokens on the command line (caller passes them)
-//  2. --all flag → every manifest entry
-//  3. state.Modules.MacApps.BackupApps → user's curated backup list
-//  4. manifest ∩ installed casks (default when brew is available)
-//  5. every manifest entry (fallback)
-func resolveBackupTokens(cmd *cobra.Command, eng *appsettings.Engine) []string {
-	all, _ := cmd.Flags().GetBool("all")
-	tokens := eng.Manifest.Tokens()
-	if all {
-		return tokens
-	}
-
-	state, brew, _, _ := appsBrewCtx(cmd)
-	if state != nil && len(state.Modules.MacApps.BackupApps) > 0 {
-		return intersectManifest(state.Modules.MacApps.BackupApps, eng.Manifest)
-	}
-
-	if brew == nil || !brew.IsAvailable() {
-		return tokens
-	}
-	installed := brew.InstalledCasks()
-	if len(installed) == 0 {
-		return tokens
-	}
-	var out []string
-	for _, t := range tokens {
-		if installed[t] {
-			out = append(out, t)
-		}
-	}
-	if len(out) == 0 {
-		return tokens
-	}
-	return out
-}
-
-func intersectManifest(tokens []string, mf *appsettings.Manifest) []string {
-	valid := make(map[string]bool)
-	for _, t := range mf.Tokens() {
-		valid[t] = true
-	}
-	var out []string
-	for _, t := range tokens {
-		if valid[t] {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-func printAppSummary(p *Printer, label string, sum *appsettings.Summary) {
-	p.Header(label + " Summary")
-	for _, a := range sum.Apps {
-		line := fmt.Sprintf("%s  paths: %d copied / %d missing  files: %d  bytes: %d",
-			ui.StyleValue.Render(a.Token), a.Copied, a.Missing, a.Files, a.Bytes)
-		marker := ui.StyleHint.Render(ui.MarkPartial)
-		if a.Failed > 0 {
-			line += "  " + ui.StyleError.Render(fmt.Sprintf("failed: %d", a.Failed))
-			marker = ui.StyleError.Render(ui.MarkFail)
-		}
-		p.Bullet(marker, line)
-	}
-	p.Blank()
-	p.Line("  Total: %d file(s), %d byte(s)", sum.Files, sum.Bytes)
-	if sum.Failed > 0 {
-		p.Warn("  %d path(s) failed", sum.Failed)
-	}
 }
