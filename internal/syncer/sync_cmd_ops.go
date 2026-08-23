@@ -14,7 +14,8 @@ import (
 //
 // An `Out io.Writer` was rejected here for the fifth consecutive slice: a
 // single writer cannot reproduce the stdout/stderr split of p.Line versus
-// p.Warn, and the styled lines would drag lipgloss into this package.
+// p.Warn, and the styled lines would drag the terminal-styling package into
+// this one.
 type SyncEventKind int
 
 const (

@@ -33,10 +33,11 @@ func newSyncConfigureCmd() *cobra.Command {
 }
 
 func runSyncConfigure(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	state, cfg, runner := bs.State, bs.Config, bs.Runner
 	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return fmt.Errorf("configure: %w; use `dot peer init` and `dot peer setup`", err)
 	}

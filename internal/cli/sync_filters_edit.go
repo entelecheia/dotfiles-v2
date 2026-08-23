@@ -123,11 +123,11 @@ func readFilterDocument(cfg *syncer.Config, kind string) (syncFilterFileJSON, er
 }
 
 func runSyncFiltersGet(cmd *cobra.Command, args []string) error {
-	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
-	document, err := readFilterDocument(cfg, args[0])
+	document, err := readFilterDocument(bs.Config, args[0])
 	if err != nil {
 		return err
 	}
@@ -142,10 +142,11 @@ func runSyncFiltersGet(cmd *cobra.Command, args []string) error {
 }
 
 func runSyncFiltersSet(cmd *cobra.Command, args []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	limited := io.LimitReader(cmd.InOrStdin(), maxPatternFileBytes+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {

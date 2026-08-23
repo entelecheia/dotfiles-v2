@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
 const (
@@ -35,10 +37,11 @@ func newSyncLogCmd() *cobra.Command {
 }
 
 func runSyncLog(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	lines, _ := cmd.Flags().GetInt("tail")
 	if lines < 1 {
 		lines = 1

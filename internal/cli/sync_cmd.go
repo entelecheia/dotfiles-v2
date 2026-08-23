@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
@@ -133,41 +131,37 @@ missing on the target are reported and skipped.`,
 }
 
 func runSyncFetch(cmd *cobra.Command, args []string) error {
-	state, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	p := printerFrom(cmd)
-	if !syncPreflight(p, cfg, runner) {
+	if !syncPreflight(p, cfg, bs.Runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-	release, lockErr := syncer.AcquireLock(cfg.LockDir)
-	if lockErr != nil {
-		p.Line("  %s", lockErr)
+	res, err := syncer.FetchCommand(cmd.Context(), syncer.FetchOptions{
+		State:    bs.State,
+		Config:   cfg,
+		Runner:   bs.Runner,
+		Paths:    args,
+		DryRun:   dryRun,
+		Progress: renderSyncEvent(p, syncRender{cfg: cfg}),
+	})
+	if err != nil {
+		return err
+	}
+	if res.Outcome == syncer.FetchLockBusy {
+		p.Line("  %s", res.LockErr)
 		return nil
 	}
-	defer release()
-
-	if dryRun {
-		p.Line("  (dry-run — no changes)")
-	}
-	res, fetchErr := syncer.Fetch(cmd.Context(), runner, cfg, args, dryRun)
-	syncer.RecordResult(state, cfg, "fetch", fetchErr, dryRun)
-	if res != nil {
-		for _, rel := range res.Missing {
-			p.Warn("not on target, skipped: %s", rel)
-		}
-	}
-	if fetchErr != nil {
-		return fmt.Errorf("fetch failed: %w", fetchErr)
-	}
-	if res == nil || len(res.Fetched) == 0 {
+	if res.Result == nil || len(res.Result.Fetched) == 0 {
 		p.Line("Nothing to fetch.")
 		return nil
 	}
-	p.Line("%s", ui.StyleSuccess.Render(fmt.Sprintf("✓ fetched %d path(s)", len(res.Fetched))))
+	p.Line("%s", ui.StyleSuccess.Render(fmt.Sprintf("✓ fetched %d path(s)", len(res.Result.Fetched))))
 	return nil
 }
 
@@ -211,11 +205,11 @@ any workspace-specific patterns from the backups to ignore.txt afterwards.`,
 }
 
 func runSyncFiltersShow(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
-	layers, err := syncer.FilterReport(cfg)
+	layers, err := syncer.FilterReport(bs.Config)
 	if err != nil {
 		return err
 	}
@@ -236,10 +230,11 @@ func runSyncFiltersShow(cmd *cobra.Command, _ []string) error {
 }
 
 func runSyncFiltersReset(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("local paths unresolved — bug in ResolveConfig")
 	}
@@ -317,12 +312,12 @@ func runSyncTarget(cmd *cobra.Command, args []string) error {
 	// creates the per-workspace .dotfiles/sync layout or touches
 	// .gitignore on first use.
 	if len(args) == 0 || dryRun {
-		_, cfg, _, err := syncBootstrapReadOnly(cmd)
+		bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 		if err != nil {
 			return err
 		}
 		if len(args) == 0 {
-			p.KV("Target", cfg.Target.String())
+			p.KV("Target", bs.Config.Target.String())
 			return nil
 		}
 		p.Line("[dry-run] would set target to %s (local config%s)", target.String(),
@@ -338,25 +333,12 @@ func runSyncTarget(cmd *cobra.Command, args []string) error {
 	// workspace, so the local config (always current-workspace) doesn't
 	// apply; only the home-aware global state below is meaningful there.
 	if homeOverride == "" {
-		_, cfg, _, err := syncBootstrap(cmd)
+		bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 		if err != nil {
 			return err
 		}
-		if cfg.LocalPaths == nil {
-			return fmt.Errorf("local paths unresolved — bug in ResolveConfig")
-		}
-		localCfg, _, err := syncer.LoadLocalConfig(cfg.LocalPaths)
-		if err != nil {
-			return fmt.Errorf("load local config: %w", err)
-		}
-		localCfg.Target = target.String()
-		if target.Kind == syncer.TargetLocal {
-			// Keep the legacy field in step so older binaries reading this
-			// workspace still resolve the same mirror.
-			localCfg.MirrorPath = target.Path
-		}
-		if err := syncer.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
-			return fmt.Errorf("save local config: %w", err)
+		if err := syncer.SetLocalTarget(bs.Config, target); err != nil {
+			return err
 		}
 	}
 
@@ -398,37 +380,25 @@ just heals any missing pieces.`,
 }
 
 func runSyncInit(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
-	paths := cfg.LocalPaths
-	if paths == nil {
-		return fmt.Errorf("local paths unresolved — bug in ResolveConfig")
-	}
-
-	// syncBootstrap already triggered LoadOrMigrateLocalConfig, so the
-	// .dotfiles/sync/ tree exists by the time we get here. Heal
-	// anything missing (operator may have deleted files) and create the
-	// inbox/gdrive staging dir.
-	if err := syncer.EnsureLocalLayout(paths); err != nil {
-		return fmt.Errorf("ensure layout: %w", err)
-	}
-	inboxGdrive := stripTrailingSlash(cfg.LocalPath) + "/inbox/gdrive"
-	if err := os.MkdirAll(inboxGdrive, 0755); err != nil {
-		return fmt.Errorf("create inbox/gdrive: %w", err)
+	res, err := syncer.InitStore(bs.Config)
+	if err != nil {
+		return err
 	}
 
 	p.Header("gsync workspace initialized")
-	p.KV("Store", paths.StoreDir)
-	p.KV("Workspace", stripTrailingSlash(cfg.LocalPath))
-	p.KV("Mirror", stripTrailingSlash(cfg.MirrorPath))
-	p.KV("Propagation", cfg.Propagation.String())
-	p.KV("Filter mode", cfg.FilterMode.String())
-	p.KV("Inbox staging", inboxGdrive)
+	p.KV("Store", res.StoreDir)
+	p.KV("Workspace", res.Workspace)
+	p.KV("Mirror", res.Mirror)
+	p.KV("Propagation", res.Propagation.String())
+	p.KV("Filter mode", res.FilterMode.String())
+	p.KV("Inbox staging", res.InboxDir)
 	p.Blank()
-	p.Line("Edit %s to customize behavior; %s for include patterns; %s for additional ignore patterns.", paths.ConfigFile, paths.IncludeFile, paths.IgnoreFile)
+	p.Line("Edit %s to customize behavior; %s for include patterns; %s for additional ignore patterns.", res.ConfigFile, res.IncludeFile, res.IgnoreFile)
 	p.Line("Run 'dot sync setup' to verify rsync and keep automatic sync disabled unless intervals are passed.")
 	return nil
 }
@@ -450,25 +420,6 @@ func syncBootstrapOptions(cmd *cobra.Command, readOnly bool) syncer.BootstrapOpt
 		FilterMode:    filterMode,
 		FilterModeSet: cmd.Flags().Changed("filter-mode"),
 	}
-}
-
-func syncBootstrapWith(cmd *cobra.Command, readOnly bool) (*config.UserState, *syncer.Config, *exec.Runner, error) {
-	res, err := syncer.Bootstrap(syncBootstrapOptions(cmd, readOnly))
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return res.State, res.Config, res.Runner, nil
-}
-
-// syncBootstrap loads state + resolved config + a runner for any
-// gsync subcommand. Thin delegating wrapper over syncer.Bootstrap; plan 03-06
-// inlines it at each call site.
-func syncBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec.Runner, error) {
-	return syncBootstrapWith(cmd, false)
-}
-
-func syncBootstrapReadOnly(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec.Runner, error) {
-	return syncBootstrapWith(cmd, true)
 }
 
 // syncPreflight reports whether the run may proceed, printing the engine's
@@ -612,15 +563,16 @@ backing up the local version into .sync-conflicts/<ts>/from-workspace/.`,
 }
 
 func runSyncPull(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
-	if !syncPreflight(p, cfg, runner) {
+	if !syncPreflight(p, cfg, bs.Runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -630,64 +582,30 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	release, lockErr := syncer.AcquireLock(cfg.LockDir)
-	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
+	res, err := syncer.PullCommand(cmd.Context(), syncer.PullCommandOptions{
+		State:    bs.State,
+		Config:   cfg,
+		Runner:   bs.Runner,
+		Mode:     mode,
+		Strict:   strict,
+		DryRun:   dryRun,
+		Progress: renderSyncEvent(p, syncRender{cfg: cfg, mode: mode}),
+		Confirm:  confirmSync(cmd),
+	})
+	if err != nil {
+		return err
 	}
-	defer release()
-
-	// SSH targets: direct rsync pull (--update, backups). The baseline-
-	// driven pull below needs to walk the target tree, which ssh can't.
-	if cfg.Target.IsSSH() {
-		p.Line("Pull %s → %s (direct rsync --update; workspace files win ties)",
-			cfg.Target.RsyncDest(), cfg.LocalPath)
-		if dryRun {
-			p.Line("  (dry-run — no changes)")
-		}
-		pullErr := syncer.PullDirect(cmd.Context(), runner, cfg, dryRun)
-		syncer.RecordResult(state, cfg, "pull", pullErr, dryRun)
-		if pullErr != nil {
-			return fmt.Errorf("pull failed: %w", pullErr)
-		}
+	switch res.Outcome {
+	case syncer.PullLockBusy:
+		p.Line("  %s", res.LockErr)
+	case syncer.PullAborted:
+		p.Line("Aborted.")
+	case syncer.PullCompleteDirect:
 		p.Line("✓ Pull complete.")
-		return nil
+	case syncer.PullCompleteTracked:
+		printPullResult(p, cfg, res.Result)
+	case syncer.PullPlanned:
 	}
-
-	p.Line("Pull plan for baseline-tracked payloads %s → %s (%s)", cfg.MirrorPath, cfg.LocalPath, mode)
-	if dryRun {
-		p.Line("  (dry-run — no changes)")
-	}
-	plan, err := syncer.PullTracked(cfg, syncer.PullOptions{DryRun: true, Strict: strict})
-	if err != nil {
-		return fmt.Errorf("planning pull: %w", err)
-	}
-	printPullPlan(p, cfg, plan)
-	if dryRun || !plan.HasChanges() {
-		return nil
-	}
-	if mode == syncer.ModeClean && len(plan.Conflicts) > 0 {
-		return fmt.Errorf("pull refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
-	}
-	force := mode == syncer.ModeForce
-	if mode == syncer.ModeManual {
-		yes, _ := cmd.Flags().GetBool("yes")
-		confirmed, err := ui.Confirm("Apply this pull plan?", yes)
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			p.Line("Aborted.")
-			return nil
-		}
-		force = len(plan.Conflicts) > 0
-	}
-	res, err := syncer.PullTracked(cfg, syncer.PullOptions{Force: force, Strict: strict})
-	syncer.RecordResult(state, cfg, "pull", err, false)
-	if err != nil {
-		return fmt.Errorf("pull failed: %w", err)
-	}
-	printPullResult(p, cfg, res)
 	return nil
 }
 
@@ -715,12 +633,13 @@ Mirror-side deletions against baseline are detected by pull, not intake.
 }
 
 func runSyncIntake(cmd *cobra.Command, _ []string) error {
-	_, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	p := printerFrom(cmd)
-	if !syncPreflight(p, cfg, runner) {
+	if !syncPreflight(p, cfg, bs.Runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -729,28 +648,21 @@ func runSyncIntake(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	release, lockErr := syncer.AcquireLock(cfg.LockDir)
-	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
-	}
-	defer release()
-
-	mode := "fast"
-	if strict {
-		mode = "strict"
-	}
-	p.Line("Intaking %s → %s/inbox/gdrive/<ts>/ (%s mode)", cfg.MirrorPath, stripTrailingSlash(cfg.LocalPath), mode)
-	if dryRun {
-		p.Line("  (dry-run — no changes)")
-	}
-	res, err := syncer.Intake(cmd.Context(), runner, cfg, syncer.IntakeOptions{
-		Strict: strict,
-		DryRun: dryRun,
+	out, err := syncer.IntakeCommand(cmd.Context(), syncer.IntakeCommandOptions{
+		Config:   cfg,
+		Runner:   bs.Runner,
+		Strict:   strict,
+		DryRun:   dryRun,
+		Progress: renderSyncEvent(p, syncRender{cfg: cfg, strict: strict}),
 	})
 	if err != nil {
-		return fmt.Errorf("intake failed: %w", err)
+		return err
 	}
+	if out.Outcome == syncer.IntakeLockBusy {
+		p.Line("  %s", out.LockErr)
+		return nil
+	}
+	res := out.Result
 
 	printPullResult(p, cfg, res.Pull)
 	if res.StagingDir != "" {
@@ -868,49 +780,24 @@ entirely.
 }
 
 func runSyncInboxList(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
-	if cfg.LocalPaths == nil {
-		return fmt.Errorf("local paths unresolved")
+	report, err := syncer.InboxSummary(bs.Config)
+	if err != nil {
+		return err
 	}
 	p := printerFrom(cmd)
 
-	stagingRoot := stripTrailingSlash(cfg.LocalPath) + "/inbox/gdrive"
-	runDirs, _ := os.ReadDir(stagingRoot)
-	dirCount := 0
-	totalFiles := 0
-	for _, e := range runDirs {
-		if !e.IsDir() {
-			continue
-		}
-		dirCount++
-		_ = filepath.WalkDir(filepath.Join(stagingRoot, e.Name()), func(_ string, d fs.DirEntry, _ error) error {
-			if d != nil && !d.IsDir() {
-				totalFiles++
-			}
-			return nil
-		})
-	}
-
-	imports, err := syncer.LoadImportsManifest(cfg.LocalPaths.ImportsFile)
-	if err != nil {
-		return fmt.Errorf("loading imports: %w", err)
-	}
-	tomb, err := syncer.LoadTombstones(cfg.LocalPaths.TombstonesFile)
-	if err != nil {
-		return fmt.Errorf("loading tombstones: %w", err)
-	}
-
 	p.Header("gsync inbox")
-	p.KV("Staging root", stagingRoot)
-	p.KV("Pending run-dirs", fmt.Sprintf("%d (%d files)", dirCount, totalFiles))
-	p.KV("Imports manifest", fmt.Sprintf("%d entries", len(imports)))
-	p.KV("Tombstones", fmt.Sprintf("%d entries", len(tomb)))
-	if len(tomb) > 0 {
+	p.KV("Staging root", report.StagingRoot)
+	p.KV("Pending run-dirs", fmt.Sprintf("%d (%d files)", report.RunDirs, report.Files))
+	p.KV("Imports manifest", fmt.Sprintf("%d entries", report.Imports))
+	p.KV("Tombstones", fmt.Sprintf("%d entries", len(report.Tombstones)))
+	if len(report.Tombstones) > 0 {
 		p.Section("Recent tombstones (newest 5):")
-		shown := tomb
+		shown := report.Tombstones
 		if len(shown) > 5 {
 			shown = shown[len(shown)-5:]
 		}
@@ -923,18 +810,12 @@ func runSyncInboxList(cmd *cobra.Command, _ []string) error {
 }
 
 func runSyncInboxForget(cmd *cobra.Command, args []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	if cfg.LocalPaths == nil {
-		return fmt.Errorf("local paths unresolved")
-	}
 	rel := strings.TrimSpace(args[0])
-	if rel == "" {
-		return fmt.Errorf("relpath cannot be empty")
-	}
-	dropped, err := syncer.ForgetImport(cfg.LocalPaths, rel)
+	dropped, err := syncer.InboxForget(bs.Config, args[0])
 	if err != nil {
 		return err
 	}
@@ -948,22 +829,22 @@ func runSyncInboxForget(cmd *cobra.Command, args []string) error {
 }
 
 func runSyncInboxClear(cmd *cobra.Command, _ []string) error {
-	state, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	if cfg.LocalPaths == nil {
-		return fmt.Errorf("local paths unresolved")
-	}
+	cfg := bs.Config
 	yes, _ := cmd.Flags().GetBool("yes")
-	imports, _ := syncer.LoadImportsManifest(cfg.LocalPaths.ImportsFile)
-	tomb, _ := syncer.LoadTombstones(cfg.LocalPaths.TombstonesFile)
+	imports, tomb, err := syncer.InboxManifestCounts(cfg)
+	if err != nil {
+		return err
+	}
 	p := printerFrom(cmd)
-	if len(imports) == 0 && len(tomb) == 0 {
+	if imports == 0 && tomb == 0 {
 		p.Line("imports.manifest and tombstones.log are already empty.")
 		return nil
 	}
-	confirmed, err := ui.Confirm(fmt.Sprintf("Clear %d imports + %d tombstones? Next intake will re-stage anything still on mirror.", len(imports), len(tomb)), yes)
+	confirmed, err := ui.Confirm(fmt.Sprintf("Clear %d imports + %d tombstones? Next intake will re-stage anything still on mirror.", imports, tomb), yes)
 	if err != nil {
 		return err
 	}
@@ -974,8 +855,7 @@ func runSyncInboxClear(cmd *cobra.Command, _ []string) error {
 	if err := syncer.ClearImportsAndTombstones(cfg.LocalPaths); err != nil {
 		return err
 	}
-	p.Line("✓ cleared %d imports + %d tombstones.", len(imports), len(tomb))
-	_ = state
+	p.Line("✓ cleared %d imports + %d tombstones.", imports, tomb)
 	return nil
 }
 
@@ -1235,15 +1115,16 @@ func newSyncStatusCmd() *cobra.Command {
 }
 
 func runSyncStatus(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
-	sched, _, err := syncer.ResolveScheduler(cfg, runner)
+	cfg := bs.Config
+	sched, _, err := syncer.ResolveScheduler(cfg, bs.Runner)
 	if err != nil {
 		return err
 	}
-	st, err := syncer.GetStatus(cmd.Context(), runner, cfg, state, sched)
+	st, err := syncer.GetStatus(cmd.Context(), bs.Runner, cfg, bs.State, sched)
 	if err != nil {
 		return err
 	}
@@ -1349,36 +1230,6 @@ func boolStr(b bool) string {
 
 // ── conflicts ────────────────────────────────────────────────────────────
 
-// conflictTrees returns the (label, root) pairs that accumulate
-// .sync-conflicts/ backups: pull backups land in the workspace tree,
-// push backups land in the mirror tree.
-func conflictTrees(cfg *syncer.Config) [][2]string {
-	trees := [][2]string{{"workspace", stripTrailingSlash(cfg.LocalPath)}}
-	// SSH targets have no local mirror tree: ResolveConfig intentionally leaves
-	// MirrorPath empty for them. Never turn that empty value into "/" and scan
-	// the invoking machine's root; remote conflicts are handled below through
-	// cfg.Target.Path.
-	if !cfg.Target.IsSSH() {
-		trees = append(trees, [2]string{"mirror", stripTrailingSlash(cfg.MirrorPath)})
-	}
-	return trees
-}
-
-func remoteConflictTrees(cfg *syncer.Config) ([][2]string, error) {
-	if !cfg.Target.IsSSH() {
-		return nil, nil
-	}
-	root, err := syncer.RemoteTargetConflictRoot(cfg.Target)
-	if err != nil {
-		return nil, err
-	}
-	trees := [][2]string{{"remote target", root}}
-	if cfg.Profile == syncer.PeerProfile {
-		trees = append(trees, [2]string{"remote home", syncer.PeerHomeConflictRoot})
-	}
-	return trees, nil
-}
-
 func newSyncConflictsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "conflicts",
@@ -1418,86 +1269,63 @@ peer profile also includes ~/.dot-peer-conflicts from its host-path pass.
 }
 
 func runSyncConflictsList(cmd *cobra.Command, _ []string) error {
-	_, cfg, runner, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
 	now := time.Now()
-	for _, tree := range conflictTrees(cfg) {
-		label, root := tree[0], tree[1]
-		confs, err := syncer.ListConflicts(root)
-		if err != nil {
-			return err
-		}
-		if len(confs) == 0 {
-			p.Line("No conflict backups under %s/.sync-conflicts/ (%s)", root, label)
-			continue
-		}
-		p.Header(fmt.Sprintf("Conflict backups under %s/.sync-conflicts/ (%s)", root, label))
-		for _, c := range confs {
-			age := now.Sub(c.ModTime).Truncate(time.Hour)
-			marker := "•"
-			if age > 30*24*time.Hour {
-				marker = "▲" // older than 30 days — candidate for cleanup
-			}
-			p.Bullet(marker, fmt.Sprintf("%s (%s ago) — %s", c.Timestamp, age, c.Path))
-		}
-		p.Blank()
-	}
-	remoteTrees, err := remoteConflictTrees(cfg)
-	if err != nil {
+	if err := syncer.ConflictsList(cmd.Context(), bs.Runner, bs.Config, func(l syncer.ConflictListing) {
+		printConflictListing(p, now, l)
+	}); err != nil {
 		return err
-	}
-	for _, tree := range remoteTrees {
-		label, root := tree[0], tree[1]
-		confs, err := syncer.ListRemoteConflicts(cmd.Context(), runner, cfg.Target, root)
-		if err != nil {
-			return err
-		}
-		if len(confs) == 0 {
-			p.Line("No conflict backups under %s/ (%s)", root, label)
-			continue
-		}
-		p.Header(fmt.Sprintf("Conflict backups under %s/ (%s)", root, label))
-		for _, c := range confs {
-			age := now.Sub(c.ModTime).Truncate(time.Hour)
-			marker := "•"
-			if age > 30*24*time.Hour {
-				marker = "▲" // older than 30 days — candidate for cleanup
-			}
-			p.Bullet(marker, fmt.Sprintf("%s (%s ago, %s) — %s", c.Timestamp, age, ws.FormatSize(c.Size), c.Path))
-		}
-		p.Blank()
 	}
 	p.Line("Prune candidates (▲) with: dot sync conflicts prune")
 	return nil
 }
 
-// resolvePruneCutoff turns the prune flags into a cutoff time. olderChanged
-// reports whether --older-than was set explicitly, so it can be rejected in
-// combination with --all.
-func resolvePruneCutoff(olderDays int, all, olderChanged bool) (time.Time, error) {
-	if all && olderChanged {
-		return time.Time{}, fmt.Errorf("--all and --older-than are mutually exclusive")
+// printConflictListing renders one tree's backup directories. The engine walks
+// the trees and hands each one over as it is read, so a later tree's failure
+// still leaves the earlier trees printed, exactly as before the move.
+func printConflictListing(p *Printer, now time.Time, l syncer.ConflictListing) {
+	suffix := "/.sync-conflicts/"
+	if l.IsRemote {
+		suffix = "/"
 	}
-	if olderDays < 0 {
-		return time.Time{}, fmt.Errorf("--older-than must be >= 0 (got %d)", olderDays)
+	if len(l.Entries) == 0 && len(l.Remotes) == 0 {
+		p.Line("No conflict backups under %s%s (%s)", l.Root, suffix, l.Label)
+		return
 	}
-	if all {
-		return time.Now(), nil
+	p.Header(fmt.Sprintf("Conflict backups under %s%s (%s)", l.Root, suffix, l.Label))
+	for _, c := range l.Entries {
+		p.Bullet(conflictAgeMarker(now, c.ModTime), fmt.Sprintf("%s (%s ago) — %s", c.Timestamp, conflictAge(now, c.ModTime), c.Path))
 	}
-	return time.Now().Add(-time.Duration(olderDays) * 24 * time.Hour), nil
+	for _, c := range l.Remotes {
+		p.Bullet(conflictAgeMarker(now, c.ModTime), fmt.Sprintf("%s (%s ago, %s) — %s", c.Timestamp, conflictAge(now, c.ModTime), ws.FormatSize(c.Size), c.Path))
+	}
+	p.Blank()
+}
+
+func conflictAge(now, modTime time.Time) time.Duration {
+	return now.Sub(modTime).Truncate(time.Hour)
+}
+
+// conflictAgeMarker flags backups older than 30 days as prune candidates.
+func conflictAgeMarker(now, modTime time.Time) string {
+	if conflictAge(now, modTime) > 30*24*time.Hour {
+		return "▲"
+	}
+	return "•"
 }
 
 func runSyncConflictsPrune(cmd *cobra.Command, _ []string) error {
-	_, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	p := printerFrom(cmd)
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	yes, _ := cmd.Flags().GetBool("yes")
 	olderDays, _ := cmd.Flags().GetInt("older-than")
 	all, _ := cmd.Flags().GetBool("all")
 	remoteOnly, _ := cmd.Flags().GetBool("remote-only")
@@ -1505,124 +1333,61 @@ func runSyncConflictsPrune(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--remote-only requires an SSH target")
 	}
 
-	cutoff, err := resolvePruneCutoff(olderDays, all, cmd.Flags().Changed("older-than"))
+	cutoff, err := syncer.ResolvePruneCutoff(olderDays, all, cmd.Flags().Changed("older-than"))
 	if err != nil {
 		return err
 	}
 
-	// Hold the sync lock so RemoveAll never interleaves with an rsync
-	// pass that is actively writing new backups.
-	release, lockErr := syncer.AcquireLock(cfg.LockDir)
-	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
-	}
-	defer release()
-
-	trees := conflictTrees(cfg)
-	if remoteOnly {
-		trees = nil
-	}
-	plans := make([]*syncer.PruneResult, len(trees))
-	var candidates int
-	var reclaim int64
-	for i, tree := range trees {
-		plan, err := syncer.PruneConflicts(tree[1], cutoff, true)
-		if err != nil {
-			return err
-		}
-		plans[i] = plan
-		candidates += len(plan.Pruned)
-		reclaim += plan.Reclaimed
-	}
-	remoteTrees, err := remoteConflictTrees(cfg)
+	res, err := syncer.ConflictsPrune(cmd.Context(), syncer.ConflictsPruneOptions{
+		Config:     cfg,
+		Runner:     bs.Runner,
+		Cutoff:     cutoff,
+		RemoteOnly: remoteOnly,
+		DryRun:     dryRun,
+		Progress:   renderSyncEvent(p, syncRender{cfg: cfg}),
+		OnPlanned:  func(r syncer.PruneTreeReport) { printPrunePlan(p, r) },
+		OnPruned:   func(r syncer.PruneTreeReport) { printPruneApplied(p, r) },
+		Confirm:    confirmSync(cmd),
+	})
 	if err != nil {
 		return err
 	}
-	remotePlans := make([]*syncer.PruneResult, len(remoteTrees))
-	for i, tree := range remoteTrees {
-		plan, err := syncer.PruneRemoteConflicts(cmd.Context(), runner, cfg.Target, tree[1], cutoff, true)
-		if err != nil {
-			return err
-		}
-		remotePlans[i] = plan
-		candidates += len(plan.Pruned)
-		reclaim += plan.Reclaimed
-	}
-
-	now := time.Now()
-	for i, tree := range trees {
-		label := tree[0]
-		plan := plans[i]
-		if len(plan.Pruned) == 0 {
-			continue
-		}
-		p.Section(fmt.Sprintf("%s — %s", label, plan.Root))
-		for _, c := range plan.Pruned {
-			age := now.Sub(c.ModTime).Truncate(time.Hour)
-			p.Bullet("▲", fmt.Sprintf("%s (%s ago, %s)", c.Timestamp, age, ws.FormatSize(c.Size)))
-		}
-	}
-	for i, tree := range remoteTrees {
-		label := tree[0]
-		plan := remotePlans[i]
-		if len(plan.Pruned) == 0 {
-			continue
-		}
-		p.Section(fmt.Sprintf("%s — %s", label, plan.Root))
-		for _, c := range plan.Pruned {
-			age := now.Sub(c.ModTime).Truncate(time.Hour)
-			p.Bullet("▲", fmt.Sprintf("%s (%s ago, %s)", c.Timestamp, age, ws.FormatSize(c.Size)))
-		}
-	}
-	if candidates == 0 {
+	switch res.Outcome {
+	case syncer.PruneLockBusy:
+		p.Line("  %s", res.LockErr)
+	case syncer.PruneNothingToDo:
 		p.Line("Nothing to prune.")
-		return nil
-	}
-	p.Line("Would reclaim %s across %d backup dir(s).", ws.FormatSize(reclaim), candidates)
-	if dryRun {
+	case syncer.PrunePlanned:
 		p.Line("  (dry-run — no changes)")
-		return nil
-	}
-
-	confirmed, err := ui.Confirm(fmt.Sprintf("Remove %d backup dir(s), reclaiming %s?", candidates, ws.FormatSize(reclaim)), yes)
-	if err != nil {
-		return err
-	}
-	if !confirmed {
+	case syncer.PruneAborted:
 		p.Line("Aborted.")
-		return nil
-	}
-
-	for _, tree := range trees {
-		label, root := tree[0], tree[1]
-		res, err := syncer.PruneConflicts(root, cutoff, false)
-		if err != nil {
-			return err
-		}
-		if len(res.Pruned) == 0 {
-			continue
-		}
-		p.Success("pruned %d backup dir(s) (freed %s) under %s/.sync-conflicts/", len(res.Pruned), ws.FormatSize(res.Reclaimed), root)
-		if label == "mirror" {
-			p.Line("  The Drive sync client will propagate these deletions and reclaim cloud quota.")
-		}
-	}
-	for i, tree := range remoteTrees {
-		label, root := tree[0], tree[1]
-		res, err := syncer.ApplyRemoteConflictPrune(cmd.Context(), runner, cfg.Target, root, remotePlans[i].Pruned)
-		if err != nil {
-			return err
-		}
-		if len(res.Pruned) == 0 {
-			continue
-		}
-		p.Success("pruned %d backup dir(s) (freed %s) under %s/", len(res.Pruned), ws.FormatSize(res.Reclaimed), root)
-		if label == "remote target" {
-			p.Line("  The peer target now has the selected conflict backups removed.")
-		}
+	case syncer.PruneDone:
 	}
 	return nil
+}
+
+// printPrunePlan lists one tree's prune candidates.
+func printPrunePlan(p *Printer, r syncer.PruneTreeReport) {
+	p.Section(fmt.Sprintf("%s — %s", r.Label, r.Result.Root))
+	for _, c := range r.Result.Pruned {
+		p.Bullet("▲", fmt.Sprintf("%s (%s ago, %s)", c.Timestamp, conflictAge(r.Now, c.ModTime), ws.FormatSize(c.Size)))
+	}
+}
+
+// printPruneApplied reports one tree's removal, plus the follow-on consequence
+// that only the mirror and remote-target trees have.
+func printPruneApplied(p *Printer, r syncer.PruneTreeReport) {
+	suffix := "/.sync-conflicts/"
+	if r.IsRemote {
+		suffix = "/"
+	}
+	p.Success("pruned %d backup dir(s) (freed %s) under %s%s", len(r.Result.Pruned), ws.FormatSize(r.Result.Reclaimed), r.Root, suffix)
+	switch r.Label {
+	case "mirror":
+		p.Line("  The Drive sync client will propagate these deletions and reclaim cloud quota.")
+	case "remote target":
+		p.Line("  The peer target now has the selected conflict backups removed.")
+	}
 }
 
 // ── pause / resume ───────────────────────────────────────────────────────
@@ -1637,39 +1402,32 @@ func newSyncResumeCmd() *cobra.Command {
 }
 
 func runSyncResume(cmd *cobra.Command, _ []string) error {
-	_, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
+	if err := syncer.RejectGenericPeerProfile(bs.Config); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
 
-	if cfg.Paused {
-		if err := setLocalPaused(cfg, false); err != nil {
-			return fmt.Errorf("saving local config: %w", err)
-		}
+	res, err := syncer.SyncResume(cmd.Context(), bs.Config, bs.Runner)
+	if err != nil {
+		return err
+	}
+	if res.WasPaused {
 		p.Line("✓ gsync resumed.")
 	} else {
 		p.Line("gsync was not paused.")
 	}
-
-	if cfg.Interval == 0 && cfg.PullInterval == 0 {
+	if res.SchedulerOff {
 		p.Line("scheduler remains off — run `dot sync setup --push-interval=DUR` or `--pull-interval=DUR` to enable.")
 		return nil
 	}
-	// If the scheduler is configured and installed, reattach it so periodic runs resume.
-	sched, _, err := syncer.ResolveScheduler(cfg, runner)
-	if err != nil {
-		return nil // state save succeeded; scheduler is best-effort
-	}
-	if sched.State(cmd.Context()) != syncer.SchedulerNotInstalled {
-		if err := sched.Resume(cmd.Context()); err != nil {
-			p.Warn("scheduler resume failed: %v", err)
-		} else {
-			p.Line("✓ scheduler resumed.")
-		}
+	if res.SchedulerErr != nil {
+		p.Warn("scheduler resume failed: %v", res.SchedulerErr)
+	} else if res.SchedulerResumed {
+		p.Line("✓ scheduler resumed.")
 	}
 	return nil
 }
@@ -1684,36 +1442,28 @@ func newSyncPauseCmd() *cobra.Command {
 }
 
 func runSyncPause(cmd *cobra.Command, _ []string) error {
-	_, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
+	if err := syncer.RejectGenericPeerProfile(bs.Config); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
 
-	if !cfg.Paused {
-		if err := setLocalPaused(cfg, true); err != nil {
-			return fmt.Errorf("saving local config: %w", err)
-		}
+	res, err := syncer.SyncPause(cmd.Context(), bs.Config, bs.Runner)
+	if err != nil {
+		return err
+	}
+	if !res.WasPaused {
 		p.Line("✓ gsync paused.")
 	} else {
 		p.Line("gsync was already paused.")
 	}
-
-	// Stop the scheduler if installed so we don't waste invocations
-	// hitting the paused gate every Interval seconds.
-	sched, _, err := syncer.ResolveScheduler(cfg, runner)
-	if err != nil {
-		return nil
-	}
-	if sched.State(cmd.Context()) == syncer.SchedulerRunning {
-		if err := sched.Pause(cmd.Context()); err != nil {
-			p.Warn("scheduler pause failed: %v", err)
-		} else {
-			p.Line("✓ scheduler stopped.")
-		}
+	if res.SchedulerErr != nil {
+		p.Warn("scheduler pause failed: %v", res.SchedulerErr)
+	} else if res.SchedulerStopped {
+		p.Line("✓ scheduler stopped.")
 	}
 	return nil
 }
@@ -1746,19 +1496,12 @@ Idempotent — re-run safely after an interval change to reload the unit.`,
 }
 
 func runSyncSetup(cmd *cobra.Command, _ []string) error {
-	yes, _ := cmd.Flags().GetBool("yes")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	var cfg *syncer.Config
-	var runner *exec.Runner
-	var err error
-	if dryRun {
-		_, cfg, runner, err = syncBootstrapReadOnly(cmd)
-	} else {
-		_, cfg, runner, err = syncBootstrap(cmd)
-	}
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, dryRun))
 	if err != nil {
 		return err
 	}
+	cfg, runner := bs.Config, bs.Runner
 	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
@@ -1796,36 +1539,24 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("--pull-mode: %w", err)
 	}
-	if err := setLocalSchedule(cfg, pushInterval, pullInterval, pushMode, pullMode, dryRun); err != nil {
+	if err := syncer.SetLocalSchedule(cfg, pushInterval, pullInterval, pushMode, pullMode, dryRun); err != nil {
 		return fmt.Errorf("saving scheduler config: %w", err)
 	}
 
 	// 1. Check / install rsync
 	p.Line("Checking rsync...")
-	ver, ok := syncer.CheckRsync(runner)
-	if ok {
-		p.Line("  ✓ rsync installed (%s)", ver)
-	} else {
-		if dryRun {
-			p.Line("  ~ rsync not found; would install after confirmation")
-		} else {
-			confirmed, err := ui.Confirm("rsync not found. Install it?", yes)
-			if err != nil {
-				return err
-			}
-			if !confirmed {
-				p.Line("Aborted.")
-				return nil
-			}
-			if err := syncer.InstallRsync(ctx, runner, p.Out); err != nil {
-				return fmt.Errorf("installing rsync: %w", err)
-			}
-			ver, ok = syncer.CheckRsync(runner)
-			if !ok {
-				return fmt.Errorf("rsync not found in PATH after install")
-			}
-			p.Line("  ✓ rsync installed (%s)", ver)
-		}
+	rsync, err := syncer.EnsureRsync(ctx, runner, p.Out, dryRun, confirmSync(cmd))
+	if err != nil {
+		return err
+	}
+	switch rsync.Outcome {
+	case syncer.RsyncPresent, syncer.RsyncInstalled:
+		p.Line("  ✓ rsync installed (%s)", rsync.Version)
+	case syncer.RsyncWouldInstall:
+		p.Line("  ~ rsync not found; would install after confirmation")
+	case syncer.RsyncInstallDeclined:
+		p.Line("Aborted.")
+		return nil
 	}
 
 	// 2. Deploy scheduler(s) only when explicitly enabled.
@@ -1910,64 +1641,6 @@ func parseAutomaticModeFlag(raw string) (syncer.RunMode, error) {
 	return syncer.NormalizeAutomaticMode(mode)
 }
 
-// setLocalSchedule mutates LocalConfig scheduler settings, persists, and
-// keeps cfg in sync.
-func setLocalSchedule(cfg *syncer.Config, pushInterval, pullInterval int, pushMode, pullMode syncer.RunMode, dryRun bool) error {
-	if cfg.LocalPaths == nil {
-		return fmt.Errorf("local paths unresolved")
-	}
-	schedule, err := (syncer.ScheduleSettings{
-		Interval:     pushInterval,
-		PullInterval: pullInterval,
-		PushMode:     pushMode,
-		PullMode:     pullMode,
-	}).Normalize()
-	if err != nil {
-		return err
-	}
-	local, ok, err := syncer.LoadLocalConfig(cfg.LocalPaths)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		local = &syncer.LocalConfig{Propagation: syncer.DefaultPropagationPolicy()}
-	}
-	schedule.ApplyToLocalConfig(local)
-	if !dryRun {
-		if err := syncer.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
-			return err
-		}
-	}
-	cfg.Interval = schedule.Interval
-	cfg.PullInterval = schedule.PullInterval
-	cfg.PushMode = schedule.PushMode
-	cfg.PullMode = schedule.PullMode
-	return nil
-}
-
-// setLocalPaused mutates the local config's Paused field, persists, and
-// keeps cfg in sync so callers see the new value without re-running
-// ResolveConfig.
-func setLocalPaused(cfg *syncer.Config, paused bool) error {
-	if cfg.LocalPaths == nil {
-		return fmt.Errorf("local paths unresolved")
-	}
-	local, ok, err := syncer.LoadLocalConfig(cfg.LocalPaths)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		// Should not happen — ResolveConfig migrates first. Defensive fallback.
-		local = &syncer.LocalConfig{Propagation: syncer.DefaultPropagationPolicy()}
-	}
-	local.Paused = paused
-	if err := syncer.SaveLocalConfig(cfg.LocalPaths, local); err != nil {
-		return err
-	}
-	cfg.Paused = paused
-	return nil
-}
-
 // ── shared (manual exclusion list) ───────────────────────────────────────
 
 func newSyncSharedCmd() *cobra.Command {
@@ -2021,10 +1694,11 @@ The list feeds a per-run dynamic excludes file passed to rsync.
 }
 
 func runSyncSharedList(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 	entries, err := syncer.ScanShared(stripTrailingSlash(cfg.MirrorPath), cfg.SharedExcludes)
 	if err != nil {
 		return fmt.Errorf("scanning shared entries: %w", err)
@@ -2049,35 +1723,14 @@ func runSyncSharedList(cmd *cobra.Command, _ []string) error {
 }
 
 func runSyncSharedAdd(cmd *cobra.Command, args []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	mirror := stripTrailingSlash(cfg.MirrorPath)
-	added := make([]string, 0, len(args))
-	localCfg, err := editableLocalConfig(cfg)
+	added, err := syncer.SharedAdd(bs.Config, args)
 	if err != nil {
 		return err
 	}
-	current := append([]string(nil), localCfg.SharedExcludes...)
-
-	for _, raw := range args {
-		rel, err := relativizeForMirror(raw, mirror)
-		if err != nil {
-			return err
-		}
-		if !containsString(current, rel) {
-			current = append(current, rel)
-			added = append(added, rel)
-		}
-	}
-
-	dedupedSorted := dedupSorted(current)
-	localCfg.SharedExcludes = dedupedSorted
-	if err := syncer.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
-		return fmt.Errorf("saving local config: %w", err)
-	}
-	cfg.SharedExcludes = dedupedSorted
 
 	p := printerFrom(cmd)
 	if len(added) == 0 {
@@ -2091,43 +1744,14 @@ func runSyncSharedAdd(cmd *cobra.Command, args []string) error {
 }
 
 func runSyncSharedRemove(cmd *cobra.Command, args []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	mirror := stripTrailingSlash(cfg.MirrorPath)
-	removed := make([]string, 0, len(args))
-	localCfg, err := editableLocalConfig(cfg)
+	removed, err := syncer.SharedRemove(bs.Config, args)
 	if err != nil {
 		return err
 	}
-	current := append([]string(nil), localCfg.SharedExcludes...)
-
-	for _, raw := range args {
-		rel, err := relativizeForMirror(raw, mirror)
-		if err != nil {
-			return err
-		}
-		next := current[:0]
-		gone := false
-		for _, e := range current {
-			if e == rel {
-				gone = true
-				continue
-			}
-			next = append(next, e)
-		}
-		current = next
-		if gone {
-			removed = append(removed, rel)
-		}
-	}
-
-	localCfg.SharedExcludes = current
-	if err := syncer.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
-		return fmt.Errorf("saving local config: %w", err)
-	}
-	cfg.SharedExcludes = current
 
 	p := printerFrom(cmd)
 	if len(removed) == 0 {
@@ -2141,16 +1765,15 @@ func runSyncSharedRemove(cmd *cobra.Command, args []string) error {
 }
 
 func runSyncSharedClear(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
 	yes, _ := cmd.Flags().GetBool("yes")
-	localCfg, err := editableLocalConfig(cfg)
+	n, err := syncer.SharedCount(bs.Config)
 	if err != nil {
 		return err
 	}
-	n := len(localCfg.SharedExcludes)
 	p := printerFrom(cmd)
 	if n == 0 {
 		p.Line("Manual shared-excludes list is already empty.")
@@ -2164,87 +1787,11 @@ func runSyncSharedClear(cmd *cobra.Command, _ []string) error {
 		p.Line("Aborted.")
 		return nil
 	}
-	localCfg.SharedExcludes = nil
-	if err := syncer.SaveLocalConfig(cfg.LocalPaths, localCfg); err != nil {
-		return fmt.Errorf("saving local config: %w", err)
+	if err := syncer.SharedClear(bs.Config); err != nil {
+		return err
 	}
-	cfg.SharedExcludes = nil
 	p.Line("✓ Cleared %d manual entries.", n)
 	return nil
-}
-
-func editableLocalConfig(cfg *syncer.Config) (*syncer.LocalConfig, error) {
-	if cfg.LocalPaths == nil {
-		return nil, fmt.Errorf("local paths unresolved")
-	}
-	localCfg, ok, err := syncer.LoadLocalConfig(cfg.LocalPaths)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		localCfg = &syncer.LocalConfig{Propagation: syncer.DefaultPropagationPolicy()}
-	}
-	return localCfg, nil
-}
-
-// relativizeForMirror normalizes a user-supplied path so it lives under
-// mirror as a relative path. Absolute paths must be inside mirror.
-// Trailing slashes and "./" prefixes are stripped. Empty results,
-// "..", and parent escapes are rejected.
-func relativizeForMirror(raw, mirror string) (string, error) {
-	cleaned := strings.TrimSpace(raw)
-	if cleaned == "" {
-		return "", fmt.Errorf("empty path")
-	}
-	if filepath.IsAbs(cleaned) {
-		mirrorAbs, err := filepath.Abs(mirror)
-		if err != nil {
-			return "", fmt.Errorf("resolving mirror %q: %w", mirror, err)
-		}
-		rel, err := filepath.Rel(mirrorAbs, cleaned)
-		if err != nil {
-			return "", fmt.Errorf("relativizing %q against %q: %w", cleaned, mirror, err)
-		}
-		cleaned = rel
-	}
-	cleaned = strings.TrimPrefix(cleaned, "./")
-	cleaned = strings.TrimSuffix(cleaned, "/")
-	if cleaned == "" || cleaned == "." {
-		return "", fmt.Errorf("path resolves to mirror root, refusing to exclude everything")
-	}
-	for _, seg := range strings.Split(cleaned, "/") {
-		if seg == ".." {
-			return "", fmt.Errorf("path %q escapes mirror root", raw)
-		}
-	}
-	return cleaned, nil
-}
-
-// dedupSorted returns a stable, sorted copy of in with duplicates removed.
-func dedupSorted(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func containsString(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // ── small helpers ────────────────────────────────────────────────────────
@@ -2281,66 +1828,54 @@ func newSyncOwnerCmd() *cobra.Command {
 		Short: "Show or set which machine may push this profile",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			p := printerFrom(c)
-			_, cfg, _, err := syncBootstrap(c)
-			if err != nil {
-				return err
-			}
-			paths := cfg.LocalPaths
-			if paths == nil {
-				return fmt.Errorf("profile store unresolved")
-			}
-			names := syncer.MachineNames()
-
-			if !setSelf && setTo == "" && !clearOwner {
-				p.KV("profile", cfg.Profile)
-				if strings.TrimSpace(cfg.Owner) == "" {
-					p.KV("owner", "(unset - any machine may push)")
-				} else {
-					p.KV("owner", cfg.Owner)
-				}
-				p.KV("this machine", strings.Join(names, ", "))
-				if err := syncer.CheckOwner(cfg); err != nil {
-					p.Warn("this machine may NOT push this profile")
-				} else {
-					p.Success("this machine may push this profile")
-				}
-				return nil
-			}
-
-			local, ok, err := syncer.LoadLocalConfig(paths)
-			if err != nil {
-				return err
-			}
-			if !ok || local == nil {
-				return fmt.Errorf("profile %q has no config yet; run dot sync init first", cfg.Profile)
-			}
-			switch {
-			case clearOwner:
-				local.Owner = ""
-			case setSelf:
-				local.Owner = syncer.PreferredMachineName()
-				if local.Owner == "" {
-					return fmt.Errorf("cannot determine this machine's name")
-				}
-			default:
-				local.Owner = setTo
-			}
-			if err := syncer.SaveLocalConfig(paths, local); err != nil {
-				return err
-			}
-			if local.Owner == "" {
-				p.Success("owner cleared for profile %q (any machine may push)", cfg.Profile)
-			} else {
-				p.Success("owner of profile %q is now %q", cfg.Profile, local.Owner)
-			}
-			return nil
+			return runSyncOwner(c, syncer.OwnerOptions{Clear: clearOwner, SetSelf: setSelf, SetTo: setTo})
 		},
 	}
 	cmd.Flags().BoolVar(&setSelf, "set-self", false, "claim ownership for this machine")
 	cmd.Flags().StringVar(&setTo, "set", "", "set ownership to a specific machine name")
 	cmd.Flags().BoolVar(&clearOwner, "clear", false, "remove the ownership restriction")
 	return cmd
+}
+
+func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
+	p := printerFrom(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
+	if err != nil {
+		return err
+	}
+	cfg := bs.Config
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("profile store unresolved")
+	}
+	names := syncer.MachineNames()
+
+	if !opts.SetSelf && opts.SetTo == "" && !opts.Clear {
+		p.KV("profile", cfg.Profile)
+		if strings.TrimSpace(cfg.Owner) == "" {
+			p.KV("owner", "(unset - any machine may push)")
+		} else {
+			p.KV("owner", cfg.Owner)
+		}
+		p.KV("this machine", strings.Join(names, ", "))
+		if err := syncer.CheckOwner(cfg); err != nil {
+			p.Warn("this machine may NOT push this profile")
+		} else {
+			p.Success("this machine may push this profile")
+		}
+		return nil
+	}
+
+	opts.Config = cfg
+	owner, err := syncer.SetOwner(opts)
+	if err != nil {
+		return err
+	}
+	if owner == "" {
+		p.Success("owner cleared for profile %q (any machine may push)", cfg.Profile)
+	} else {
+		p.Success("owner of profile %q is now %q", cfg.Profile, owner)
+	}
+	return nil
 }
 
 // reportPushPartial downgrades an rsync partial transfer (exit 23/24) from a
