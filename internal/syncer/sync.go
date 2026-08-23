@@ -89,6 +89,12 @@ type Config struct {
 	// same way RemoteRsyncPath is; nil means process stdout.
 	Out io.Writer
 
+	// Home is the raw --home override this config was resolved for; empty
+	// means the process home. Every path an engine entry derives from "the
+	// user's home" must come from HomeDir() rather than os.UserHomeDir(),
+	// or one command operates on two different homes at once (BUG-07).
+	Home string
+
 	// LocalPaths exposes the resolved per-workspace layout for
 	// callers (status, init, manifest readers) that need granular
 	// access beyond what the convenience fields above expose.
