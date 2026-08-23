@@ -31,6 +31,12 @@ fail() {
 # paths: a path-only entry would forgive a mode change or a content change on a
 # tolerated path, which is exactly what the byte-identity claim must not do.
 #
+# It is EMPTY, and empty is the intended resting state. Phase 5 fixed BUG-05
+# (internal/cli/apply.go, the state save above the homeOverride fork) and pruned
+# its five entries from both this table and the Go one in the same change,
+# because the staleness check below fails on an entry whose deviation has stopped
+# occurring just as loudly as an unattributed write fails the scan above.
+#
 # This is a record, not a suppression. Every entry names an existing requirement
 # ID, its file:line, and a one-clause description, so it is resolvable from the
 # tracked tree alone. Do not add an entry for a deviation that is not
@@ -47,19 +53,6 @@ ADD_DEVIATION() {
   DEVIATION_OWNERS+=("$2")
   DEVIATION_SEEN+=(0)
 }
-
-BUG05="BUG-05 internal/cli/apply.go:112,:116 - apply saves state on both branches of the homeOverride fork before the runner is constructed at :137; saveStateAt (internal/config/state.go:459) has no dry-run awareness"
-
-ADD_DEVIATION "$(printf '.config\td\t755')" \
-  "$BUG05 - the state dir os.MkdirAll creates"
-ADD_DEVIATION "$(printf '.config/dotfiles\td\t755')" \
-  "$BUG05 - the second level of that same state dir"
-ADD_DEVIATION "$(printf '.config/dotfiles/config.yaml\tf\t644\tf041ab184aa2cf78746a93103afca250014ef42a51aa75a7355729993e0b3ca4')" \
-  "$BUG05 - the state file itself, minimal profile payload"
-ADD_DEVIATION "$(printf '.config/dotfiles/config.yaml\tf\t644\td69657e98b6103f19c2be1b23455d37cac68553cfb35fd389305ac6ef9be01dd')" \
-  "$BUG05 - the state file itself, full profile payload"
-ADD_DEVIATION "$(printf '.config/dotfiles/config.yaml\tf\t644\t96c54d6293100d2dafe88f136086a46d887155e3105418514c431152ba4033c5')" \
-  "$BUG05 - the state file itself, server profile payload"
 
 # BUG-06 internal/exec/brew.go:293 - RefreshPath re-opens the PATH sandbox from
 # an os.Stat, so read-only probes run real third-party binaries that write into
@@ -137,7 +130,9 @@ for PROFILE in minimal full server; do
     fi
   done < <(LC_ALL=C comm -13 "$BEFORE_FILE" "$AFTER_FILE")
 
-  if [ "$UNATTRIBUTED" -eq 0 ]; then
+  if [ "$UNATTRIBUTED" -eq 0 ] && [ "$DEVIATION_COUNT" -eq 0 ]; then
+    pass "dry-run ($PROFILE) left an empty HOME byte-identical"
+  elif [ "$UNATTRIBUTED" -eq 0 ]; then
     pass "dry-run ($PROFILE) left an empty HOME byte-identical except for $DEVIATION_COUNT recorded deviation(s)"
   fi
 
@@ -146,6 +141,9 @@ done
 
 echo ""
 echo "--- known-deviation table is not stale ---"
+if [ "${#DEVIATION_KEYS[@]}" -eq 0 ]; then
+  pass "the known-deviation table is empty: the dry-run byte-identity claim is unconditional"
+fi
 I=0
 while [ "$I" -lt "${#DEVIATION_KEYS[@]}" ]; do
   if [ "${DEVIATION_SEEN[$I]}" -eq 1 ]; then
