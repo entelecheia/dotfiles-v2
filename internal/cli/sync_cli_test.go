@@ -11,7 +11,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-// syncCLIFixture isolates HOME/XDG so syncBootstrap resolves state,
+// syncCLIFixture isolates HOME/XDG so syncer.Bootstrap resolves state,
 // lock dir, and trees inside a temp sandbox, then returns the two trees.
 type syncCLIFixture struct {
 	home   string
