@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
@@ -50,24 +48,18 @@ func newPeerStatusCmd() *cobra.Command {
 	return cmd
 }
 
-func peerBootstrapReadOnly() (*config.UserState, *syncer.Config, *exec.Runner, error) {
-	state, err := config.LoadState()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("loading state: %w", err)
-	}
-	cfg, err := syncer.ResolveConfigReadOnlyForProfile(state, PeerProfile)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return state, cfg, exec.NewRunner(false, logger), nil
+// peerBootstrapReadOnly resolves the peer profile without creating its store.
+// The runner is deliberately live: reading status must work under --dry-run.
+func peerBootstrapReadOnly() (*syncer.BootstrapResult, error) {
+	return syncer.Bootstrap(syncer.BootstrapOptions{Profile: PeerProfile, ReadOnly: true})
 }
 
 func runPeerStatus(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := peerBootstrapReadOnly()
+	bs, err := peerBootstrapReadOnly()
 	if err != nil {
 		return err
 	}
+	state, cfg, runner := bs.State, bs.Config, bs.Runner
 	st, err := syncer.GetStatus(cmd.Context(), runner, cfg, state, nil)
 	if err != nil {
 		return err

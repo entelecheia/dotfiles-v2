@@ -14,7 +14,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
@@ -156,14 +155,11 @@ inbound port, which is what a laptop needs.`,
 			if strings.TrimSpace(host) == "" {
 				return fmt.Errorf("--host is required (e.g. --host yj.lee@other.tailnet.ts.net)")
 			}
-			state, err := config.LoadState()
-			if err != nil {
-				return fmt.Errorf("loading state: %w", err)
-			}
-			cfg, err := syncer.ResolveConfigForProfile(state, PeerProfile)
+			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
 				return err
 			}
+			cfg := bs.Config
 			paths := cfg.LocalPaths
 			if paths == nil {
 				return fmt.Errorf("peer store unresolved")
@@ -298,10 +294,11 @@ func newPeerDiffCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
-			_, cfg, _, err := peerBootstrap(c)
+			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
 				return err
 			}
+			cfg := bs.Config
 			if !cfg.Target.IsSSH() {
 				return fmt.Errorf("peer target is not configured; run dot peer init first")
 			}
@@ -623,10 +620,11 @@ Pick an interval in minutes, not seconds: the payload is large and each run
 walks the whole tree.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
-			_, cfg, runner, err := peerBootstrap(c)
+			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
 				return err
 			}
+			cfg, runner := bs.Config, bs.Runner
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return err
@@ -712,10 +710,11 @@ Checks, and why each exists:
                  verified over ssh — a reminder, not a failure`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
-			_, cfg, _, err := peerBootstrap(c)
+			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
 				return err
 			}
+			cfg := bs.Config
 			runner := probeRunner()
 			if !cfg.Target.IsSSH() {
 				return fmt.Errorf("peer profile target is %q, expected an ssh: target; run dot peer init", cfg.Target.String())
@@ -795,10 +794,11 @@ Exits 0 when the peer is unreachable. That is what makes this safe to schedule
 on a laptop.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
-			_, cfg, runner, err := peerBootstrap(c)
+			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
 				return err
 			}
+			cfg, runner := bs.Config, bs.Runner
 			if !cfg.Target.IsSSH() {
 				return fmt.Errorf("peer target is not an ssh target; run: dot peer init --host <user@host>")
 			}
@@ -1075,22 +1075,14 @@ func probeRunner() *exec.Runner {
 	return exec.NewRunner(false, logger)
 }
 
-func peerBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec.Runner, error) {
+// peerBootstrapOptions translates the peer command tree's flags into the
+// engine's bootstrap options. The profile is fixed here, which is why
+// `--profile` is deliberately not read: `dot peer` only ever addresses the
+// peer store.
+func peerBootstrapOptions(cmd *cobra.Command) syncer.BootstrapOptions {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	state, err := config.LoadState()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("loading state: %w", err)
-	}
-	cfg, err := syncer.ResolveConfigForProfile(state, PeerProfile)
-	if err != nil {
-		return nil, nil, nil, err
-	}
 	verbose, _ := cmd.Flags().GetBool("verbose")
-	cfg.Verbose = verbose
-	// exec.Runner dereferences its logger, so nil panics on the first Info call.
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	runner := exec.NewRunner(dryRun, logger)
-	return state, cfg, runner, nil
+	return syncer.BootstrapOptions{Profile: PeerProfile, DryRun: dryRun, Verbose: verbose}
 }
 func peerHomePathsFile(paths *syncer.LocalPaths) string {
 	return filepath.Join(paths.StoreDir, "home-paths.txt")

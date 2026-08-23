@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -436,63 +435,42 @@ func runSyncInit(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// syncBootstrap loads state + resolved config + a runner for any
-// gsync subcommand. Mirrors syncBootstrap idiom in sync_cmd.go.
-func syncBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec.Runner, error) {
+// syncBootstrapOptions translates the sync command tree's flags into the
+// engine's bootstrap options. Flag translation is cli's retained role; state
+// loading, profile resolution and runner construction are the engine's
+// (syncer.Bootstrap, D-07).
+func syncBootstrapOptions(cmd *cobra.Command, readOnly bool) syncer.BootstrapOptions {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	state, err := config.LoadState()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("loading state: %w", err)
-	}
 	profile, _ := cmd.Flags().GetString("profile")
-	cfg, err := syncer.ResolveConfigForProfile(state, profile)
+	verbose, _ := cmd.Flags().GetBool("verbose")
+	filterMode, _ := cmd.Flags().GetString("filter-mode")
+	return syncer.BootstrapOptions{
+		Profile:       profile,
+		ReadOnly:      readOnly,
+		DryRun:        dryRun,
+		Verbose:       verbose,
+		FilterMode:    filterMode,
+		FilterModeSet: cmd.Flags().Changed("filter-mode"),
+	}
+}
+
+func syncBootstrapWith(cmd *cobra.Command, readOnly bool) (*config.UserState, *syncer.Config, *exec.Runner, error) {
+	res, err := syncer.Bootstrap(syncBootstrapOptions(cmd, readOnly))
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err := applySyncFilterModeOverride(cmd, cfg); err != nil {
-		return nil, nil, nil, err
-	}
-	verbose, _ := cmd.Flags().GetBool("verbose")
-	cfg.Verbose = verbose
+	return res.State, res.Config, res.Runner, nil
+}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	runner := exec.NewRunner(dryRun, logger)
-	return state, cfg, runner, nil
+// syncBootstrap loads state + resolved config + a runner for any
+// gsync subcommand. Thin delegating wrapper over syncer.Bootstrap; plan 03-06
+// inlines it at each call site.
+func syncBootstrap(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec.Runner, error) {
+	return syncBootstrapWith(cmd, false)
 }
 
 func syncBootstrapReadOnly(cmd *cobra.Command) (*config.UserState, *syncer.Config, *exec.Runner, error) {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	state, err := config.LoadState()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("loading state: %w", err)
-	}
-	profile, _ := cmd.Flags().GetString("profile")
-	cfg, err := syncer.ResolveConfigReadOnlyForProfile(state, profile)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err := applySyncFilterModeOverride(cmd, cfg); err != nil {
-		return nil, nil, nil, err
-	}
-	verbose, _ := cmd.Flags().GetBool("verbose")
-	cfg.Verbose = verbose
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	runner := exec.NewRunner(dryRun, logger)
-	return state, cfg, runner, nil
-}
-
-func applySyncFilterModeOverride(cmd *cobra.Command, cfg *syncer.Config) error {
-	if !cmd.Flags().Changed("filter-mode") {
-		return nil
-	}
-	raw, _ := cmd.Flags().GetString("filter-mode")
-	mode, err := syncer.ParseFilterMode(raw)
-	if err != nil {
-		return fmt.Errorf("--filter-mode: %w", err)
-	}
-	cfg.FilterMode = mode
-	return nil
+	return syncBootstrapWith(cmd, true)
 }
 
 // syncScheduler builds a Scheduler bound to the same runner+cfg used
