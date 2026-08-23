@@ -145,10 +145,11 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 			Force:     false,
 			Yes:       rc.Yes,
 			VaultPath: m.expandHome(rc, rc.Config.VaultCloneTarget()),
+			Out:       rc.out(),
 		})
 		messages = append(messages, initMsgs...)
 		if err != nil {
-			fmt.Printf("  ⚠ workspace: ws.Init: %v (continuing)\n", err)
+			fmt.Fprintf(rc.out(), "  ⚠ workspace: ws.Init: %v (continuing)\n", err)
 		}
 	}
 

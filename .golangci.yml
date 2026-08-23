@@ -3,13 +3,32 @@ version: "2"
 linters:
   default: none
   enable:
+    - depguard
     - errcheck
+    - forbidigo
     - govet
     - ineffassign
     - misspell
     - staticcheck
     - unused
   settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^fmt\.Print(ln|f)?$
+          msg: write through the carrier's injected writer accessor instead (SEAM-01)
+        - pattern: ^(print|println)$
+          msg: write through the carrier's injected writer accessor instead (SEAM-01)
+    depguard:
+      rules:
+        engines:
+          files:
+            - $all
+            - "!**/internal/cli/**"
+            - "!**/tools/gendocs/**"
+          deny:
+            - pkg: github.com/spf13/cobra
+              desc: cobra construction, flag registration, and presentation live in internal/cli only; an engine takes an Options struct instead
     misspell:
       locale: US
   exclusions:
@@ -23,6 +42,15 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # The interactive wizard owns the terminal through huh and is out of
+      # scope for the writer seam this milestone.
+      - path: internal/ui
+        linters:
+          - forbidigo
+      # The layout contract: the one sanctioned place presentation happens.
+      - path: internal/cli/printer.go
+        linters:
+          - forbidigo
 
 formatters:
   enable:

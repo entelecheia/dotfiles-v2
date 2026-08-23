@@ -108,13 +108,13 @@ func runOpen(cmd *cobra.Command, args []string) error {
 	runner := exec.NewRunner(false, slog.Default())
 	brew := exec.NewBrew(runner)
 
-	if err := workspace.InstallRequired(ctx, runner, brew); err != nil {
+	if err := workspace.InstallRequired(ctx, runner, brew, cmd.OutOrStdout()); err != nil {
 		return fmt.Errorf("installing required tools: %w", err)
 	}
 
 	installOptional, _ := cmd.Flags().GetBool("install-optional")
 	if installOptional {
-		workspace.InstallOptional(ctx, runner, brew)
+		workspace.InstallOptional(ctx, runner, brew, cmd.OutOrStdout())
 	}
 
 	// Deploy shell scripts

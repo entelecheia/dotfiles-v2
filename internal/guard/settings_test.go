@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/entelecheia/dotfiles-v2/internal/claudecfg"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
@@ -115,7 +116,7 @@ func TestEnsureHookEntriesReplacesStaleCommand(t *testing.T) {
 
 func TestEnsureAndRemovePreserveForeignHooks(t *testing.T) {
 	home := t.TempDir()
-	path := ClaudeSettingsPath(home)
+	path := claudecfg.SettingsPath(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestRemoveHookEntriesCleansEmptyContainers(t *testing.T) {
 	if _, err := RemoveHookEntries(testRunner(), home); err != nil {
 		t.Fatal(err)
 	}
-	settings := readJSON(t, ClaudeSettingsPath(home))
+	settings := readJSON(t, claudecfg.SettingsPath(home))
 	if _, ok := settings["hooks"]; ok {
 		t.Fatalf("empty hooks container should be removed: %#v", settings)
 	}
@@ -192,7 +193,7 @@ func TestRemoveHookEntriesMissingFile(t *testing.T) {
 
 func TestInvalidJSONRefused(t *testing.T) {
 	home := t.TempDir()
-	path := ClaudeSettingsPath(home)
+	path := claudecfg.SettingsPath(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

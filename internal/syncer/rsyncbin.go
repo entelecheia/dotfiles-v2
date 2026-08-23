@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 	"time"
@@ -89,16 +90,18 @@ func CheckRsync(runner *exec.Runner) (string, bool) {
 	return "unknown", true
 }
 
-// InstallRsync installs rsync via brew or apt.
-func InstallRsync(ctx context.Context, runner *exec.Runner) error {
+// InstallRsync installs rsync via brew or apt. Progress lines go to out;
+// a nil out means process stdout.
+func InstallRsync(ctx context.Context, runner *exec.Runner, out io.Writer) error {
+	out = outOrStdout(out)
 	brew := exec.NewBrew(runner)
 	if brew.IsAvailable() {
-		fmt.Println("Installing rsync via Homebrew...")
+		fmt.Fprintln(out, "Installing rsync via Homebrew...")
 		return brew.Install(ctx, []string{"rsync"})
 	}
 
 	if runtime.GOOS == "linux" {
-		fmt.Println("Installing rsync via apt...")
+		fmt.Fprintln(out, "Installing rsync via apt...")
 		_, err := runner.Run(ctx, "sudo", "apt-get", "install", "-y", "rsync")
 		return err
 	}

@@ -190,6 +190,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		DryRun:   dryRun,
 		Yes:      yes,
 		HomeDir:  home,
+		Out:      p.Out,
 	}
 
 	p.Line("")

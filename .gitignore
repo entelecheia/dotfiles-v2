@@ -9,3 +9,4 @@ dist/
 .conductor/
 graphify-out/
 .planning/
+.gsd/

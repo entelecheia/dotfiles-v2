@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -84,10 +85,32 @@ type Config struct {
 	// already ran the marker-gated NFD preflight under the shared lock.
 	NamesNormalized bool
 
+	// Out receives sync progress output. Runtime-only, set by the caller the
+	// same way RemoteRsyncPath is; nil means process stdout.
+	Out io.Writer
+
 	// LocalPaths exposes the resolved per-workspace layout for
 	// callers (status, init, manifest readers) that need granular
 	// access beyond what the convenience fields above expose.
 	LocalPaths *LocalPaths
+}
+
+// outOrStdout normalizes a nil writer to os.Stdout, so the package states
+// its nil rule once.
+func outOrStdout(w io.Writer) io.Writer {
+	if w == nil {
+		return os.Stdout
+	}
+	return w
+}
+
+// out returns the writer progress output goes to: c.Out when set,
+// os.Stdout when c or c.Out is nil.
+func (c *Config) out() io.Writer {
+	if c == nil {
+		return os.Stdout
+	}
+	return outOrStdout(c.Out)
 }
 
 // ResolveConfig builds the runtime Config by reading the per-workspace
@@ -560,7 +583,7 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	}
 	conflict := NewConflictDir()
 	args := pushArgs(cfg, conflict, rf, dryRun)
-	fmt.Printf("  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
+	fmt.Fprintf(cfg.out(), "  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
 	// A partial transfer must still finalize. Returning here would leave the
 	// baseline stale, so every file that DID transfer comes back on the next
 	// run as "mirror-only file is not in baseline", and the conflict set grows
@@ -700,7 +723,7 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 	}
 	args = append(args, rsyncTransportArgs(cfg)...)
 	args = append(args, cfg.Target.RsyncDest(), cfg.LocalPath)
-	fmt.Printf("  Fetch: %d path(s) %s → %s\n", len(res.Fetched), cfg.Target.RsyncDest(), cfg.LocalPath)
+	fmt.Fprintf(cfg.out(), "  Fetch: %d path(s) %s → %s\n", len(res.Fetched), cfg.Target.RsyncDest(), cfg.LocalPath)
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
 		return res, err
 	}
@@ -759,7 +782,7 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 	}
 	conflict := NewConflictDir()
 	args := pullArgs(cfg, conflict, rf, dryRun)
-	fmt.Printf("  Pull: %s → %s\n", cfg.Target.RsyncDest(), cfg.LocalPath)
+	fmt.Fprintf(cfg.out(), "  Pull: %s → %s\n", cfg.Target.RsyncDest(), cfg.LocalPath)
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
 		return err
 	}

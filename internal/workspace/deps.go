@@ -3,9 +3,20 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+// outOrStdout normalizes a nil writer to os.Stdout, so the package states
+// its nil rule once.
+func outOrStdout(w io.Writer) io.Writer {
+	if w == nil {
+		return os.Stdout
+	}
+	return w
+}
 
 // ToolInfo describes a workspace dependency.
 type ToolInfo struct {
@@ -50,7 +61,9 @@ func CheckDeps(runner *exec.Runner) *DepStatus {
 
 // InstallRequired installs required missing tools via brew.
 // Optional tools are skipped (they have fallbacks in the shell scripts).
-func InstallRequired(ctx context.Context, runner *exec.Runner, brew *exec.Brew) error {
+// Progress lines go to out; a nil out means process stdout.
+func InstallRequired(ctx context.Context, runner *exec.Runner, brew *exec.Brew, out io.Writer) error {
+	out = outOrStdout(out)
 	status := CheckDeps(runner)
 	if len(status.Required) == 0 {
 		return nil
@@ -77,13 +90,15 @@ func InstallRequired(ctx context.Context, runner *exec.Runner, brew *exec.Brew) 
 		return fmt.Errorf("required tools missing but no brew formula available: %v", status.Required)
 	}
 
-	fmt.Printf("  Installing required tools: %v\n", formulas)
+	fmt.Fprintf(out, "  Installing required tools: %v\n", formulas)
 	return brew.Install(ctx, formulas)
 }
 
 // InstallOptional attempts to install optional missing tools via brew.
 // Failures are logged but not fatal.
-func InstallOptional(ctx context.Context, runner *exec.Runner, brew *exec.Brew) {
+// Progress lines go to out; a nil out means process stdout.
+func InstallOptional(ctx context.Context, runner *exec.Runner, brew *exec.Brew, out io.Writer) {
+	out = outOrStdout(out)
 	if !brew.IsAvailable() {
 		return
 	}
@@ -109,8 +124,8 @@ func InstallOptional(ctx context.Context, runner *exec.Runner, brew *exec.Brew) 
 		return
 	}
 
-	fmt.Printf("  Installing optional tools: %v\n", formulas)
+	fmt.Fprintf(out, "  Installing optional tools: %v\n", formulas)
 	if err := brew.Install(ctx, formulas); err != nil {
-		fmt.Printf("  Warning: some optional tools failed to install: %v\n", err)
+		fmt.Fprintf(out, "  Warning: some optional tools failed to install: %v\n", err)
 	}
 }

@@ -1,12 +1,19 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
+
+// ErrUnknownCommand is returned by Execute when argv names no registered
+// subcommand. Its message is never printed: unknownCommandGate has already
+// written the user-facing guidance before this error reaches main.
+var ErrUnknownCommand = errors.New("unknown command")
 
 // NewRootCmd creates the root command with all subcommands.
 func NewRootCmd(version, commit string) *cobra.Command {
@@ -110,32 +117,47 @@ func knownSubcommands(cmd *cobra.Command) map[string]bool {
 	return names
 }
 
+// unknownCommandGate inspects argv and decides whether the first argument
+// names a registered subcommand. On an unrecognized argument it writes the
+// six-line guidance to stderr and returns ErrUnknownCommand; otherwise it
+// returns nil. It never terminates the process, so every deferred function
+// registered by a caller between main and Execute still runs.
+//
+// The gate skips cobra's hidden runtime hooks (__complete, __completeNoDesc).
+// Cobra registers them inside cmd.Execute() via InitDefaultCompletionCmd, so
+// they're not yet present in knownSubcommands at gate time. User-facing
+// commands never start with "__".
+func unknownCommandGate(cmd *cobra.Command, args []string, stderr io.Writer) error {
+	if len(args) <= 1 {
+		return nil
+	}
+	first := args[1]
+	if first == "" || first[0] == '-' || strings.HasPrefix(first, "__") {
+		return nil
+	}
+	if knownSubcommands(cmd)[first] {
+		return nil
+	}
+	fmt.Fprintf(stderr, "Unknown command %q\n", first)
+	fmt.Fprintln(stderr, "")
+	fmt.Fprintf(stderr, "If you meant to launch a workspace, use:\n")
+	fmt.Fprintf(stderr, "  dot open %s\n", first)
+	fmt.Fprintln(stderr, "")
+	fmt.Fprintln(stderr, "See 'dot help' for available commands, or 'dot usecase' for examples.")
+	return ErrUnknownCommand
+}
+
 // Execute runs the root command.
 func Execute(version, commit string) error {
 	cmd := NewRootCmd(version, commit)
 
 	// If the first arg is not a known subcommand or flag, show an error
 	// guiding the user to `dot open <project>` (explicit is safer than
-	// implicit routing which could mask typos as project launches).
-	if len(os.Args) > 1 {
-		first := os.Args[1]
-		// Skip the gate for cobra's hidden runtime hooks (__complete,
-		// __completeNoDesc). Cobra registers them inside cmd.Execute()
-		// via InitDefaultCompletionCmd, so they're not yet present in
-		// knownSubcommands at this point. User-facing commands never
-		// start with "__".
-		if first != "" && first[0] != '-' && !strings.HasPrefix(first, "__") {
-			known := knownSubcommands(cmd)
-			if !known[first] {
-				fmt.Fprintf(os.Stderr, "Unknown command %q\n", first)
-				fmt.Fprintln(os.Stderr, "")
-				fmt.Fprintf(os.Stderr, "If you meant to launch a workspace, use:\n")
-				fmt.Fprintf(os.Stderr, "  dot open %s\n", first)
-				fmt.Fprintln(os.Stderr, "")
-				fmt.Fprintln(os.Stderr, "See 'dot help' for available commands, or 'dot usecase' for examples.")
-				os.Exit(1)
-			}
-		}
+	// implicit routing which could mask typos as project launches). The
+	// decision is returned, not acted on here, so deferred cleanup
+	// registered by any caller runs on this path.
+	if err := unknownCommandGate(cmd, os.Args, cmd.ErrOrStderr()); err != nil {
+		return err
 	}
 
 	return cmd.Execute()

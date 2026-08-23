@@ -1857,7 +1857,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 				p.Line("Aborted.")
 				return nil
 			}
-			if err := syncer.InstallRsync(ctx, runner); err != nil {
+			if err := syncer.InstallRsync(ctx, runner, p.Out); err != nil {
 				return fmt.Errorf("installing rsync: %w", err)
 			}
 			ver, ok = syncer.CheckRsync(runner)

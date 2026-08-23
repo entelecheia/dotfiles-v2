@@ -3,6 +3,7 @@ package aisettings
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/entelecheia/dotfiles-v2/internal/claudecfg"
 	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
@@ -225,7 +227,7 @@ func (m *HUDManager) codexStatus() HUDItem {
 }
 
 func (m *HUDManager) claudeStatus() (HUDItem, error) {
-	settingsPath := m.claudeSettingsPath()
+	settingsPath := claudecfg.SettingsPath(m.homeDir())
 	scriptPath := m.claudeScriptPath()
 	scriptOK := false
 	if data, err := os.ReadFile(scriptPath); err == nil && string(data) == claudeHUDScript {
@@ -274,7 +276,7 @@ func (m *HUDManager) applyCodexHUD(dryRun bool) (HUDItem, error) {
 }
 
 func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
-	settingsPath := m.claudeSettingsPath()
+	settingsPath := claudecfg.SettingsPath(m.homeDir())
 	scriptPath := m.claudeScriptPath()
 	settings, refused, err := m.mergedClaudeSettings(force)
 	if err != nil {
@@ -310,7 +312,17 @@ func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 		if err := os.Chmod(scriptPath, 0o755); err != nil {
 			return HUDItem{}, fmt.Errorf("chmod %s: %w", scriptPath, err)
 		}
-		if _, err := fileutil.EnsureFile(m.runner(), settingsPath, settings, 0o644); err != nil {
+		// The settings write goes through claudecfg.Mutate: the read, the
+		// edit, and the write happen inside one PID-lock critical section.
+		// The closure re-checks ownership under the lock and declines via
+		// ErrNoChange if a foreign statusLine appeared since the check
+		// above; the reported item already reflects the pre-lock read.
+		if _, err := claudecfg.Mutate(m.runner(), m.homeDir(), func(current map[string]any) error {
+			if reason := applyDotStatusLine(current, force); reason != "" {
+				return claudecfg.ErrNoChange
+			}
+			return nil
+		}); err != nil {
 			return HUDItem{}, err
 		}
 	}
@@ -318,22 +330,18 @@ func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 }
 
 func (m *HUDManager) claudeSettingsStatus() (bool, string, error) {
-	path := m.claudeSettingsPath()
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	path := claudecfg.SettingsPath(m.homeDir())
+	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return false, "settings missing", nil
 	}
+	settings, err := claudecfg.Read(m.homeDir())
 	if err != nil {
-		return false, "", fmt.Errorf("read %s: %w", path, err)
-	}
-	var settings map[string]any
-	if len(bytes.TrimSpace(data)) > 0 {
-		if err := json.Unmarshal(data, &settings); err != nil {
+		// The status path is read-only: a file dot cannot parse is drift to
+		// report, not a reason to abort and hide every other HUD target.
+		if errors.Is(err, claudecfg.ErrInvalidJSON) {
 			return false, "settings json invalid", nil
 		}
-	}
-	if settings == nil {
-		settings = map[string]any{}
+		return false, "", err
 	}
 	sl, ok := settings["statusLine"].(map[string]any)
 	if !ok {
@@ -362,27 +370,14 @@ func foreignStatusLineReason(command string) string {
 	return fmt.Sprintf("statusLine owned by another tool (%s); rerun with --force to take it over", owner)
 }
 
-// mergedClaudeSettings returns the settings file with dot's statusLine block
-// applied. A statusLine installed by another tool is left alone unless force
-// is set; the second return value reports that refusal.
-func (m *HUDManager) mergedClaudeSettings(force bool) ([]byte, string, error) {
-	path := m.claudeSettingsPath()
-	settings := map[string]any{}
-	if data, err := os.ReadFile(path); err == nil && len(bytes.TrimSpace(data)) > 0 {
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return nil, "", fmt.Errorf("parse %s: %w", path, err)
-		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return nil, "", fmt.Errorf("read %s: %w", path, err)
-	}
+// applyDotStatusLine applies dot's statusLine block to a settings map. A
+// statusLine installed by another tool is left alone unless force is set;
+// the return value reports that refusal (empty when the block was applied).
+func applyDotStatusLine(settings map[string]any, force bool) string {
 	if existing, ok := settings["statusLine"].(map[string]any); ok && !force {
 		command, _ := existing["command"].(string)
 		if !isDotStatusLine(command) {
-			data, err := json.MarshalIndent(settings, "", "  ")
-			if err != nil {
-				return nil, "", err
-			}
-			return append(data, '\n'), foreignStatusLineReason(command), nil
+			return foreignStatusLineReason(command)
 		}
 	}
 	settings["statusLine"] = map[string]any{
@@ -390,11 +385,23 @@ func (m *HUDManager) mergedClaudeSettings(force bool) ([]byte, string, error) {
 		"command":         claudeStatusLineCommand,
 		"refreshInterval": float64(5),
 	}
+	return ""
+}
+
+// mergedClaudeSettings returns the settings file with dot's statusLine block
+// applied. A statusLine installed by another tool is left alone unless force
+// is set; the second return value reports that refusal.
+func (m *HUDManager) mergedClaudeSettings(force bool) ([]byte, string, error) {
+	settings, err := claudecfg.Read(m.homeDir())
+	if err != nil {
+		return nil, "", err
+	}
+	refused := applyDotStatusLine(settings, force)
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return nil, "", err
 	}
-	return append(data, '\n'), "", nil
+	return append(data, '\n'), refused, nil
 }
 
 func patchCodexStatusLine(content string) string {
@@ -517,10 +524,6 @@ func (m *HUDManager) homeDir() string {
 
 func (m *HUDManager) codexConfigPath() string {
 	return filepath.Join(m.homeDir(), ".codex", "config.toml")
-}
-
-func (m *HUDManager) claudeSettingsPath() string {
-	return filepath.Join(m.homeDir(), ".claude", "settings.json")
 }
 
 func (m *HUDManager) claudeScriptPath() string {
