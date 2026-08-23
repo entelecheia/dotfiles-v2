@@ -21,6 +21,11 @@ import (
 // write (e.g. a foreign-owned block it must not overwrite).
 var ErrNoChange = errors.New("claudecfg: no change")
 
+// ErrInvalidJSON wraps every parse failure Read reports, so a read-only
+// caller (a status or drift report) can translate the condition into a
+// drift result instead of aborting, while writers still fail hard.
+var ErrInvalidJSON = errors.New("claudecfg: settings json invalid")
+
 // SettingsPath returns ~/.claude/settings.json for the given home.
 func SettingsPath(home string) string {
 	return filepath.Join(home, ".claude", "settings.json")
@@ -54,7 +59,7 @@ func Read(home string) (map[string]any, error) {
 		return settings, nil
 	}
 	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil, fmt.Errorf("parse %s: %w (fix the JSON manually; dot will not overwrite it)", path, err)
+		return nil, fmt.Errorf("parse %s: %w: %v (fix the JSON manually; dot will not overwrite it)", path, ErrInvalidJSON, err)
 	}
 	return settings, nil
 }

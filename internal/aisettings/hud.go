@@ -3,6 +3,7 @@ package aisettings
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -335,6 +336,11 @@ func (m *HUDManager) claudeSettingsStatus() (bool, string, error) {
 	}
 	settings, err := claudecfg.Read(m.homeDir())
 	if err != nil {
+		// The status path is read-only: a file dot cannot parse is drift to
+		// report, not a reason to abort and hide every other HUD target.
+		if errors.Is(err, claudecfg.ErrInvalidJSON) {
+			return false, "settings json invalid", nil
+		}
 		return false, "", err
 	}
 	sl, ok := settings["statusLine"].(map[string]any)
