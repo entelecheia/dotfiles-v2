@@ -65,6 +65,34 @@ fail() {
   echo "  ✗ $1"
 }
 
+# unchecked() is the third state (D-07): something this run could not compare at
+# all, so it is neither a pass nor a failure. It carries its own counter and
+# deliberately does NOT append to ERRORS - a row nobody looked at is not a
+# failure detail, and listing it under "Failures:" is exactly the misreport
+# BUG-17 was. The leading tilde is this file's existing "not asserted" marker
+# (see the preflight banner and the budget block).
+#
+# tests/assert.sh report() is untouched: it counts PASS and FAIL only and is
+# sourced by fourteen scenario files, so the third state is printed and counted
+# here rather than pushed into shared code no other scenario needs.
+UNCHECKED=0
+unchecked() {
+  UNCHECKED=$((UNCHECKED + 1))
+  echo "  ~ $1"
+}
+
+# FIELD_COMPARED answers "did this run compare this field", reading the SAME
+# variable the matrix loop branches on below, so the preflight banner and the
+# end-of-run verdict can never disagree about what was compared. stdout, stderr
+# and exit_code are unconditional; tree is the only field a preflight can
+# disable.
+FIELD_COMPARED() {
+  if [ "$1" = tree ] && [ "$TREE_COMPARISON" != enabled ]; then
+    return 1
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # The command matrix. Read and --dry-run surfaces only: this harness must never
 # mutate anything outside the temp HOME it creates for each individual run.
@@ -371,9 +399,16 @@ if [ "${#REG_COMMANDS[@]}" -eq 0 ]; then
 else
   I=0
   while [ "$I" -lt "${#REG_COMMANDS[@]}" ]; do
-    if [ "${REG_SEEN[$I]}" -eq 1 ]; then
+    # Order matters: the not-compared arm is first, because a row on a field the
+    # matrix skipped can never have REG_SEEN set and would otherwise fall
+    # through to the stale arm and be reported as reverted (BUG-17).
+    if ! FIELD_COMPARED "${REG_FIELDS[$I]}"; then
+      unchecked "registered row NOT CHECKED: ${REG_COMMANDS[$I]} / ${REG_FIELDS[$I]} — this run did not compare the ${REG_FIELDS[$I]} field, so it can say nothing about whether the change this row records still occurs. Do not remove the row on this run's evidence. $TREE_SKIP_REASON"
+    elif [ "${REG_SEEN[$I]}" -eq 1 ]; then
       pass "registered change still occurs: ${REG_COMMANDS[$I]} / ${REG_FIELDS[$I]}"
     else
+      # D-08: fail-closed for every field this run DID compare, so the registry
+      # prunes itself instead of accumulating dead excuses.
       fail "expected-diff.tsv row matched no difference in this run, so the change it records appears reverted or superseded — remove the row: ${REG_COMMANDS[$I]} / ${REG_FIELDS[$I]} (${REG_REASONS[$I]})"
     fi
     I=$((I + 1))
@@ -393,6 +428,15 @@ elif [ "$ELAPSED" -le "$BUDGET_SECONDS" ]; then
   pass "comparison finished in ${ELAPSED}s, within the ${BUDGET_SECONDS}s budget"
 else
   fail "comparison took ${ELAPSED}s, over the ${BUDGET_SECONDS}s budget"
+fi
+
+# A run that could not assert every registered row is not a full verification,
+# and a green terminal that does not say so is how a developer concludes more
+# than the run proved. Silent when the count is zero: an extra line on the
+# authoritative run is noise.
+if [ "$UNCHECKED" -ne 0 ]; then
+  echo ""
+  echo "  ~ $UNCHECKED registered row(s) could not be asserted because this run did not compare the field they name, so this run is NOT a full verification. CI's linux job compares every field in a clean ubuntu:22.04 container and is the authoritative run."
 fi
 
 # Cleanup
