@@ -102,6 +102,11 @@ type SchedulerTemplateData struct {
 
 	// Per-kind fields: the templates render the same file twice with
 	// distinct labels/actions so push and intake units don't collide.
+	// Home is the --home override the unit must re-supply on every scheduled
+	// run; empty renders no flag. Without it a unit installed for another
+	// user's home runs `dot sync` against the invoking user's workspace on
+	// every tick, long after the install command exited.
+	Home        string
 	Label       string // launchd Label
 	Profile     string // sync profile the unit operates on ("" for the default)
 	Action      string // gsync subcommand to run
@@ -239,6 +244,7 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 	}
 	return SchedulerTemplateData{
 		DotfilesPath: dotfilesPath,
+		Home:         s.Config.Home,
 		LogFile:      s.Config.LogFile,
 		Interval:     interval,
 		Label:        profiledLabel(kind, s.profile()),

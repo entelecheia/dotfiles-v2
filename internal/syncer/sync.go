@@ -101,6 +101,18 @@ type Config struct {
 	LocalPaths *LocalPaths
 }
 
+// HomeDir is the home this run operates on: the --home target when one was
+// given, the process home otherwise. Engine entries that derive a path from
+// "the user's home" call this instead of os.UserHomeDir, so a command cannot
+// resolve its profile from one home and transfer against another.
+func (c *Config) HomeDir() string {
+	if c != nil && c.Home != "" {
+		return c.Home
+	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
 // outOrStdout normalizes a nil writer to os.Stdout, so the package states
 // its nil rule once.
 func outOrStdout(w io.Writer) io.Writer {
@@ -177,6 +189,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		return nil, err
 	}
 	profile = NormalizeProfile(profile)
+	override := home
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
@@ -298,6 +311,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 
 	return &Config{
 		Profile:           profile,
+		Home:              override,
 		Owner:             localCfg.Owner,
 		IncludeSubmodules: localCfg.IncludeSubmodules,
 		LocalPath:         localPath,

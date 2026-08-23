@@ -146,9 +146,11 @@ func RecordResult(state *config.UserState, cfg *Config, op string, syncErr error
 
 // ResolveScheduler builds a Scheduler bound to the same runner+cfg used
 // elsewhere in the gsync subcommands. Returns the Paths used so callers can
-// introspect plist/timer locations.
+// introspect plist/timer locations. The unit lands under the home the config
+// was resolved for: a unit written into the invoking user's LaunchAgents for
+// another user's workspace fires forever against the wrong tree.
 func ResolveScheduler(cfg *Config, runner *exec.Runner) (*Scheduler, *Paths, error) {
-	paths, err := ResolvePaths()
+	paths, err := ResolvePathsForHome(cfg.Home)
 	if err != nil {
 		return nil, nil, err
 	}

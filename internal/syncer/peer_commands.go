@@ -106,7 +106,7 @@ const peerPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
   <array>
     <string>%s</string>
     <string>peer</string>
-    <string>sync</string>
+    <string>sync</string>%s
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -162,6 +162,17 @@ func emitPeer(progress func(PeerEvent), e PeerEvent) {
 // PeerHomePathsFile is the host-path allowlist inside a peer store.
 func PeerHomePathsFile(paths *LocalPaths) string {
 	return filepath.Join(paths.StoreDir, "home-paths.txt")
+}
+
+// peerHomeArg renders the ProgramArguments entry that re-supplies --home on
+// every scheduled run, or nothing when the job was installed without an
+// override. The value is interpolated raw, exactly as the executable path and
+// the log path already are.
+func peerHomeArg(cfg *Config) string {
+	if cfg == nil || cfg.Home == "" {
+		return ""
+	}
+	return "\n    <string>--home=" + cfg.Home + "</string>"
 }
 
 func seedFileIfAbsent(path, body string) error {
@@ -531,11 +542,7 @@ type PeerScheduleResult struct {
 // PeerSchedule installs or removes the periodic `dot peer sync` job.
 func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleResult, error) {
 	cfg, runner := opts.Config, opts.Runner
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	plist := filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+	plist := filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist")
 
 	if opts.Off {
 		_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
@@ -586,7 +593,7 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 		return nil, err
 	}
-	body := fmt.Sprintf(peerPlistTmpl, exe, int(opts.Interval.Seconds()), logFile, logFile)
+	body := fmt.Sprintf(peerPlistTmpl, exe, peerHomeArg(cfg), int(opts.Interval.Seconds()), logFile, logFile)
 	if err := os.WriteFile(plist, []byte(body), 0o644); err != nil {
 		return nil, err
 	}
@@ -706,10 +713,7 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, cfg *Config, progres
 		emitPeer(progress, PeerEvent{Kind: PeerEventHostPathsMissing, Path: list})
 		return nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
+	home := cfg.HomeDir()
 	// --update keeps a peer's newer host config from being overwritten by a
 	// stale coordinator copy. Ordinary host-path updates are deliberately not
 	// backed up: they are not workspace conflicts, and an unconditional backup
