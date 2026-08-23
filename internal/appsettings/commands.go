@@ -385,9 +385,10 @@ func (e *Engine) StampLastBackup(sum *Summary, tokens []string) (bool, error) {
 	if e.Runner.DryRun || sum.Failed > 0 {
 		return false, nil
 	}
-	return true, e.WriteLastBackupStamp(BackupStamp{
+	err := e.WriteLastBackupStamp(BackupStamp{
 		CreatedAt: time.Now().UTC(),
 		Tokens:    tokens,
 		Files:     sum.Files,
 	})
+	return err == nil, err
 }

@@ -281,7 +281,9 @@ func appsInstallMarker(installKnown, installed bool) (string, interface{ Render(
 	case installed:
 		return ui.MarkPresent, ui.StyleSuccess
 	default:
-		return ui.MarkPartial, ui.StyleHint
+		// Absent in the neutral style: Homebrew was asked and said no,
+		// which is a fact rather than a failure (BUG-10, D-07).
+		return ui.MarkAbsent, ui.StyleHint
 	}
 }
 
