@@ -5,7 +5,7 @@ package cli
 // promise about every command, and BUG-13 measured twelve files left behind by a
 // single `dot peer sync --dry-run` on an empty HOME.
 //
-// These commands do not honour --home yet (BUG-07/BUG-08, plan 05-04), so the
+// These commands do not honor --home yet (BUG-07/BUG-08, plan 05-04), so the
 // sandbox is built from HOME plus the XDG variables the way the GUARD-03 test
 // builds it, not by passing the flag.
 
