@@ -55,7 +55,7 @@ func (m *ShellModule) pluginDir(homeDir, name string) string {
 func (m *ShellModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
 	var changes []Change
 	cfg := rc.Config
-	data := cfg.TemplateData()
+	data := cfg.TemplateData(rc.HomeDir)
 
 	omzDir := m.omzDir(rc.HomeDir)
 	if !rc.Runner.IsDir(omzDir) || fileutil.NeedsRefresh(omzDir, omzRefreshPeriod) {
@@ -102,7 +102,7 @@ func (m *ShellModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, 
 func (m *ShellModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	var messages []string
 	cfg := rc.Config
-	data := cfg.TemplateData()
+	data := cfg.TemplateData(rc.HomeDir)
 
 	// Oh My Zsh
 	omzDir := m.omzDir(rc.HomeDir)

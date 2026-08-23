@@ -260,7 +260,7 @@ func TestTemplateData_Keys(t *testing.T) {
 		},
 	}
 
-	data := cfg.TemplateData()
+	data := cfg.TemplateData(t.TempDir())
 
 	requiredKeys := []string{
 		"Home",
@@ -291,7 +291,7 @@ func TestTemplateData_Keys(t *testing.T) {
 
 func TestTemplateData_NilSystem(t *testing.T) {
 	cfg := &Config{}
-	data := cfg.TemplateData()
+	data := cfg.TemplateData(t.TempDir())
 
 	if data["IsDarwin"] != false {
 		t.Errorf("TemplateData[IsDarwin] with nil System = %v, want false", data["IsDarwin"])

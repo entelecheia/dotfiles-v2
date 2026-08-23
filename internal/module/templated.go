@@ -16,7 +16,7 @@ type templatedFile struct {
 
 func checkTemplatedFiles(rc *RunContext, files []templatedFile) ([]Change, error) {
 	var changes []Change
-	data := rc.Config.TemplateData()
+	data := rc.Config.TemplateData(rc.HomeDir)
 
 	for _, f := range files {
 		content, err := renderTemplatedFile(rc, f, data)
@@ -36,7 +36,7 @@ func checkTemplatedFiles(rc *RunContext, files []templatedFile) ([]Change, error
 
 func applyTemplatedFiles(rc *RunContext, files []templatedFile) ([]string, error) {
 	var messages []string
-	data := rc.Config.TemplateData()
+	data := rc.Config.TemplateData(rc.HomeDir)
 
 	for _, f := range files {
 		content, err := renderTemplatedFile(rc, f, data)

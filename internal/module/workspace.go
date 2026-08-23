@@ -109,7 +109,7 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 
 	// shell config file
 	shellDest := filepath.Join(rc.HomeDir, ".config", "shell", "40-workspace.sh")
-	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData())
+	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData(rc.HomeDir))
 	if err != nil {
 		return nil, fmt.Errorf("rendering shell/40-workspace.sh.tmpl: %w", err)
 	}
@@ -213,7 +213,7 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 
 	// shell config
 	shellDest := filepath.Join(rc.HomeDir, ".config", "shell", "40-workspace.sh")
-	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData())
+	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData(rc.HomeDir))
 	if err != nil {
 		return nil, fmt.Errorf("rendering shell/40-workspace.sh.tmpl: %w", err)
 	}

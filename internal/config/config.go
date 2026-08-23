@@ -348,9 +348,12 @@ func joinPathTilde(base, rel string) string {
 	return strings.TrimSuffix(base, "/") + "/" + rel
 }
 
-// TemplateData returns a map suitable for Go template rendering.
-func (c *Config) TemplateData() map[string]any {
-	home, _ := os.UserHomeDir()
+// TemplateData returns a map suitable for Go template rendering. home is the
+// home the run targets: it is published as {{.Home}} and rendered INTO the
+// files the run writes, so a --home run must not embed the invoking user's
+// home in them (BUG-20).
+func (c *Config) TemplateData(home string) map[string]any {
+	home, _ = os.UserHomeDir()
 
 	isDarwin := false
 	hostname := ""
