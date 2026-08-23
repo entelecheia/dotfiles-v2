@@ -1223,7 +1223,7 @@ dot apps install --defaults           # catalog's default set
 dot apps install --all                # every cask in the catalog
 dot apps install --select             # force picker even when state has a list
 dot apps install --no-save            # one-off install without persisting selection
-dot apps status                       # install ✓/· + backup path counts per app
+dot apps status                       # install ✓ yes / ✗ no / · unknown + backup path counts
 dot apps backup                       # snapshot settings for BackupApps ∩ manifest
 dot apps backup raycast hazel         # explicit tokens
 dot apps backup --all --to <root>     # override backup root, back up every entry

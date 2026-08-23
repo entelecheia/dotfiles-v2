@@ -14,13 +14,24 @@ import (
 // and documented as what a prune would remove, so a negative value would be
 // a lie to any caller that acted on it.
 //
-// Keep below 1 must stay UNCLAMPED. The cli prints Delete verbatim in its
+// Keep below 1 stays UNCLAMPED, and since Phase 5 that is defense in depth
+// rather than live behavior. The cli prints Delete verbatim in its
 // confirmation line, and the pre-decomposition binary overstates there — with
 // three snapshots and --keep -1 it prompts 4 and removes 2. Slice 03-04 is
-// gated on byte-identity with that binary, so the overstatement is preserved
-// on purpose and recorded as BUG-12 for Phase 5. Clamping this half would
-// turn the differential harness red; a future "cleanup" that does so must
-// fail here first.
+// gated on byte-identity with that binary, so the overstatement was preserved
+// on purpose and recorded as BUG-12 for Phase 5.
+//
+// Plan 05-05 is the deliberate cleanup the old wording of this comment was
+// waiting for, and it came and looked here first. D-06 chose rejection over
+// flooring: `dot ai prune` and `dot profile prune` now reject a --keep below
+// 1 at flag validation, so nothing reaches PlanPrune with a negative Keep and
+// the overstatement is unreachable in practice.
+//
+// The engine is deliberately untouched, which is why the negative row below
+// still expects 4: max(0, len(all)-opts.Keep) over three snapshots with
+// Keep=-1 is still 4. Reachability changed; the arithmetic did not. A future
+// cleanup that wants a different number here has to change the engine, and
+// must fail here first.
 func TestPlanPrune_DeleteFlooredAtZeroButNegativeKeepLeftAlone(t *testing.T) {
 	e := planPruneTestEngine(t, 3)
 
@@ -32,7 +43,7 @@ func TestPlanPrune_DeleteFlooredAtZeroButNegativeKeepLeftAlone(t *testing.T) {
 		{"keep above total floors to zero", 10, 0},
 		{"keep equal to total is zero", 3, 0},
 		{"normal keep", 1, 2},
-		{"negative keep stays unclamped (BUG-12)", -1, 4},
+		{"negative keep stays unclamped, unreachable past the cli rejection (BUG-12)", -1, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			plan, err := e.PlanPrune(PruneOptions{Keep: tc.keep})

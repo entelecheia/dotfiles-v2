@@ -503,13 +503,20 @@ func dedupeOrdered(values []string) []string {
 	return out
 }
 
-// InstalledCasks returns the set of all currently installed casks.
+// InstalledCasks returns the set of all currently installed casks, or nil
+// when the query itself failed.
+//
+// The nil is load-bearing and must not be normalized into an empty map: a
+// caller cannot otherwise tell "Homebrew says nothing is installed" from
+// "Homebrew could not be asked", and `dot apps status` renders those two as
+// different states (BUG-10). Returning an empty map on error made every
+// tracked app read as confidently absent whenever brew was unhealthy.
 func (b *Brew) InstalledCasks() map[string]bool {
-	installed := make(map[string]bool)
 	result, err := b.Runner.RunQuery(context.Background(), b.brewCmd(), "list", "--cask", "-1")
 	if err != nil {
-		return installed
+		return nil
 	}
+	installed := make(map[string]bool)
 	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
 		if s := strings.TrimSpace(line); s != "" {
 			installed[s] = true
