@@ -48,7 +48,7 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 	gdriveSymlink := m.expandHome(rc, cfg.GdriveSymlink)
 
 	// Git repo cloning: check if configured repos need cloning
-	vaultPath := m.expandHome(rc, rc.Config.VaultCloneTarget())
+	vaultPath := m.expandHome(rc, rc.Config.VaultCloneTarget(rc.HomeDir))
 	for _, repo := range cfg.Repos {
 		repoPath := ws.RepoTarget(workspacePath, repo.Name, vaultPath)
 		if !rc.Runner.IsDir(repoPath) {
@@ -109,7 +109,7 @@ func (m *WorkspaceModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 
 	// shell config file
 	shellDest := filepath.Join(rc.HomeDir, ".config", "shell", "40-workspace.sh")
-	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData())
+	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData(rc.HomeDir))
 	if err != nil {
 		return nil, fmt.Errorf("rendering shell/40-workspace.sh.tmpl: %w", err)
 	}
@@ -144,7 +144,7 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		initMsgs, err := ws.Init(ctx, rc.Runner, workspacePath, cfg.Repos, ws.InitOptions{
 			Force:     false,
 			Yes:       rc.Yes,
-			VaultPath: m.expandHome(rc, rc.Config.VaultCloneTarget()),
+			VaultPath: m.expandHome(rc, rc.Config.VaultCloneTarget(rc.HomeDir)),
 			Out:       rc.out(),
 		})
 		messages = append(messages, initMsgs...)
@@ -213,7 +213,7 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 
 	// shell config
 	shellDest := filepath.Join(rc.HomeDir, ".config", "shell", "40-workspace.sh")
-	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData())
+	content, err := rc.Template.Render("shell/40-workspace.sh.tmpl", rc.Config.TemplateData(rc.HomeDir))
 	if err != nil {
 		return nil, fmt.Errorf("rendering shell/40-workspace.sh.tmpl: %w", err)
 	}

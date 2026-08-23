@@ -272,31 +272,33 @@ func (c *Config) AllCasks() []string {
 }
 
 // VaultPath returns the vault directory in ~-form, resolved from the
-// workspace module config. See ResolveVaultPath.
-func (c *Config) VaultPath() string {
-	return ResolveVaultPath(c.Modules.Workspace.Vault, c.Modules.Workspace.Path)
+// workspace module config. home is the home the run targets, which detection
+// stats. See ResolveVaultPath.
+func (c *Config) VaultPath(home string) string {
+	return ResolveVaultPath(c.Modules.Workspace.Vault, c.Modules.Workspace.Path, home)
 }
 
 // VaultCloneTarget returns the clone target for a standalone vault repo in
 // ~-form, or "" when no vault location is configured or detectable. See
 // ResolveVaultCloneTarget.
-func (c *Config) VaultCloneTarget() string {
-	return ResolveVaultCloneTarget(c.Modules.Workspace.Vault, c.Modules.Workspace.Path)
+func (c *Config) VaultCloneTarget(home string) string {
+	return ResolveVaultCloneTarget(c.Modules.Workspace.Vault, c.Modules.Workspace.Path, home)
 }
 
 // ResolveVaultPath returns the vault directory in ~-form. Resolution order:
 // explicit vault value → detected existing directory (<ws>/work/vault first,
 // then <ws>/vault) → default <ws>/work/vault. Render-time detection lets
 // VAULT track the real location without a reconfigure. A relative explicit
-// value (no ~ or / prefix) is anchored under the workspace path.
-func ResolveVaultPath(vault, wsPath string) string {
+// value (no ~ or / prefix) is anchored under the workspace path. home is the
+// home a ~-form workspace path expands against for the on-disk detection.
+func ResolveVaultPath(vault, wsPath, home string) string {
 	if vault != "" {
 		return anchorVaultPath(vault, wsPath)
 	}
 	if wsPath == "" {
 		return ""
 	}
-	if detected := detectVaultDir(wsPath); detected != "" {
+	if detected := detectVaultDir(wsPath, home); detected != "" {
 		return detected
 	}
 	return joinPathTilde(wsPath, "work/vault")
@@ -307,14 +309,14 @@ func ResolveVaultPath(vault, wsPath string) string {
 // the vault location is neither configured nor present on disk it returns "",
 // so legacy setups (separate vault repo, no workspace.vault key) keep cloning
 // into <ws>/vault instead of being redirected into the work tree.
-func ResolveVaultCloneTarget(vault, wsPath string) string {
+func ResolveVaultCloneTarget(vault, wsPath, home string) string {
 	if vault != "" {
 		return anchorVaultPath(vault, wsPath)
 	}
 	if wsPath == "" {
 		return ""
 	}
-	return detectVaultDir(wsPath)
+	return detectVaultDir(wsPath, home)
 }
 
 // anchorVaultPath returns vault unchanged when it is ~-form or absolute;
@@ -328,9 +330,16 @@ func anchorVaultPath(vault, wsPath string) string {
 
 // detectVaultDir returns the first existing vault directory under the
 // workspace path in ~-form (<ws>/work/vault preferred, then <ws>/vault),
-// or "" when neither exists.
-func detectVaultDir(wsPath string) string {
-	expanded := fileutil.ExpandHome(wsPath)
+// or "" when neither exists. home is the home a ~-form wsPath is stat'd
+// under: a run pointed elsewhere must not probe the invoking user's tree.
+func detectVaultDir(wsPath, home string) string {
+	if strings.HasPrefix(wsPath, "~/") && home == "" {
+		// Joining "" with the rest yields a relative path, so the stats below
+		// would probe whatever directory the binary was started in. Detect
+		// nothing instead: callers fall back to the fresh default.
+		return ""
+	}
+	expanded := fileutil.ExpandHomeFor(wsPath, home)
 	for _, rel := range []string{"work/vault", "vault"} {
 		if fi, err := os.Stat(filepath.Join(expanded, rel)); err == nil && fi.IsDir() {
 			return joinPathTilde(wsPath, rel)
@@ -345,10 +354,11 @@ func joinPathTilde(base, rel string) string {
 	return strings.TrimSuffix(base, "/") + "/" + rel
 }
 
-// TemplateData returns a map suitable for Go template rendering.
-func (c *Config) TemplateData() map[string]any {
-	home, _ := os.UserHomeDir()
-
+// TemplateData returns a map suitable for Go template rendering. home is the
+// home the run targets: it is published as {{.Home}} and rendered INTO the
+// files the run writes, so a --home run must not embed the invoking user's
+// home in them (BUG-20).
+func (c *Config) TemplateData(home string) map[string]any {
 	isDarwin := false
 	hostname := ""
 	if c.System != nil {
@@ -377,7 +387,7 @@ func (c *Config) TemplateData() map[string]any {
 		"EnableWorkspace": c.Modules.Workspace.Enabled,
 		"EnableAI":        c.Modules.AI.Enabled,
 		"WorkspacePath":   c.Modules.Workspace.Path,
-		"VaultPath":       c.VaultPath(),
+		"VaultPath":       c.VaultPath(home),
 		"CloudSymlink":    c.Modules.Workspace.GdriveSymlink,
 		"SSHKeyName":      c.Modules.SSH.KeyName,
 		"CoauthorGuard":   c.Modules.Git.CoauthorGuard,

@@ -64,12 +64,12 @@ func wsInitBootstrap(cmd *cobra.Command) (workspacePath string, repos []config.R
 	if cfgPath == "" {
 		return "", nil, nil, false, "", fmt.Errorf("workspace.path not configured; run 'dot reconfigure'")
 	}
-	vaultPath = config.ResolveVaultCloneTarget(state.Modules.Workspace.Vault, cfgPath)
-
 	home, _ := os.UserHomeDir()
 	if homeOverride != "" {
 		home = homeOverride
 	}
+	vaultPath = config.ResolveVaultCloneTarget(state.Modules.Workspace.Vault, cfgPath, home)
+
 	if strings.HasPrefix(cfgPath, "~/") {
 		cfgPath = filepath.Join(home, cfgPath[2:])
 	}

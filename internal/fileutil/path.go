@@ -19,12 +19,24 @@ func IsDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// ExpandHome replaces a leading "~/" with the current user's home directory.
-// Returns the input unchanged if it doesn't start with "~/".
-func ExpandHome(path string) string {
+// ExpandHomeFor replaces a leading "~/" with home. Returns the input
+// unchanged if it doesn't start with "~/".
+//
+// A run that targets a home other than the process's own (--home) must use
+// this rather than ExpandHome: reading the process environment is how vault
+// detection came to stat the invoking user's tree no matter which home the
+// run was pointed at (BUG-20).
+func ExpandHomeFor(path, home string) string {
 	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
 		return filepath.Join(home, path[2:])
 	}
 	return path
+}
+
+// ExpandHome expands a leading "~/" against the process home. Correct for
+// code that acts as the invoking user (the interactive wizard); everything
+// resolving a path for another home wants ExpandHomeFor.
+func ExpandHome(path string) string {
+	home, _ := os.UserHomeDir()
+	return ExpandHomeFor(path, home)
 }

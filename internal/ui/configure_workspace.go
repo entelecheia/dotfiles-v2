@@ -219,8 +219,11 @@ func configureWorkspaceSymlinkAndRepos(state *config.UserState, yes bool) error 
 			oldRepos := state.Modules.Workspace.Repos
 			state.Modules.Workspace.Repos = nil
 			topLevelVault := strings.TrimSuffix(state.Modules.Workspace.Path, "/") + "/vault"
+			// The wizard configures the machine it runs on, so vault
+			// detection is meant to stat the invoking user's tree.
+			uiHome, _ := os.UserHomeDir()
 			for _, name := range []string{"work", "vault"} {
-				if name == "vault" && config.ResolveVaultPath(state.Modules.Workspace.Vault, state.Modules.Workspace.Path) != topLevelVault {
+				if name == "vault" && config.ResolveVaultPath(state.Modules.Workspace.Vault, state.Modules.Workspace.Path, uiHome) != topLevelVault {
 					fmt.Println(StyleHint.Render(fmt.Sprintf(
 						"  Vault location is %s — skipping the separate vault repo\n"+
 							"  (the vault is expected to arrive with work, e.g. as a submodule).",
