@@ -353,8 +353,6 @@ func joinPathTilde(base, rel string) string {
 // files the run writes, so a --home run must not embed the invoking user's
 // home in them (BUG-20).
 func (c *Config) TemplateData(home string) map[string]any {
-	home, _ = os.UserHomeDir()
-
 	isDarwin := false
 	hostname := ""
 	if c.System != nil {
