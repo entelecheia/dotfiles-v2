@@ -56,39 +56,24 @@ func newAppsListCmd() *cobra.Command {
 }
 
 func runAppsList(cmd *cobra.Command, _ []string) error {
-	cat, err := catalog.LoadMacApps()
+	res, err := appsettings.List(appsettings.ListOptions{Brew: appsBrewForQuery(cmd)})
 	if err != nil {
 		return err
-	}
-	var installed map[string]bool
-	if runtime.GOOS == "darwin" {
-		_, brew, _, _ := appsBrewCtx(cmd)
-		if brew != nil && brew.IsAvailable() {
-			installed = brew.InstalledCasks()
-		}
-	}
-	defaults := make(map[string]bool, len(cat.Defaults))
-	for _, t := range cat.Defaults {
-		defaults[t] = true
-	}
-	recommended := make(map[string]bool, len(cat.Recommended))
-	for _, t := range cat.Recommended {
-		recommended[t] = true
 	}
 
 	p := printerFrom(cmd)
 	p.Header("macOS Cask Catalog")
-	for _, g := range cat.Groups {
+	for _, g := range res.Groups {
 		p.Section(g.Name)
 		for _, a := range g.Apps {
 			marks := []string{}
-			if defaults[a.Token] {
+			if a.Default {
 				marks = append(marks, ui.StyleSuccess.Render(ui.MarkStarred))
 			}
-			if recommended[a.Token] && !defaults[a.Token] {
+			if a.Recommended && !a.Default {
 				marks = append(marks, ui.StyleSuccess.Render(ui.MarkPreferred))
 			}
-			if installed != nil && installed[a.Token] {
+			if a.Installed {
 				marks = append(marks, ui.StyleSuccess.Render(ui.MarkPresent))
 			}
 			marker := strings.Join(marks, " ")
@@ -372,36 +357,19 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	eng.Hostname = host
-	mf := eng.Manifest
 
-	var installed map[string]bool
-	if runtime.GOOS == "darwin" {
-		_, brew, _, _ := appsBrewCtx(cmd)
-		if brew != nil && brew.IsAvailable() {
-			installed = brew.InstalledCasks()
-		}
-	}
+	res := eng.StatusReport(appsettings.StatusOptions{Brew: appsBrewForQuery(cmd)})
 
 	p := printerFrom(cmd)
 	p.Header("macOS App Settings Status")
-	p.KV("Host", eng.Hostname)
-	p.KV("Backup", eng.HostRoot())
+	p.KV("Host", res.Hostname)
+	p.KV("Backup", res.HostRoot)
 	p.Section("Apps")
 
-	statuses := eng.Status(nil)
-	tokens := make([]string, 0, len(statuses))
-	byToken := make(map[string]appsettings.AppStatus, len(statuses))
-	for _, s := range statuses {
-		tokens = append(tokens, s.Token)
-		byToken[s.Token] = s
-	}
-	sort.Strings(tokens)
-
-	for _, token := range tokens {
-		s := byToken[token]
+	for _, s := range res.Apps {
 		marker := ui.StyleHint.Render(ui.MarkPartial) // unknown: brew unavailable
-		if installed != nil {
-			if installed[token] {
+		if s.InstallKnown {
+			if s.Installed {
 				marker = ui.StyleSuccess.Render(ui.MarkPresent)
 			} else {
 				marker = ui.StyleHint.Render(ui.MarkPartial)
@@ -418,9 +386,8 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 			bak = ui.StyleWarning.Render(bak)
 		}
 		p.Bullet(marker, fmt.Sprintf("%-22s  live:%-6s  backup:%-8s",
-			ui.StyleValue.Render(token), live, bak))
+			ui.StyleValue.Render(s.Token), live, bak))
 	}
-	_ = mf
 	return nil
 }
 
@@ -830,6 +797,18 @@ func appsBrewCtx(cmd *cobra.Command) (*config.UserState, *exec.Brew, *exec.Runne
 	runner := exec.NewRunner(dryRun, logger)
 	brew := exec.NewBrew(runner)
 	return state, brew, runner, nil
+}
+
+// appsBrewForQuery returns a Brew handle for read-only cask queries, or nil
+// off macOS where no cask can be installed. A state-load failure also yields
+// nil: the catalog listings degrade to "install state unknown" rather than
+// failing the command.
+func appsBrewForQuery(cmd *cobra.Command) *exec.Brew {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	_, brew, _, _ := appsBrewCtx(cmd)
+	return brew
 }
 
 // newAppsEngine constructs an appsettings.Engine from flags + state.
