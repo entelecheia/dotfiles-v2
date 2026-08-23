@@ -1,7 +1,13 @@
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
+# `age` is the real binary, never a stub (D-09). tests/scenarios/secrets.sh
+# asserts that an archive is ciphertext, and a stub that copies its input to
+# its output satisfies every other assertion a round trip can make. jammy
+# universe carries age 1.0.0-1ubuntu0.1, which ships both /usr/bin/age and
+# /usr/bin/age-keygen; it goes in this apt layer rather than a new RUN so the
+# image gains one package, not one more layer.
 RUN apt-get update && apt-get install -y \
-    sudo curl git zsh ca-certificates findutils coreutils \
+    sudo curl git zsh ca-certificates findutils coreutils age \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -s /bin/bash testuser \
     && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
