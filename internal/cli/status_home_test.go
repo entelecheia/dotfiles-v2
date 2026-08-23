@@ -223,3 +223,42 @@ func assertKV(t *testing.T, out, key, want string) {
 	}
 	t.Errorf("no %q row in status output:\n%s", key, out)
 }
+
+// TestJSONStatusSurfacesHonorHomeFlag is BUG-07's other half: `dot sync status
+// --json` and `dot peer status --json` resolved workspace paths through
+// syncer.Bootstrap, which loaded state and resolved the profile from the
+// process home no matter what the flag said.
+func TestJSONStatusSurfacesHonorHomeFlag(t *testing.T) {
+	for _, surface := range [][]string{
+		{"sync", "status", "--json"},
+		{"peer", "status", "--json"},
+	} {
+		t.Run(strings.Join(surface, " "), func(t *testing.T) {
+			invoker, target := newStatusHomeFixture(t)
+
+			out, errOut, err := runDotForTest(append([]string{"--home", target}, surface...)...)
+			if err != nil {
+				t.Fatalf("%v --home: %v\nstderr=%s", surface, err, errOut)
+			}
+			if !strings.Contains(out, filepath.Join(target, "workspace", "work")) {
+				t.Errorf("--home did not move the workspace path into the target home:\n%s", out)
+			}
+			if strings.Contains(out, invoker) {
+				t.Errorf("--home run still reports paths under the invoking user's home:\n%s", out)
+			}
+
+			// Non-vacuity: without the flag the same document resolves through
+			// the process home exactly as it does today.
+			out, errOut, err = runDotForTest(surface...)
+			if err != nil {
+				t.Fatalf("%v: %v\nstderr=%s", surface, err, errOut)
+			}
+			if !strings.Contains(out, filepath.Join(invoker, "workspace", "work")) {
+				t.Errorf("without --home the workspace path left the process home:\n%s", out)
+			}
+			if strings.Contains(out, target) {
+				t.Errorf("without --home the document reports an unrelated home:\n%s", out)
+			}
+		})
+	}
+}
