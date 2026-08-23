@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
@@ -80,6 +82,43 @@ func peerBootstrapOptions(cmd *cobra.Command) syncer.BootstrapOptions {
 func probeRunner() *exec.Runner {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	return exec.NewRunner(false, logger)
+}
+
+// scheduledRunEnv marks a run started by the launchd job `dot peer schedule`
+// installs. The plist plants it (internal/syncer/peer_commands.go); this is
+// the only place that reads it.
+//
+// The mechanism was chosen rather than inherited: launchd sets no
+// distinguishing variable of its own, a TTY check misfires under CI and under
+// a pipe, and a new persistent flag would appear in the command's help output
+// for a mode no human invokes. The plist already had an EnvironmentVariables
+// dict, so the marker cost one entry there.
+const scheduledRunEnv = "DOT_SCHEDULED_RUN"
+
+// isScheduledRun reports whether this process was started by the peer
+// scheduler rather than by a person.
+func isScheduledRun() bool { return os.Getenv(scheduledRunEnv) != "" }
+
+// quietScheduledContention turns a lost lock race into a clean exit on a
+// scheduled run and leaves every other failure exactly as loud as it was.
+//
+// launchd consumes the exit code. A sibling `dot peer sync` still holding the
+// lock when the interval fires is normal operation on a laptop, not a job
+// failure, and reporting it as one trains the operator to ignore the report.
+// Contention is matched with errors.Is against the sentinel, never against
+// the message, so an unwritable lock parent or an unreachable peer stays loud.
+// The line goes through the runner's logger, which the plist routes to
+// StandardOutPath, so a swallowed run is still recorded.
+//
+// ponytail: known ceiling. A plist installed by an older dot carries no
+// marker, so its runs stay loud until the operator re-runs `dot peer
+// schedule`. That is a one-time cost, stated here rather than discovered.
+func quietScheduledContention(runner *exec.Runner, err error) error {
+	if err == nil || !isScheduledRun() || !errors.Is(err, fileutil.ErrLockHeld) {
+		return err
+	}
+	runner.Logger.Info("scheduled peer sync skipped: another run holds the lock", "err", err)
+	return nil
 }
 
 // renderPeerEvent turns engine progress into the lines `dot peer sync` has
@@ -211,7 +250,7 @@ on a laptop.`,
 				Progress: renderPeerEvent(p),
 			})
 			if err != nil {
-				return err
+				return quietScheduledContention(bs.Runner, err)
 			}
 			if res.Unreachable {
 				p.Warn("peer %s unreachable; nothing to do", bs.Config.Target.Host)
