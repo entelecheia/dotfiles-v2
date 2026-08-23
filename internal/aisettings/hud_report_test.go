@@ -186,3 +186,44 @@ func TestClaudeConflictItem_ShapeIsShared(t *testing.T) {
 		t.Fatalf("claudeConflictItem = %+v, want %+v", got, want)
 	}
 }
+
+// TestApplyClaudeHUD_ReformatsAndSaysSo is the row that discriminates the
+// SETTINGS half specifically, and it needs no race to do it.
+//
+// The two comparisons are not the same predicate: the pre-lock prediction
+// uses jsonBytesEqual, which normalizes, while claudecfg.Mutate persists
+// through a byte-exact hash comparison. A settings.json another tool left in
+// compact form is therefore semantically in sync and byte-stale at once, so
+// the prediction says "script only" while the write really does rewrite both
+// halves. Reporting the prediction here under-reports a file dot rewrote in
+// a third party's tree.
+//
+// The SCRIPT half has no equivalent row on purpose: scriptChanged and
+// EnsureFile's own comparison are the same byte comparison over the same
+// bytes, so outside a genuine race they cannot disagree, and manufacturing a
+// disagreement would mean adding a production seam.
+func TestApplyClaudeHUD_ReformatsAndSaysSo(t *testing.T) {
+	m := newHUDManagerForTest(t)
+	settingsPath := claudecfg.SettingsPath(m.homeDir())
+	writeHUDFile(t, settingsPath,
+		`{"statusLine":{"type":"command","command":"~/.claude/statusline-dot.py # dot-hud","refreshInterval":5}}`)
+	writeHUDFile(t, m.claudeScriptPath(), "# stale statusline from an older dot\n")
+
+	item, err := m.applyClaudeHUD(false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !item.Changed || item.Drift != "out-of-sync" {
+		t.Fatalf("item = %+v, want Changed=true Drift=out-of-sync", item)
+	}
+	if item.Detail != "write statusLine and statusline-dot.py" {
+		t.Fatalf("item.Detail = %q, want both halves named: the settings file really was rewritten", item.Detail)
+	}
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) == 0 || string(after)[0:2] != "{\n" {
+		t.Fatalf("the settings file should have been reindented, got %q", after)
+	}
+}

@@ -275,6 +275,69 @@ func (m *HUDManager) applyCodexHUD(dryRun bool) (HUDItem, error) {
 	return item, nil
 }
 
+// claudePreviewDetail is what a preview or a not-yet-attempted run reports.
+// It stays the pre-lock prediction on purpose: a dry run reports the work it
+// declined to do, and there is no outcome yet to report.
+const claudePreviewDetail = "write statusLine and statusline-dot.py"
+
+// claudeConflictItem is the item BOTH statusLine refusals report: the
+// pre-lock check in mergedClaudeSettings, and the recheck the Mutate closure
+// performs under the lock. One constructor with two real callers, so "the
+// two refusals report identically" is a property of the code rather than a
+// convention two hand-built literals happen to agree on.
+func claudeConflictItem(settingsPath, reason string) HUDItem {
+	return HUDItem{ToolID: "claude", TargetPath: settingsPath, Changed: false, Drift: "out-of-sync", Detail: reason}
+}
+
+// claudeHUDItem shapes the non-refusal item. A detail is only meaningful
+// when something changed, which is the one rule both callers share.
+func claudeHUDItem(settingsPath string, changed bool, detail string) HUDItem {
+	item := HUDItem{ToolID: "claude", TargetPath: settingsPath, Changed: changed, Drift: "in-sync"}
+	if changed {
+		item.Drift = "out-of-sync"
+		item.Detail = detail
+	}
+	return item
+}
+
+// claudeHUDWroteDetail names the halves a run actually wrote. Reporting both
+// when only one landed is the misreport this function exists to prevent.
+func claudeHUDWroteDetail(wroteSettings, wroteScript bool) string {
+	switch {
+	case wroteSettings && wroteScript:
+		return claudePreviewDetail
+	case wroteSettings:
+		return "write statusLine"
+	case wroteScript:
+		return "write statusline-dot.py"
+	}
+	return ""
+}
+
+// applyClaudeHUD installs dot's statusLine block and the script it points at,
+// and reports what the writes actually did rather than what the pre-lock read
+// predicted.
+//
+// Write order is script first, then the settings Mutate, and that is a
+// decision rather than an accident. A failed settings write leaves an orphan
+// statusline-dot.py that nothing references: inert, idempotent, and healed by
+// the next successful run. The reverse order would leave a statusLine entry
+// pointing at a stale or absent script, which is a visibly broken status line
+// in Claude Code. The safe half is the one that already lands first.
+//
+// ponytail: known ceiling. The pair is still not atomic — a failed settings
+// write leaves that orphan script behind. Closing it needs a rollback or a
+// staged two-phase write, which is a larger change than the reporting fix
+// this is. STATE.md WR-02's reporting clause lands here; its atomicity clause
+// is accepted, not closed.
+//
+// The refusal branch's provenance: a Codex review on PR #69 found that a
+// closure declining a foreign statusLine still rendered as `wrote`, and the
+// thread was answered as "Phase 5 BUG-03 closes it". That answer was
+// imprecise. BUG-03's retry fires on a hash MISMATCH, while a foreign
+// statusLine is a REFUSAL: the closure returns ErrNoChange and Mutate
+// short-circuits to (false, nil) before any retry. Threading that result into
+// the item is what actually closes it.
 func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 	settingsPath := claudecfg.SettingsPath(m.homeDir())
 	scriptPath := m.claudeScriptPath()
@@ -285,7 +348,7 @@ func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 	if refused != "" {
 		// Another tool owns statusLine. Leave it and report, rather than
 		// silently replacing an entry dot does not own.
-		return HUDItem{ToolID: "claude", TargetPath: settingsPath, Changed: false, Drift: "out-of-sync", Detail: refused}, nil
+		return claudeConflictItem(settingsPath, refused), nil
 	}
 	settingsChanged := true
 	if current, err := os.ReadFile(settingsPath); err == nil {
@@ -300,33 +363,38 @@ func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 		return HUDItem{}, fmt.Errorf("read %s: %w", scriptPath, err)
 	}
 	changed := settingsChanged || scriptChanged
-	item := HUDItem{ToolID: "claude", TargetPath: settingsPath, Changed: changed, Drift: "in-sync"}
-	if changed {
-		item.Drift = "out-of-sync"
-		item.Detail = "write statusLine and statusline-dot.py"
+	if !changed || dryRun {
+		return claudeHUDItem(settingsPath, changed, claudePreviewDetail), nil
 	}
-	if changed && !dryRun {
-		if _, err := fileutil.EnsureFile(m.runner(), scriptPath, []byte(claudeHUDScript), 0o755); err != nil {
-			return HUDItem{}, err
-		}
-		if err := os.Chmod(scriptPath, 0o755); err != nil {
-			return HUDItem{}, fmt.Errorf("chmod %s: %w", scriptPath, err)
-		}
-		// The settings write goes through claudecfg.Mutate: the read, the
-		// edit, and the write happen inside one PID-lock critical section.
-		// The closure re-checks ownership under the lock and declines via
-		// ErrNoChange if a foreign statusLine appeared since the check
-		// above; the reported item already reflects the pre-lock read.
-		if _, err := claudecfg.Mutate(m.runner(), m.homeDir(), func(current map[string]any) error {
-			if reason := applyDotStatusLine(current, force); reason != "" {
-				return claudecfg.ErrNoChange
-			}
-			return nil
-		}); err != nil {
-			return HUDItem{}, err
-		}
+
+	wroteScript, err := fileutil.EnsureFile(m.runner(), scriptPath, []byte(claudeHUDScript), 0o755)
+	if err != nil {
+		return HUDItem{}, err
 	}
-	return item, nil
+	if err := os.Chmod(scriptPath, 0o755); err != nil {
+		return HUDItem{}, fmt.Errorf("chmod %s: %w", scriptPath, err)
+	}
+	// The settings write goes through claudecfg.Mutate, which re-reads and
+	// re-hashes under its PID lock. The closure re-checks ownership there and
+	// declines via ErrNoChange if a foreign statusLine appeared since the
+	// check above; refusedUnderLock carries that reason back out, because the
+	// closure computes it and would otherwise throw it away. It is assigned
+	// on every pass, so a retry's verdict replaces the earlier one.
+	var refusedUnderLock string
+	wroteSettings, err := claudecfg.Mutate(m.runner(), m.homeDir(), func(current map[string]any) error {
+		refusedUnderLock = applyDotStatusLine(current, force)
+		if refusedUnderLock != "" {
+			return claudecfg.ErrNoChange
+		}
+		return nil
+	})
+	if err != nil {
+		return HUDItem{}, err
+	}
+	if refusedUnderLock != "" {
+		return claudeConflictItem(settingsPath, refusedUnderLock), nil
+	}
+	return claudeHUDItem(settingsPath, wroteScript || wroteSettings, claudeHUDWroteDetail(wroteSettings, wroteScript)), nil
 }
 
 func (m *HUDManager) claudeSettingsStatus() (bool, string, error) {
