@@ -282,3 +282,51 @@ func backdatedPIDLessLock(t *testing.T, age time.Duration) string {
 	}
 	return lockDir
 }
+
+// TestAcquirePIDLock_StaleReclaimFailureIsNotLockHeld pins that a real
+// filesystem failure during stale-lock reclaim surfaces as an error rather
+// than masquerading as contention.
+//
+// This is load-bearing because of how two features interact. If the rename
+// aside fails and the failure is swallowed, the following os.Mkdir sees the
+// still-present stale directory and returns EEXIST, which the recreate-race
+// branch classifies as ErrLockHeld — and a scheduled peer run swallows
+// ErrLockHeld into a quiet exit 0. A permission problem on the lock's parent
+// would therefore become an indefinite silent no-op instead of a reported
+// failure.
+//
+// Restoring `if err := os.Rename(...); err == nil` (ignoring the error) must
+// turn this red: the acquire then returns ErrLockHeld instead of an error.
+func TestAcquirePIDLock_StaleReclaimFailureIsNotLockHeld(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can rename inside a read-only-mode directory")
+	}
+	parent := t.TempDir()
+	lockDir := filepath.Join(parent, "dot.lock")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A pid-less lock older than the pidless horizon reads as stale, so the
+	// reclaim path is the one under test rather than the plain held path.
+	old := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(lockDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// Deny writes on the PARENT so the rename cannot create the trash entry,
+	// while the stale lock itself stays readable and judged stale.
+	if err := os.Chmod(parent, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
+
+	release, err := AcquirePIDLock(lockDir, LockOptions{Label: "reclaim probe", StaleAfter: time.Minute})
+	if release != nil {
+		release()
+	}
+	if err == nil {
+		t.Fatal("AcquirePIDLock() err = nil, want a reclaim failure")
+	}
+	if errors.Is(err, ErrLockHeld) {
+		t.Errorf("AcquirePIDLock() err = %v, want a real filesystem error, NOT ErrLockHeld — a scheduled run swallows ErrLockHeld into exit 0", err)
+	}
+}

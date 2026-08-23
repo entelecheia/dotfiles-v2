@@ -92,7 +92,22 @@ func AcquirePIDLock(lockDir string, opts LockOptions) (func(), error) {
 		// succeeds. A plain RemoveAll here could delete a lock that a faster
 		// contender had already recreated and pid-stamped.
 		trash := fmt.Sprintf("%s.stale.%d", lockDir, os.Getpid())
-		if err := os.Rename(lockDir, trash); err == nil {
+		// A leftover trash dir from an earlier run that shared this pid would
+		// make the rename fail forever. It is ours by construction, so clear
+		// it first rather than letting it wedge the reclaim.
+		_ = os.RemoveAll(trash)
+		if err := os.Rename(lockDir, trash); err != nil {
+			// Only a vanished source is the benign race: a faster contender
+			// already reclaimed the stale lock, so fall through and let Mkdir
+			// decide. Anything else — no write permission on the parent, a
+			// read-only mount — is a real failure and MUST surface. Ignoring
+			// it here would make Mkdir report EEXIST, which classifies as
+			// ErrLockHeld, which a scheduled run swallows into exit 0. A
+			// permission problem would then be an indefinite silent no-op.
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("reclaiming stale lock %s: %w", lockDir, err)
+			}
+		} else {
 			_ = os.RemoveAll(trash)
 		}
 		if err := os.Mkdir(lockDir, 0755); err != nil {
