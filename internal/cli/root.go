@@ -101,6 +101,25 @@ Also available as 'dotfiles' for back-compat.`,
 	return root
 }
 
+// homeOverrideFrom returns the raw home override for this run: the --home flag
+// the root command registers above, falling back to $DOTFILES_HOME. Empty
+// means "the process home", which is what every caller's own fallback then
+// resolves.
+//
+// It is the first two steps of the shape apply.go, check.go and diff.go
+// spell out inline; commands that also load state keep that spelling so the
+// state fork stays visible beside them.
+func homeOverrideFrom(cmd *cobra.Command) string {
+	var override string
+	if cmd != nil {
+		override, _ = cmd.Flags().GetString("home")
+	}
+	if override == "" {
+		override = os.Getenv("DOTFILES_HOME")
+	}
+	return override
+}
+
 // knownSubcommands is the set of all registered subcommand names + built-ins.
 // Used by Execute to decide whether to inject "open" for implicit project routing.
 func knownSubcommands(cmd *cobra.Command) map[string]bool {

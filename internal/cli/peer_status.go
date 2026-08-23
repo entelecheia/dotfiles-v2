@@ -50,12 +50,20 @@ func newPeerStatusCmd() *cobra.Command {
 
 // peerBootstrapReadOnly resolves the peer profile without creating its store.
 // The runner is deliberately live: reading status must work under --dry-run.
-func peerBootstrapReadOnly() (*syncer.BootstrapResult, error) {
-	return syncer.Bootstrap(syncer.BootstrapOptions{Profile: PeerProfile, ReadOnly: true})
+//
+// It takes the command because it must read --home: this is the path
+// `dot peer status --json` and `dot peer home-paths get` take, and neither
+// goes through peerBootstrapOptions (BUG-07).
+func peerBootstrapReadOnly(cmd *cobra.Command) (*syncer.BootstrapResult, error) {
+	return syncer.Bootstrap(syncer.BootstrapOptions{
+		Profile:  PeerProfile,
+		ReadOnly: true,
+		Home:     homeOverrideFrom(cmd),
+	})
 }
 
 func runPeerStatus(cmd *cobra.Command, _ []string) error {
-	bs, err := peerBootstrapReadOnly()
+	bs, err := peerBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}

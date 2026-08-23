@@ -64,7 +64,7 @@ func readPeerHomePaths(path string) (peerHomePathsJSON, error) {
 }
 
 func runPeerHomePathsGet(cmd *cobra.Command, _ []string) error {
-	bs, err := peerBootstrapReadOnly()
+	bs, err := peerBootstrapReadOnly(cmd)
 	if err != nil {
 		return err
 	}

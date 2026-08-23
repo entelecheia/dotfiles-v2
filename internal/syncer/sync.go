@@ -140,9 +140,20 @@ func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
 	return resolveConfig(state, false, "", DefaultProfile)
 }
 
-// ResolveConfigReadOnlyForProfile is ResolveConfigReadOnly for one profile.
-func ResolveConfigReadOnlyForProfile(state *config.UserState, profile string) (*Config, error) {
-	return resolveConfig(state, false, "", profile)
+// ResolveConfigForHomeProfile is ResolveConfigForProfile with an explicit home
+// directory instead of os.UserHomeDir(). Commands that honor --home must use it
+// so they operate on the target user's workspace rather than the invoking
+// user's. An empty home falls back to the current user's.
+func ResolveConfigForHomeProfile(state *config.UserState, home, profile string) (*Config, error) {
+	return resolveConfig(state, true, home, profile)
+}
+
+// ResolveConfigReadOnlyForHomeProfile is ResolveConfigForHomeProfile without
+// creating the local store, migrating global config, or healing .gitignore.
+// It is what a status or preview run under --home resolves through. An empty
+// home falls back to the current user's.
+func ResolveConfigReadOnlyForHomeProfile(state *config.UserState, home, profile string) (*Config, error) {
+	return resolveConfig(state, false, home, profile)
 }
 
 // ResolveConfigReadOnlyForHome is like ResolveConfigReadOnly but resolves all

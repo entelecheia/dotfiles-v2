@@ -41,10 +41,7 @@ func runStatus(cmd *cobra.Command, _ []string) error {
 	// config.StatePathForHome joins the home directly without consulting the
 	// variable, which is what those three commands already do when the flag
 	// is set. This follows that precedent rather than inventing an ordering.
-	homeOverride, _ := cmd.Flags().GetString("home")
-	if homeOverride == "" {
-		homeOverride = os.Getenv("DOTFILES_HOME")
-	}
+	homeOverride := homeOverrideFrom(cmd)
 	home := homeOverride
 	if home == "" {
 		home, _ = os.UserHomeDir()
