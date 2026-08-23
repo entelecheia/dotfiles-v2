@@ -5,11 +5,11 @@ package cli
 // a preview safe on a live machine with no undo, and GUARD-02 only covers what
 // goes through exec.Runner. This guard covers everything that does not.
 //
-// Two pre-existing defects make the strict assertion false today. Neither is
-// silenced: each is a requirement in .planning/REQUIREMENTS.md routed to Phase 5,
-// and knownDryRunDeviations below is fail-closed in BOTH directions - an
-// unattributed write fails the test, and an entry that stops occurring also fails
-// the test, so Phase 5's fix prunes the table instead of leaving a stale excuse.
+// The assertion is now strict: knownDryRunDeviations below is empty. It stays in
+// place because it is fail-closed in BOTH directions - an unattributed write fails
+// the test, and an entry that stops occurring also fails the test - so it is the
+// mechanism by which a future deviation has to be minted as a requirement rather
+// than absorbed.
 //
 // The container half, tests/scenarios/dry-run-empty-home.sh, carries the same
 // assertion unconditionally in a clean ubuntu:22.04 image where no Homebrew prefix
@@ -34,10 +34,13 @@ import (
 // but currently does, keyed on the FULL snapshot line snapshotTree emits
 // ("path\tmode" for a directory, "path\tmode\thash" for a regular file) rather
 // than on the path alone. Keying on the path would forgive a mode change or a
-// content change on a tolerated path - a regression that made the state write
-// emit *different* content would ride through. Full-line keys close that, at the
-// cost of one entry per profile for the state file, whose payload names the
-// profile.
+// content change on a tolerated path - a regression that made a tolerated write
+// emit *different* content would ride through. Full-line keys close that.
+//
+// It is EMPTY, and empty is the intended resting state: Phase 5 fixed BUG-05
+// (internal/cli/apply.go, the state save above the homeOverride fork) and removed
+// its five entries in the same change, because the reverse-direction check below
+// fails on an entry whose deviation has stopped occurring.
 //
 // Values are self-describing from the tracked tree: .planning/ is git-ignored in
 // this repo, so a bare "BUG-05" in a committed test file is unresolvable to
@@ -48,13 +51,7 @@ import (
 // that is not attributable to an existing BUG requirement: mint the requirement
 // first. A table that grows to cover whatever the guard happens to find has
 // stopped being a guard.
-var knownDryRunDeviations = map[string]string{
-	".config\tdrwxr-xr-x":          "BUG-05 internal/cli/apply.go:112,:116 - apply saves state on both branches of the homeOverride fork before the runner is constructed at :137; saveStateAt (internal/config/state.go:459) has no dry-run awareness - the state dir os.MkdirAll creates",
-	".config/dotfiles\tdrwxr-xr-x": "BUG-05 internal/cli/apply.go:112,:116 - apply saves state on both branches of the homeOverride fork before the runner is constructed at :137; saveStateAt (internal/config/state.go:459) has no dry-run awareness - the second level of that same state dir",
-	".config/dotfiles/config.yaml\t-rw-r--r--\tf041ab184aa2cf78746a93103afca250014ef42a51aa75a7355729993e0b3ca4": "BUG-05 internal/cli/apply.go:112,:116 - apply saves state on both branches of the homeOverride fork before the runner is constructed at :137; saveStateAt (internal/config/state.go:459) has no dry-run awareness - the state file itself, minimal profile payload",
-	".config/dotfiles/config.yaml\t-rw-r--r--\td69657e98b6103f19c2be1b23455d37cac68553cfb35fd389305ac6ef9be01dd": "BUG-05 internal/cli/apply.go:112,:116 - apply saves state on both branches of the homeOverride fork before the runner is constructed at :137; saveStateAt (internal/config/state.go:459) has no dry-run awareness - the state file itself, full profile payload",
-	".config/dotfiles/config.yaml\t-rw-r--r--\t96c54d6293100d2dafe88f136086a46d887155e3105418514c431152ba4033c5": "BUG-05 internal/cli/apply.go:112,:116 - apply saves state on both branches of the homeOverride fork before the runner is constructed at :137; saveStateAt (internal/config/state.go:459) has no dry-run awareness - the state file itself, server profile payload",
-}
+var knownDryRunDeviations = map[string]string{}
 
 // snapshotTree is a character-identical copy of the package exec helper in
 // internal/exec/runner_dryrun_test.go. The two packages share no internal test
@@ -221,6 +218,77 @@ func TestApply_DryRunLeavesEmptyHomeUntouched(t *testing.T) {
 	for _, line := range stale {
 		t.Errorf("knownDryRunDeviations entry never occurred during this run, so the defect it records appears fixed - remove the entry\n  entry: %q\n  recorded as: %s", line, knownDryRunDeviations[line])
 	}
+}
+
+// TestApply_DryRunWritesNoState pins BUG-05 on BOTH arms of the homeOverride
+// fork in runApply (internal/cli/apply.go). It exists alongside the whole-tree
+// guard above rather than inside it for two reasons:
+//
+//   - the whole-tree guard skips on any host carrying a Homebrew prefix, so on a
+//     developer machine it asserts nothing at all. This one asserts on a single
+//     path, which no brew probe can write, so it runs everywhere;
+//   - every surface the whole-tree guard drives passes --home and therefore only
+//     ever exercises the fork's first arm. A guard placed below the fork would
+//     pass there and still leave `dot apply --dry-run` writing state for anyone
+//     who does not pass the flag.
+//
+// Every row filters modules to a name no module has, so runApply reaches the
+// state save, then returns at "No modules to apply." That isolates the save from
+// module execution, which is what makes the non-vacuity row - a real apply, no
+// --dry-run - safe to run at all.
+func TestApply_DryRunWritesNoState(t *testing.T) {
+	// Matches nothing in module.defaultOrder, so Registry.Resolve returns an
+	// empty set and no module Check or Apply ever runs.
+	const noModules = "no-such-module"
+
+	// The literal path rather than config.StatePathForHome: BUG-05 is a claim
+	// about ~/.config/dotfiles/config.yaml specifically, and a helper that moved
+	// would carry the assertion along with it instead of failing.
+	statePath := func(home string) string {
+		return filepath.Join(home, ".config", "dotfiles", "config.yaml")
+	}
+	sandbox := func(t *testing.T) string {
+		t.Helper()
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		// XDG_CONFIG_HOME outranks HOME in config.StateDir, so a HOME-only
+		// sandbox would let a developer's own XDG setting take the write.
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+		return home
+	}
+	run := func(t *testing.T, args ...string) {
+		t.Helper()
+		if out, errOut, err := runDotForTest(args...); err != nil {
+			t.Fatalf("dot %v: %v\nstdout=%s\nstderr=%s", args, err, out, errOut)
+		}
+	}
+
+	t.Run("home flag arm", func(t *testing.T) {
+		home := sandbox(t)
+		run(t, "apply", "--profile", "minimal", "--yes", "--dry-run", "--module", noModules, "--home", home)
+		if _, err := os.Stat(statePath(home)); !os.IsNotExist(err) {
+			t.Errorf("apply --dry-run --home wrote the state file it only previews: %s (stat err: %v)", statePath(home), err)
+		}
+	})
+
+	t.Run("no home flag arm", func(t *testing.T) {
+		home := sandbox(t)
+		run(t, "apply", "--profile", "minimal", "--yes", "--dry-run", "--module", noModules)
+		if _, err := os.Stat(statePath(home)); !os.IsNotExist(err) {
+			t.Errorf("apply --dry-run without --home wrote the state file it only previews: %s (stat err: %v)", statePath(home), err)
+		}
+	})
+
+	// Non-vacuity: without --dry-run the save must still happen. Without this
+	// row the guard could have been a permanent disable and every row above
+	// would still be green.
+	t.Run("without dry-run the state is still saved", func(t *testing.T) {
+		home := sandbox(t)
+		run(t, "apply", "--profile", "minimal", "--yes", "--module", noModules, "--home", home)
+		if _, err := os.Stat(statePath(home)); err != nil {
+			t.Errorf("apply without --dry-run did not write the state file, so the dry-run guard disabled the save outright: %s (stat err: %v)", statePath(home), err)
+		}
+	})
 }
 
 // addedSnapshotLines returns every line present in after but not in before.
