@@ -156,8 +156,9 @@ func (o *onestopCtx) secretsArchiveDir() string {
 }
 
 // secretsStoreDir is the local encrypted store, resolved against the
-// session home so --home overrides reach the secrets domain too
-// (secrets.StorePath always uses os.UserHomeDir).
+// session home so --home overrides reach the secrets domain too. The
+// standalone `dot secrets` subcommands now join the same constant against
+// their own session home (BUG-08).
 func (o *onestopCtx) secretsStoreDir() string {
 	return filepath.Join(o.home, secrets.StoreDirRel)
 }

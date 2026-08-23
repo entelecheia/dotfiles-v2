@@ -37,6 +37,17 @@ func addAgeRecipient(t *testing.T, home, recipient string) {
 
 func targetStore(home string) string { return filepath.Join(home, secrets.StoreDirRel) }
 
+// stubAgeOnUsablePATH installs the age stub over a PATH that still carries the
+// system utilities. The shared fixture empties PATH so module probes answer the
+// same everywhere, but the stub is a /bin/sh script that calls cat, so it exits
+// 127 on an empty PATH. Real age stays out of reach either way: the stub dir is
+// first and no Homebrew prefix is on this PATH.
+func stubAgeOnUsablePATH(t *testing.T) {
+	t.Helper()
+	t.Setenv("PATH", "/usr/bin:/bin")
+	stubAge(t, false)
+}
+
 func TestSecretsStatusHonorsHomeFlag(t *testing.T) {
 	invoker, target := newStatusHomeFixture(t)
 
@@ -107,7 +118,7 @@ func TestSecretsListHonorsHomeFlag(t *testing.T) {
 func TestSecretsInitHonorsHomeFlag(t *testing.T) {
 	invoker, target := newStatusHomeFixture(t)
 	addAgeRecipient(t, target, "age1targetrecipient")
-	stubAge(t, false)
+	stubAgeOnUsablePATH(t)
 
 	out, errOut, err := runDotForTest("--home", target, "secrets", "init")
 	if err != nil {
@@ -134,7 +145,7 @@ func TestSecretsInitHonorsHomeFlag(t *testing.T) {
 
 func TestSecretsRestoreHonorsHomeFlag(t *testing.T) {
 	invoker, target := newStatusHomeFixture(t)
-	stubAge(t, false)
+	stubAgeOnUsablePATH(t)
 
 	src := t.TempDir()
 	if err := os.WriteFile(filepath.Join(src, "id_ed25519.age"), []byte("restored-payload"), 0o600); err != nil {

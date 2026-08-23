@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -91,6 +92,65 @@ func confirmSecrets(unattended bool) func(secrets.ConfirmKind, string) (bool, er
 	}
 }
 
+// secretsSession is the home, state and store directory one `dot secrets`
+// invocation operates on. Resolving them in one place is what keeps --home
+// from reaching some subcommands and not others (BUG-08).
+type secretsSession struct {
+	// Home is the resolved target home: the override when one was given,
+	// the process home otherwise.
+	Home string
+	// override is the raw --home / $DOTFILES_HOME value, empty for the
+	// process home. It selects the state loader and saver, so a run under
+	// the flag reads and records in the target's state file.
+	override string
+	State    *config.UserState
+	// StoreDir is the encrypted store, joined from the store-relative
+	// constant against Home. That is the same spelling the one-stop backup
+	// and restore steps use (onestop.go:162), which is why they honored the
+	// flag while these subcommands did not.
+	StoreDir string
+}
+
+// secretsSessionFrom resolves the session for one command run: the flag, then
+// $DOTFILES_HOME, then the process home, with state loaded from whichever it
+// picked. The override outranks XDG_CONFIG_HOME, following
+// config.StatePathForHome and the apply/check/diff precedent.
+func secretsSessionFrom(cmd *cobra.Command) (*secretsSession, error) {
+	s := &secretsSession{override: homeOverrideFrom(cmd)}
+	s.Home = s.override
+	if s.Home == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		s.Home = home
+	}
+	state, err := s.loadState()
+	if err != nil {
+		return nil, fmt.Errorf("loading state: %w", err)
+	}
+	s.State = state
+	s.StoreDir = filepath.Join(s.Home, secrets.StoreDirRel)
+	return s, nil
+}
+
+// loadState reads the target home's state file. Backup re-reads after copying
+// so a concurrent edit is not clobbered by the last-backup record.
+func (s *secretsSession) loadState() (*config.UserState, error) {
+	if s.override != "" {
+		return config.LoadStateForHome(s.override)
+	}
+	return config.LoadState()
+}
+
+// saveState writes state back to the target home.
+func (s *secretsSession) saveState(state *config.UserState) error {
+	if s.override != "" {
+		return config.SaveStateForHome(s.override, state)
+	}
+	return config.SaveState(state)
+}
+
 // newSecretsInitCmd encrypts local secrets files with age.
 func newSecretsInitCmd() *cobra.Command {
 	var scaffold bool
@@ -98,32 +158,23 @@ func newSecretsInitCmd() *cobra.Command {
 		Use:   "init",
 		Short: "Encrypt SSH key and shell secrets with age",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			state, err := config.LoadState()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
-				return fmt.Errorf("loading state: %w", err)
+				return err
 			}
 
 			// Checked before any path lookup: a state with no recipients
 			// cannot produce a decryptable archive under any of them.
-			if len(state.Secrets.AgeRecipients) == 0 {
+			if len(ses.State.Secrets.AgeRecipients) == 0 {
 				return fmt.Errorf("no age recipients configured; set secrets.age_recipients in state")
-			}
-
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return err
-			}
-			storeDir, err := secrets.StorePath()
-			if err != nil {
-				return err
 			}
 
 			p := printerFrom(cmd)
 			if err := secrets.Init(context.Background(), secrets.InitOptions{
 				Runner:   secretsRunner(cmd),
-				State:    state,
-				Home:     home,
-				StoreDir: storeDir,
+				State:    ses.State,
+				Home:     ses.Home,
+				StoreDir: ses.StoreDir,
 				Scaffold: scaffold,
 				Progress: renderSecretsEvent(p),
 			}); err != nil {
@@ -145,11 +196,7 @@ func newSecretsRestoreCmd() *cobra.Command {
 		Short: "Decrypt secrets from a source directory",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			state, err := config.LoadState()
-			if err != nil {
-				return fmt.Errorf("loading state: %w", err)
-			}
-			home, err := os.UserHomeDir()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
 				return err
 			}
@@ -159,8 +206,8 @@ func newSecretsRestoreCmd() *cobra.Command {
 
 			if _, err := secrets.Restore(context.Background(), secrets.RestoreOptions{
 				Runner:   secretsRunner(cmd),
-				State:    state,
-				Home:     home,
+				State:    ses.State,
+				Home:     ses.Home,
 				Src:      args[0],
 				Confirm:  confirmSecrets(yes),
 				Progress: renderSecretsEvent(p),
@@ -179,26 +226,16 @@ func newSecretsStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Check status of secrets files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			state, err := config.LoadState()
-			if err != nil {
-				return fmt.Errorf("loading state: %w", err)
-			}
-
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return err
-			}
-
-			storeDir, err := secrets.StorePath()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
 				return err
 			}
 
 			res, err := secrets.Status(secrets.StatusOptions{
 				Runner:   secretsRunner(cmd),
-				State:    state,
-				Home:     home,
-				StoreDir: storeDir,
+				State:    ses.State,
+				Home:     ses.Home,
+				StoreDir: ses.StoreDir,
 			})
 			if err != nil {
 				return err
@@ -226,9 +263,9 @@ func newSecretsStatusCmd() *cobra.Command {
 
 			p.Line("")
 			p.Line("  Age identity: %s", res.AgeIdentity)
-			if len(state.Secrets.AgeRecipients) > 0 {
+			if len(ses.State.Secrets.AgeRecipients) > 0 {
 				p.Line("  Age recipients:")
-				for _, r := range state.Secrets.AgeRecipients {
+				for _, r := range ses.State.Secrets.AgeRecipients {
 					p.Line("    %s", r)
 				}
 			} else {
@@ -236,7 +273,7 @@ func newSecretsStatusCmd() *cobra.Command {
 			}
 
 			p.Line("")
-			if lb := state.Secrets.LastBackup; lb != nil && lb.Path != "" {
+			if lb := ses.State.Secrets.LastBackup; lb != nil && lb.Path != "" {
 				p.Line("Last backup:")
 				p.Line("  Path:  %s", lb.Path)
 				p.Line("  When:  %s (%s ago)", lb.Time.Format(time.RFC3339), humanDuration(time.Since(lb.Time)))
@@ -273,12 +310,12 @@ func newSecretsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List encrypted secrets files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			storeDir, err := secrets.StorePath()
+			ses, err := secretsSessionFrom(cmd)
 			if err != nil {
 				return err
 			}
 
-			res, err := secrets.List(secrets.ListOptions{StoreDir: storeDir})
+			res, err := secrets.List(secrets.ListOptions{StoreDir: ses.StoreDir})
 			p := printerFrom(cmd)
 			if err != nil {
 				return err
@@ -288,7 +325,7 @@ func newSecretsListCmd() *cobra.Command {
 				return nil
 			}
 
-			p.Line("Secrets store: %s\n", storeDir)
+			p.Line("Secrets store: %s\n", ses.StoreDir)
 			for _, e := range res.Entries {
 				p.Line("  %-30s  %d bytes", e.Name, e.Size)
 			}
