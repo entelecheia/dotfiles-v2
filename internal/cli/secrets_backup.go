@@ -1,0 +1,118 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/secrets"
+)
+
+// defaultSecretsBackupDest derives the secrets backup destination from the
+// shared backup root (which now prefers Dropbox via DetectCloudCandidate),
+// matching the one-stop wizard's <root>/secrets-age/<host> layout. Used when
+// `dot secrets backup` is called without an explicit destination.
+func defaultSecretsBackupDest(cmd *cobra.Command) (string, error) {
+	homeOverride, _ := cmd.Flags().GetString("home")
+	home, _ := os.UserHomeDir()
+	var state *config.UserState
+	var err error
+	if homeOverride != "" {
+		home = homeOverride
+		state, err = config.LoadStateForHome(homeOverride)
+	} else {
+		state, err = config.LoadState()
+	}
+	if err != nil {
+		return "", fmt.Errorf("load user state for default secrets backup destination: %w", err)
+	}
+	// resolveBackupRoot reads --to/--from (not registered here — the guards
+	// skip them safely), then state.BackupRoot, then cloud-detect, then local.
+	root := resolveBackupRoot(cmd, state, home)
+	host, _ := os.Hostname()
+	if i := strings.Index(host, "."); i > 0 {
+		host = host[:i]
+	}
+	return filepath.Join(root, "secrets-age", host), nil
+}
+
+// newSecretsBackupCmd copies *.age files to a destination directory.
+func newSecretsBackupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backup [destination]",
+		Short: "Copy encrypted secrets to a destination directory",
+		Long: `Copy the encrypted *.age files from the local store to a destination.
+
+With no destination, defaults to <backup-root>/secrets-age/<host> — the
+same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			storeDir, err := secrets.StorePath()
+			if err != nil {
+				return err
+			}
+
+			runner := secretsRunner(cmd)
+			p := printerFrom(cmd)
+
+			var dest string
+			if len(args) == 1 {
+				dest = args[0]
+			} else {
+				dest, err = defaultSecretsBackupDest(cmd)
+				if err != nil {
+					return err
+				}
+				p.Line("Destination (default): %s", dest)
+			}
+
+			if _, err := os.Stat(storeDir); os.IsNotExist(err) {
+				p.Line("No secrets store found. Run 'dot secrets init' first.")
+				return nil
+			}
+
+			res, err := secrets.Backup(secrets.BackupOptions{
+				Runner:   runner,
+				StoreDir: storeDir,
+				Dest:     dest,
+				Progress: renderSecretsEvent(p),
+			})
+			if err != nil {
+				return err
+			}
+			if res.Copied == 0 {
+				p.Line("No .age files found to backup.")
+				return nil
+			}
+			p.Line("Backup complete: %d file(s) -> %s", res.Copied, dest)
+
+			// Record last-backup location (skip in dry-run — nothing was copied).
+			if runner.DryRun {
+				return nil
+			}
+			absDest, err := filepath.Abs(dest)
+			if err != nil {
+				absDest = dest
+			}
+			state, err := config.LoadState()
+			if err != nil {
+				p.Warn("warning: could not load state to record backup: %v", err)
+				return nil
+			}
+			state.Secrets.LastBackup = &config.BackupRecord{
+				Path:  absDest,
+				Time:  time.Now(),
+				Files: res.Copied,
+			}
+			if err := config.SaveState(state); err != nil {
+				p.Warn("warning: could not save last-backup record: %v", err)
+			}
+			return nil
+		},
+	}
+}

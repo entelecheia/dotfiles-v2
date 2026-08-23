@@ -17,6 +17,7 @@ band_max=350
 # nobody has decomposed yet, which is a different requirement.
 files=(
   "internal/cli/tunnel_cmd.go"
+  "internal/cli/secrets.go"
 )
 
 if [[ ${#files[@]} -eq 0 ]]; then

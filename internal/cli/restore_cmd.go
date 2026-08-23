@@ -14,6 +14,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/profilesnap"
+	"github.com/entelecheia/dotfiles-v2/internal/secrets"
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
@@ -460,7 +461,14 @@ func (o *onestopCtx) applyStep() onestopStep {
 
 func (o *onestopCtx) restoreSecretsStep() onestopStep {
 	src := o.secretsArchiveDir()
-	result, err := secretsRestoreFiles(context.Background(), o.runner, o.p, o.state, o.home, src, o.yes)
+	result, err := secrets.Restore(context.Background(), secrets.RestoreOptions{
+		Runner:   o.runner,
+		State:    o.state,
+		Home:     o.home,
+		Src:      src,
+		Confirm:  confirmSecrets(o.yes),
+		Progress: renderSecretsEvent(o.p),
+	})
 	if err != nil {
 		return onestopStep{Name: "secrets", Err: err}
 	}
@@ -468,7 +476,7 @@ func (o *onestopCtx) restoreSecretsStep() onestopStep {
 		result.Restored, result.Unchanged, result.Skipped)
 	// Unmatched .age archives (e.g. a key from a host with a different
 	// ssh.key_name, or an obsolete leftover) are non-fatal: every entry
-	// that maps to the restored config was restored. secretsRestoreFiles
+	// that maps to the restored config was restored. secrets.Restore
 	// already printed a prominent warning with a remediation hint, so we
 	// surface the count in the summary detail without failing the run.
 	if len(result.Unmatched) > 0 {

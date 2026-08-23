@@ -15,6 +15,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/profilesnap"
+	"github.com/entelecheia/dotfiles-v2/internal/secrets"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
@@ -333,10 +334,16 @@ func (o *onestopCtx) backupAIStep(tag string, includeAuth bool) onestopStep {
 
 func (o *onestopCtx) backupSecretsStep(storeDir string) onestopStep {
 	dest := o.secretsArchiveDir()
-	copied, err := secretsBackupFiles(o.runner, o.p, storeDir, dest)
+	res, err := secrets.Backup(secrets.BackupOptions{
+		Runner:   o.runner,
+		StoreDir: storeDir,
+		Dest:     dest,
+		Progress: renderSecretsEvent(o.p),
+	})
 	if err != nil {
 		return onestopStep{Name: "secrets", Err: err}
 	}
+	copied := res.Copied
 	if !o.dryRun {
 		o.state.Secrets.LastBackup = &config.BackupRecord{
 			Path:  dest,
