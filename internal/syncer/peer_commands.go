@@ -89,6 +89,12 @@ const peerHomePathsHeader = `# dot peer home-paths.txt — host-local paths carr
 // job a minimal PATH that finds Apple's /usr/bin/rsync (openrsync) before
 // Homebrew's 3.x. A peer transfer with the wrong rsync fails at data time, not
 // at probe time.
+//
+// DOT_SCHEDULED_RUN is how the run tells cli it is scheduled: launchd sets no
+// distinguishing variable of its own, a TTY check misfires under CI and under
+// a pipe, and a persistent flag would advertise a mode no human invokes. The
+// dict was already here, so the marker costs one entry. It is read in exactly
+// one place, internal/cli/peer_cmd.go.
 const peerPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -106,6 +112,8 @@ const peerPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
   <dict>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>DOT_SCHEDULED_RUN</key>
+    <string>1</string>
   </dict>
   <key>StartInterval</key>
   <integer>%d</integer>

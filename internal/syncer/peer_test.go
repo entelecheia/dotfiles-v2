@@ -474,3 +474,16 @@ func TestPushFinalizesLocalTargetAfterPartialTransfer(t *testing.T) {
 		t.Error("Push must surface the partial error so callers can report it")
 	}
 }
+
+// TestPeerPlistCarriesTheScheduledRunMarker is the other half of the
+// scheduled-run detection: launchd sets no distinguishing variable of its
+// own, so the job dot installs plants one. The cli side asserts the same
+// literal, since nothing else binds the two packages.
+func TestPeerPlistCarriesTheScheduledRunMarker(t *testing.T) {
+	if !strings.Contains(peerPlistTmpl, "<key>DOT_SCHEDULED_RUN</key>") {
+		t.Fatal("the peer launchd job must mark itself as a scheduled run")
+	}
+	if !strings.Contains(peerPlistTmpl, "<key>EnvironmentVariables</key>") {
+		t.Fatal("the marker belongs in the plist's existing EnvironmentVariables dict")
+	}
+}
