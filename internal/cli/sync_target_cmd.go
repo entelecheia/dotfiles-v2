@@ -144,11 +144,15 @@ func runSyncInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	if res.DryRun {
+		if res.LegacyStoreDir != "" {
+			p.Line("dry-run: would rename %s to %s", res.LegacyStoreDir, res.StoreDir)
+		}
 		p.Line("dry-run: would create %s", res.StoreDir)
 		for _, f := range []string{res.ConfigFile, res.IncludeFile, res.IgnoreFile} {
 			p.Line("dry-run: would create %s", f)
 		}
 		p.Line("dry-run: would create %s", res.InboxDir)
+		p.Line("dry-run: would append the managed block to %s", res.WorkspaceIgnore)
 		return nil
 	}
 
