@@ -48,6 +48,13 @@ func TestSyncAndPeer_DryRunLeavesEmptyHomeUntouched(t *testing.T) {
 		// these two is overridden.
 		{"sync init", []string{"sync", "init", "--dry-run"}},
 		{"peer init", []string{"peer", "init", "--host", "someone@peer.example", "--dry-run"}},
+		// BUG-14's cli-level row. It stops at the unconfigured-target check on an
+		// empty HOME, which is the point: even a run that refuses must not have
+		// written the store on its way to refusing. The plist guard itself is
+		// asserted past the whole validation chain in
+		// internal/syncer/peer_schedule_dryrun_test.go, where a stub peer can be
+		// made to satisfy it.
+		{"peer schedule", []string{"peer", "setup", "--interval", "15m", "--dry-run"}},
 	}
 
 	for _, tc := range tests {
