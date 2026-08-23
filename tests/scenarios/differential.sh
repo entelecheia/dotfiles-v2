@@ -43,9 +43,20 @@ HOST_HOME="${HOME:-}"
 # behavior changes, and a row for this would go red in CI where the escape never
 # fires - the registry would assert both "this must differ" and "this must not
 # differ" at once. This is the same call 01-03 made for the same defect.
+#
+# The prefix list is an env-defaulted variable rather than two literals so
+# tests/scenarios/differential-registry-gate.sh can point the probe at a
+# directory inside its own temp tree and drive the skipped-field arm
+# deterministically on any host. It exists for that gate and nothing else: CI's
+# linux job and every developer run leave it unset and get exactly the two
+# paths below. Overriding it can only widen the comparison or narrow it to a
+# directory the caller created — it can never forgive a difference.
+DIFFERENTIAL_BREW_PREFIXES="${DIFFERENTIAL_BREW_PREFIXES:-/opt/homebrew/bin /home/linuxbrew/.linuxbrew/bin}"
+BREW_PREFIXES=()
+read -r -a BREW_PREFIXES <<< "$DIFFERENTIAL_BREW_PREFIXES"
 TREE_COMPARISON=enabled
 TREE_SKIP_REASON=""
-for BREW_PREFIX in /opt/homebrew/bin /home/linuxbrew/.linuxbrew/bin; do
+for BREW_PREFIX in ${BREW_PREFIXES[@]+"${BREW_PREFIXES[@]}"}; do
   if [ -d "$BREW_PREFIX" ]; then
     TREE_COMPARISON=disabled
     TREE_SKIP_REASON="host homebrew at $BREW_PREFIX defeats the PATH sandbox: BUG-06 internal/exec/brew.go:293 - read-only probes run real third-party binaries that write into HOME and refetch over the network, so the tree field cannot carry a claim on this host. CI runs this scenario in a clean ubuntu:22.04 container where neither prefix exists and the tree field is compared unconditionally."

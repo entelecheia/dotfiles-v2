@@ -54,6 +54,13 @@ jobs:
       # vulnerability finding.
       - name: Dependency vulnerability gate is not a no-op
         run: bash tests/scenarios/govulncheck-gate.sh
+      # Runs here, not in the linux container: it copies the harness and
+      # assert.sh out of the repo, and /tests/scenarios in the image has no repo
+      # above it. ubuntu-latest also gives it the GNU `find -printf` the copied
+      # harness needs. Placed after the real gates for the same reason as the
+      # two above.
+      - name: differential.sh decides all three registry verdict arms correctly
+        run: bash tests/scenarios/differential-registry-gate.sh
       - name: cmd/dot must not depend on the man-page toolchain
         run: |
           deps=$(go list -deps ./cmd/dot)
@@ -126,8 +133,8 @@ jobs:
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
