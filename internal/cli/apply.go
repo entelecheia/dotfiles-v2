@@ -107,8 +107,18 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Save updated state
-	if homeOverride != "" {
+	// Save updated state. The guard sits ABOVE the fork on purpose: the fork
+	// only picks a destination, so one condition covers both arms, and a guard
+	// duplicated inside them is how one arm gets fixed and the other does not
+	// (BUG-05). It cannot live in internal/config either — saveStateAt has no
+	// runner to consult and the runner does not exist until :137.
+	if dryRun {
+		statePath := config.StatePath()
+		if homeOverride != "" {
+			statePath = config.StatePathForHome(homeOverride)
+		}
+		p.Line("dry-run: would write %s", statePath)
+	} else if homeOverride != "" {
 		if err := config.SaveStateForHome(homeOverride, state); err != nil {
 			return fmt.Errorf("saving state: %w", err)
 		}
