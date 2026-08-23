@@ -44,7 +44,14 @@ type BootstrapOptions struct {
 
 // BootstrapResult is what every sync and peer subcommand needs before it can
 // do anything: the loaded user state, the resolved profile config, and the
-// runner every side effect goes through.
+// runner external commands go through.
+//
+// Runner covers command execution only, and its DryRun flag suppresses only
+// that. It is NOT a blanket dry-run guarantee: engine entries that mutate
+// files directly — PeerInit via SaveLocalConfig, PeerSchedule via os.MkdirAll
+// and os.WriteFile — bypass it entirely, and profile resolution creates the
+// per-workspace store before any entry runs (BUG-13). A caller must not read
+// a dry-run runner as "nothing was written".
 type BootstrapResult struct {
 	State  *config.UserState
 	Config *Config
