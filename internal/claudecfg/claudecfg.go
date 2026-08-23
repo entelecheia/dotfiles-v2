@@ -187,7 +187,7 @@ func Mutate(runner *exec.Runner, home string, fn func(map[string]any) error) (bo
 		if hashSettings(current) != hashSettings(raw) {
 			continue
 		}
-		return fileutil.EnsureFileAtomic(runner, path, append(data, '\n'), 0o644)
+		return fileutil.EnsureFileAtomic(runner, home, path, append(data, '\n'), 0o644)
 	}
 	return false, fmt.Errorf("%s changed underneath the write twice; another process is rewriting it, so dot stopped rather than overwrite it", path)
 }

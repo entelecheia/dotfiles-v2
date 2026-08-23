@@ -15,7 +15,7 @@ const backupDir = ".local/share/dotfiles/backup"
 
 // EnsureFile writes content to path if it differs from current content.
 // Returns true if the file was written.
-func EnsureFile(runner *exec.Runner, path string, content []byte, perm os.FileMode) (bool, error) {
+func EnsureFile(runner *exec.Runner, home, path string, content []byte, perm os.FileMode) (bool, error) {
 	existing, err := runner.ReadFile(path)
 	if err == nil && hashBytes(existing) == hashBytes(content) {
 		return false, nil
@@ -44,7 +44,7 @@ func EnsureFile(runner *exec.Runner, path string, content []byte, perm os.FileMo
 // another process rewrites concurrently: a reader must never observe a torn
 // file. Rename replaces a symlink at path instead of writing through it, so
 // use it only on paths owned as regular files.
-func EnsureFileAtomic(runner *exec.Runner, path string, content []byte, perm os.FileMode) (bool, error) {
+func EnsureFileAtomic(runner *exec.Runner, home, path string, content []byte, perm os.FileMode) (bool, error) {
 	existing, err := runner.ReadFile(path)
 	if err == nil && hashBytes(existing) == hashBytes(content) {
 		return false, nil

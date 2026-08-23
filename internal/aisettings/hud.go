@@ -268,7 +268,7 @@ func (m *HUDManager) applyCodexHUD(dryRun bool) (HUDItem, error) {
 		// Codex rewrites config.toml continuously; an atomic rename write
 		// guarantees it never reads a torn file. A write it makes between our
 		// read and rename can still be lost — the next codex write self-heals.
-		if _, err := fileutil.EnsureFileAtomic(m.runner(), path, []byte(next), 0o600); err != nil {
+		if _, err := fileutil.EnsureFileAtomic(m.runner(), m.homeDir(), path, []byte(next), 0o600); err != nil {
 			return HUDItem{}, err
 		}
 	}
@@ -367,7 +367,7 @@ func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 		return claudeHUDItem(settingsPath, changed, claudePreviewDetail), nil
 	}
 
-	wroteScript, err := fileutil.EnsureFile(m.runner(), scriptPath, []byte(claudeHUDScript), 0o755)
+	wroteScript, err := fileutil.EnsureFile(m.runner(), m.homeDir(), scriptPath, []byte(claudeHUDScript), 0o755)
 	if err != nil {
 		return HUDItem{}, err
 	}

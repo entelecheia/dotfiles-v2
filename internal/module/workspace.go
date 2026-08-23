@@ -217,7 +217,7 @@ func (m *WorkspaceModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 	if err != nil {
 		return nil, fmt.Errorf("rendering shell/40-workspace.sh.tmpl: %w", err)
 	}
-	written, err := fileutil.EnsureFile(rc.Runner, shellDest, content, 0644)
+	written, err := fileutil.EnsureFile(rc.Runner, rc.HomeDir, shellDest, content, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("writing %s: %w", shellDest, err)
 	}

@@ -86,7 +86,7 @@ func TestEnsureFile_WritesNewFile(t *testing.T) {
 	path := filepath.Join(dir, "subdir", "new.txt")
 	content := []byte("new file content\n")
 
-	written, err := EnsureFile(runner, path, content, 0644)
+	written, err := EnsureFile(runner, dir, path, content, 0644)
 	if err != nil {
 		t.Fatalf("EnsureFile: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestEnsureFile_SkipsIdentical(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	written, err := EnsureFile(runner, path, content, 0644)
+	written, err := EnsureFile(runner, dir, path, content, 0644)
 	if err != nil {
 		t.Fatalf("EnsureFile: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestEnsureFile_UpdatesDifferent(t *testing.T) {
 	}
 
 	newContent := []byte("new content")
-	written, err := EnsureFile(runner, path, newContent, 0644)
+	written, err := EnsureFile(runner, dir, path, newContent, 0644)
 	if err != nil {
 		t.Fatalf("EnsureFile: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestEnsureFileAtomic_WritesAndReplaces(t *testing.T) {
 	path := filepath.Join(dir, "sub", "config.toml")
 	first := []byte("v1\n")
 
-	written, err := EnsureFileAtomic(runner, path, first, 0o600)
+	written, err := EnsureFileAtomic(runner, dir, path, first, 0o600)
 	if err != nil || !written {
 		t.Fatalf("EnsureFileAtomic new file: written=%v err=%v", written, err)
 	}
@@ -167,13 +167,13 @@ func TestEnsureFileAtomic_WritesAndReplaces(t *testing.T) {
 		t.Errorf("perm = %v, want 0600", info.Mode().Perm())
 	}
 
-	written, err = EnsureFileAtomic(runner, path, first, 0o600)
+	written, err = EnsureFileAtomic(runner, dir, path, first, 0o600)
 	if err != nil || written {
 		t.Fatalf("identical content: written=%v err=%v, want skip", written, err)
 	}
 
 	second := []byte("v2\n")
-	written, err = EnsureFileAtomic(runner, path, second, 0o600)
+	written, err = EnsureFileAtomic(runner, dir, path, second, 0o600)
 	if err != nil || !written {
 		t.Fatalf("replace: written=%v err=%v", written, err)
 	}
@@ -205,7 +205,7 @@ func TestEnsureFileAtomic_RejectsSymlinkTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := EnsureFileAtomic(runner, link, []byte("new\n"), 0o600); err == nil {
+	if _, err := EnsureFileAtomic(runner, dir, link, []byte("new\n"), 0o600); err == nil {
 		t.Fatal("atomic write over a symlink must error, not replace the link")
 	}
 	got, _ := os.ReadFile(real)

@@ -120,7 +120,7 @@ func (m *TerminalModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResul
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", f.templatePath, err)
 		}
-		written, err := fileutil.EnsureFile(rc.Runner, f.destPath, content, 0644)
+		written, err := fileutil.EnsureFile(rc.Runner, rc.HomeDir, f.destPath, content, 0644)
 		if err != nil {
 			return nil, fmt.Errorf("writing %s: %w", f.destPath, err)
 		}

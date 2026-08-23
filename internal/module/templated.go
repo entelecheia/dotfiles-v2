@@ -43,7 +43,7 @@ func applyTemplatedFiles(rc *RunContext, files []templatedFile) ([]string, error
 		if err != nil {
 			return nil, err
 		}
-		written, err := fileutil.EnsureFile(rc.Runner, f.destPath, content, f.mode())
+		written, err := fileutil.EnsureFile(rc.Runner, rc.HomeDir, f.destPath, content, f.mode())
 		if err != nil {
 			return nil, fmt.Errorf("writing %s: %w", f.destPath, err)
 		}
