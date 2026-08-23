@@ -124,10 +124,13 @@ func encryptFile(
 		return fmt.Errorf("creating temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
+	// Registered before the close check can return, so a failing Close
+	// cannot strand a partial archive in the store (BUG-09). No-op after a
+	// successful rename.
+	defer os.Remove(tmpPath)
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing temp file: %w", err)
 	}
-	defer os.Remove(tmpPath) // no-op after a successful rename
 
 	args := append([]string{"-e"}, recipientArgs...)
 	args = append(args, "-o", tmpPath, src)
@@ -172,10 +175,12 @@ func verifier(ctx context.Context, runner *exec.Runner, identity string) (func(s
 			return err
 		}
 		outPath := out.Name()
+		// Registered before the close check can return (BUG-09): this temp
+		// file holds the round-trip decryption of a secret.
+		defer os.Remove(outPath)
 		if err := out.Close(); err != nil {
 			return err
 		}
-		defer os.Remove(outPath)
 		_, err = runner.Run(ctx, "age", "-d", "-i", identity, "-o", outPath, agePath)
 		return err
 	}, ""
@@ -198,20 +203,18 @@ func copyArchive(runner *exec.Runner, src, dst string) error {
 		return err
 	}
 	tmpPath := tmp.Name()
+	// Same registration order as the other three temp-file sites (BUG-09).
+	// This one already removed on every error path explicitly; the defer
+	// states the rule once instead of three times.
+	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
 		return err
 	}
-	if err := os.Rename(tmpPath, dst); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	return os.Rename(tmpPath, dst)
 }
 
 // restoreStatus reports what restoreFile did.
@@ -263,10 +266,13 @@ func restoreFile(
 		return 0, "", fmt.Errorf("creating temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
+	// Registered before the close check can return: a failing Close would
+	// otherwise strand a 0600 plaintext secret in the destination
+	// directory (BUG-09). No-op after a successful rename.
+	defer os.Remove(tmpPath)
 	if err := tmp.Close(); err != nil {
 		return 0, "", fmt.Errorf("closing temp file: %w", err)
 	}
-	defer os.Remove(tmpPath) // no-op after a successful rename
 
 	if _, err := runner.Run(ctx, "age", "-d", "-i", identity, "-o", tmpPath, srcAge); err != nil {
 		return 0, "", fmt.Errorf("decrypting %s: %w (existing %s untouched)", srcAge, err, destPath)
