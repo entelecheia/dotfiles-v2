@@ -96,7 +96,7 @@ func TestEngineBackupAndRestoreRoundtrip(t *testing.T) {
 		Manifest: mf,
 	}
 
-	sum, err := eng.Backup(context.Background(), []string{"testmoom"})
+	sum, err := eng.Backup(context.Background(), BackupOptions{Tokens: []string{"testmoom"}})
 	if err != nil {
 		t.Fatalf("backup: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestEngineBackupAndRestoreRoundtrip(t *testing.T) {
 	if err := os.WriteFile(plistPath, []byte("mutated"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.Restore(context.Background(), []string{"testmoom"}); err != nil {
+	if _, err := eng.Restore(context.Background(), RestoreOptions{Tokens: []string{"testmoom"}}); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	got, err := os.ReadFile(plistPath)
@@ -144,7 +144,7 @@ func TestBackupSkipsExcludedSubtrees(t *testing.T) {
 	runner := exec.NewRunner(false, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	eng := &Engine{Runner: runner, HomeDir: home, Root: filepath.Join(home, "bk"), Hostname: "h", Manifest: mf}
 
-	if _, err := eng.Backup(context.Background(), nil); err != nil {
+	if _, err := eng.Backup(context.Background(), BackupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	archiveRoot := filepath.Join(home, "bk", "app-settings", "h", "foo", "Application Support", "Foo")
@@ -175,7 +175,7 @@ func TestDryRunProducesNoFiles(t *testing.T) {
 	runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	eng := &Engine{Runner: runner, HomeDir: home, Root: backup, Hostname: "h", Manifest: mf}
 
-	if _, err := eng.Backup(context.Background(), nil); err != nil {
+	if _, err := eng.Backup(context.Background(), BackupOptions{}); err != nil {
 		t.Fatalf("dry-run backup: %v", err)
 	}
 	// The host root dir itself is skipped in dry-run (MkdirAll), so no files.
@@ -220,14 +220,14 @@ func TestRestoreSnapshotsExistingFilesFirst(t *testing.T) {
 	}}}
 	eng := newRoundtripEngine(t, home, mf)
 
-	if _, err := eng.Backup(context.Background(), nil); err != nil {
+	if _, err := eng.Backup(context.Background(), BackupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(plistPath, []byte("live-edit"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	sum, err := eng.Restore(context.Background(), nil)
+	sum, err := eng.Restore(context.Background(), RestoreOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestBackupFailureKeepsPreviousArchive(t *testing.T) {
 	}}}
 	eng := newRoundtripEngine(t, home, mf)
 
-	if _, err := eng.Backup(context.Background(), nil); err != nil {
+	if _, err := eng.Backup(context.Background(), BackupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	guardedArchive := filepath.Join(eng.HostRoot(), "foo", "Application Support", "Foo", "settings.json")
@@ -296,7 +296,7 @@ func TestBackupFailureKeepsPreviousArchive(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(guarded, 0o644) })
 
-	sum, err := eng.Backup(context.Background(), nil)
+	sum, err := eng.Backup(context.Background(), BackupOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestBackupCommitsReadableWhenFailedPathNeverArchived(t *testing.T) {
 	}}}
 	eng := newRoundtripEngine(t, home, mf)
 
-	sum, err := eng.Backup(context.Background(), nil)
+	sum, err := eng.Backup(context.Background(), BackupOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,14 +383,14 @@ func TestBackupSeedsArchivedCopyWhenLiveMissing(t *testing.T) {
 	}}}
 	eng := newRoundtripEngine(t, home, mf)
 
-	if _, err := eng.Backup(context.Background(), nil); err != nil {
+	if _, err := eng.Backup(context.Background(), BackupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// App uninstalled: live file gone. Re-backup must not wipe the archive.
 	if err := os.Remove(plistPath); err != nil {
 		t.Fatal(err)
 	}
-	sum, err := eng.Backup(context.Background(), nil)
+	sum, err := eng.Backup(context.Background(), BackupOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +433,7 @@ func TestBackupRecoversOrphanPrev(t *testing.T) {
 	}
 	seedOrphanPrev(t, eng, "x")
 
-	if _, err := eng.Backup(context.Background(), nil); err != nil {
+	if _, err := eng.Backup(context.Background(), BackupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(eng.HostRoot(), "x", "Preferences", "com.x.plist"))
@@ -456,7 +456,7 @@ func TestRestoreRecoversOrphanPrev(t *testing.T) {
 	}
 	seedOrphanPrev(t, eng, "x")
 
-	if _, err := eng.Restore(context.Background(), []string{"x"}); err != nil {
+	if _, err := eng.Restore(context.Background(), RestoreOptions{Tokens: []string{"x"}}); err != nil {
 		t.Fatal(err)
 	}
 	// Recovery renamed x.prev → x, then Restore copied it back to Library.
@@ -518,7 +518,7 @@ func TestAdoptArchivedAppsSynthesizesEntries(t *testing.T) {
 	}
 
 	// Restore must now bring the archived settings back.
-	sum, err := eng.Restore(context.Background(), []string{"Moom Classic"})
+	sum, err := eng.Restore(context.Background(), RestoreOptions{Tokens: []string{"Moom Classic"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +589,7 @@ func TestBackupRefusesUnsafeToken(t *testing.T) {
 	}}}
 	eng := newRoundtripEngine(t, home, mf)
 
-	sum, err := eng.Backup(context.Background(), []string{"../escape"})
+	sum, err := eng.Backup(context.Background(), BackupOptions{Tokens: []string{"../escape"}})
 	if err != nil {
 		t.Fatal(err)
 	}

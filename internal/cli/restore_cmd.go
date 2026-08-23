@@ -493,7 +493,7 @@ func (o *onestopCtx) restoreAppsStep() onestopStep {
 	}
 	adopted := eng.AdoptArchivedApps()
 	tokens := sliceutil.Dedupe(append(resolveBackupTokens(o.cmd, eng), adopted...))
-	sum, err := eng.Restore(context.Background(), tokens)
+	sum, err := eng.Restore(context.Background(), appsettings.RestoreOptions{Tokens: tokens})
 	if err != nil {
 		return onestopStep{Name: "apps", Err: err}
 	}
