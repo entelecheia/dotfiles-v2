@@ -65,7 +65,7 @@ func (m *CondaModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, 
 
 	// Ensure .condarc
 	condarcPath := filepath.Join(rc.HomeDir, ".condarc")
-	written, err := fileutil.EnsureFile(rc.Runner, condarcPath, []byte(condarcContent), 0644)
+	written, err := fileutil.EnsureFile(rc.Runner, rc.HomeDir, condarcPath, []byte(condarcContent), 0644)
 	if err != nil {
 		return nil, fmt.Errorf("writing %s: %w", condarcPath, err)
 	}

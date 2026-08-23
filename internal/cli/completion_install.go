@@ -49,7 +49,7 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	}
 	zshScript := patchZshForAliases(zshBuf.Bytes(), root.Name(), root.Aliases)
 	zshFile := filepath.Join(dir, "_dot")
-	written, err := fileutil.EnsureFile(runner, zshFile, zshScript, 0644)
+	written, err := fileutil.EnsureFile(runner, homeDir, zshFile, zshScript, 0644)
 	if err != nil {
 		return changed, fmt.Errorf("writing %s: %w", zshFile, err)
 	}
@@ -64,7 +64,7 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	}
 	bashScript := patchBashForAliases(bashBuf.Bytes(), root.Name(), root.Aliases)
 	bashFile := filepath.Join(dir, "dot.bash")
-	written, err = fileutil.EnsureFile(runner, bashFile, bashScript, 0644)
+	written, err = fileutil.EnsureFile(runner, homeDir, bashFile, bashScript, 0644)
 	if err != nil {
 		return changed, fmt.Errorf("writing %s: %w", bashFile, err)
 	}
@@ -76,7 +76,7 @@ func installCompletions(root *cobra.Command, runner *exec.Runner, homeDir string
 	var fishBuf bytes.Buffer
 	if err := root.GenFishCompletion(&fishBuf, true); err == nil {
 		fishFile := filepath.Join(dir, "dot.fish")
-		w, _ := fileutil.EnsureFile(runner, fishFile, fishBuf.Bytes(), 0644)
+		w, _ := fileutil.EnsureFile(runner, homeDir, fishFile, fishBuf.Bytes(), 0644)
 		if w {
 			changed = true
 		}

@@ -142,7 +142,7 @@ func (m *CoauthorGuardManager) Apply(opts CoauthorGuardOptions) (*CoauthorGuardR
 	if st.HookDrift != "in-sync" {
 		result.HookChanged = true
 		if !effectiveDryRun {
-			if _, err := fileutil.EnsureFile(m.runner(), st.HookPath, hookContent, 0o755); err != nil {
+			if _, err := fileutil.EnsureFile(m.runner(), m.homeDir(), st.HookPath, hookContent, 0o755); err != nil {
 				return nil, err
 			}
 			if err := os.Chmod(st.HookPath, 0o755); err != nil {
@@ -160,7 +160,7 @@ func (m *CoauthorGuardManager) Apply(opts CoauthorGuardOptions) (*CoauthorGuardR
 				return nil, fmt.Errorf("read %s: %w", st.GitConfigPath, err)
 			}
 			next := patchGitHooksPath(current)
-			if _, err := fileutil.EnsureFile(m.runner(), st.GitConfigPath, []byte(next), 0o644); err != nil {
+			if _, err := fileutil.EnsureFile(m.runner(), m.homeDir(), st.GitConfigPath, []byte(next), 0o644); err != nil {
 				return nil, err
 			}
 		}
