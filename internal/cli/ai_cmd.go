@@ -218,6 +218,15 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 	eng.Hostname = host
 	p := printerFrom(cmd)
 
+	// Below 1 is rejected rather than floored (D-06): the engine clamps to 1
+	// while the confirmation line prints the raw count, so a keep of 0 asked
+	// the operator to approve a deletion the run never intended (BUG-12).
+	// Placed here, after host validation, so the first error a doubly-wrong
+	// run reports does not move.
+	if keep < 1 {
+		return fmt.Errorf("--keep must be at least 1 (got %d)", keep)
+	}
+
 	opts := aisettings.PruneOptions{Keep: keep}
 	plan, err := eng.PlanPrune(opts)
 	if err != nil {

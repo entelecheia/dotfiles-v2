@@ -452,6 +452,13 @@ func runProfilePrune(cmd *cobra.Command, _ []string) error {
 	}
 	eng.Hostname = host
 	keep, _ := cmd.Flags().GetInt("keep")
+	// Same rejection and the same wording as `dot ai prune` (D-06, BUG-12):
+	// Engine.Prune clamps to 1 while the confirmation line below prints
+	// len(all)-keep from the raw flag. Placed after host validation so the
+	// first error a doubly-wrong run reports does not move.
+	if keep < 1 {
+		return fmt.Errorf("--keep must be at least 1 (got %d)", keep)
+	}
 	p := printerFrom(cmd)
 
 	all, err := eng.List()
