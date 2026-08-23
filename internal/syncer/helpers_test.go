@@ -1,12 +1,15 @@
 package syncer
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 func TestAcquireLock_FailsWhenLiveLockHeld(t *testing.T) {
@@ -155,5 +158,30 @@ func TestRotateLog_NoOpUnderThreshold(t *testing.T) {
 	got, _ := os.ReadFile(logFile)
 	if string(got) != original {
 		t.Errorf("RotateLog modified file under threshold: got %q want %q", got, original)
+	}
+}
+
+// TestAcquireLock_RefusalWordingIsUnchanged pins the exact operator-visible
+// string, not just a substring. The lock primitive gained a caller-supplied
+// label for BUG-04; the syncer passes the zero value precisely so this
+// wording, which every sync and peer refusal wraps, does not move.
+func TestAcquireLock_RefusalWordingIsUnchanged(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "live.lock")
+	release, err := AcquireLock(dir)
+	if err != nil {
+		t.Fatalf("first AcquireLock: %v", err)
+	}
+	defer release()
+
+	_, err = AcquireLock(dir)
+	if err == nil {
+		t.Fatal("AcquireLock did not refuse a held lock")
+	}
+	want := "another sync is running (lock: " + dir + ")"
+	if err.Error() != want {
+		t.Fatalf("refusal = %q, want %q", err.Error(), want)
+	}
+	if !errors.Is(err, fileutil.ErrLockHeld) {
+		t.Fatalf("the syncer refusal must still classify as contention: %v", err)
 	}
 }

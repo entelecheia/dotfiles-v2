@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
@@ -407,5 +408,35 @@ func TestMutate_DryRunWritesNothing(t *testing.T) {
 	}
 	if string(data) != "{\n  \"a\": 1\n}\n" {
 		t.Fatalf("dry run wrote the file: %q", data)
+	}
+}
+
+// TestMutate_ReclaimsAnAbandonedLockWellInsideTheHour is BUG-04's stale
+// window clause seen from the caller that needed it. The lock directory has
+// no readable pid (the shape a sudo run leaves behind) and is far younger
+// than fileutil's package-level hour, so under the shared horizon dot ai hud
+// and dot guard would be blocked behind it for the rest of that hour.
+func TestMutate_ReclaimsAnAbandonedLockWellInsideTheHour(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, SettingsPath(home), "{\n  \"a\": 1\n}\n")
+
+	lockDir := LockDir(home)
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	abandoned := time.Now().Add(-2 * settingsLockStaleAfter)
+	if err := os.Chtimes(lockDir, abandoned, abandoned); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := Mutate(testRunner(), home, func(settings map[string]any) error {
+		settings["added"] = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("an abandoned settings lock must self-heal in minutes, not in an hour: %v", err)
+	}
+	if !changed {
+		t.Fatal("the write should have gone through after reclaiming the lock")
 	}
 }
