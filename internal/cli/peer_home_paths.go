@@ -68,7 +68,7 @@ func runPeerHomePathsGet(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	document, err := readPeerHomePaths(peerHomePathsFile(bs.Config.LocalPaths))
+	document, err := readPeerHomePaths(syncer.PeerHomePathsFile(bs.Config.LocalPaths))
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func runPeerHomePathsSet(cmd *cobra.Command, _ []string) error {
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	path := peerHomePathsFile(bs.Config.LocalPaths)
+	path := syncer.PeerHomePathsFile(bs.Config.LocalPaths)
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	if !dryRun {
 		if err := writePatternFileAtomic(path, []byte(content)); err != nil {

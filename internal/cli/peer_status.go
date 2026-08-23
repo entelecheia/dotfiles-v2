@@ -16,7 +16,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-const peerStatusSchemaVersion = 1
+const peerStatusSchemaVersion = syncer.PeerStatusSchemaVersion
 
 type peerSchedulerSnapshot struct {
 	Label           string
@@ -88,7 +88,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 			Job:           job,
 			LastExitCode:  snapshot.LastExitCode,
 			RunCount:      snapshot.RunCount,
-			HomePathsPath: peerHomePathsFile(cfg.LocalPaths),
+			HomePathsPath: syncer.PeerHomePathsFile(cfg.LocalPaths),
 		})
 	}
 	p := printerFrom(cmd)
