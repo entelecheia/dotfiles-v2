@@ -333,6 +333,12 @@ func anchorVaultPath(vault, wsPath string) string {
 // or "" when neither exists. home is the home a ~-form wsPath is stat'd
 // under: a run pointed elsewhere must not probe the invoking user's tree.
 func detectVaultDir(wsPath, home string) string {
+	if strings.HasPrefix(wsPath, "~/") && home == "" {
+		// Joining "" with the rest yields a relative path, so the stats below
+		// would probe whatever directory the binary was started in. Detect
+		// nothing instead: callers fall back to the fresh default.
+		return ""
+	}
 	expanded := fileutil.ExpandHomeFor(wsPath, home)
 	for _, rel := range []string{"work/vault", "vault"} {
 		if fi, err := os.Stat(filepath.Join(expanded, rel)); err == nil && fi.IsDir() {
