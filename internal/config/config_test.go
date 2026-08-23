@@ -306,7 +306,7 @@ func TestVaultPath_Explicit(t *testing.T) {
 		Path:  "~/workspace",
 		Vault: "~/custom/vault",
 	}}}
-	if got, want := cfg.VaultPath(), "~/custom/vault"; got != want {
+	if got, want := cfg.VaultPath(t.TempDir()), "~/custom/vault"; got != want {
 		t.Errorf("VaultPath() = %q, want %q", got, want)
 	}
 }
@@ -319,7 +319,7 @@ func TestVaultPath_DetectsWorkVault(t *testing.T) {
 	}
 
 	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
-	if got, want := cfg.VaultPath(), "~/workspace/work/vault"; got != want {
+	if got, want := cfg.VaultPath(home), "~/workspace/work/vault"; got != want {
 		t.Errorf("VaultPath() = %q, want %q", got, want)
 	}
 }
@@ -332,7 +332,7 @@ func TestVaultPath_DetectsTopLevelVault(t *testing.T) {
 	}
 
 	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
-	if got, want := cfg.VaultPath(), "~/workspace/vault"; got != want {
+	if got, want := cfg.VaultPath(home), "~/workspace/vault"; got != want {
 		t.Errorf("VaultPath() = %q, want %q", got, want)
 	}
 }
@@ -342,14 +342,14 @@ func TestVaultPath_FreshDefault(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
-	if got, want := cfg.VaultPath(), "~/workspace/work/vault"; got != want {
+	if got, want := cfg.VaultPath(home), "~/workspace/work/vault"; got != want {
 		t.Errorf("VaultPath() = %q, want %q", got, want)
 	}
 }
 
 func TestVaultPath_EmptyWorkspacePath(t *testing.T) {
 	cfg := &Config{}
-	if got := cfg.VaultPath(); got != "" {
+	if got := cfg.VaultPath(t.TempDir()); got != "" {
 		t.Errorf("VaultPath() with empty workspace path = %q, want empty", got)
 	}
 }
@@ -360,7 +360,7 @@ func TestVaultPath_RelativeAnchoredUnderWorkspace(t *testing.T) {
 		"vault":      "~/workspace/vault",
 	} {
 		cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace", Vault: vault}}}
-		if got := cfg.VaultPath(); got != want {
+		if got := cfg.VaultPath(t.TempDir()); got != want {
 			t.Errorf("VaultPath() with vault=%q = %q, want %q", vault, got, want)
 		}
 	}
@@ -368,7 +368,7 @@ func TestVaultPath_RelativeAnchoredUnderWorkspace(t *testing.T) {
 
 func TestVaultCloneTarget_Explicit(t *testing.T) {
 	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace", Vault: "work/vault"}}}
-	if got, want := cfg.VaultCloneTarget(), "~/workspace/work/vault"; got != want {
+	if got, want := cfg.VaultCloneTarget(t.TempDir()), "~/workspace/work/vault"; got != want {
 		t.Errorf("VaultCloneTarget() = %q, want %q", got, want)
 	}
 }
@@ -381,7 +381,7 @@ func TestVaultCloneTarget_Detected(t *testing.T) {
 	}
 
 	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
-	if got, want := cfg.VaultCloneTarget(), "~/workspace/work/vault"; got != want {
+	if got, want := cfg.VaultCloneTarget(home), "~/workspace/work/vault"; got != want {
 		t.Errorf("VaultCloneTarget() = %q, want %q", got, want)
 	}
 }
@@ -393,7 +393,7 @@ func TestVaultCloneTarget_LegacyFallthrough(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	cfg := &Config{Modules: ModulesConfig{Workspace: WorkConfig{Path: "~/workspace"}}}
-	if got := cfg.VaultCloneTarget(); got != "" {
+	if got := cfg.VaultCloneTarget(home); got != "" {
 		t.Errorf("VaultCloneTarget() with nothing on disk = %q, want empty (legacy <ws>/vault)", got)
 	}
 }
