@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -277,8 +278,8 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer status --json --home: %v\nstderr=%s", err, errOut)
 	}
-	if strings.Contains(out, "900") {
-		t.Errorf("peer status --home reported the invoking user's scheduler interval:\n%s", out)
+	if got := schedulerIntervalSeconds(t, out); got != 0 {
+		t.Errorf("peer status --home reported the invoking user's scheduler interval %d:\n%s", got, out)
 	}
 	if !strings.Contains(out, "not installed") {
 		t.Errorf("peer status --home did not report the target home's (absent) scheduler:\n%s", out)
@@ -289,7 +290,33 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer status --json: %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, "900") {
-		t.Errorf("peer status without the flag did not read the process home's plist:\n%s", out)
+	if got := schedulerIntervalSeconds(t, out); got != 900 {
+		t.Errorf("peer status without the flag read intervalSeconds=%d, want 900 from the process home's plist:\n%s", got, out)
 	}
+}
+
+// schedulerIntervalSeconds pulls the scheduler interval out of a `peer status
+// --json` document.
+//
+// It parses rather than substring-matching on purpose. The previous version of
+// this test asserted `strings.Contains(out, "900")`, and the document embeds
+// several t.TempDir() paths whose random suffix is decimal — a run under
+// .../TestPeerStatusSchedulerHonorsHomeFlag2189005701/ contains "900" inside
+// "89005701" and failed on CI with the invoking user's interval nowhere in the
+// output. A substring assertion over a document full of random numbers is a
+// coin flip, not a check.
+func schedulerIntervalSeconds(t *testing.T, jsonDoc string) int {
+	t.Helper()
+	var doc struct {
+		Job struct {
+			IntervalSeconds int `json:"intervalSeconds"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal([]byte(jsonDoc), &doc); err != nil {
+		t.Fatalf("peer status --json emitted invalid JSON: %v\n%s", err, jsonDoc)
+	}
+	// A peer document carries exactly one `job` object (peer_status.go's
+	// peerStatusJSON.Job); with no scheduler installed its intervalSeconds is
+	// the zero value, which is the "not installed" case the --home side asserts.
+	return doc.Job.IntervalSeconds
 }
