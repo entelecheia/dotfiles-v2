@@ -6,6 +6,7 @@ package claudecfg
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,14 +48,31 @@ func LockDir(home string) string {
 // close. Only writers serialize.
 func Read(home string) (map[string]any, error) {
 	path := SettingsPath(home)
-	settings := map[string]any{}
+	data, err := readRaw(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseSettings(path, data)
+}
+
+// readRaw returns settings.json's bytes. A missing file yields nil bytes,
+// the same tolerance Read has, so Mutate can hash "absent" and "empty"
+// distinctly from any real content.
+func readRaw(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return settings, nil
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	return data, nil
+}
+
+// parseSettings is the parse half of Read, split out so Mutate can hash the
+// exact bytes it parsed instead of reading the file a second time.
+func parseSettings(path string, data []byte) (map[string]any, error) {
+	settings := map[string]any{}
 	if len(bytes.TrimSpace(data)) == 0 {
 		return settings, nil
 	}
@@ -64,38 +82,97 @@ func Read(home string) (map[string]any, error) {
 	return settings, nil
 }
 
-// Mutate is the write path for settings.json. It acquires the PID lock at
-// LockDir, reads the file through the same code path Read uses, applies fn
-// to the parsed map, and persists via fileutil.EnsureFile (hash-skip when
-// unchanged, backup-before-overwrite, dry-run aware through the runner) at
-// mode 0644 with two-space indentation and a trailing newline. It returns
-// the changed flag EnsureFile reports.
-//
-// The lock is released on every exit path: the release closure is deferred
-// on the statement following a successful acquire, so a closure error, a
-// marshal failure, and a write failure all drop it. A closure returning
-// ErrNoChange short-circuits to (false, nil) before any write; any other
-// closure error is returned with nothing written.
-func Mutate(runner *exec.Runner, home string, fn func(map[string]any) error) (bool, error) {
-	release, err := fileutil.AcquirePIDLock(LockDir(home))
-	if err != nil {
-		return false, err
-	}
-	defer release()
+// hashSettings fingerprints the on-disk bytes so Mutate can tell whether a
+// foreign writer landed between its unlocked pre-read and its locked
+// re-read. It lives here rather than in fileutil because only this one
+// caller needs it, and fileutil already carries the EnsureFile/EnsureFileAtomic
+// pair's worth of near-duplicate bodies.
+func hashSettings(data []byte) [sha256.Size]byte {
+	return sha256.Sum256(data)
+}
 
-	settings, err := Read(home)
-	if err != nil {
-		return false, err
-	}
-	if err := fn(settings); err != nil {
-		if errors.Is(err, ErrNoChange) {
-			return false, nil
+// mutateAttempts bounds Mutate's retry: one pass, plus one more if a foreign
+// writer landed inside the window. Two writers trading the file back and
+// forth is a condition to report, not to spin on.
+const mutateAttempts = 2
+
+// Mutate is the write path for settings.json. Its order is, per attempt:
+//
+//  1. read the raw bytes UNLOCKED and hash them (a missing or empty file is
+//     an empty document, the same tolerance Read has);
+//  2. parse through the same code path Read uses, so invalid JSON still
+//     fails hard with ErrInvalidJSON and dot never overwrites a file it
+//     cannot faithfully rewrite;
+//  3. apply fn. ErrNoChange returns (false, nil) IMMEDIATELY — on the first
+//     pass that is before any lock acquire, so a no-op mutation creates
+//     neither ~/.claude nor the lock directory; any other closure error is
+//     returned with nothing written;
+//  4. marshal with two-space indentation and a trailing newline;
+//  5. acquire the PID lock at LockDir, once. The retry keeps holding it;
+//  6. re-read and re-hash under the lock. A different hash means another
+//     writer landed inside the window: discard the marshaled document and
+//     go around from step 1 without releasing the lock, so fn is re-applied
+//     to the foreign writer's content instead of clobbering it. A second
+//     mismatch is an error naming the path;
+//  7. persist with fileutil.EnsureFileAtomic at mode 0644 — hash-skip when
+//     unchanged, backup-before-overwrite, dry-run aware through the runner,
+//     and a temp-and-rename write, so an interrupted write leaves the
+//     original intact and a symlink at the path is refused rather than
+//     written through. It returns that call's changed flag.
+//
+// The lock is released on every exit path: the release is deferred as soon
+// as it exists, so a marshal failure, a re-read failure, a declining retry
+// and a write failure all drop it.
+//
+// ponytail: known ceiling, and a residual on purpose rather than a race
+// claimed closed. Step 6's re-hash happens BEFORE EnsureFileAtomic, which
+// then does its own read, a backup, a MkdirAll and only then the rename. A
+// foreign write landing inside that final sub-interval is still lost. It is
+// far smaller than the read-to-write window this restructure closes, but it
+// is not zero, and the lock binds only dot. Closing it needs a
+// compare-and-swap write: move the hash check inside Runner.WriteFileAtomic,
+// between its temp-file write and its rename.
+func Mutate(runner *exec.Runner, home string, fn func(map[string]any) error) (bool, error) {
+	path := SettingsPath(home)
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
 		}
-		return false, err
+	}()
+
+	for attempt := 0; attempt < mutateAttempts; attempt++ {
+		raw, err := readRaw(path)
+		if err != nil {
+			return false, err
+		}
+		settings, err := parseSettings(path, raw)
+		if err != nil {
+			return false, err
+		}
+		if err := fn(settings); err != nil {
+			if errors.Is(err, ErrNoChange) {
+				return false, nil
+			}
+			return false, err
+		}
+		data, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return false, err
+		}
+		if release == nil {
+			if release, err = fileutil.AcquirePIDLock(LockDir(home)); err != nil {
+				return false, err
+			}
+		}
+		current, err := readRaw(path)
+		if err != nil {
+			return false, err
+		}
+		if hashSettings(current) != hashSettings(raw) {
+			continue
+		}
+		return fileutil.EnsureFileAtomic(runner, path, append(data, '\n'), 0o644)
 	}
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return false, err
-	}
-	return fileutil.EnsureFile(runner, SettingsPath(home), append(data, '\n'), 0o644)
+	return false, fmt.Errorf("%s changed underneath the write twice; another process is rewriting it, so dot stopped rather than overwrite it", path)
 }
