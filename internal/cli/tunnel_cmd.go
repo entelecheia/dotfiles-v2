@@ -177,41 +177,37 @@ func runTunnelStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	ctx := context.Background()
 	p := printerFrom(cmd)
-	runner := tunnelRunner(false)
 	state, err := config.LoadState()
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
 
+	// Header first, then probe: the pre-move order, so a runner warning on
+	// stderr still interleaves the same way against stdout.
 	p.Header("dot tunnel status")
-	cloudflaredPath, found := lookupCloudflared()
-	if found {
-		p.KV("cloudflared", cloudflaredVersion(ctx, runner, cloudflaredPath))
+	status := tunnel.Status(context.Background(), tunnelRunner(false), tunnel.StatusOptions{
+		TunnelName: state.Modules.Tunnel.TunnelName,
+	})
+
+	if status.CloudflaredFound {
+		p.KV("cloudflared", status.CloudflaredVersion)
 	} else {
 		p.KV("cloudflared", "not found")
 	}
 	p.KV("Tunnel", tunnelStateLabel(state.Modules.Tunnel))
 	p.KV("Hostname", state.Modules.Tunnel.Hostname)
 	p.KV("Config", filePresence(tunnel.ConfigPath))
-	p.KV("Daemon", string(tunnel.DaemonStateFor(ctx, runner)))
-	if tunnel.Port22Open(time.Second) {
+	p.KV("Daemon", string(status.Daemon))
+	if status.Port22Open {
 		p.KV("Port 22", "open")
 	} else {
 		p.KV("Port 22", "closed")
 	}
 
 	connections := "(offline or unauthorized)"
-	if found && state.Modules.Tunnel.TunnelName != "" {
-		// The connector probe is a Cloudflare API call — bound it so an
-		// offline machine doesn't make a local status command hang.
-		lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		record, ok, err := tunnel.LookupTunnelID(lookupCtx, runner, cloudflaredPath, state.Modules.Tunnel.TunnelName)
-		cancel()
-		if err == nil && ok {
-			connections = strconv.Itoa(record.Connections)
-		}
+	if status.ConnectionsKnown {
+		connections = strconv.Itoa(status.Connections)
 	}
 	p.KV("Connectors", connections)
 	p.Blank()
@@ -705,18 +701,6 @@ func lookupCloudflared() (string, bool) {
 func lookupBrew() (string, bool) {
 	path, err := osexec.LookPath("brew")
 	return path, err == nil
-}
-
-func cloudflaredVersion(ctx context.Context, runner *exec.Runner, cloudflaredPath string) string {
-	result, err := runner.RunQuery(ctx, cloudflaredPath, "--version")
-	if err != nil {
-		return filepath.Base(cloudflaredPath)
-	}
-	line := strings.TrimSpace(result.Stdout)
-	if line == "" {
-		return filepath.Base(cloudflaredPath)
-	}
-	return line
 }
 
 func tunnelStateLabel(state config.UserTunnelState) string {
