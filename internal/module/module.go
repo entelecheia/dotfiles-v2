@@ -138,13 +138,16 @@ func (r *Registry) Resolve(cfg *config.Config, filter []string) []Module {
 	return result
 }
 
-// RunAll executes Check then Apply on each module in order.
+// RunAll executes Check then Apply on each module in order. A module whose
+// Check fails counts as a failed module just as an Apply failure does, so a
+// run that could not even evaluate a module never reports success.
 func RunAll(ctx context.Context, modules []Module, rc *RunContext) error {
 	var errors []string
 	for _, m := range modules {
 		check, err := m.Check(ctx, rc)
 		if err != nil {
 			fmt.Fprintf(rc.out(), "  ⚠ %s: check error: %v\n", m.Name(), err)
+			errors = append(errors, fmt.Sprintf("%s: %v", m.Name(), err))
 			continue
 		}
 		if check.Satisfied {
