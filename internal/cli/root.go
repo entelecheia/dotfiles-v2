@@ -120,6 +120,17 @@ func homeOverrideFrom(cmd *cobra.Command) string {
 	return override
 }
 
+// homeFor resolves the home a command operates on: the override when there is
+// one, the process home otherwise. Commands that also load state keep the
+// fork visible at their own call site and use homeOverrideFrom instead.
+func homeFor(cmd *cobra.Command) string {
+	home := homeOverrideFrom(cmd)
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	return home
+}
+
 // knownSubcommands is the set of all registered subcommand names + built-ins.
 // Used by Execute to decide whether to inject "open" for implicit project routing.
 func knownSubcommands(cmd *cobra.Command) map[string]bool {

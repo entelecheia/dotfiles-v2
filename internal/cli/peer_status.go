@@ -72,7 +72,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	snapshot := inspectPeerScheduler(cmd.Context(), runner)
+	snapshot := inspectPeerScheduler(cmd.Context(), runner, homeFor(cmd))
 	base := buildSyncStatusJSON(cfg, st, &syncer.Scheduler{Paths: cfgPathsForStatus(cfg)})
 	base.Kind = "peer-profile"
 	base.Jobs = []syncJobJSON{}
@@ -134,11 +134,14 @@ func newestTimeJSON(values ...time.Time) *string {
 	return timeJSON(newest)
 }
 
-func inspectPeerScheduler(ctx context.Context, runner *exec.Runner) peerSchedulerSnapshot {
+// inspectPeerScheduler reads the peer agent's plist under the home the run is
+// pointed at. It takes the home rather than resolving one: a --home run that
+// reported the invoking user's agent state would be the same disclosure the
+// workspace fields above carry (BUG-07).
+func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string) peerSchedulerSnapshot {
 	const label = "com.dotfiles.peer"
 	snapshot := peerSchedulerSnapshot{Label: label, State: syncer.SchedulerNotInstalled.String()}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	if home == "" {
 		return snapshot
 	}
 	plist := filepath.Join(home, "Library", "LaunchAgents", label+".plist")
