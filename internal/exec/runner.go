@@ -8,6 +8,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Runner wraps shell command execution and file I/O with dry-run support.
@@ -191,6 +192,21 @@ func (r *Runner) WriteFileAtomic(path string, content []byte, perm os.FileMode) 
 		return fmt.Errorf("atomic write target %s exists and is not a regular file", path)
 	}
 	r.Logger.Info("write file (atomic)", "path", path, "size", len(content))
+	// perm is the CREATE mode, matching os.WriteFile's contract, which the
+	// non-atomic WriteFile above inherits. A rename replaces the inode, so
+	// without this an atomic write would silently reset an existing file's
+	// mode and ownership to whatever the caller passed and whoever is running
+	// — a user who chmod'd ~/.claude/settings.json to 0600 would get 0644
+	// back on the next write, and a sudo run would leave it root-owned.
+	// Preserve what is already there; perm applies only when creating.
+	mode := perm
+	var preserveOwner *syscall.Stat_t
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			preserveOwner = st
+		}
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".dot-write-*")
 	if err != nil {
 		return err
@@ -200,9 +216,15 @@ func (r *Runner) WriteFileAtomic(path string, content []byte, perm os.FileMode) 
 		tmp.Close()
 		return err
 	}
-	if err := tmp.Chmod(perm); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		tmp.Close()
 		return err
+	}
+	if preserveOwner != nil {
+		// Best effort: only a privileged process can chown to another uid, so
+		// this matters exactly in the sudo case it exists to protect against.
+		// A failure for an unprivileged caller is expected and not an error.
+		_ = tmp.Chown(int(preserveOwner.Uid), int(preserveOwner.Gid))
 	}
 	if err := tmp.Close(); err != nil {
 		return err
