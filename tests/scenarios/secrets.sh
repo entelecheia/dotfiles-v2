@@ -91,12 +91,49 @@ YAML
   chmod 600 "$HOME_DIR/.config/shell/90-secrets.sh"
 }
 
+# SNAPSHOT_HOME records the WHOLE tree, not just regular files: relative path,
+# entry type, and mode for directories, symlinks and files alike, plus a content
+# hash for regular files and the target for symlinks. Copied in shape from
+# dry-run-empty-home.sh rather than reaching for tests/assert.sh, whose two tree
+# helpers walk with `find -type f` and are therefore mode-blind and
+# symlink-blind — neither can support the byte-identity claim group 4 makes.
+# GNU findutils and coreutils are installed in the image.
+SNAPSHOT_HOME() {
+  local DIR="$1"
+  find "$DIR" -mindepth 1 -printf '%P\t%y\t%m\n' |
+    while IFS=$'\t' read -r ENTRY_PATH ENTRY_TYPE ENTRY_MODE; do
+      if [ "$ENTRY_TYPE" = "f" ]; then
+        printf '%s\t%s\t%s\t%s\n' "$ENTRY_PATH" "$ENTRY_TYPE" "$ENTRY_MODE" \
+          "$(sha256sum "$DIR/$ENTRY_PATH" | cut -d' ' -f1)"
+      elif [ "$ENTRY_TYPE" = "l" ]; then
+        printf '%s\t%s\t%s\t-> %s\n' "$ENTRY_PATH" "$ENTRY_TYPE" "$ENTRY_MODE" \
+          "$(readlink "$DIR/$ENTRY_PATH")"
+      else
+        printf '%s\t%s\t%s\n' "$ENTRY_PATH" "$ENTRY_TYPE" "$ENTRY_MODE"
+      fi
+    done | LC_ALL=C sort
+}
+
 echo "=== Scenario: secrets ==="
 
 WORK_DIR=$(mktemp -d /tmp/dotfiles-secrets-XXXX)
 # Cleanup on the failure path too: every home below holds a generated age
 # identity and a plaintext sentinel, and the container outlives this script.
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+# Recorded before anything runs, so group 3's absence claims are about THIS
+# run rather than about whatever the machine already carried. The process home
+# is deliberately not stripped: BUG-08 got its answer wrong precisely when
+# $HOME was a real, different, writable directory, which is what it is here.
+PROC_STORE="$HOME/.local/share/dotfiles-secrets"
+PROC_PLAIN="$HOME/.config/shell/90-secrets.sh"
+PROC_STATE="$HOME/.config/dotfiles/config.yaml"
+PROC_STORE_BEFORE=absent
+PROC_PLAIN_BEFORE=absent
+PROC_STATE_BEFORE=absent
+if [ -e "$PROC_STORE" ]; then PROC_STORE_BEFORE=present; fi
+if [ -e "$PROC_PLAIN" ]; then PROC_PLAIN_BEFORE=present; fi
+if [ -e "$PROC_STATE" ]; then PROC_STATE_BEFORE=present; fi
 
 echo ""
 echo "--- group 1: init, backup and restore round trip against a real age ---"
@@ -169,5 +206,121 @@ if cmp -s "$ORIGINAL" "$PLAIN"; then
 else
   fail "the restored plaintext differs from the original: $(cmp "$ORIGINAL" "$PLAIN" 2>&1 || true)"
 fi
+
+echo ""
+echo "--- group 2: init with no configured recipients is refused (D-10) ---"
+
+NORECIP="$WORK_DIR/home-norecipients"
+mkdir -p "$NORECIP"
+# Deliberately NOT run through SECRETS_FIXTURE: the state this group needs is
+# the one dot init writes on its own, with no secrets block at all.
+if ! dot init --home "$NORECIP" --yes >/dev/null 2>&1; then
+  ABORT "dot init --home $NORECIP failed, so the no-recipients state does not exist"
+fi
+
+NORECIP_STORE="$NORECIP/.local/share/dotfiles-secrets"
+NORECIP_LOG="$WORK_DIR/norecipients.log"
+NORECIP_RC=0
+dot secrets init --home "$NORECIP" --yes > "$NORECIP_LOG" 2>&1 || NORECIP_RC=$?
+cat "$NORECIP_LOG"
+# All three of exit code, wording and absence are asserted. An exit code alone
+# does not tell a refusal from a crash, and a refusal that had already created
+# the store would still be a defect.
+if [ "$NORECIP_RC" -ne 0 ]; then
+  pass "dot secrets init --home refused a state with no recipients (exit $NORECIP_RC)"
+else
+  fail "dot secrets init --home exited 0 on a state with no configured recipients"
+fi
+assert_file_contains "$NORECIP_LOG" "secrets.age_recipients" \
+  "the refusal names the setting an operator has to fix"
+if [ -e "$NORECIP_STORE" ]; then
+  fail "the refused run left a secrets store behind at $NORECIP_STORE"
+else
+  pass "the refused run created no secrets store"
+fi
+
+echo ""
+echo "--- group 3: --home is honoured and the invoking user's home is untouched (BUG-08) ---"
+
+if [ "$PROC_STORE_BEFORE" = absent ]; then
+  pass "the invoking user's home carried no secrets store before group 1, so the absence claims below are about this run"
+else
+  fail "the invoking user's home already carried $PROC_STORE before group 1; a leak cannot be told apart from pre-existing state"
+fi
+
+# Absence in the process home, not only presence in the target home: a run that
+# wrote to BOTH homes would sail through a presence check alone.
+if [ -e "$PROC_STORE" ]; then
+  fail "the --home round trip leaked a secrets store into the invoking user's home at $PROC_STORE"
+else
+  pass "the invoking user's home carries no secrets store after a full --home round trip"
+fi
+if [ "$PROC_PLAIN_BEFORE" = present ]; then
+  fail "the invoking user's home already carried $PROC_PLAIN before group 1; the leak claim below cannot be made"
+elif [ -e "$PROC_PLAIN" ]; then
+  fail "the --home restore wrote decrypted plaintext into the invoking user's home at $PROC_PLAIN"
+else
+  pass "the --home restore wrote no plaintext into the invoking user's home"
+fi
+# The backup subcommand records its last-backup entry through the session, so
+# the state file is a second, independent seam the same defect would show at.
+if [ "$PROC_STATE_BEFORE" = present ]; then
+  fail "the invoking user's home already carried $PROC_STATE before group 1; the leak claim below cannot be made"
+elif [ -e "$PROC_STATE" ]; then
+  fail "a --home run wrote state into the invoking user's home at $PROC_STATE"
+else
+  pass "no --home run wrote state into the invoking user's home"
+fi
+
+assert_file_exists "$ARCHIVE" "the archive is in the TARGET home's store"
+assert_file_exists "$PLAIN" "the restored plaintext is in the TARGET home"
+assert_file_contains "$SANDBOX/.config/dotfiles/config.yaml" "last_backup" \
+  "the last-backup record landed in the TARGET home's state file"
+
+echo ""
+echo "--- group 4: init --dry-run leaves a configured home byte-identical (BUG-13) ---"
+
+# A configured home rather than an empty one: secrets init reaches its
+# interesting paths only when recipients and a plaintext both exist.
+DRYHOME="$WORK_DIR/home-dryrun"
+SECRETS_FIXTURE "$DRYHOME"
+DRY_BEFORE="$WORK_DIR/dryrun-before"
+DRY_AFTER="$WORK_DIR/dryrun-after"
+SNAPSHOT_HOME "$DRYHOME" > "$DRY_BEFORE"
+assert_exit_code 0 dot secrets init --home "$DRYHOME" --yes --dry-run
+SNAPSHOT_HOME "$DRYHOME" > "$DRY_AFTER"
+
+DRY_DIFFS=0
+while IFS= read -r LINE; do
+  [ -n "$LINE" ] || continue
+  DRY_DIFFS=$((DRY_DIFFS + 1))
+  fail "dot secrets init --dry-run changed a configured home (differing snapshot line: $LINE)"
+done < <(LC_ALL=C diff "$DRY_BEFORE" "$DRY_AFTER" | grep -E '^[<>]' || true)
+if [ "$DRY_DIFFS" -eq 0 ]; then
+  pass "dot secrets init --dry-run left the configured home byte-identical, modes and symlink targets alike"
+fi
+
+echo ""
+echo "--- group 5: the read surfaces report the archive that exists ---"
+
+STATUS_LOG="$WORK_DIR/status.log"
+STATUS_RC=0
+dot secrets status --home "$SANDBOX" > "$STATUS_LOG" 2>&1 || STATUS_RC=$?
+if [ "$STATUS_RC" -eq 0 ]; then
+  pass "dot secrets status --home exited 0"
+else
+  fail "dot secrets status --home exited $STATUS_RC"
+fi
+assert_file_contains "$STATUS_LOG" "90-secrets.sh.age" "status names the archive that exists"
+
+LIST_LOG="$WORK_DIR/list.log"
+LIST_RC=0
+dot secrets list --home "$SANDBOX" > "$LIST_LOG" 2>&1 || LIST_RC=$?
+if [ "$LIST_RC" -eq 0 ]; then
+  pass "dot secrets list --home exited 0"
+else
+  fail "dot secrets list --home exited $LIST_RC"
+fi
+assert_file_contains "$LIST_LOG" "90-secrets.sh.age" "list names the archive that exists"
 
 report
