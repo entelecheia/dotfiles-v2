@@ -978,9 +978,10 @@ func (e *Engine) ResolveLatest() (string, error) {
 	})
 }
 
-// Prune removes older snapshots, keeping the newest `keep` (including
+// Prune removes older snapshots, keeping the newest `Keep` (including
 // whatever latest.txt points at).
-func (e *Engine) Prune(keep int) ([]string, error) {
+func (e *Engine) Prune(opts PruneOptions) ([]string, error) {
+	keep := opts.Keep
 	if keep < 1 {
 		keep = 1
 	}

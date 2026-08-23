@@ -1075,7 +1075,7 @@ func TestAIPruneKeepsNewest(t *testing.T) {
 		dir := eng.VersionPath(v)
 		mustWrite(t, filepath.Join(dir, "meta.yaml"), []byte("version: "+v+"\nhostname: testhost\n"))
 	}
-	removed, err := eng.Prune(1)
+	removed, err := eng.Prune(PruneOptions{Keep: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

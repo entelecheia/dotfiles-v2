@@ -1,19 +1,14 @@
 package cli
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
-	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
-	execrun "github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
@@ -105,7 +100,7 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 		if entry.Auth {
 			label += "  (auth)"
 		}
-		if aiEntryManagedByAgents(entry.Path) {
+		if aisettings.ManagedByAgents(entry.Path) {
 			label += "  (agents SSOT)"
 		}
 		p.Bullet(marker, fmt.Sprintf("%-8s %s", ui.StyleValue.Render(entry.Tool), label))
@@ -116,6 +111,23 @@ func runAIList(cmd *cobra.Command, _ []string) error {
 		p.Line("  %s", ui.StyleHint.Render(strings.Join(apps, ", ")))
 	}
 	return nil
+}
+
+func aiCaskTokens() ([]string, error) {
+	cat, err := catalog.LoadMacApps()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, group := range cat.Groups {
+		if group.Name != "AI" {
+			continue
+		}
+		for _, app := range group.Apps {
+			out = append(out, app.Token)
+		}
+	}
+	return out, nil
 }
 
 func newAIStatusCmd() *cobra.Command {
@@ -142,17 +154,18 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	eng.Hostname = host
+	report := eng.StatusReport(aisettings.StatusOptions{IncludeAuth: includeAuth})
 	p := printerFrom(cmd)
 	p.Header("AI Config Status")
-	p.KV("Host", eng.Hostname)
-	p.KV("Backup", eng.HostRoot())
-	if latest, err := eng.ResolveLatest(); err == nil {
-		p.KV("Latest", latest)
+	p.KV("Host", report.Hostname)
+	p.KV("Backup", report.HostRoot)
+	if report.LatestKnown {
+		p.KV("Latest", report.Latest)
 	} else {
 		p.KV("Latest", "(none)")
 	}
 	p.Section("Paths")
-	for _, st := range eng.Status(includeAuth) {
+	for _, st := range report.Entries {
 		live := "·"
 		backup := "·"
 		if st.PresentLive {
@@ -169,875 +182,13 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 			marker = ui.StyleWarning.Render(ui.MarkWarn)
 		}
 		label := st.Entry.Path
-		if aiEntryManagedByAgents(st.Entry.Path) {
+		if st.ManagedByAgents {
 			label += "  (agents SSOT)"
 		}
 		p.Bullet(marker, fmt.Sprintf("%-8s live:%s backup:%s  %s",
 			ui.StyleValue.Render(st.Entry.Tool), live, backup, label))
 	}
 	return nil
-}
-
-func newAIBackupCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "backup",
-		Short: "Create a versioned AI settings snapshot",
-		Args:  cobra.NoArgs,
-		RunE:  runAIBackup,
-	}
-	c.Flags().String("to", "", "Backup root (overrides configured BackupRoot)")
-	c.Flags().String("tag", "", "Human-friendly label stored in meta.yaml")
-	c.Flags().Bool("include-auth", false, "Include auth/local-secret files")
-	return c
-}
-
-func runAIBackup(cmd *cobra.Command, _ []string) error {
-	includeAuth, _ := cmd.Flags().GetBool("include-auth")
-	tag, _ := cmd.Flags().GetString("tag")
-	eng, err := newAIEngine(cmd)
-	if err != nil {
-		return err
-	}
-	sum, err := eng.Backup(aisettings.BackupOptions{Tag: tag, IncludeAuth: includeAuth})
-	if err != nil {
-		return err
-	}
-	auditAIEventBestEffort(cmd, "ai.backup", aiSummaryPayload(sum))
-	printAISummary(printerFrom(cmd), "AI Backup", sum)
-	return nil
-}
-
-func newAIRestoreCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "restore",
-		Short: "Restore AI settings from a versioned snapshot",
-		Args:  cobra.NoArgs,
-		RunE:  runAIRestore,
-	}
-	c.Flags().String("from", "", "Backup root (overrides configured BackupRoot)")
-	c.Flags().String("host", "", "Source hostname to restore from (default: this host)")
-	c.Flags().String("version", "", `Specific version to restore, or "latest" (default: latest)`)
-	c.Flags().Bool("include-auth", false, "Restore auth/local-secret files from the snapshot")
-	c.Flags().Bool("reapply-agents", false, "After restore, reapply the agents SSOT to tool targets")
-	return c
-}
-
-func runAIRestore(cmd *cobra.Command, _ []string) error {
-	yes, _ := cmd.Flags().GetBool("yes")
-	includeAuth, _ := cmd.Flags().GetBool("include-auth")
-	version, _ := cmd.Flags().GetString("version")
-	reapplyAgents, _ := cmd.Flags().GetBool("reapply-agents")
-	eng, err := newAIEngine(cmd)
-	if err != nil {
-		return err
-	}
-	host, err := hostOverride(cmd, eng.Hostname)
-	if err != nil {
-		return err
-	}
-	eng.Hostname = host
-	p := printerFrom(cmd)
-	if version == "" || version == "latest" {
-		v, err := eng.ResolveLatest()
-		if err != nil {
-			return err
-		}
-		version = v
-	}
-	if !yes {
-		p.Line("About to restore AI settings from snapshot %s.", version)
-		ok, err := ui.ConfirmBool("Continue?", false, false)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			p.Line("aborted")
-			return nil
-		}
-	}
-	sum, err := eng.Restore(aisettings.RestoreOptions{Version: version, IncludeAuth: includeAuth})
-	if err != nil {
-		return err
-	}
-	auditAIEventBestEffort(cmd, "ai.restore", aiSummaryPayload(sum))
-	printAISummary(p, "AI Restore", sum)
-	if sum.PreBackupPath != "" {
-		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(sum.PreBackupPath))
-	}
-	if reapplyAgents {
-		mgr := newAgentsManagerFromCmd(cmd)
-		dryRun, _ := cmd.Flags().GetBool("dry-run")
-		result, err := mgr.Apply(aisettings.ApplyOptions{Tools: mgr.DefaultApplyTools(), DryRun: dryRun})
-		if err != nil {
-			return err
-		}
-		if err := auditAIEvent(cmd, "ai.agents.apply", agentsApplyPayload(result)); err != nil {
-			return err
-		}
-		p.Section("Agents SSOT Reapply")
-		printAgentsApplyResult(p, result)
-	}
-	return nil
-}
-
-func newAIExportCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "export <file.tar.gz>",
-		Short: "Export AI settings to a portable tar.gz archive",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runAIExport,
-	}
-	c.Flags().String("tag", "", "Human-friendly label stored in meta.yaml")
-	c.Flags().Bool("include-auth", false, "Include auth/local-secret files")
-	return c
-}
-
-func runAIExport(cmd *cobra.Command, args []string) error {
-	includeAuth, _ := cmd.Flags().GetBool("include-auth")
-	tag, _ := cmd.Flags().GetString("tag")
-	eng, err := newAIEngine(cmd)
-	if err != nil {
-		return err
-	}
-	sum, err := eng.Export(args[0], aisettings.BackupOptions{Tag: tag, IncludeAuth: includeAuth})
-	if err != nil {
-		return err
-	}
-	auditAIEventBestEffort(cmd, "ai.export", aiSummaryPayload(sum))
-	printAISummary(printerFrom(cmd), "AI Export", sum)
-	return nil
-}
-
-func newAIImportCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "import <file.tar.gz>",
-		Short: "Import AI settings from a portable tar.gz archive",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runAIImport,
-	}
-	c.Flags().Bool("include-auth", false, "Import auth/local-secret files from the archive")
-	return c
-}
-
-func runAIImport(cmd *cobra.Command, args []string) error {
-	yes, _ := cmd.Flags().GetBool("yes")
-	includeAuth, _ := cmd.Flags().GetBool("include-auth")
-	eng, err := newAIEngine(cmd)
-	if err != nil {
-		return err
-	}
-	p := printerFrom(cmd)
-	if !yes {
-		p.Line("About to import AI settings from %s.", args[0])
-		ok, err := ui.ConfirmBool("Continue?", false, false)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			p.Line("aborted")
-			return nil
-		}
-	}
-	sum, err := eng.Import(args[0], aisettings.RestoreOptions{IncludeAuth: includeAuth})
-	if err != nil {
-		return err
-	}
-	auditAIEventBestEffort(cmd, "ai.import", aiSummaryPayload(sum))
-	printAISummary(p, "AI Import", sum)
-	if sum.PreBackupPath != "" {
-		p.Line("  %s  %s", ui.StyleKey.Render("Previous:"), ui.StyleHint.Render(sum.PreBackupPath))
-	}
-	return nil
-}
-
-func newAIHudCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "hud",
-		Short: "Manage dot-native Claude Code and Codex HUD status lines",
-	}
-	c.AddCommand(newAIHudStatusCmd())
-	c.AddCommand(newAIHudApplyCmd())
-	return c
-}
-
-func newAIHudStatusCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "status",
-		Short: "Show Claude Code and Codex HUD status",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			tools, _ := cmd.Flags().GetString("tool")
-			mgr := newHUDManagerFromCmd(cmd)
-			items, err := mgr.Status(parseAgentToolIDs(tools))
-			if err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("AI HUD")
-			printHUDItems(p, items)
-			return nil
-		},
-	}
-	c.Flags().String("tool", "", "Comma-separated tool IDs (claude,codex)")
-	return c
-}
-
-func newAIHudApplyCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "apply",
-		Short: "Apply dot-native HUD settings to Claude Code and Codex",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			tools, _ := cmd.Flags().GetString("tool")
-			persist, _ := cmd.Flags().GetBool("persist")
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			mgr := newHUDManagerFromCmd(cmd)
-			force, _ := cmd.Flags().GetBool("force")
-			result, err := mgr.Apply(aisettings.HUDOptions{Tools: parseAgentToolIDs(tools), DryRun: dryRun, Force: force})
-			if err != nil {
-				return err
-			}
-			if persist && !dryRun {
-				if err := persistAIHUD(cmd); err != nil {
-					return err
-				}
-			}
-			if err := auditAIEvent(cmd, "ai.hud.apply", hudApplyPayload(result, persist)); err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("AI HUD Apply")
-			printHUDApplyResult(p, result)
-			if persist {
-				p.KV("Persist", fmt.Sprintf("%v", !dryRun))
-			}
-			return nil
-		},
-	}
-	c.Flags().String("tool", "", "Comma-separated tool IDs (claude,codex)")
-	c.Flags().Bool("persist", false, "Persist modules.ai.hud=true for future dot apply runs")
-	c.Flags().Bool("force", false, "Take over a statusLine currently owned by another tool")
-	return c
-}
-
-func newAICoauthoredGuardCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "coauthor-guard",
-		Short: "Warn or block AI-added Co-authored commit trailers",
-	}
-	c.AddCommand(newAICoauthoredGuardStatusCmd())
-	c.AddCommand(newAICoauthoredGuardApplyCmd())
-	return c
-}
-
-func newAICoauthoredGuardStatusCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "status",
-		Short: "Show coauthor guard status",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			mode, _ := cmd.Flags().GetString("mode")
-			mgr := newCoauthorGuardManagerFromCmd(cmd)
-			st, err := mgr.Status(mode)
-			if err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("Coauthor Guard")
-			printCoauthorGuardStatus(p, st)
-			return nil
-		},
-	}
-	c.Flags().String("mode", aisettings.CoauthorGuardWarn, "Guard mode: off, warn, or block")
-	return c
-}
-
-func newAICoauthoredGuardApplyCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "apply",
-		Short: "Apply coauthor guard instruction and Git commit-msg hook",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			mode, _ := cmd.Flags().GetString("mode")
-			persist, _ := cmd.Flags().GetBool("persist")
-			forceHooksPath, _ := cmd.Flags().GetBool("force-hooks-path")
-			applyAgents, _ := cmd.Flags().GetBool("apply-agents")
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			mgr := newCoauthorGuardManagerFromCmd(cmd)
-			result, err := mgr.Apply(aisettings.CoauthorGuardOptions{
-				Mode:           mode,
-				DryRun:         dryRun,
-				ForceHooksPath: forceHooksPath,
-				ApplyAgents:    applyAgents,
-			})
-			if err != nil {
-				return err
-			}
-			if persist && !dryRun {
-				if err := persistCoauthorGuard(cmd, result.Status.Mode); err != nil {
-					return err
-				}
-			}
-			if err := auditAIEvent(cmd, "ai.coauthor_guard.apply", coauthorGuardPayload(result, persist)); err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("Coauthor Guard Apply")
-			printCoauthorGuardStatus(p, result.Status)
-			if result.HookChanged {
-				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "hook updated")
-			}
-			if result.ConfigChanged {
-				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "git hooksPath updated")
-			}
-			if result.AgentsChanged {
-				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "AGENTS instruction updated")
-			}
-			if result.AgentsApplied {
-				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "agent targets reapplied")
-			}
-			if persist {
-				p.KV("Persist", fmt.Sprintf("%v", !dryRun))
-			}
-			return nil
-		},
-	}
-	c.Flags().String("mode", aisettings.CoauthorGuardWarn, "Guard mode: off, warn, or block")
-	c.Flags().Bool("persist", false, "Persist modules.git.coauthor_guard for future dot apply runs")
-	c.Flags().Bool("force-hooks-path", false, "Replace an existing non-dotfiles core.hooksPath")
-	c.Flags().Bool("apply-agents", false, "Reapply agents SSOT to live tool targets after updating the instruction")
-	return c
-}
-
-func newAIAgentsCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "agents",
-		Short: "Manage the shared AI agents instruction SSOT",
-		Long:  "Manage ~/.config/dotfiles/agents/AGENTS.md and copy-render it to Claude, Codex, Cursor, and optional AI coding tool targets.",
-	}
-	c.AddCommand(newAIAgentsListCmd(false))
-	c.AddCommand(newAIAgentsListCmd(true))
-	c.AddCommand(newAIAgentsInitCmd())
-	c.AddCommand(newAIAgentsAuthorCmd())
-	c.AddCommand(newAIAgentsShowCmd())
-	c.AddCommand(newAIAgentsEditCmd())
-	c.AddCommand(newAIAgentsApplyCmd())
-	c.AddCommand(newAIAgentsPullCmd())
-	c.AddCommand(newAIAgentsDiffCmd())
-	c.AddCommand(newAIAgentsPathCmd())
-	return c
-}
-
-func newAIAgentsListCmd(verbose bool) *cobra.Command {
-	use := "list"
-	short := "List registered agents targets and drift"
-	if verbose {
-		use = "status"
-		short = "Show detailed agents SSOT drift status"
-	}
-	return &cobra.Command{
-		Use:   use,
-		Short: short,
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			mgr := newAgentsManagerFromCmd(cmd)
-			statuses, err := mgr.Status()
-			if err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("AI Agents SSOT")
-			p.KV("SSOT", mgr.SSOTPath())
-			p.Section("Targets")
-			for _, st := range statuses {
-				marker, style := agentDriftMarker(st.Drift)
-				opt := ""
-				if st.Tool.Optional {
-					opt = " optional"
-				}
-				overlay := ""
-				if st.OverlayExists {
-					overlay = " overlay"
-				}
-				p.Bullet(style.Render(marker), fmt.Sprintf("%-8s %-14s %s%s%s",
-					ui.StyleValue.Render(st.Tool.ID), st.Drift, st.TargetPath, opt, overlay))
-				if verbose {
-					p.Line("      rendered:%s target:%s", shortHash(st.RenderedHash), shortHash(st.TargetHash))
-				}
-			}
-			return nil
-		},
-	}
-}
-
-func newAIAgentsInitCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "init",
-		Short: "Create the shared agents SSOT",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			from, _ := cmd.Flags().GetString("from-current")
-			yes, _ := cmd.Flags().GetBool("yes")
-			force, _ := cmd.Flags().GetBool("force")
-			mgr := newAgentsManagerFromCmd(cmd)
-			res, err := mgr.Init(aisettings.InitOptions{FromCurrent: from, Yes: yes, Force: force})
-			if err != nil {
-				return err
-			}
-			if err := auditAIEvent(cmd, "ai.agents.init", map[string]any{
-				"path":        res.Path,
-				"created":     res.Created,
-				"from_tool":   res.FromTool,
-				"backup_path": res.BackupPath,
-			}); err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("AI Agents Init")
-			p.KV("SSOT", res.Path)
-			if res.FromTool != "" {
-				p.KV("From", res.FromTool)
-			}
-			if res.BackupPath != "" {
-				p.KV("Backup", res.BackupPath)
-			}
-			if res.Created {
-				p.Success("created")
-			} else {
-				p.Line("already exists")
-			}
-			return nil
-		},
-	}
-	c.Flags().String("from-current", "", "Seed AGENTS.md from an existing tool target")
-	c.Flags().Bool("force", false, "Overwrite an existing SSOT after backing it up")
-	return c
-}
-
-func newAIAgentsAuthorCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "author",
-		Short: "Interactively or programmatically edit SSOT sections",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			from, _ := cmd.Flags().GetString("from-current")
-			nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
-			section, _ := cmd.Flags().GetString("section")
-			value, _ := cmd.Flags().GetString("value")
-			yes, _ := cmd.Flags().GetBool("yes")
-			mgr := newAgentsManagerFromCmd(cmd)
-			res, err := mgr.Author(aisettings.AuthorOptions{
-				FromCurrent:    from,
-				NonInteractive: nonInteractive,
-				Section:        section,
-				Value:          value,
-				Yes:            yes,
-			})
-			if err != nil {
-				return err
-			}
-			if err := auditAIEvent(cmd, "ai.agents.author", map[string]any{
-				"path":     res.Path,
-				"changed":  res.Changed,
-				"sections": res.Sections,
-			}); err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("AI Agents Author")
-			p.KV("SSOT", res.Path)
-			if len(res.Sections) > 0 {
-				p.KV("Sections", strings.Join(res.Sections, ", "))
-			}
-			if res.Changed {
-				p.Success("updated")
-			} else {
-				p.Line("no changes")
-			}
-			return nil
-		},
-	}
-	c.Flags().String("from-current", "", "Pull from a live tool target before authoring")
-	c.Flags().Bool("non-interactive", false, "Update one section without the wizard")
-	c.Flags().String("section", "", "Section name for --non-interactive")
-	c.Flags().String("value", "", "Section value for --non-interactive")
-	return c
-}
-
-func newAIAgentsShowCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "show",
-		Short: "Print the raw or rendered agents SSOT",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			rendered, _ := cmd.Flags().GetString("rendered")
-			withLineNumbers, _ := cmd.Flags().GetBool("with-line-numbers")
-			mgr := newAgentsManagerFromCmd(cmd)
-			out, err := mgr.Show(aisettings.ShowOptions{RenderedTool: rendered, WithLineNumbers: withLineNumbers})
-			if err != nil {
-				return err
-			}
-			fmt.Fprint(cmd.OutOrStdout(), out)
-			if !strings.HasSuffix(out, "\n") {
-				fmt.Fprintln(cmd.OutOrStdout())
-			}
-			return nil
-		},
-	}
-	c.Flags().String("rendered", "", "Print SSOT rendered for one tool")
-	c.Flags().Bool("with-line-numbers", false, "Prefix output with line numbers")
-	return c
-}
-
-func newAIAgentsEditCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "edit",
-		Short: "Open $EDITOR on the shared AGENTS.md",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			mgr := newAgentsManagerFromCmd(cmd)
-			editor := os.Getenv("EDITOR")
-			if err := mgr.Edit(context.Background(), editor); err != nil {
-				return err
-			}
-			return auditAIEvent(cmd, "ai.agents.edit", map[string]any{"path": mgr.SSOTPath()})
-		},
-	}
-}
-
-func newAIAgentsApplyCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "apply",
-		Short: "Copy-render the SSOT to agent tool targets",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			toolFlag, _ := cmd.Flags().GetString("tool")
-			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			force, _ := cmd.Flags().GetBool("force")
-			mgr := newAgentsManagerFromCmd(cmd)
-			ids := parseAgentToolIDs(toolFlag)
-			if len(ids) == 0 {
-				ids = mgr.DefaultApplyTools()
-			}
-			result, err := mgr.Apply(aisettings.ApplyOptions{Tools: ids, DryRun: dryRun, Force: force})
-			if err != nil {
-				return err
-			}
-			if err := auditAIEvent(cmd, "ai.agents.apply", agentsApplyPayload(result)); err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("AI Agents Apply")
-			printAgentsApplyResult(p, result)
-			return nil
-		},
-	}
-	c.Flags().String("tool", "", "Comma-separated tool IDs to apply")
-	c.Flags().Bool("force", false, "Overwrite a target changed outside the last dot-managed apply after backing it up")
-	return c
-}
-
-func newAIAgentsPullCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "pull",
-		Short: "Copy one live tool target back into the SSOT",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			from, _ := cmd.Flags().GetString("from")
-			yes, _ := cmd.Flags().GetBool("yes")
-			mgr := newAgentsManagerFromCmd(cmd)
-			res, err := mgr.Pull(aisettings.PullOptions{FromTool: from, Yes: yes})
-			if err != nil {
-				return err
-			}
-			if err := auditAIEvent(cmd, "ai.agents.pull", map[string]any{
-				"from_tool":   res.FromTool,
-				"source_path": res.SourcePath,
-				"ssot_path":   res.SSOTPath,
-				"backup_path": res.BackupPath,
-				"changed":     res.Changed,
-			}); err != nil {
-				return err
-			}
-			p := printerFrom(cmd)
-			p.Header("AI Agents Pull")
-			p.KV("From", res.SourcePath)
-			p.KV("SSOT", res.SSOTPath)
-			if res.BackupPath != "" {
-				p.KV("Backup", res.BackupPath)
-			}
-			if res.Changed {
-				p.Success("updated")
-			} else {
-				p.Line("already matches")
-			}
-			return nil
-		},
-	}
-	c.Flags().String("from", "", "Tool ID to pull from")
-	return c
-}
-
-func newAIAgentsDiffCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "diff",
-		Short: "Show rendered-vs-live diff for agents targets",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			toolFlag, _ := cmd.Flags().GetString("tool")
-			mgr := newAgentsManagerFromCmd(cmd)
-			ids := parseAgentToolIDs(toolFlag)
-			if len(ids) == 0 {
-				ids = mgr.DefaultApplyTools()
-			}
-			for _, id := range ids {
-				diff, err := mgr.Diff(id)
-				if err != nil {
-					return err
-				}
-				if diff == "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s: in-sync\n", id)
-					continue
-				}
-				fmt.Fprint(cmd.OutOrStdout(), diff)
-			}
-			return nil
-		},
-	}
-	c.Flags().String("tool", "", "Comma-separated tool IDs to diff")
-	return c
-}
-
-func newAIAgentsPathCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "path",
-		Short: "Print the absolute agents SSOT directory",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			mgr := newAgentsManagerFromCmd(cmd)
-			fmt.Fprintln(cmd.OutOrStdout(), mgr.SSOTDirPath())
-			return nil
-		},
-	}
-}
-
-func printAgentsApplyResult(p *Printer, result *aisettings.ApplyResult) {
-	for _, warning := range result.Warnings {
-		p.Warn("%s", warning)
-	}
-	changed := 0
-	for _, item := range result.Items {
-		marker := ui.StyleSuccess.Render(ui.MarkPresent)
-		state := "in-sync"
-		if item.Changed {
-			changed++
-			marker = ui.StyleHint.Render(ui.MarkPending)
-			state = "would write"
-			if !result.DryRun {
-				state = "wrote"
-			}
-		}
-		p.Bullet(marker, fmt.Sprintf("%-8s %-10s %s", ui.StyleValue.Render(item.ToolID), state, item.TargetPath))
-		if result.DryRun && item.Diff != "" {
-			p.Line("%s", item.Diff)
-		}
-	}
-	if changed == 0 {
-		p.Success("all selected targets already match")
-	}
-}
-
-func newAgentsManagerFromCmd(cmd *cobra.Command) *aisettings.AgentsManager {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	home, _ := os.UserHomeDir()
-	if over, _ := cmd.Flags().GetString("home"); over != "" {
-		home = over
-	}
-	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelWarn}))
-	mgr := aisettings.NewAgentsManager(execrun.NewRunner(dryRun, logger), home)
-	mgr.Out = cmd.OutOrStdout()
-	return mgr
-}
-
-func newHUDManagerFromCmd(cmd *cobra.Command) *aisettings.HUDManager {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	home, _ := os.UserHomeDir()
-	if over, _ := cmd.Flags().GetString("home"); over != "" {
-		home = over
-	}
-	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return aisettings.NewHUDManager(execrun.NewRunner(dryRun, logger), home)
-}
-
-func newCoauthorGuardManagerFromCmd(cmd *cobra.Command) *aisettings.CoauthorGuardManager {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	home, _ := os.UserHomeDir()
-	if over, _ := cmd.Flags().GetString("home"); over != "" {
-		home = over
-	}
-	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return aisettings.NewCoauthorGuardManager(execrun.NewRunner(dryRun, logger), home)
-}
-
-func printHUDItems(p *Printer, items []aisettings.HUDItem) {
-	for _, item := range items {
-		marker, style := agentDriftMarker(item.Drift)
-		label := fmt.Sprintf("%-8s %-12s %s", ui.StyleValue.Render(item.ToolID), item.Drift, item.TargetPath)
-		if item.Detail != "" {
-			label += "  " + ui.StyleHint.Render(item.Detail)
-		}
-		p.Bullet(style.Render(marker), label)
-	}
-}
-
-func printHUDApplyResult(p *Printer, result *aisettings.HUDResult) {
-	changed, conflicts := 0, 0
-	for _, item := range result.Items {
-		marker := ui.StyleSuccess.Render(ui.MarkPresent)
-		state := "in-sync"
-		switch {
-		case item.Changed:
-			changed++
-			marker = ui.StyleHint.Render(ui.MarkPending)
-			state = "wrote"
-			if result.DryRun {
-				state = "would write"
-			}
-		case item.Drift == "out-of-sync":
-			// Not written and still drifted: the target is owned by another
-			// tool. Rendering this as in-sync would report success for a
-			// change that did not happen.
-			conflicts++
-			marker = ui.StyleWarning.Render(ui.MarkWarn)
-			state = "conflict"
-		}
-		label := fmt.Sprintf("%-8s %-12s %s", ui.StyleValue.Render(item.ToolID), state, item.TargetPath)
-		if item.Detail != "" {
-			label += "  " + ui.StyleHint.Render(item.Detail)
-		}
-		p.Bullet(marker, label)
-	}
-	switch {
-	case conflicts > 0:
-		p.Warn("%d HUD target(s) left untouched: owned by another tool. Rerun with --force to take over.", conflicts)
-	case changed == 0:
-		p.Success("all selected HUD targets already match")
-	}
-}
-
-func printCoauthorGuardStatus(p *Printer, st aisettings.CoauthorGuardStatus) {
-	p.KV("Mode", st.Mode)
-	p.KV("Hook", st.HookPath)
-	p.KV("Git config", st.GitConfigPath)
-	p.KV("AGENTS", st.AgentsPath)
-	p.Section("Drift")
-	for _, row := range []struct {
-		name  string
-		drift string
-	}{
-		{"hook", st.HookDrift},
-		{"hooksPath", st.HooksPathDrift},
-		{"agents", st.AgentsDrift},
-	} {
-		marker, style := agentDriftMarker(row.drift)
-		p.Bullet(style.Render(marker), fmt.Sprintf("%-10s %s", row.name, row.drift))
-	}
-	if st.HooksPath != "" {
-		p.KV("Current hooksPath", st.HooksPath)
-	}
-	if st.Conflict != "" {
-		p.Warn("%s", st.Conflict)
-	}
-}
-
-func persistAIHUD(cmd *cobra.Command) error {
-	state, err := loadStateForCmd(cmd)
-	if err != nil {
-		return err
-	}
-	state.Modules.AI.Enabled = true
-	state.Modules.AI.HUD = true
-	return saveStateForCmd(cmd, state)
-}
-
-func persistCoauthorGuard(cmd *cobra.Command, mode string) error {
-	state, err := loadStateForCmd(cmd)
-	if err != nil {
-		return err
-	}
-	state.Modules.AI.Enabled = true
-	state.Modules.Git.CoauthorGuard = mode
-	return saveStateForCmd(cmd, state)
-}
-
-func loadStateForCmd(cmd *cobra.Command) (*config.UserState, error) {
-	if homeOverride, _ := cmd.Flags().GetString("home"); homeOverride != "" {
-		return config.LoadStateForHome(homeOverride)
-	}
-	return config.LoadState()
-}
-
-func saveStateForCmd(cmd *cobra.Command, state *config.UserState) error {
-	if homeOverride, _ := cmd.Flags().GetString("home"); homeOverride != "" {
-		return config.SaveStateForHome(homeOverride, state)
-	}
-	return config.SaveState(state)
-}
-
-func parseAgentToolIDs(value string) []string {
-	var ids []string
-	for _, part := range strings.Split(value, ",") {
-		part = strings.ToLower(strings.TrimSpace(part))
-		if part != "" {
-			ids = append(ids, part)
-		}
-	}
-	return ids
-}
-
-func agentDriftMarker(drift string) (string, interface{ Render(...string) string }) {
-	switch drift {
-	case "in-sync":
-		return ui.MarkPresent, ui.StyleSuccess
-	case "out-of-sync":
-		return ui.MarkWarn, ui.StyleWarning
-	case "target-missing", "ssot-missing":
-		return ui.MarkAbsent, ui.StyleHint
-	default:
-		return ui.MarkPartial, ui.StyleHint
-	}
-}
-
-func shortHash(hash string) string {
-	if hash == "" {
-		return "-"
-	}
-	if len(hash) <= 12 {
-		return hash
-	}
-	return hash[:12]
-}
-
-func aiEntryManagedByAgents(path string) bool {
-	if path == aisettings.AgentsSSOTRelPath {
-		return true
-	}
-	for _, tool := range aisettings.RegisteredAgentTools() {
-		target := strings.TrimPrefix(tool.TargetPath, "~/")
-		if path == target {
-			return true
-		}
-	}
-	return false
-}
-
-// auditAIEventBestEffort appends to the audit log but never fails the
-// command: the operation already succeeded, and an unwritable audit log
-// must not turn that success into an error.
-func auditAIEventBestEffort(cmd *cobra.Command, typ string, payload map[string]any) {
-	if err := auditAIEvent(cmd, typ, payload); err != nil {
-		printerFrom(cmd).Warn("  audit log write failed: %v", err)
-	}
 }
 
 func newAIPruneCmd() *cobra.Command {
@@ -1067,17 +218,17 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 	eng.Hostname = host
 	p := printerFrom(cmd)
 
-	all, err := eng.List()
+	opts := aisettings.PruneOptions{Keep: keep}
+	plan, err := eng.PlanPrune(opts)
 	if err != nil {
 		return err
 	}
-	if len(all) <= keep {
-		p.Line("Nothing to prune (%d snapshots <= keep=%d).", len(all), keep)
+	if plan.Delete <= 0 {
+		p.Line("Nothing to prune (%d snapshots <= keep=%d).", plan.Total, plan.Keep)
 		return nil
 	}
-	toDelete := len(all) - keep
 	if !yes {
-		p.Line("About to delete %d snapshot(s) under %s.", toDelete, eng.HostRoot())
+		p.Line("About to delete %d snapshot(s) under %s.", plan.Delete, plan.HostRoot)
 		ok, err := ui.ConfirmBool("Continue?", false, false)
 		if err != nil {
 			return err
@@ -1087,7 +238,7 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 			return nil
 		}
 	}
-	removed, err := eng.Prune(keep)
+	removed, err := eng.Prune(opts)
 	if err != nil {
 		return err
 	}
@@ -1096,82 +247,4 @@ func runAIPrune(cmd *cobra.Command, _ []string) error {
 		p.Line("  - %s", v)
 	}
 	return nil
-}
-
-func newAIEngine(cmd *cobra.Command) (*aisettings.Engine, error) {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	homeOverride, _ := cmd.Flags().GetString("home")
-	var state *config.UserState
-	var err error
-	if homeOverride != "" {
-		state, err = config.LoadStateForHome(homeOverride)
-	} else {
-		state, err = config.LoadState()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load state: %w", err)
-	}
-	home, _ := os.UserHomeDir()
-	if homeOverride != "" {
-		home = homeOverride
-	}
-	root := resolveBackupRoot(cmd, state, home)
-	hostname, _ := os.Hostname()
-	if idx := strings.Index(hostname, "."); idx > 0 {
-		hostname = hostname[:idx]
-	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return &aisettings.Engine{
-		Runner:   execrun.NewRunner(dryRun, logger),
-		HomeDir:  home,
-		Root:     root,
-		Hostname: hostname,
-		User:     os.Getenv("USER"),
-	}, nil
-}
-
-func printAISummary(p *Printer, title string, sum *aisettings.Summary) {
-	p.Header(title + " Summary")
-	if sum.Version != "" {
-		p.KV("Version", sum.Version)
-	}
-	if sum.Path != "" {
-		p.KV("Path", sum.Path)
-	}
-	p.Section("Entries")
-	for _, entry := range sum.Entries {
-		if entry.Skipped > 0 {
-			p.Bullet(ui.StyleHint.Render(ui.MarkPartial), fmt.Sprintf("%-8s kept live copy (move ~/%s aside first to restore from snapshot)",
-				ui.StyleValue.Render(entry.Tool), entry.Path))
-			continue
-		}
-		marker := ui.StyleHint.Render(ui.MarkPartial)
-		if entry.Copied > 0 {
-			marker = ui.StyleSuccess.Render(ui.MarkPresent)
-		}
-		if entry.Auth {
-			marker = ui.StyleWarning.Render(ui.MarkWarn)
-		}
-		p.Bullet(marker, fmt.Sprintf("%-8s paths:%d copied / %d missing  files:%d  bytes:%d  %s",
-			ui.StyleValue.Render(entry.Tool), entry.Copied, entry.Missing, entry.Files, entry.Bytes, entry.Path))
-	}
-	p.Blank()
-	p.Line("  Total: %d file(s), %d byte(s)", sum.Files, sum.Bytes)
-}
-
-func aiCaskTokens() ([]string, error) {
-	cat, err := catalog.LoadMacApps()
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, group := range cat.Groups {
-		if group.Name != "AI" {
-			continue
-		}
-		for _, app := range group.Apps {
-			out = append(out, app.Token)
-		}
-	}
-	return out, nil
 }
