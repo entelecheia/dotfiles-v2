@@ -86,3 +86,13 @@ func formatInterval(seconds int) string {
 	}
 	return fmt.Sprintf("%ds", seconds)
 }
+
+// containsString reports whether needle appears in haystack.
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}

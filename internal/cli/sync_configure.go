@@ -33,11 +33,12 @@ func newSyncConfigureCmd() *cobra.Command {
 }
 
 func runSyncConfigure(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	if err := rejectGenericPeerProfile(cfg); err != nil {
+	state, cfg, runner := bs.State, bs.Config, bs.Runner
+	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return fmt.Errorf("configure: %w; use `dot peer init` and `dot peer setup`", err)
 	}
 	if cfg.LocalPaths == nil {
@@ -149,7 +150,7 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 		if scheduleChanged {
-			scheduler, _, err := syncScheduler(cfg, runner)
+			scheduler, _, err := syncer.ResolveScheduler(cfg, runner)
 			if err != nil {
 				return err
 			}
@@ -162,7 +163,7 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 	}
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	if jsonOutput {
-		scheduler, _, err := syncScheduler(cfg, runner)
+		scheduler, _, err := syncer.ResolveScheduler(cfg, runner)
 		if err != nil {
 			return err
 		}

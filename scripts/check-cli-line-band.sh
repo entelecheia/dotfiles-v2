@@ -21,6 +21,7 @@ files=(
   "internal/cli/apps_cmd.go"
   "internal/cli/ai_cmd.go"
   "internal/cli/peer_cmd.go"
+  "internal/cli/sync_cmd.go"
 )
 
 if [[ ${#files[@]} -eq 0 ]]; then

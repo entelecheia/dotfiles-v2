@@ -40,10 +40,11 @@ func newSyncNamesNormalizeCmd() *cobra.Command {
 
 func runSyncNamesNormalize(cmd *cobra.Command, _ []string) error {
 	p := printerFrom(cmd)
-	_, cfg, _, err := syncBootstrapReadOnly(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, true))
 	if err != nil {
 		return err
 	}
+	cfg := bs.Config
 
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	yes, _ := cmd.Flags().GetBool("yes")
