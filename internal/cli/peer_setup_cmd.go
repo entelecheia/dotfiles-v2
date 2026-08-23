@@ -115,6 +115,10 @@ walks the whole tree.`,
 				p.Success("peer sync job removed")
 				return nil
 			}
+			if res.DryRun {
+				p.Line("dry-run: would write %s", res.Plist)
+				return nil
+			}
 			p.Success("peer sync scheduled every %s", res.Interval)
 			p.KV("plist", res.Plist)
 			p.KV("log", res.LogFile)
