@@ -854,7 +854,9 @@ func newAgentsManagerFromCmd(cmd *cobra.Command) *aisettings.AgentsManager {
 		home = over
 	}
 	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return aisettings.NewAgentsManager(execrun.NewRunner(dryRun, logger), home)
+	mgr := aisettings.NewAgentsManager(execrun.NewRunner(dryRun, logger), home)
+	mgr.Out = cmd.OutOrStdout()
+	return mgr
 }
 
 func newHUDManagerFromCmd(cmd *cobra.Command) *aisettings.HUDManager {

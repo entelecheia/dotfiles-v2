@@ -56,6 +56,7 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
+		manager.Out = rc.out()
 		statuses, err := manager.Status()
 		if err != nil {
 			return nil, fmt.Errorf("agents SSOT status: %w", err)
@@ -136,6 +137,7 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
+		manager.Out = rc.out()
 		ssotMissing := !rc.Runner.FileExists(manager.SSOTPath())
 		if ssotMissing {
 			// Fresh machines enable agents_ssot by default, so the first apply
