@@ -15,8 +15,11 @@ func (m *PackagesModule) Check(ctx context.Context, rc *RunContext) (*CheckResul
 	var changes []Change
 	packages := rc.Brew.InstallableFormulas(rc.Config.AllPackages())
 
-	// Ensure Homebrew PATH is set (may not be in PATH for fresh processes)
-	rc.Brew.RefreshPath()
+	// No PATH refresh here, unlike Apply below. Check is read-only and must not
+	// mutate process state at all; the refresh it used to call os.Setenv'd PATH
+	// for the whole process, so every later lookup in the run widened, not just
+	// brew's (BUG-06, D-02). Detection does not need it: Brew resolves the
+	// platform prefix itself when PATH cannot find brew.
 
 	if !rc.Brew.IsAvailable() {
 		changes = append(changes, Change{
@@ -64,7 +67,12 @@ func (m *PackagesModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResul
 	var messages []string
 	packages := rc.Brew.InstallableFormulas(rc.Config.AllPackages())
 
-	// Ensure Homebrew PATH is set (may not be in PATH for fresh processes)
+	// Ensure Homebrew PATH is set (may not be in PATH for fresh processes).
+	// This one survives while its Check-side twin did not: Apply is a write
+	// path, and everything installed below — plus anything a later module
+	// shells out to — needs brew on PATH, not just this package's own
+	// invocations (D-02). module.RunAll skips Apply entirely under --dry-run,
+	// so a preview never reaches it.
 	rc.Brew.RefreshPath()
 
 	if !rc.Brew.IsAvailable() {
