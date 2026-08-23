@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
@@ -91,6 +92,11 @@ func hashSettings(data []byte) [sha256.Size]byte {
 	return sha256.Sum256(data)
 }
 
+// settingsLockStaleAfter is this caller's own pid-less lock horizon. See the
+// acquire site in Mutate for why it is minutes rather than the package
+// default's hour.
+const settingsLockStaleAfter = 2 * time.Minute
+
 // mutateAttempts bounds Mutate's retry: one pass, plus one more if a foreign
 // writer landed inside the window. Two writers trading the file back and
 // forth is a condition to report, not to spin on.
@@ -161,7 +167,16 @@ func Mutate(runner *exec.Runner, home string, fn func(map[string]any) error) (bo
 			return false, err
 		}
 		if release == nil {
-			if release, err = fileutil.AcquirePIDLock(LockDir(home)); err != nil {
+			// A settings mutation is a sub-second operation, so a lock older
+			// than a few minutes with no live pid behind it is abandoned by
+			// definition. The package default of an hour was sized for a
+			// legacy bare-directory sync lock; applied here it would block
+			// dot ai hud and dot guard for an hour behind, say, a lock left
+			// root-owned by a sudo run.
+			if release, err = fileutil.AcquirePIDLock(LockDir(home), fileutil.LockOptions{
+				Label:      "another dot write to the claude settings is running",
+				StaleAfter: settingsLockStaleAfter,
+			}); err != nil {
 				return false, err
 			}
 		}

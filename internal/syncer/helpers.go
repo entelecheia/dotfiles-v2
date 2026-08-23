@@ -159,8 +159,11 @@ func pathExists(path string) bool {
 // On EEXIST, reads <lockDir>/lock.pid and probes the process with signal 0.
 // If the PID is dead (ESRCH), removes the stale lock and retries once.
 // Otherwise reports the lock is held by another running sync.
+// The zero-value LockOptions is deliberate: it keeps the refusal wording and
+// the one-hour pid-less horizon a sync lock has always had, so nothing an
+// operator has already seen changes shape.
 func AcquireLock(lockDir string) (func(), error) {
-	return fileutil.AcquirePIDLock(lockDir)
+	return fileutil.AcquirePIDLock(lockDir, fileutil.LockOptions{})
 }
 
 // lockIsStale returns true when the PID file inside lockDir points at a

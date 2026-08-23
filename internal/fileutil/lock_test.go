@@ -219,7 +219,7 @@ func TestAcquirePIDLock_ContentionIsDistinguishableFromFailure(t *testing.T) {
 }
 
 // TestAcquirePIDLock_ZeroStaleAfterKeepsTheHourHorizon pins the zero-value
-// fallback at the boundary, so "zero means today's behaviour" is measured
+// fallback at the boundary, so "zero means today's behavior" is measured
 // rather than asserted in a doc comment.
 func TestAcquirePIDLock_ZeroStaleAfterKeepsTheHourHorizon(t *testing.T) {
 	justUnder := backdatedPIDLessLock(t, pidlessStaleAfter-time.Minute)
