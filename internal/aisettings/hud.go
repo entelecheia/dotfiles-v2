@@ -275,9 +275,10 @@ func (m *HUDManager) applyCodexHUD(dryRun bool) (HUDItem, error) {
 	return item, nil
 }
 
-// claudePreviewDetail is what a preview or a not-yet-attempted run reports.
-// It stays the pre-lock prediction on purpose: a dry run reports the work it
-// declined to do, and there is no outcome yet to report.
+// claudePreviewDetail is the both-halves detail: what a run reports when the
+// settings and the script are BOTH out of date. It is shared by the preview
+// and the write result, which is why the fully-stale case reads the same
+// either way.
 const claudePreviewDetail = "write statusLine and statusline-dot.py"
 
 // claudeConflictItem is the item BOTH statusLine refusals report: the
@@ -300,15 +301,18 @@ func claudeHUDItem(settingsPath string, changed bool, detail string) HUDItem {
 	return item
 }
 
-// claudeHUDWroteDetail names the halves a run actually wrote. Reporting both
-// when only one landed is the misreport this function exists to prevent.
-func claudeHUDWroteDetail(wroteSettings, wroteScript bool) string {
+// claudeHUDDetail names the halves a run is reporting on: the ones a write
+// actually landed, or the ones a preview would write. Reporting both when
+// only one is in play is the misreport this function exists to prevent, and
+// it is the same misreport on either path — which is why the name no longer
+// claims a write happened.
+func claudeHUDDetail(settingsHalf, scriptHalf bool) string {
 	switch {
-	case wroteSettings && wroteScript:
+	case settingsHalf && scriptHalf:
 		return claudePreviewDetail
-	case wroteSettings:
+	case settingsHalf:
 		return "write statusLine"
-	case wroteScript:
+	case scriptHalf:
 		return "write statusline-dot.py"
 	}
 	return ""
@@ -364,7 +368,7 @@ func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 	}
 	changed := settingsChanged || scriptChanged
 	if !changed || dryRun {
-		return claudeHUDItem(settingsPath, changed, claudePreviewDetail), nil
+		return claudeHUDItem(settingsPath, changed, claudeHUDDetail(settingsChanged, scriptChanged)), nil
 	}
 
 	wroteScript, err := fileutil.EnsureFile(m.runner(), m.homeDir(), scriptPath, []byte(claudeHUDScript), 0o755)
@@ -394,7 +398,7 @@ func (m *HUDManager) applyClaudeHUD(dryRun, force bool) (HUDItem, error) {
 	if refusedUnderLock != "" {
 		return claudeConflictItem(settingsPath, refusedUnderLock), nil
 	}
-	return claudeHUDItem(settingsPath, wroteScript || wroteSettings, claudeHUDWroteDetail(wroteSettings, wroteScript)), nil
+	return claudeHUDItem(settingsPath, wroteScript || wroteSettings, claudeHUDDetail(wroteSettings, wroteScript)), nil
 }
 
 func (m *HUDManager) claudeSettingsStatus() (bool, string, error) {
