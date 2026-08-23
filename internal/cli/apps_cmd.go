@@ -270,6 +270,21 @@ func newAppsStatusCmd() *cobra.Command {
 	return c
 }
 
+// appsInstallMarker maps an app's install state to a (marker, style) tuple,
+// in the shape agentDriftMarker already establishes. Three states, because
+// StatusApp carries three: installed, known-and-not-installed, and install
+// state unknown — no brew, a non-macOS host, or a failed state load.
+func appsInstallMarker(installKnown, installed bool) (string, interface{ Render(...string) string }) {
+	switch {
+	case !installKnown:
+		return ui.MarkPartial, ui.StyleHint
+	case installed:
+		return ui.MarkPresent, ui.StyleSuccess
+	default:
+		return ui.MarkPartial, ui.StyleHint
+	}
+}
+
 func runAppsStatus(cmd *cobra.Command, _ []string) error {
 	eng, err := newAppsEngine(cmd)
 	if err != nil {
@@ -290,14 +305,8 @@ func runAppsStatus(cmd *cobra.Command, _ []string) error {
 	p.Section("Apps")
 
 	for _, s := range res.Apps {
-		marker := ui.StyleHint.Render(ui.MarkPartial) // unknown: brew unavailable
-		if s.InstallKnown {
-			if s.Installed {
-				marker = ui.StyleSuccess.Render(ui.MarkPresent)
-			} else {
-				marker = ui.StyleHint.Render(ui.MarkPartial)
-			}
-		}
+		mark, style := appsInstallMarker(s.InstallKnown, s.Installed)
+		marker := style.Render(mark)
 		live := fmt.Sprintf("%d/%d", s.PresentLive, s.TotalLive)
 		bak := fmt.Sprintf("%d/%d", s.PresentBak, s.TotalBak)
 		switch s.PresentBak {
