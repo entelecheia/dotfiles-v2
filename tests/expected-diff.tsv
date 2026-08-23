@@ -54,11 +54,19 @@
 # differential.sh disables the tree field entirely on any host carrying a
 # Homebrew prefix (see its TREE_COMPARISON preflight), because read-only brew
 # probes write into the sandbox HOME and refetch over the network. A tree row
-# therefore matches nothing on such a host and is reported as stale by the
-# not-stale check at the end of the run. That verdict is meaningless there: the
-# banner in the preflight already says the field was not compared. CI's linux
-# job runs this scenario in a clean ubuntu:22.04 container with no Homebrew
-# prefix, compares the tree unconditionally, and is the authoritative run.
+# therefore matches nothing on such a host, and the run reports it in a third
+# state - neither pass nor fail - on a line beginning with `~` that names the
+# row and says the field was not compared. Those rows are NOT stale and must not
+# be removed on that evidence: the run never looked at them. The run also prints
+# how many rows it could not assert and states that it is therefore not a full
+# verification. CI's linux job runs this scenario in a clean ubuntu:22.04
+# container with no Homebrew prefix, compares the tree unconditionally, and is
+# the authoritative run.
+#
+# The third state is scoped to the field THIS RUN skipped, not to the field
+# name. A `tree` row on a host that did compare the tree still fails with the
+# remove-this-row message, exactly like every other field, so rule 2 above is
+# unweakened for anything the run actually compared.
 #
 # command	field	reason
 apply --profile minimal --yes --dry-run	stdout	BUG-05: apply --dry-run no longer saves user state. It reports the write it is skipping instead, gaining one line in the repo's existing preview wording: dry-run: would write @HOME@/.config/dotfiles/config.yaml
