@@ -262,3 +262,34 @@ func TestJSONStatusSurfacesHonorHomeFlag(t *testing.T) {
 		})
 	}
 }
+
+// TestPeerStatusSchedulerHonorsHomeFlag covers the other home-derived half of
+// `dot peer status --json`: the launchd snapshot. Threading --home into
+// syncer.Bootstrap moves the workspace fields but not this one, which reads a
+// plist path of its own — so a --home run would report whether the INVOKING
+// user's peer agent is installed and how often it runs.
+func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
+	invoker, target := newStatusHomeFixture(t)
+	writeCLITestFile(t, filepath.Join(invoker, "Library", "LaunchAgents", "com.dotfiles.peer.plist"),
+		"<plist><dict><key>StartInterval</key><integer>900</integer></dict></plist>\n")
+
+	out, errOut, err := runDotForTest("--home", target, "peer", "status", "--json")
+	if err != nil {
+		t.Fatalf("peer status --json --home: %v\nstderr=%s", err, errOut)
+	}
+	if strings.Contains(out, "900") {
+		t.Errorf("peer status --home reported the invoking user's scheduler interval:\n%s", out)
+	}
+	if !strings.Contains(out, "not installed") {
+		t.Errorf("peer status --home did not report the target home's (absent) scheduler:\n%s", out)
+	}
+
+	// Non-vacuity: the same document does report the process home's plist.
+	out, errOut, err = runDotForTest("peer", "status", "--json")
+	if err != nil {
+		t.Fatalf("peer status --json: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "900") {
+		t.Errorf("peer status without the flag did not read the process home's plist:\n%s", out)
+	}
+}
