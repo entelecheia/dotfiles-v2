@@ -95,3 +95,25 @@ func TestResolveVaultPath_ProcessHomeStillDetected(t *testing.T) {
 		t.Errorf("VaultPath(invoking home) = %q, want %q", got, want)
 	}
 }
+
+// Converse rule: before the home was a parameter, detectVaultDir resolved it
+// itself, so "" was only reachable when os.UserHomeDir failed. Now any caller
+// can supply it, and filepath.Join("", "workspace") is "workspace" — a probe
+// of the process WORKING DIRECTORY. Detection must find nothing instead of
+// answering from wherever the binary happened to be started.
+func TestResolveVaultPath_EmptyHomeDetectsNothing(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "workspace", "vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(cwd)
+
+	// The fresh default, i.e. nothing was detected. Seeded as <ws>/vault so a
+	// cwd probe answers differently from the default rather than by accident.
+	if got, want := ResolveVaultPath("", "~/workspace", ""), "~/workspace/work/vault"; got != want {
+		t.Errorf("ResolveVaultPath with no home = %q, want %q (it probed the working directory)", got, want)
+	}
+	if got := ResolveVaultCloneTarget("", "~/workspace", ""); got != "" {
+		t.Errorf("ResolveVaultCloneTarget with no home = %q, want empty (it probed the working directory)", got)
+	}
+}
