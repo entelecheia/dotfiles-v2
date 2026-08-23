@@ -14,10 +14,9 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/secrets"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
-
-const secretsDir = ".local/share/dotfiles-secrets"
 
 const shellSecretsTemplate = `# Shell secrets — sourced by zsh at login via zshrc.
 # Add environment exports for API keys, tokens, and other secrets.
@@ -54,74 +53,6 @@ func secretsRunner(cmd *cobra.Command) *exec.Runner {
 		Level: slog.LevelInfo,
 	}))
 	return exec.NewRunner(dryRun, logger)
-}
-
-func secretsStorePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, secretsDir), nil
-}
-
-// sshKeyName returns the configured SSH key name, rejecting values that
-// would escape ~/.ssh or the secrets store when interpolated into paths.
-func sshKeyName(state *config.UserState) (string, error) {
-	keyName := state.SSH.KeyName
-	if keyName == "" {
-		return "id_ed25519", nil
-	}
-	if strings.ContainsAny(keyName, "/\\") || keyName == "." || keyName == ".." {
-		return "", fmt.Errorf("invalid ssh.key_name %q: must be a bare file name", keyName)
-	}
-	return keyName, nil
-}
-
-// resolveAgeIdentity returns the age identity path (default
-// ~/.ssh/id_ed25519) with a leading ~ expanded.
-func resolveAgeIdentity(state *config.UserState, home string) string {
-	identity := state.Secrets.AgeIdentity
-	if identity == "" {
-		return filepath.Join(home, ".ssh", "id_ed25519")
-	}
-	if strings.HasPrefix(identity, "~/") {
-		return filepath.Join(home, identity[2:])
-	}
-	if identity == "~" {
-		return home
-	}
-	return identity
-}
-
-// secretEntry maps one encrypted archive name to its plaintext location.
-type secretEntry struct {
-	Label   string      // human-readable name for reports
-	AgeName string      // file name inside the store / backup dir
-	Plain   string      // plaintext path (encrypt source, restore dest)
-	DirPerm os.FileMode // permission for the plaintext parent dir
-}
-
-// secretEntries is the single source of truth for which files `dot
-// secrets` manages — init, restore, and status all derive from it.
-func secretEntries(state *config.UserState, home string) ([]secretEntry, error) {
-	keyName, err := sshKeyName(state)
-	if err != nil {
-		return nil, err
-	}
-	return []secretEntry{
-		{
-			Label:   "SSH key",
-			AgeName: keyName + ".age",
-			Plain:   filepath.Join(home, ".ssh", keyName),
-			DirPerm: 0o700,
-		},
-		{
-			Label:   "Shell secrets",
-			AgeName: "90-secrets.sh.age",
-			Plain:   filepath.Join(home, ".config", "shell", "90-secrets.sh"),
-			DirPerm: 0o755,
-		},
-	}, nil
 }
 
 // encryptSecretFile encrypts src to dest without ever truncating an
@@ -229,7 +160,7 @@ func newSecretsInitCmd() *cobra.Command {
 			runner := secretsRunner(cmd)
 			p := printerFrom(cmd)
 
-			storeDir, err := secretsStorePath()
+			storeDir, err := secrets.StorePath()
 			if err != nil {
 				return err
 			}
@@ -252,12 +183,12 @@ func newSecretsInitCmd() *cobra.Command {
 			// Round-trip verification: a typo'd recipient produces archives
 			// that encrypt fine and fail only at restore time, when the
 			// plaintext may already be gone.
-			verify, skipReason := secretsVerifier(ctx, runner, resolveAgeIdentity(state, home))
+			verify, skipReason := secretsVerifier(ctx, runner, secrets.ResolveAgeIdentity(state, home))
 			if skipReason != "" {
 				p.Warn("  decrypt verification skipped: %s — restore from this archive is unverified", skipReason)
 			}
 
-			entries, err := secretEntries(state, home)
+			entries, err := secrets.Entries(state, home)
 			if err != nil {
 				return err
 			}
@@ -405,7 +336,7 @@ With no destination, defaults to <backup-root>/secrets-age/<host> — the
 same cloud root (Dropbox-preferred) the rest of dot backs up to.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			storeDir, err := secretsStorePath()
+			storeDir, err := secrets.StorePath()
 			if err != nil {
 				return err
 			}
@@ -583,11 +514,11 @@ func secretsRestoreFiles(
 	if !runner.CommandExists("age") {
 		return nil, fmt.Errorf("age is not installed — run 'dot apply' to install it")
 	}
-	entries, err := secretEntries(state, home)
+	entries, err := secrets.Entries(state, home)
 	if err != nil {
 		return nil, err
 	}
-	identity := resolveAgeIdentity(state, home)
+	identity := secrets.ResolveAgeIdentity(state, home)
 
 	confirm := func(dest string) (bool, error) {
 		return ui.Confirm(fmt.Sprintf("%s exists and differs — overwrite? (a timestamped .bak copy will be saved)", dest), unattended)
@@ -685,40 +616,44 @@ func newSecretsStatusCmd() *cobra.Command {
 				return err
 			}
 
-			storeDir, err := secretsStorePath()
-			if err != nil {
-				return err
-			}
-
-			entries, err := secretEntries(state, home)
+			storeDir, err := secrets.StorePath()
 			if err != nil {
 				return err
 			}
 
 			runner := secretsRunner(cmd)
+			res, err := secrets.Status(secrets.StatusOptions{
+				Runner:   runner,
+				State:    state,
+				Home:     home,
+				StoreDir: storeDir,
+			})
+			if err != nil {
+				return err
+			}
+
 			p := printerFrom(cmd)
-			checkFile := func(label, path string) {
-				exists := runner.FileExists(path)
+			checkFile := func(f secrets.FileStatus) {
 				mark := "missing"
-				if exists {
+				if f.Present {
 					mark = "present"
 				}
-				p.Line("  %-30s  %s", label, mark)
+				p.Line("  %-30s  %s", f.Label, mark)
 			}
 
 			p.Line("Plaintext files:")
-			for _, entry := range entries {
-				checkFile(entry.Label, entry.Plain)
+			for _, f := range res.Plaintext {
+				checkFile(f)
 			}
 
 			p.Line("")
 			p.Line("Encrypted files:")
-			for _, entry := range entries {
-				checkFile(entry.AgeName, filepath.Join(storeDir, entry.AgeName))
+			for _, f := range res.Encrypted {
+				checkFile(f)
 			}
 
 			p.Line("")
-			p.Line("  Age identity: %s", resolveAgeIdentity(state, home))
+			p.Line("  Age identity: %s", res.AgeIdentity)
 			if len(state.Secrets.AgeRecipients) > 0 {
 				p.Line("  Age recipients:")
 				for _, r := range state.Secrets.AgeRecipients {
@@ -766,7 +701,7 @@ func newSecretsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List encrypted secrets files",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			storeDir, err := secretsStorePath()
+			storeDir, err := secrets.StorePath()
 			if err != nil {
 				return err
 			}
