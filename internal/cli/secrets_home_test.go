@@ -214,3 +214,34 @@ func TestSecretsBackupHonorsHomeFlag(t *testing.T) {
 		t.Errorf("the process home's state has no 5-file last-backup record: %+v", invokerState.Secrets.LastBackup)
 	}
 }
+
+// TestSecretsBackupWithUnreadableState is the recovery case: an explicit
+// destination needs no state at all, so a malformed config.yaml must not stop
+// the archives from being copied out. Resolving the session's state up front
+// turned the one situation where preserving the .age files matters most into a
+// hard refusal.
+func TestSecretsBackupWithUnreadableState(t *testing.T) {
+	_, target := newStatusHomeFixture(t)
+	writeCLITestFile(t, config.StatePathForHome(target), "name: [unterminated\n")
+	dest := filepath.Join(t.TempDir(), "dest")
+
+	out, errOut, err := runDotForTest("--home", target, "secrets", "backup", dest)
+	if err != nil {
+		t.Fatalf("backup to an explicit destination refused on unreadable state: %v\nstdout=%s\nstderr=%s", err, out, errOut)
+	}
+	for _, name := range []string{"f0.age", "f1.age"} {
+		if _, statErr := os.Stat(filepath.Join(dest, name)); statErr != nil {
+			t.Errorf("%s was not copied out: %v", name, statErr)
+		}
+	}
+	if !strings.Contains(errOut, "could not load state") {
+		t.Errorf("the unreadable state was not reported as a warning:\nstderr=%s", errOut)
+	}
+
+	// Non-vacuity: with NO destination the state is what names one, so the
+	// same broken file must still refuse rather than invent a path.
+	_, _, err = runDotForTest("--home", target, "secrets", "backup")
+	if err == nil {
+		t.Fatal("backup with no destination resolved one without readable state")
+	}
+}
