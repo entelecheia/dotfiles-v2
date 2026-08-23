@@ -45,7 +45,25 @@
 #      superseded, the row goes with it; the registry prunes itself instead of
 #      accumulating dead excuses.
 #
-# This file ships with zero data rows: the milestone starts from a stated
-# position of full behavior preservation.
+# This file shipped with zero data rows: the milestone started from a stated
+# position of full behavior preservation. Phase 5 is the one phase that changes
+# behavior on purpose, and the rows below are its record.
+#
+# READING THE `tree` ROWS ON A DEVELOPER MACHINE
+#
+# differential.sh disables the tree field entirely on any host carrying a
+# Homebrew prefix (see its TREE_COMPARISON preflight), because read-only brew
+# probes write into the sandbox HOME and refetch over the network. A tree row
+# therefore matches nothing on such a host and is reported as stale by the
+# not-stale check at the end of the run. That verdict is meaningless there: the
+# banner in the preflight already says the field was not compared. CI's linux
+# job runs this scenario in a clean ubuntu:22.04 container with no Homebrew
+# prefix, compares the tree unconditionally, and is the authoritative run.
 #
 # command	field	reason
+apply --profile minimal --yes --dry-run	stdout	BUG-05: apply --dry-run no longer saves user state. It reports the write it is skipping instead, gaining one line in the repo's existing preview wording: dry-run: would write @HOME@/.config/dotfiles/config.yaml
+apply --profile full --yes --dry-run	stdout	BUG-05: same as the minimal row. The preview line names the state file the run would have written.
+apply --profile server --yes --dry-run	stdout	BUG-05: same as the minimal row. The preview line names the state file the run would have written.
+apply --profile minimal --yes --dry-run	tree	BUG-05: the baseline left .config, .config/dotfiles and .config/dotfiles/config.yaml in an otherwise untouched HOME; the current binary leaves it byte-identical. These are the same three entries the GUARD-03 known-deviation tables recorded and this phase removed.
+apply --profile full --yes --dry-run	tree	BUG-05: same three entries as the minimal row, with the full profile's state payload.
+apply --profile server --yes --dry-run	tree	BUG-05: same three entries as the minimal row, with the server profile's state payload.
