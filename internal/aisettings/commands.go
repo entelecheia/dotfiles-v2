@@ -76,9 +76,15 @@ type PruneOptions struct {
 // caller can confirm before anything is deleted.
 type PrunePlan struct {
 	Total int
-	// Keep is echoed back exactly as given, unclamped, because Delete is
-	// computed from it; Prune itself floors Keep at 1.
-	Keep     int
+	// Keep is echoed back exactly as given, unclamped, because the caller's
+	// "Nothing to prune (%d snapshots <= keep=%d)" line prints it verbatim;
+	// Prune itself floors Keep at 1.
+	Keep int
+	// Delete is floored at 0: a Keep above Total removes nothing, and a
+	// negative count would be a lie to any caller that acted on it. A Keep
+	// BELOW 1 is deliberately left unclamped here so the confirmation line
+	// stays byte-identical to the pre-decomposition binary — that
+	// overstatement is recorded as BUG-12 and belongs to Phase 5.
 	Delete   int
 	HostRoot string
 }
@@ -92,7 +98,7 @@ func (e *Engine) PlanPrune(opts PruneOptions) (*PrunePlan, error) {
 	return &PrunePlan{
 		Total:    len(all),
 		Keep:     opts.Keep,
-		Delete:   len(all) - opts.Keep,
+		Delete:   max(0, len(all)-opts.Keep),
 		HostRoot: e.HostRoot(),
 	}, nil
 }
