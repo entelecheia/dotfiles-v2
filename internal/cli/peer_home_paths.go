@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
 const peerHomePathsSchemaVersion = 1
@@ -62,11 +64,11 @@ func readPeerHomePaths(path string) (peerHomePathsJSON, error) {
 }
 
 func runPeerHomePathsGet(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := peerBootstrapReadOnly()
+	bs, err := peerBootstrapReadOnly()
 	if err != nil {
 		return err
 	}
-	document, err := readPeerHomePaths(peerHomePathsFile(cfg.LocalPaths))
+	document, err := readPeerHomePaths(syncer.PeerHomePathsFile(bs.Config.LocalPaths))
 	if err != nil {
 		return err
 	}
@@ -81,7 +83,7 @@ func runPeerHomePathsGet(cmd *cobra.Command, _ []string) error {
 }
 
 func runPeerHomePathsSet(cmd *cobra.Command, _ []string) error {
-	_, cfg, _, err := peerBootstrap(cmd)
+	bs, err := syncer.Bootstrap(peerBootstrapOptions(cmd))
 	if err != nil {
 		return err
 	}
@@ -99,7 +101,7 @@ func runPeerHomePathsSet(cmd *cobra.Command, _ []string) error {
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	path := peerHomePathsFile(cfg.LocalPaths)
+	path := syncer.PeerHomePathsFile(bs.Config.LocalPaths)
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	if !dryRun {
 		if err := writePatternFileAtomic(path, []byte(content)); err != nil {

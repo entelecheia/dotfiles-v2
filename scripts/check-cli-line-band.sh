@@ -20,6 +20,7 @@ files=(
   "internal/cli/secrets.go"
   "internal/cli/apps_cmd.go"
   "internal/cli/ai_cmd.go"
+  "internal/cli/peer_cmd.go"
 )
 
 if [[ ${#files[@]} -eq 0 ]]; then

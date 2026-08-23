@@ -1,11 +1,12 @@
-package cli
+// Moved out of the cli package with the inventory machinery it covers
+// (plan 03-05, D-13). Assertions are unchanged.
+package syncer
 
 import (
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -46,7 +47,7 @@ func TestParsePeerRemoteInventoryIgnoresUnknownNonRegularButRejectsBaselineTrans
 	if got, err := parsePeerRemoteInventory(stdout, time.UTC, nil, false); err != nil || len(got) != 0 {
 		t.Fatalf("unknown symlink should be outside payload: got=%v err=%v", got, err)
 	}
-	baseline := map[string]syncer.Fingerprint{"links/current": {Size: 1}}
+	baseline := map[string]Fingerprint{"links/current": {Size: 1}}
 	if _, err := parsePeerRemoteInventory(stdout, time.UTC, baseline, false); err == nil || !strings.Contains(err.Error(), "non-regular on the peer") {
 		t.Fatalf("baseline symlink transition error = %v", err)
 	}
@@ -64,10 +65,10 @@ func TestParsePeerRemoteInventoryRequiresNFDWhenMigrationIsMarked(t *testing.T) 
 }
 
 func TestValidateRemotePeerStatusRequiresSameCoordinatorAndPair(t *testing.T) {
-	cfg := &syncer.Config{
+	cfg := &Config{
 		Owner:     "coordinator.local",
 		LocalPath: "/Users/test/work/",
-		Target:    syncer.Target{Kind: syncer.TargetSSH, Host: "peer", Path: "/Users/test/work"},
+		Target:    Target{Kind: TargetSSH, Host: "peer", Path: "/Users/test/work"},
 	}
 	raw := `{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"workspacePath":"/Users/test/work","owner":"coordinator","target":{"path":"/Users/test/work"}}}`
 	if err := validateRemotePeerStatus(cfg, raw); err != nil {
