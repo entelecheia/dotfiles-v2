@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
-	"github.com/entelecheia/dotfiles-v2/internal/template"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/ws"
 )
@@ -156,7 +154,7 @@ func runSyncFetch(cmd *cobra.Command, args []string) error {
 		p.Line("  (dry-run — no changes)")
 	}
 	res, fetchErr := syncer.Fetch(cmd.Context(), runner, cfg, args, dryRun)
-	recordSyncResult(state, cfg, "fetch", fetchErr, dryRun)
+	syncer.RecordResult(state, cfg, "fetch", fetchErr, dryRun)
 	if res != nil {
 		for _, rel := range res.Missing {
 			p.Warn("not on target, skipped: %s", rel)
@@ -473,57 +471,101 @@ func syncBootstrapReadOnly(cmd *cobra.Command) (*config.UserState, *syncer.Confi
 	return syncBootstrapWith(cmd, true)
 }
 
-// syncScheduler builds a Scheduler bound to the same runner+cfg used
-// elsewhere in the gsync subcommands. Returns the Paths used so
-// callers can introspect plist/timer locations.
-func syncScheduler(cfg *syncer.Config, runner *exec.Runner) (*syncer.Scheduler, *syncer.Paths, error) {
-	paths, err := syncer.ResolvePaths()
-	if err != nil {
-		return nil, nil, err
-	}
-	return syncer.NewScheduler(runner, paths, cfg, template.NewEngine()), paths, nil
-}
-
-// syncPreflight validates that sync can proceed.
+// syncPreflight reports whether the run may proceed, printing the engine's
+// refusal when it may not. Where this sits among each handler's other guards
+// is what fixes that command's error precedence, so the call stays in cli even
+// though syncer.Preflight does the classifying.
 func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) bool {
-	if !runner.CommandExists("rsync") {
+	block := syncer.Preflight(runner, cfg)
+	if block == nil {
+		return true
+	}
+	switch block.Kind {
+	case syncer.PreflightRsyncMissing:
 		p.Line("rsync not installed. Install via: brew install rsync")
-		return false
-	}
-	if !runner.IsDir(cfg.LocalPath) {
-		p.Line("Local path missing: %s", cfg.LocalPath)
-		return false
-	}
-	if cfg.Target.IsSSH() {
-		if err := syncer.CheckSSH(context.Background(), runner, cfg.Target.Host); err != nil {
-			p.Line("SSH target unreachable: %v", err)
-			return false
-		}
-	} else if !runner.IsDir(cfg.MirrorPath) {
-		p.Line("Mirror path missing: %s", cfg.MirrorPath)
-		return false
-	}
-	if cfg.Paused {
+	case syncer.PreflightLocalMissing:
+		p.Line("Local path missing: %s", block.Path)
+	case syncer.PreflightSSHUnreachable:
+		p.Line("SSH target unreachable: %v", block.Err)
+	case syncer.PreflightMirrorMissing:
+		p.Line("Mirror path missing: %s", block.Path)
+	case syncer.PreflightPaused:
 		p.Line("sync is paused. Run `dot sync resume` to activate.")
-		return false
 	}
-	return true
+	return false
 }
 
-// recordSyncResult updates the on-disk log after a sync operation. Runtime
-// timestamps now live in the workspace-local gsync state file.
-func recordSyncResult(state *config.UserState, cfg *syncer.Config, op string, syncErr error, dryRun bool) {
-	_ = state
-	if dryRun {
-		return
-	}
-	exitCode := 0
-	if syncErr != nil {
-		exitCode = 1
-	}
-	syncer.AppendLog(cfg.LogFile, op, exitCode)
-	syncer.RotateLog(cfg.LogFile, 2000, 1000)
+// syncRender carries what the shared event renderer needs from the invoking
+// command: the resolved config plus the two flag-derived tokens that appear
+// inside the progress lines.
+type syncRender struct {
+	cfg    *syncer.Config
+	mode   syncer.RunMode
+	strict bool
+}
 
+// renderSyncEvent turns engine progress into the lines the sync commands have
+// always printed. One renderer for every call site, so the wording cannot
+// drift apart between push, pull, intake and fetch.
+func renderSyncEvent(p *Printer, r syncRender) func(syncer.SyncEvent) {
+	cfg := r.cfg
+	return func(e syncer.SyncEvent) {
+		switch e.Kind {
+		case syncer.SyncEventDryRunNotice:
+			p.Line("  (dry-run — no changes)")
+		case syncer.SyncEventPushSSHStart:
+			p.Line("Push %s → %s (%s, direct rsync — no plan preview for ssh targets)",
+				cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
+		case syncer.SyncEventPushPlanStart:
+			p.Line("Push plan for %s → %s (%s, mode=%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation, r.mode)
+		case syncer.SyncEventPushPlanReady:
+			printPushPlan(p, e.PushPlan)
+		case syncer.SyncEventPullSSHStart:
+			p.Line("Pull %s → %s (direct rsync --update; workspace files win ties)",
+				cfg.Target.RsyncDest(), cfg.LocalPath)
+		case syncer.SyncEventPullPlanStart:
+			p.Line("Pull plan for baseline-tracked payloads %s → %s (%s)", cfg.MirrorPath, cfg.LocalPath, r.mode)
+		case syncer.SyncEventPullPlanReady:
+			printPullPlan(p, cfg, e.PullResult)
+		case syncer.SyncEventIntakeStart:
+			p.Line("Intaking %s → %s/inbox/gdrive/<ts>/ (%s mode)", cfg.MirrorPath, stripTrailingSlash(cfg.LocalPath), strictLabel(r.strict))
+		case syncer.SyncEventFetchMissing:
+			p.Warn("not on target, skipped: %s", e.Path)
+		case syncer.SyncEventPartialTransfer:
+			_ = reportPushPartial(p, e.Err)
+		case syncer.SyncEventPruneSummary:
+			p.Line("Would reclaim %s across %d backup dir(s).", ws.FormatSize(e.Reclaimed), e.Candidates)
+		}
+	}
+}
+
+// strictLabel names the fingerprinting mode intake reports it is running in.
+func strictLabel(strict bool) string {
+	if strict {
+		return "strict"
+	}
+	return "fast"
+}
+
+// confirmSync answers the engine's confirmation requests. The engine names the
+// decision; cli owns both the wording and the `--yes` policy (D-09).
+func confirmSync(cmd *cobra.Command) syncer.ConfirmFunc {
+	return func(req syncer.ConfirmRequest) (bool, error) {
+		yes, _ := cmd.Flags().GetBool("yes")
+		switch req.Kind {
+		case syncer.ConfirmPushSSH:
+			return ui.Confirm("Push to SSH target?", yes)
+		case syncer.ConfirmPushPlan:
+			return ui.Confirm("Apply this push plan?", yes)
+		case syncer.ConfirmPullPlan:
+			return ui.Confirm("Apply this pull plan?", yes)
+		case syncer.ConfirmPruneConflicts:
+			return ui.Confirm(fmt.Sprintf("Remove %d backup dir(s), reclaiming %s?", req.Candidates, ws.FormatSize(req.Reclaimed)), yes)
+		case syncer.ConfirmInstallRsync:
+			return ui.Confirm("rsync not found. Install it?", yes)
+		}
+		return false, fmt.Errorf("unknown confirmation request %d", req.Kind)
+	}
 }
 
 // ── sync (root default + explicit subcommand) ────────────────────────────
@@ -574,7 +616,7 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectGenericPeerProfile(cfg); err != nil {
+	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
@@ -604,7 +646,7 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 			p.Line("  (dry-run — no changes)")
 		}
 		pullErr := syncer.PullDirect(cmd.Context(), runner, cfg, dryRun)
-		recordSyncResult(state, cfg, "pull", pullErr, dryRun)
+		syncer.RecordResult(state, cfg, "pull", pullErr, dryRun)
 		if pullErr != nil {
 			return fmt.Errorf("pull failed: %w", pullErr)
 		}
@@ -641,7 +683,7 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 		force = len(plan.Conflicts) > 0
 	}
 	res, err := syncer.PullTracked(cfg, syncer.PullOptions{Force: force, Strict: strict})
-	recordSyncResult(state, cfg, "pull", err, false)
+	syncer.RecordResult(state, cfg, "pull", err, false)
 	if err != nil {
 		return fmt.Errorf("pull failed: %w", err)
 	}
@@ -968,11 +1010,12 @@ The per-workspace store (.dotfiles/) and intake staging area
 }
 
 func runSyncPush(cmd *cobra.Command, _ []string) error {
-	state, cfg, runner, err := syncBootstrap(cmd)
+	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
-	if err := rejectGenericPeerProfile(cfg); err != nil {
+	cfg := bs.Config
+	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
@@ -992,7 +1035,7 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 		cfg.Propagation = policy
 	}
 
-	if !syncPreflight(p, cfg, runner) {
+	if !syncPreflight(p, cfg, bs.Runner) {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -1001,88 +1044,27 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	release, lockErr := syncer.AcquireLock(cfg.LockDir)
-	if lockErr != nil {
-		p.Line("  %s", lockErr)
-		return nil
-	}
-	defer release()
-
-	// Once the explicit workspace migration has written its marker, every real
-	// push canonicalizes newly downloaded or created NFC names before either a
-	// preview plan or rsync filter is materialized. Dry-runs remain read-only.
-	if !dryRun {
-		if err := syncer.NormalizeWorkspaceNamesBeforePush(cfg); err != nil {
-			return fmt.Errorf("normalizing workspace names: %w", err)
-		}
-		cfg.NamesNormalized = true
-	}
-
-	// SSH targets cannot be plan-previewed (the remote tree is not
-	// walkable); push runs rsync directly, like the retired SSH-only sync.
-	if cfg.Target.IsSSH() {
-		p.Line("Push %s → %s (%s, direct rsync — no plan preview for ssh targets)",
-			cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
-		if mode == syncer.ModeManual && !dryRun {
-			yes, _ := cmd.Flags().GetBool("yes")
-			confirmed, err := ui.Confirm("Push to SSH target?", yes)
-			if err != nil {
-				return err
-			}
-			if !confirmed {
-				p.Line("Aborted.")
-				return nil
-			}
-		}
-		pushErr := reportPushPartial(p, syncer.Push(cmd.Context(), runner, cfg, dryRun))
-		recordSyncResult(state, cfg, "push", pushErr, dryRun)
-		if pushErr != nil {
-			return fmt.Errorf("push failed: %w", pushErr)
-		}
-		p.Line("✓ Push complete.")
-		return nil
-	}
-
-	p.Line("Push plan for %s → %s (%s, mode=%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation, mode)
-	if dryRun {
-		p.Line("  (dry-run — no changes)")
-	}
-	plan, err := syncer.PlanPush(cfg)
+	res, err := syncer.PushCommand(cmd.Context(), syncer.PushOptions{
+		State:    bs.State,
+		Config:   cfg,
+		Runner:   bs.Runner,
+		Mode:     mode,
+		DryRun:   dryRun,
+		Progress: renderSyncEvent(p, syncRender{cfg: cfg, mode: mode}),
+		Confirm:  confirmSync(cmd),
+	})
 	if err != nil {
-		return fmt.Errorf("planning push: %w", err)
+		return err
 	}
-	printPushPlan(p, plan)
-	if dryRun || (!plan.HasChanges() && !plan.HasConflicts()) {
-		recordSyncResult(state, cfg, "push", nil, dryRun)
-		if !dryRun && cfg.LocalPaths != nil {
-			if err := syncer.UpdateLocalState(cfg.LocalPaths, func(s *syncer.LocalState) {
-				s.LastPush = time.Now().UTC()
-			}); err != nil {
-				return fmt.Errorf("state update: %w", err)
-			}
-		}
-		return nil
+	switch res.Outcome {
+	case syncer.PushLockBusy:
+		p.Line("  %s", res.LockErr)
+	case syncer.PushAborted:
+		p.Line("Aborted.")
+	case syncer.PushComplete:
+		p.Line("✓ Push complete.")
+	case syncer.PushPlanned:
 	}
-	if mode == syncer.ModeClean && plan.HasConflicts() {
-		return fmt.Errorf("push refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
-	}
-	if mode == syncer.ModeManual {
-		yes, _ := cmd.Flags().GetBool("yes")
-		confirmed, err := ui.Confirm("Apply this push plan?", yes)
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			p.Line("Aborted.")
-			return nil
-		}
-	}
-	pushErr := reportPushPartial(p, syncer.Push(cmd.Context(), runner, cfg, false))
-	recordSyncResult(state, cfg, "push", pushErr, false)
-	if pushErr != nil {
-		return fmt.Errorf("push failed: %w", pushErr)
-	}
-	p.Line("✓ Push complete.")
 	return nil
 }
 
@@ -1257,7 +1239,7 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	sched, _, err := syncScheduler(cfg, runner)
+	sched, _, err := syncer.ResolveScheduler(cfg, runner)
 	if err != nil {
 		return err
 	}
@@ -1659,7 +1641,7 @@ func runSyncResume(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectGenericPeerProfile(cfg); err != nil {
+	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
@@ -1678,7 +1660,7 @@ func runSyncResume(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	// If the scheduler is configured and installed, reattach it so periodic runs resume.
-	sched, _, err := syncScheduler(cfg, runner)
+	sched, _, err := syncer.ResolveScheduler(cfg, runner)
 	if err != nil {
 		return nil // state save succeeded; scheduler is best-effort
 	}
@@ -1706,7 +1688,7 @@ func runSyncPause(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectGenericPeerProfile(cfg); err != nil {
+	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	p := printerFrom(cmd)
@@ -1722,7 +1704,7 @@ func runSyncPause(cmd *cobra.Command, _ []string) error {
 
 	// Stop the scheduler if installed so we don't waste invocations
 	// hitting the paused gate every Interval seconds.
-	sched, _, err := syncScheduler(cfg, runner)
+	sched, _, err := syncer.ResolveScheduler(cfg, runner)
 	if err != nil {
 		return nil
 	}
@@ -1777,7 +1759,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectGenericPeerProfile(cfg); err != nil {
+	if err := syncer.RejectGenericPeerProfile(cfg); err != nil {
 		return err
 	}
 	ctx := cmd.Context()
@@ -1848,7 +1830,7 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 
 	// 2. Deploy scheduler(s) only when explicitly enabled.
 	p.Line("Configuring opt-in scheduler...")
-	sched, paths, err := syncScheduler(cfg, runner)
+	sched, paths, err := syncer.ResolveScheduler(cfg, runner)
 	if err != nil {
 		return err
 	}
@@ -1891,16 +1873,6 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		p.Line("  Paused gate is set — run `dot sync resume` to start syncing.")
 	} else {
 		p.Line("  Run `dot sync push` or `dot sync pull` when you want to sync manually.")
-	}
-	return nil
-}
-
-// The peer profile has a different transaction: compute tombstones, protect
-// the pull, quarantine remote deletions, then push. Generic sync entrypoints
-// skip that transaction and can retire or restore the only deletion evidence.
-func rejectGenericPeerProfile(cfg *syncer.Config) error {
-	if cfg != nil && cfg.Profile == syncer.PeerProfile {
-		return fmt.Errorf("the peer profile must use `dot peer sync` and `dot peer setup`; generic sync push, pull, setup, pause, and resume bypass peer tombstones")
 	}
 	return nil
 }

@@ -51,15 +51,6 @@ func TestParseAutomaticModeFlag(t *testing.T) {
 	}
 }
 
-func TestRejectGenericPeerProfile(t *testing.T) {
-	if err := rejectGenericPeerProfile(&syncer.Config{Profile: syncer.PeerProfile}); err == nil {
-		t.Fatal("generic sync commands must not bypass the peer tombstone transaction")
-	}
-	if err := rejectGenericPeerProfile(&syncer.Config{Profile: syncer.DefaultProfile}); err != nil {
-		t.Fatalf("default sync profile rejected: %v", err)
-	}
-}
-
 func TestParseFilterMode(t *testing.T) {
 	for _, raw := range []string{"include", "exclude", "INCLUDE"} {
 		if _, err := syncer.ParseFilterMode(raw); err != nil {
