@@ -72,11 +72,21 @@ awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
     else if (line ~ /^exclude:[[:space:]]*$/) section = "exclude"
     else if (section == "exclude" && line ~ /^[[:space:]]+paths:[[:space:]]*$/) section = "exclude_paths"
     else if (section == "override" && line ~ /^[[:space:]]*-[[:space:]]+path:/) {
+      # A new entry begins, so the previous one can no longer acquire a
+      # threshold. Flush it with the verdict it ended up with.
+      if (pending != "") print pending_thr "\t" pending >ov
       v = line
       sub(/^[[:space:]]*-[[:space:]]+path:[[:space:]]*/, "", v)
       sub(/[[:space:]]*#.*$/, "", v)
       sub(/[[:space:]]+$/, "", v)
-      if (v != "") print v >ov
+      pending = v
+      pending_thr = 0
+    }
+    # A `threshold:` belonging to the entry above it. Anchored to the list-item
+    # indentation so a `threshold:` under `threshold:` at the top of the file
+    # cannot be mistaken for one.
+    else if (section == "override" && pending != "" && line ~ /^[[:space:]]+threshold:[[:space:]]*-?[0-9]+/) {
+      pending_thr = 1
     }
     else if (section == "exclude_paths" && line ~ /^[[:space:]]*-[[:space:]]/) {
       v = line
@@ -88,11 +98,12 @@ awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
     }
     prev = line
   }
+  END { if (pending != "") print pending_thr "\t" pending >ov }
 ' "$config_file"
 
 touch "$work_dir/overrides.raw" "$work_dir/exclusions.raw"
 
-sed 's/^\^//; s/\$$//' "$work_dir/overrides.raw" | sort -u >"$work_dir/overrides"
+cut -f2 "$work_dir/overrides.raw" | sed 's/^\^//; s/\$$//' | sort -u >"$work_dir/overrides"
 cut -f2 "$work_dir/exclusions.raw" | sed 's/^\^//; s|/$||' | sort -u >"$work_dir/exclusions"
 
 package_count=$(wc -l <"$work_dir/packages" | tr -d '[:space:]')
@@ -127,6 +138,44 @@ if [[ "$exclusion_count" -eq 0 ]]; then
 fi
 
 echo "check-coverage-floors: $package_count package(s), $override_count override(s), $exclusion_count exclusion(s)"
+
+# --- override entries must be complete and anchored --------------------------
+#
+# Both checks run on the RAW entries, before normalisation erases the very thing
+# they inspect. Each closes a way for this table to look seeded while enforcing
+# nothing, and both were found by review on PR #87 rather than by design:
+#
+#   - An entry with a `path` but no `threshold` is not an error to the coverage
+#     tool. It falls back to `threshold.package`, which this config sets to 0
+#     deliberately, so the package is measured against nothing while every gate
+#     stays green. Reproduced: dropping `internal/guard`'s threshold left a
+#     92.3% package enforced at 0 with both CI steps passing.
+#   - An override path missing its trailing `$` still normalises to a live
+#     package name here, so this script blesses it, while the coverage tool's
+#     FIRST matching override wins and shadows the sibling's own entry.
+#     Reproduced: unanchoring `^internal/config` judged `internal/config/catalog`
+#     at config's floor instead of its own.
+#
+# Neither is caught by the set comparison below, which sees only the normalised
+# name and cannot tell a complete entry from a hollow one.
+
+incomplete=0
+while IFS=$'\t' read -r has_threshold path; do
+  [[ -z "$path" ]] && continue
+  if [[ "$has_threshold" != "1" ]]; then
+    echo "check-coverage-floors: override '$path' has no 'threshold:' line, so it falls back to threshold.package (0) and enforces nothing" >&2
+    incomplete=$((incomplete + 1))
+  fi
+  if [[ "$path" != "^"* || "$path" != *'$' ]]; then
+    echo "check-coverage-floors: override '$path' is not anchored at both ends (^...\$), so it can also match a sibling package and shadow that package's own floor" >&2
+    incomplete=$((incomplete + 1))
+  fi
+done <"$work_dir/overrides.raw"
+
+if [[ "$incomplete" -gt 0 ]]; then
+  echo "check-coverage-floors: $incomplete malformed override entr(ies); a floor that matches loosely or carries no threshold is not enforcement" >&2
+  exit 1
+fi
 
 # --- the comparison, read in both directions ---------------------------------
 
