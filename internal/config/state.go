@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,16 +14,69 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// currentSchemaVersion is the version of the STATE SCHEMA this binary writes.
+// It describes the on-disk shape of UserState, not the binary's own version:
+// a release that changes no state field leaves this number alone (D-02).
+//
+// It is a single monotonically increasing integer. There is no range parsing
+// and no per-field versioning; a reader compares two integers, which is the
+// smallest thing that satisfies DEBT-02's error message. Version 0 is the
+// sentinel for a file written before the field existed, which is a normal
+// state and not an error.
+const currentSchemaVersion = 1
+
+// peekSchemaVersion recovers the top-level schema_version from raw state bytes
+// with a second decode into a one-field struct.
+//
+// The second pass is not redundant with the SchemaVersion field. The field is
+// populated by the full decode, so when that decode fails the field is never
+// set; the peek reads the version out of a document the full decode rejects,
+// which is what lets a caller say "this file came from a newer dot" instead of
+// surfacing a bare yaml type error.
+//
+// It SWALLOWS its own error and returns 0. Measured across five malformed
+// inputs (07-RESEARCH.md Q3b: a sequence, a scalar, an empty document, broken
+// syntax, and a non-integer version) the peek's own error is always worse than
+// the decode error that follows it -- "cannot unmarshal !!seq into struct
+// { SchemaVersion int }" tells a user nothing. Returning 0 lets the real error
+// surface. Do not "improve" this into propagating.
+func peekSchemaVersion(raw []byte) int {
+	var probe struct {
+		SchemaVersion int `yaml:"schema_version"`
+	}
+	if err := yaml.Unmarshal(raw, &probe); err != nil {
+		return 0
+	}
+	return probe.SchemaVersion
+}
+
+// warnForwardSchema reports that a state file was written by a newer dot. It
+// does not fail the load: an additively-forward file still decodes, and an
+// incompatibly-forward one gets this warning before its decode error so the
+// user is pointed at the upgrade rather than at a yaml type error.
+//
+// It fires once per load, including from internal/profilesnap's walk over
+// other homes' snapshots, so a fleet mid-upgrade would print one line per
+// forward-version snapshot during `dot profile backup`. Accepted rather than
+// adding a quiet variant: by D-01's reasoning no file in this release can
+// carry a version above this binary's, so the case is unreachable in v1.0. A
+// quiet variant is the one-line upgrade path if v1.1 makes it real.
+func warnForwardSchema(path string, version int) {
+	fmt.Fprintf(os.Stderr, "warning: %s was written by a newer dot (state schema version %d, this binary understands %d)\n", path, version, currentSchemaVersion)
+	fmt.Fprintln(os.Stderr, "  Run 'dot update' to upgrade.")
+}
+
 // UserState holds user-configured settings persisted to disk.
 type UserState struct {
-	Name       string            `yaml:"name"`
-	Email      string            `yaml:"email"`
-	GithubUser string            `yaml:"github_user"`
-	Timezone   string            `yaml:"timezone"`
-	Profile    string            `yaml:"profile"`
-	Modules    UserModulesState  `yaml:"modules,omitempty"`
-	SSH        UserSSHState      `yaml:"ssh,omitempty"`
-	Secrets    SecretsUserConfig `yaml:"secrets,omitempty"`
+	SchemaVersion int               `yaml:"schema_version"`
+	Name          string            `yaml:"name"`
+	Email         string            `yaml:"email"`
+	GithubUser    string            `yaml:"github_user"`
+	Timezone      string            `yaml:"timezone"`
+	Profile       string            `yaml:"profile"`
+	Modules       UserModulesState  `yaml:"modules,omitempty"`
+	SSH           UserSSHState      `yaml:"ssh,omitempty"`
+	Secrets       SecretsUserConfig `yaml:"secrets,omitempty"`
 }
 
 // UserModulesState holds module opt-in/config from user state.
@@ -427,24 +482,48 @@ func LoadState() (*UserState, error) {
 	return loadStateAt(StatePath())
 }
 
-func loadStateAt(path string) (*UserState, error) {
+// readStateFile is the one place a state file is read and decoded. Both read
+// entry points route through it, because a version check attached only to
+// loadStateAt would leave `dot init --from`, internal/cli/onestop.go and
+// internal/profilesnap unversioned (D-03 as corrected).
+//
+// It returns the peeked schema version even when the decode fails, so the
+// wrapper can warn about a forward-version file before returning that error.
+// The noun ("state" or "config") keeps each wrapper's error wording byte-exact:
+// the differential harness compares stderr byte for byte and the wordings are
+// pinned by tests, so a merge that rewords either path is the thing that is
+// wrong, not the wording.
+func readStateFile(path, noun string) (*UserState, int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &UserState{}, nil
-		}
-		return nil, fmt.Errorf("reading state: %w", err)
+		return nil, 0, fmt.Errorf("reading %s: %w", noun, err)
 	}
+
+	version := peekSchemaVersion(data)
 
 	var state UserState
 	if err := yaml.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("parsing state: %w", err)
+		return nil, version, fmt.Errorf("parsing %s: %w", noun, err)
+	}
+	return &state, version, nil
+}
+
+func loadStateAt(path string) (*UserState, error) {
+	state, version, err := readStateFile(path, "state")
+	if version > currentSchemaVersion {
+		warnForwardSchema(path, version)
+	}
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return &UserState{}, nil
+		}
+		return nil, err
 	}
 	if err := state.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: state file has invalid values: %v\n", err)
 		fmt.Fprintln(os.Stderr, "  Run 'dot reconfigure' to fix.")
 	}
-	return &state, nil
+	return state, nil
 }
 
 // SaveState writes user state to disk atomically.
@@ -466,7 +545,13 @@ func saveStateAt(path string, state *UserState) error {
 		return fmt.Errorf("creating state dir: %w", err)
 	}
 
-	data, err := yaml.Marshal(state)
+	// Stamp the version here rather than trusting callers to populate the
+	// struct, so one place decides and no caller can forget (DEBT-01). A copy
+	// keeps the caller's value untouched.
+	out := *state
+	out.SchemaVersion = currentSchemaVersion
+
+	data, err := yaml.Marshal(&out)
 	if err != nil {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
@@ -517,13 +602,12 @@ func StatePathForHome(homeDir string) string {
 // LoadStateFrom reads user state from an arbitrary file path.
 // Unlike LoadState, it returns an error if the file does not exist.
 func LoadStateFrom(path string) (*UserState, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading config: %w", err)
+	state, version, err := readStateFile(path, "config")
+	if version > currentSchemaVersion {
+		warnForwardSchema(path, version)
 	}
-	var state UserState
-	if err := yaml.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
+	if err != nil {
+		return nil, err
 	}
 	if err := state.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: imported config has invalid values: %v\n", err)
@@ -531,7 +615,7 @@ func LoadStateFrom(path string) (*UserState, error) {
 	if state.Name == "" && state.Profile == "" {
 		return nil, fmt.Errorf("imported config is empty (no name or profile set)")
 	}
-	return &state, nil
+	return state, nil
 }
 
 // LoadStateForHome reads user state from a specific home directory.
