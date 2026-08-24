@@ -142,6 +142,25 @@ jobs:
           name: coverage
           path: coverage.out
           retention-days: 7
+      # TEST-01. Linux-only, matching the upload step above: D-01 makes the
+      # linux job authoritative for coverage, the same way it is for the
+      # differential and container scenarios, and judging the macOS leg against
+      # Linux floors would fail it for code that never entered the Linux build.
+      # The macOS leg keeps producing its own numbers and is not measured here.
+      #
+      # Placed AFTER the upload rather than before it: a floor failure is
+      # exactly when somebody needs coverage.out, and the upload step carries no
+      # `if: always()`, so gating ahead of it would withhold the artifact from
+      # the only run that needs it.
+      #
+      # `go install` at a pinned version rather than a third-party action,
+      # following the govulncheck gate in the lint job: the version is visible
+      # here and every other action in this workflow is first-party.
+      - name: Coverage floors
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go install github.com/vladopajic/go-test-coverage/v2@v2.19.0
+          go-test-coverage --config=./.testcoverage.yml
 
   integration:
     needs: unit

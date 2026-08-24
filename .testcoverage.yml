@@ -1,0 +1,120 @@
+# Per-package coverage floors, enforced in CI by vladopajic/go-test-coverage
+# v2.19.0 on the `unit` job's ubuntu-latest leg (TEST-01).
+#
+# HOW TO READ A FLOOR. The measuring command is CI's own
+# `go test ./... -race -count=1 -coverprofile=coverage.out` with NO -coverpkg,
+# so each package's denominator is its own statements and its numerator is what
+# ITS OWN test binary reached. A floor here therefore asks "does this package
+# have tests of its own?", not "does somebody else's test walk through it".
+# Adding -coverpkg would change the denominator for every package at once and
+# silently shift all 23 numbers below (D-02).
+#
+# AUTHORITY PLATFORM. Linux, matching the differential and container scenarios
+# which already name CI's linux job authoritative (D-01). Two distinct
+# mechanisms depress a Linux figure and both are measured, not assumed:
+#   - internal/syncer/scheduler_darwin.go carries `//go:build darwin` and leaves
+#     the Linux build entirely; its counterpart scheduler_other.go (systemd) is
+#     compiled instead, contributing 57 statements of which 0 are hit, because
+#     the only scheduler test is scheduler_darwin_test.go and it is darwin-tagged
+#     too. That is the whole build-tagged split in this repo.
+#   - internal/module/macapps.go carries NO build tag, so it COMPILES on Linux
+#     and its 84 statements sit in the denominator with 12 hit. Its darwin
+#     behaviour is gated at runtime and its tests skip.
+#   Consequence: darwin-only code is not measured by these floors. It is either
+#   absent from the build (first case) or present-and-unhit (second case), and
+#   only the second case drags a floor down. Raising a floor here can never be
+#   achieved by testing darwin-only behaviour; it needs Linux-reachable tests.
+#
+# HOW FLOORS WERE SEEDED. Each is the measured coverage rounded DOWN to an
+# integer, minus one point of slack (D-06). Measured on 2026-08-24 from the
+# ubuntu-latest leg of the `unit` job itself (runs 32675151304 and 32675708144),
+# confirmed by two runs that agree block for block. Ratcheting is manual: raise
+# a number by editing it.
+#
+# COMPLETENESS. scripts/check-coverage-floors.sh fails the build when a package
+# from `go list ./...` appears in neither list, when an entry here names no
+# package, when a package appears in both, and when an exclusion carries no
+# reason.
+#
+# ANCHORING, which differs between the two lists and is verified, not assumed:
+#   - override.path matches the PACKAGE path with the module prefix stripped
+#     (`internal/guard`, not `github.com/entelecheia/dotfiles-v2/internal/guard`
+#     — the latter matches nothing). Anchored at BOTH ends: unanchored
+#     `^internal/config` also matches `internal/config/catalog`, which is a
+#     separate package with a separate floor.
+#   - exclude.paths matches FILE paths, also module-prefix-stripped. NO trailing
+#     anchor: `^cmd/dot$` matches nothing because the profile records
+#     `cmd/dot/main.go`, so the exclusion would be decorative while looking
+#     deliberate.
+
+profile: coverage.out
+
+threshold:
+  # File-level floors are noise on a repo this size; per-package floors below
+  # are the enforcement. Package-level default is 0 because `override` carries
+  # every package explicitly and the completeness guard proves it.
+  file: 0
+  package: 0
+  # Repo total measured 50.2542% (9588/19079).
+  total: 49
+
+override:
+  - path: ^internal/aisettings$ # measured 63.9678% (1825/2853)
+    threshold: 62
+  - path: ^internal/appsettings$ # measured 54.1133% (296/547)
+    threshold: 53
+  - path: ^internal/claudecfg$ # measured 83.6735% (41/49)
+    threshold: 82
+  - path: ^internal/clean$ # measured 76.6667% (69/90)
+    threshold: 75
+  - path: ^internal/cli$ # measured 41.0866% (2798/6810)
+    threshold: 40
+  - path: ^internal/config$ # measured 70.7516% (433/612)
+    threshold: 69
+  - path: ^internal/config/catalog$ # measured 91.4894% (43/47)
+    threshold: 90
+  - path: ^internal/exec$ # measured 46.5318% (161/346)
+    threshold: 45
+  - path: ^internal/fileutil$ # measured 55.1867% (133/241)
+    threshold: 54
+  - path: ^internal/ghauth$ # measured 100.0000% (6/6)
+    threshold: 99
+  - path: ^internal/guard$ # measured 92.3077% (168/182)
+    threshold: 91
+  - path: ^internal/module$ # measured 21.9512% (207/943)
+    threshold: 20
+  - path: ^internal/noindex$ # measured 91.2281% (52/57)
+    threshold: 90
+  - path: ^internal/profilesnap$ # measured 74.5455% (164/220)
+    threshold: 73
+  - path: ^internal/secrets$ # measured 44.9339% (102/227)
+    threshold: 43
+  - path: ^internal/sliceutil$ # measured 100.0000% (24/24)
+    threshold: 99
+  - path: ^internal/snapstore$ # measured 48.4211% (46/95)
+    threshold: 47
+  - path: ^internal/syncer$ # measured 60.0000% (2442/4070)
+    threshold: 59
+  - path: ^internal/template$ # measured 66.6667% (16/24)
+    threshold: 65
+  - path: ^internal/tunnel$ # measured 31.6964% (142/448)
+    threshold: 30
+  - path: ^internal/ui$ # measured 19.9442% (143/717)
+    threshold: 18
+  - path: ^internal/workspace$ # measured 60.8434% (101/166)
+    threshold: 59
+  - path: ^internal/ws$ # measured 60.6897% (176/290)
+    threshold: 59
+
+exclude:
+  paths:
+    # cmd/dot is main() with every decision delegated to internal/cli, which
+    # carries its own floor above. What covers it instead: the container
+    # scenarios under tests/scenarios/ execute the BUILT BINARY end to end, so
+    # a broken main() fails them rather than passing a unit floor.
+    - ^cmd/dot/
+    # tools/gendocs is a build-time generator with no runtime callers. What
+    # covers it instead: GUARD-06, the `make docs` plus `git status --porcelain
+    # docs/commands` check in the lint job, which fails the build when its
+    # output drifts from the committed pages.
+    - ^tools/gendocs/
