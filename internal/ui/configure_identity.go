@@ -76,11 +76,11 @@ func ConfigureProfile(state *config.UserState, suggested string, yes bool) error
 	return err
 }
 
-// ConfigureSSH prompts for SSH key name with auto-detection of existing keys.
-func ConfigureSSH(state *config.UserState, yes bool) error {
+// ConfigureSSH prompts for SSH key name with auto-detection in home.
+func ConfigureSSH(state *config.UserState, home string, yes bool) error {
 	printSection("SSH")
 
-	keys := detectSSHKeys()
+	keys := detectSSHKeys(home)
 
 	sshKeyDefault := state.SSH.KeyName
 	if sshKeyDefault == "" {

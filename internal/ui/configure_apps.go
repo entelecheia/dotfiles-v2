@@ -225,14 +225,14 @@ func ConfigureFonts(state *config.UserState, profile string, yes bool) error {
 }
 
 // ConfigureSecrets prompts for age encryption settings with auto-detection.
-func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
+func ConfigureSecrets(state *config.UserState, home, profile string, yes bool) error {
 	if profile == "server" || profile == "minimal" {
 		return nil
 	}
 
 	printSection("Secrets (age encryption)")
 
-	ageKeys := detectAgeKeys()
+	ageKeys := detectAgeKeys(home)
 
 	if len(ageKeys) == 0 && state.Secrets.AgeIdentity == "" {
 		fmt.Println(StyleHint.Render("  No age keys found. Skipping secrets configuration."))
@@ -295,7 +295,7 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 		recipientDefault = state.Secrets.AgeRecipients[0]
 	}
 	if recipientDefault == "" {
-		recipientDefault = readAgePublicKey(state.Secrets.AgeIdentity)
+		recipientDefault = readAgePublicKey(home, state.Secrets.AgeIdentity)
 	}
 
 	if recipientDefault != "" {
@@ -316,7 +316,7 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 
 // ConfigureMacApps prompts for macOS cask selection and backup destination.
 // Skipped on non-darwin. Mutates state.Modules.MacApps in place.
-func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
+func ConfigureMacApps(state *config.UserState, home, profile string, yes bool) error {
 	if runtime.GOOS != "darwin" {
 		state.Modules.MacApps = config.UserMacAppsState{}
 		return nil

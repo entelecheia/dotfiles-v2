@@ -178,12 +178,8 @@ func defaultCloudSymlink(cloudPath string) string {
 	return "~/gdrive-workspace"
 }
 
-// detectSSHKeys finds existing SSH key names in ~/.ssh/.
-func detectSSHKeys() []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
+// detectSSHKeys finds existing SSH key names in home/.ssh/.
+func detectSSHKeys(home string) []string {
 	sshDir := filepath.Join(home, ".ssh")
 	entries, err := os.ReadDir(sshDir)
 	if err != nil {
@@ -224,12 +220,8 @@ func detectSSHKeys() []string {
 	return keys
 }
 
-// detectAgeKeys finds existing age identity files in ~/.ssh/.
-func detectAgeKeys() []string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
+// detectAgeKeys finds existing age identity files in home/.ssh/.
+func detectAgeKeys(home string) []string {
 	sshDir := filepath.Join(home, ".ssh")
 	entries, err := os.ReadDir(sshDir)
 	if err != nil {
@@ -250,9 +242,9 @@ func detectAgeKeys() []string {
 	return keys
 }
 
-// readAgePublicKey attempts to read the .pub file corresponding to an age identity.
-func readAgePublicKey(identityPath string) string {
-	expanded := fileutil.ExpandHome(identityPath)
+// readAgePublicKey attempts to read an age public key from the resolved home.
+func readAgePublicKey(home, identityPath string) string {
+	expanded := fileutil.ExpandHomeFor(identityPath, home)
 	pubPath := expanded + ".pub"
 	f, err := os.Open(pubPath)
 	if err != nil {
