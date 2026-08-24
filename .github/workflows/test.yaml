@@ -133,8 +133,8 @@ jobs:
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
@@ -142,17 +142,23 @@ jobs:
           name: coverage
           path: coverage.out
           retention-days: 7
-      # TEST-01. Linux-only, matching the upload step above: D-01 makes the
-      # linux job authoritative for coverage, the same way it is for the
-      # differential and container scenarios, and judging the macOS leg against
-      # Linux floors would fail it for code that never entered the Linux build.
-      # The macOS leg keeps producing its own numbers and is not measured here.
+      # TEST-01, two Linux-only steps. D-01 makes the linux job authoritative
+      # for coverage, the same way it already is for the differential and
+      # container scenarios, so both carry the upload step's own
+      # `matrix.os == 'ubuntu-latest'` condition. The macOS leg keeps producing
+      # its own numbers and is not judged against Linux floors, which would fail
+      # it for code that never entered the Linux build.
       #
-      # Placed AFTER the upload rather than before it: a floor failure is
+      # Both sit AFTER the upload rather than before it: a floor failure is
       # exactly when somebody needs coverage.out, and the upload step carries no
       # `if: always()`, so gating ahead of it would withhold the artifact from
       # the only run that needs it.
-      #
+
+      # First, so a package with no floor is reported as itself rather than
+      # surfacing later as a total that drifted for no visible reason.
+      - name: Every package has a coverage floor
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-coverage-floors.sh
       # `go install` at a pinned version rather than a third-party action,
       # following the govulncheck gate in the lint job: the version is visible
       # here and every other action in this workflow is first-party.
