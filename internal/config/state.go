@@ -50,6 +50,71 @@ func peekSchemaVersion(raw []byte) int {
 	return probe.SchemaVersion
 }
 
+// applyLegacyKeys overlays the legacy state keys onto an already-decoded
+// state, reading them from the raw bytes in a second pass -- the same
+// mechanism peekSchemaVersion uses, and the reason DEBT-01 strictly precedes
+// DEBT-03.
+//
+// It exists because the UnmarshalYAML shims that used to read these keys are
+// gone. DEBT-03 asks for them to be migrated AND deleted, and a shim cannot be
+// both: read the keys here instead and the conversion stops depending on them.
+// yaml.v3 drops unknown keys with a nil error, so without this pass deleting
+// the shims would silently discard the values.
+//
+// The overlay runs only on a document the full decode already accepted, so its
+// own decode error means nothing new and is swallowed like the peek's.
+//
+// It converts in memory and writes nothing. Every ordinary SaveState* then
+// emits the canonical form on its own, because Warp is tagged `yaml:"-"` and
+// every other destination is a serialized field -- seven write commands
+// migrate implicitly and none of them needs to know. No read path may persist
+// this (D-05, D-23): dot check, dot diff and internal/profilesnap all reach
+// here, and profilesnap reads other homes' files merely to inspect them.
+func applyLegacyKeys(state *UserState, raw []byte) {
+	var legacy struct {
+		Modules struct {
+			AITools      bool `yaml:"ai_tools"`
+			Warp         bool `yaml:"warp"`
+			TerminalApps struct {
+				Casks []string `yaml:"casks"`
+			} `yaml:"terminal_apps"`
+		} `yaml:"modules"`
+	}
+	if err := yaml.Unmarshal(raw, &legacy); err != nil {
+		return
+	}
+
+	if legacy.Modules.AITools {
+		state.carriedLegacy = append(state.carriedLegacy, "modules.ai_tools")
+		if !state.Modules.AI.Enabled {
+			state.Modules.AI.Enabled = true
+		}
+	}
+
+	// Casks before warp, matching the old shim order: the terminal_apps shim
+	// ran during the decode, so a file carrying both casks and warp had its
+	// apps already populated by the time the warp branch tested them.
+	//
+	// A nil Apps slice means the canonical key was absent; an explicit
+	// `apps: []` decodes to a non-nil zero-length slice (measured). That is
+	// what keeps an explicit empty list winning over a populated casks list.
+	if len(legacy.Modules.TerminalApps.Casks) > 0 {
+		state.carriedLegacy = append(state.carriedLegacy, "modules.terminal_apps.casks")
+		if state.Modules.TerminalApps.Apps == nil {
+			state.Modules.TerminalApps.Apps = append([]string(nil), legacy.Modules.TerminalApps.Casks...)
+		}
+	}
+
+	if legacy.Modules.Warp {
+		state.carriedLegacy = append(state.carriedLegacy, "modules.warp")
+		state.Modules.Warp = true
+		if !state.Modules.TerminalApps.Enabled && len(state.Modules.TerminalApps.Apps) == 0 {
+			state.Modules.TerminalApps.Enabled = true
+			state.Modules.TerminalApps.Apps = []string{"warp"}
+		}
+	}
+}
+
 // warnForwardSchema reports that a state file was written by a newer dot. It
 // does not fail the load: an additively-forward file still decodes, and an
 // incompatibly-forward one gets this warning before its decode error so the
@@ -77,6 +142,12 @@ type UserState struct {
 	Modules       UserModulesState  `yaml:"modules,omitempty"`
 	SSH           UserSSHState      `yaml:"ssh,omitempty"`
 	Secrets       SecretsUserConfig `yaml:"secrets,omitempty"`
+
+	// carriedLegacy names the legacy keys the file this state was read from
+	// still used, in the order applyLegacyKeys applies them. It is unexported,
+	// so yaml.v3 cannot see it: the flag can never be written to disk and
+	// needs no tag. saveStateAt reads it to print one note per converted write.
+	carriedLegacy []string
 }
 
 // UserModulesState holds module opt-in/config from user state.
@@ -134,70 +205,10 @@ func (a *UserAIState) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*raw)(a))
 }
 
-// UnmarshalYAML accepts legacy read-only input:
-//   - modules.ai_tools -> modules.ai.enabled
-//   - modules.warp -> modules.terminal_apps.apps: [warp]
-func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
-	type raw UserModulesState
-	aux := struct {
-		*raw       `yaml:",inline"`
-		LegacyAI   bool `yaml:"ai_tools"`
-		LegacyWarp bool `yaml:"warp"`
-	}{
-		raw: (*raw)(s),
-	}
-	if err := value.Decode(&aux); err != nil {
-		return err
-	}
-	if !s.AI.Enabled && aux.LegacyAI {
-		s.AI.Enabled = true
-	}
-	if aux.LegacyWarp {
-		s.Warp = true
-		if !s.TerminalApps.Enabled && len(s.TerminalApps.Apps) == 0 {
-			s.TerminalApps.Enabled = true
-			s.TerminalApps.Apps = []string{"warp"}
-		}
-	}
-	return nil
-}
-
 // UserTerminalAppsState holds cross-platform GUI terminal app selections.
 type UserTerminalAppsState struct {
 	Enabled bool     `yaml:"enabled,omitempty"`
 	Apps    []string `yaml:"apps,omitempty"`
-}
-
-// UnmarshalYAML accepts the legacy `casks` key as read-only input. When both
-// keys are present, the canonical `apps` key wins, including an explicit empty
-// list.
-func (s *UserTerminalAppsState) UnmarshalYAML(value *yaml.Node) error {
-	var raw struct {
-		Enabled bool     `yaml:"enabled"`
-		Apps    []string `yaml:"apps"`
-		Casks   []string `yaml:"casks"`
-	}
-	if err := value.Decode(&raw); err != nil {
-		return err
-	}
-
-	appsSet := false
-	if value.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(value.Content); i += 2 {
-			if value.Content[i].Value == "apps" {
-				appsSet = true
-				break
-			}
-		}
-	}
-
-	s.Enabled = raw.Enabled
-	if appsSet {
-		s.Apps = append([]string(nil), raw.Apps...)
-	} else {
-		s.Apps = append([]string(nil), raw.Casks...)
-	}
-	return nil
 }
 
 // IsZero lets yaml.v3 omit an unset terminal_apps block from user state.
@@ -505,6 +516,7 @@ func readStateFile(path, noun string) (*UserState, int, error) {
 	if err := yaml.Unmarshal(data, &state); err != nil {
 		return nil, version, fmt.Errorf("parsing %s: %w", noun, err)
 	}
+	applyLegacyKeys(&state, data)
 	return &state, version, nil
 }
 
@@ -588,6 +600,15 @@ func saveStateAt(path string, state *UserState) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		cleanup()
 		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	// The write choke point is the smallest correct site for this notice: it
+	// fires once per write, from every write command, and no read path can
+	// reach it. `note: ` is the prefix internal/syncer/sync.go:217 already uses
+	// for a non-actionable informational line.
+	if len(state.carriedLegacy) > 0 {
+		fmt.Fprintf(os.Stderr, "note: migrated legacy state keys to their canonical form: %s\n",
+			strings.Join(state.carriedLegacy, ", "))
 	}
 	return nil
 }

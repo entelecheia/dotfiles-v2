@@ -423,3 +423,78 @@ func TestSaveState_UnparseableDestinationIsOverwrittenNotRefused(t *testing.T) {
 		t.Fatal("recovery write did not land")
 	}
 }
+
+// TestLoadState_ExplicitEmptyAppsBeatsLegacyCasks characterizes the one
+// semantic the deleted UserTerminalAppsState.UnmarshalYAML did more than
+// legacy handling for: it told "apps absent" apart from "apps present and
+// empty", so an explicit empty list wins over casks. A plain struct decode
+// keeps the distinction (measured: an absent apps decodes to a nil slice, an
+// explicit empty one to a non-nil zero-length slice), so the legacy overlay
+// must apply casks only when the canonical slice is nil.
+func TestLoadState_ExplicitEmptyAppsBeatsLegacyCasks(t *testing.T) {
+	path := writeStateFile(t, t.TempDir(),
+		"name: Test\nprofile: full\nmodules:\n  terminal_apps:\n    enabled: true\n    apps: []\n    casks: [warp]\n")
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if len(loaded.Modules.TerminalApps.Apps) != 0 {
+		t.Fatalf("explicit empty apps lost to casks: %#v", loaded.Modules.TerminalApps.Apps)
+	}
+}
+
+// TestLoadState_AIShorthandStillAccepted guards the shim that is NOT a legacy
+// shim: `ai: true` is a supported input form, not a migration.
+func TestLoadState_AIShorthandStillAccepted(t *testing.T) {
+	path := writeStateFile(t, t.TempDir(), "name: Test\nprofile: full\nmodules:\n  ai: true\n")
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	if !loaded.Modules.AI.Enabled {
+		t.Fatal("ai: true shorthand no longer enables the AI module")
+	}
+}
+
+// TestSaveState_NotesTheLegacyMigration: a file whose keys moved says so once,
+// on the write that persists the move.
+func TestSaveState_NotesTheLegacyMigration(t *testing.T) {
+	path := writeStateFile(t, t.TempDir(), "name: Test\nprofile: full\nmodules:\n  warp: true\n")
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	out := captureStderr(t, func() {
+		if err := saveStateAt(path, loaded); err != nil {
+			t.Errorf("saveStateAt: %v", err)
+		}
+	})
+	if !strings.HasPrefix(out, "note: ") {
+		t.Fatalf("no migration note on a converted write: %q", out)
+	}
+	if !strings.Contains(out, "modules.warp") {
+		t.Fatalf("note does not name the key that moved: %q", out)
+	}
+	if strings.Count(out, "note: ") != 1 {
+		t.Fatalf("note fired %d times, want once: %q", strings.Count(out, "note: "), out)
+	}
+}
+
+// TestSaveState_SilentOnACanonicalFile is the other half: a file with nothing
+// to migrate must not print a note anybody would have to learn to ignore.
+func TestSaveState_SilentOnACanonicalFile(t *testing.T) {
+	path := writeStateFile(t, t.TempDir(),
+		"schema_version: 1\nname: Test\nprofile: full\nmodules:\n  terminal_apps:\n    enabled: true\n    apps: [warp]\n")
+	loaded, err := loadStateAt(path)
+	if err != nil {
+		t.Fatalf("loadStateAt: %v", err)
+	}
+	out := captureStderr(t, func() {
+		if err := saveStateAt(path, loaded); err != nil {
+			t.Errorf("saveStateAt: %v", err)
+		}
+	})
+	if out != "" {
+		t.Fatalf("canonical write wrote to stderr: %q", out)
+	}
+}

@@ -48,6 +48,16 @@ type ModulesConfig struct {
 
 // UnmarshalYAML accepts the legacy modules.ai_tools key as read-only input and
 // normalizes it into modules.ai.
+//
+// Deliberately OUT of DEBT-03's scope, which deleted the two UserState shims.
+// The reason is mechanical: a profile Config is either embedded in the binary
+// (loader.go, and no embedded profile carries the legacy key) or a file the
+// user passes with --config, and nothing in this package ever marshals a
+// Config back to disk -- the only yaml.Marshal here writes UserState. With no
+// write path, "migrate then persist" has no meaning, and deleting this shim
+// would drop a --config file's legacy key with nothing anywhere able to
+// rewrite the file. Keeping it is what satisfies DEBT-03 rather than what
+// evades it. Do not re-open without a write path.
 func (m *ModulesConfig) UnmarshalYAML(value *yaml.Node) error {
 	type raw ModulesConfig
 	aux := struct {
