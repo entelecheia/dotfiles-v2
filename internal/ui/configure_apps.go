@@ -2,14 +2,12 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
-	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
@@ -411,11 +409,10 @@ func ConfigureMacApps(state *config.UserState, home, profile string, yes bool) e
 	rootDefault := state.Modules.MacApps.BackupRoot
 	detected := false
 	if rootDefault == "" {
-		if cloud := appsettings.DetectCloudCandidate(fileutil.ExpandHome("~")); cloud != "" {
+		if cloud := appsettings.DetectCloudCandidate(home); cloud != "" {
 			rootDefault = cloud
 			detected = true
 		} else {
-			home, _ := os.UserHomeDir()
 			rootDefault = appsettings.DefaultBackupRoot(home)
 		}
 	}
@@ -438,7 +435,6 @@ func ConfigureMacApps(state *config.UserState, home, profile string, yes bool) e
 			state.Modules.MacApps.BackupRoot = path
 		}
 	case "local":
-		home, _ := os.UserHomeDir()
 		state.Modules.MacApps.BackupRoot = appsettings.DefaultBackupRoot(home)
 	case "custom":
 		path, inputErr := Input("Backup root path", rootDefault, yes)

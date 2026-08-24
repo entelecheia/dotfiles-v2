@@ -42,6 +42,7 @@ func TestExpandHome(t *testing.T) {
 	tests := []struct {
 		in, want string
 	}{
+		{"~", home},
 		{"~/foo", filepath.Join(home, "foo")},
 		{"~/", home},
 		{"/absolute", "/absolute"},
@@ -52,6 +53,24 @@ func TestExpandHome(t *testing.T) {
 	for _, tt := range tests {
 		if got := ExpandHome(tt.in); got != tt.want {
 			t.Errorf("ExpandHome(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestExpandHomeFor(t *testing.T) {
+	home := t.TempDir()
+	tests := []struct {
+		in, want string
+	}{
+		{"~", home},
+		{"~/foo", filepath.Join(home, "foo")},
+		{"/absolute", "/absolute"},
+		{"relative/path", "relative/path"},
+		{"file~name", "file~name"},
+	}
+	for _, tt := range tests {
+		if got := ExpandHomeFor(tt.in, home); got != tt.want {
+			t.Errorf("ExpandHomeFor(%q, %q) = %q, want %q", tt.in, home, got, tt.want)
 		}
 	}
 }

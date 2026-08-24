@@ -19,14 +19,18 @@ func IsDir(path string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// ExpandHomeFor replaces a leading "~/" with home. Returns the input
-// unchanged if it doesn't start with "~/".
+// ExpandHomeFor replaces a leading "~" or "~/" with home. Returns the input
+// unchanged if it doesn't start with either form.
 //
 // A run that targets a home other than the process's own (--home) must use
 // this rather than ExpandHome: reading the process environment is how vault
 // detection came to stat the invoking user's tree no matter which home the
 // run was pointed at (BUG-20).
 func ExpandHomeFor(path, home string) string {
+	// Keep bare "~" consistent with the home-aware AI settings expanders.
+	if path == "~" {
+		return home
+	}
 	if strings.HasPrefix(path, "~/") {
 		return filepath.Join(home, path[2:])
 	}

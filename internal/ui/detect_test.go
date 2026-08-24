@@ -58,6 +58,27 @@ func TestReadAgePublicKeyUsesProvidedHome(t *testing.T) {
 	}
 }
 
+func TestConfigureMacAppsUsesProvidedHomeForCloudBackup(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS app configuration is darwin-only")
+	}
+	invoker := t.TempDir()
+	target := t.TempDir()
+	t.Setenv("HOME", invoker)
+	secrets := filepath.Join(target, "Library", "CloudStorage", "Dropbox", "secrets")
+	if err := os.MkdirAll(secrets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &config.UserState{}
+	if err := ConfigureMacApps(state, target, "full", true); err != nil {
+		t.Fatalf("ConfigureMacApps: %v", err)
+	}
+	if got, want := state.Modules.MacApps.BackupRoot, filepath.Join(secrets, "dotfiles-backup"); got != want {
+		t.Errorf("BackupRoot = %q, want %q", got, want)
+	}
+}
+
 func mkdirs(t *testing.T, paths ...string) {
 	t.Helper()
 	for _, p := range paths {
