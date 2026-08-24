@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
-	"os"
 	"strings"
 	"text/template"
 )
@@ -34,13 +33,6 @@ func NewEngine() *Engine {
 			"toLower":   strings.ToLower,
 			"toUpper":   strings.ToUpper,
 			"join":      strings.Join,
-			"expandHome": func(s string) string {
-				if strings.HasPrefix(s, "~/") {
-					home, _ := os.UserHomeDir()
-					return home + s[1:]
-				}
-				return s
-			},
 		},
 	}
 }

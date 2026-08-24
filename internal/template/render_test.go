@@ -141,6 +141,15 @@ func TestRenderString_InvalidSyntax(t *testing.T) {
 	}
 }
 
+func TestRenderString_ExpandHomeIsNotAvailable(t *testing.T) {
+	e := NewEngine()
+
+	_, err := e.RenderString("expand-home", `{{expandHome "~/workspace"}}`, nil)
+	if err == nil {
+		t.Fatal("RenderString expandHome: expected removed function to fail parsing")
+	}
+}
+
 func TestRender_ToolsInitAIToolPaths(t *testing.T) {
 	e := NewEngine()
 

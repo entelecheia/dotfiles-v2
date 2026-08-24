@@ -95,7 +95,7 @@ override:
     threshold: 47
   - path: ^internal/syncer$ # measured 60.0000% (2442/4070)
     threshold: 59
-  - path: ^internal/template$ # measured 66.6667% (16/24)
+  - path: ^internal/template$ # measured 80.0000% (16/20)
     threshold: 65
   - path: ^internal/tunnel$ # measured 31.6964% (142/448)
     threshold: 30
