@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,16 +14,140 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// currentSchemaVersion is the version of the STATE SCHEMA this binary writes.
+// It describes the on-disk shape of UserState, not the binary's own version:
+// a release that changes no state field leaves this number alone (D-02).
+//
+// It is a single monotonically increasing integer. There is no range parsing
+// and no per-field versioning; a reader compares two integers, which is the
+// smallest thing that satisfies DEBT-02's error message. Version 0 is the
+// sentinel for a file written before the field existed, which is a normal
+// state and not an error.
+const currentSchemaVersion = 1
+
+// peekSchemaVersion recovers the top-level schema_version from raw state bytes
+// with a second decode into a one-field struct.
+//
+// The second pass is not redundant with the SchemaVersion field. The field is
+// populated by the full decode, so when that decode fails the field is never
+// set; the peek reads the version out of a document the full decode rejects,
+// which is what lets a caller say "this file came from a newer dot" instead of
+// surfacing a bare yaml type error.
+//
+// It SWALLOWS its own error and returns 0. Measured across five malformed
+// inputs (07-RESEARCH.md Q3b: a sequence, a scalar, an empty document, broken
+// syntax, and a non-integer version) the peek's own error is always worse than
+// the decode error that follows it -- "cannot unmarshal !!seq into struct
+// { SchemaVersion int }" tells a user nothing. Returning 0 lets the real error
+// surface. Do not "improve" this into propagating.
+func peekSchemaVersion(raw []byte) int {
+	var probe struct {
+		SchemaVersion int `yaml:"schema_version"`
+	}
+	if err := yaml.Unmarshal(raw, &probe); err != nil {
+		return 0
+	}
+	return probe.SchemaVersion
+}
+
+// applyLegacyKeys overlays the legacy state keys onto an already-decoded
+// state, reading them from the raw bytes in a second pass -- the same
+// mechanism peekSchemaVersion uses, and the reason DEBT-01 strictly precedes
+// DEBT-03.
+//
+// It exists because the UnmarshalYAML shims that used to read these keys are
+// gone. DEBT-03 asks for them to be migrated AND deleted, and a shim cannot be
+// both: read the keys here instead and the conversion stops depending on them.
+// yaml.v3 drops unknown keys with a nil error, so without this pass deleting
+// the shims would silently discard the values.
+//
+// The overlay runs only on a document the full decode already accepted, so its
+// own decode error means nothing new and is swallowed like the peek's.
+//
+// It converts in memory and writes nothing. Every ordinary SaveState* then
+// emits the canonical form on its own, because Warp is tagged `yaml:"-"` and
+// every other destination is a serialized field -- seven write commands
+// migrate implicitly and none of them needs to know. No read path may persist
+// this (D-05, D-23): dot check, dot diff and internal/profilesnap all reach
+// here, and profilesnap reads other homes' files merely to inspect them.
+func applyLegacyKeys(state *UserState, raw []byte) {
+	var legacy struct {
+		Modules struct {
+			AITools      bool `yaml:"ai_tools"`
+			Warp         bool `yaml:"warp"`
+			TerminalApps struct {
+				Casks []string `yaml:"casks"`
+			} `yaml:"terminal_apps"`
+		} `yaml:"modules"`
+	}
+	if err := yaml.Unmarshal(raw, &legacy); err != nil {
+		return
+	}
+
+	if legacy.Modules.AITools {
+		state.carriedLegacy = append(state.carriedLegacy, "modules.ai_tools")
+		if !state.Modules.AI.Enabled {
+			state.Modules.AI.Enabled = true
+		}
+	}
+
+	// Casks before warp, matching the old shim order: the terminal_apps shim
+	// ran during the decode, so a file carrying both casks and warp had its
+	// apps already populated by the time the warp branch tested them.
+	//
+	// A nil Apps slice means the canonical key was absent; an explicit
+	// `apps: []` decodes to a non-nil zero-length slice (measured). That is
+	// what keeps an explicit empty list winning over a populated casks list.
+	if len(legacy.Modules.TerminalApps.Casks) > 0 {
+		state.carriedLegacy = append(state.carriedLegacy, "modules.terminal_apps.casks")
+		if state.Modules.TerminalApps.Apps == nil {
+			state.Modules.TerminalApps.Apps = append([]string(nil), legacy.Modules.TerminalApps.Casks...)
+		}
+	}
+
+	if legacy.Modules.Warp {
+		state.carriedLegacy = append(state.carriedLegacy, "modules.warp")
+		state.Modules.Warp = true
+		if !state.Modules.TerminalApps.Enabled && len(state.Modules.TerminalApps.Apps) == 0 {
+			state.Modules.TerminalApps.Enabled = true
+			state.Modules.TerminalApps.Apps = []string{"warp"}
+		}
+	}
+}
+
+// warnForwardSchema reports that a state file was written by a newer dot. It
+// does not fail the load: an additively-forward file still decodes, and an
+// incompatibly-forward one gets this warning before its decode error so the
+// user is pointed at the upgrade rather than at a yaml type error.
+//
+// It fires once per load, including from internal/profilesnap's walk over
+// other homes' snapshots, so a fleet mid-upgrade would print one line per
+// forward-version snapshot during `dot profile backup`. Accepted rather than
+// adding a quiet variant: by D-01's reasoning no file in this release can
+// carry a version above this binary's, so the case is unreachable in v1.0. A
+// quiet variant is the one-line upgrade path if v1.1 makes it real.
+func warnForwardSchema(path string, version int) {
+	fmt.Fprintf(os.Stderr, "warning: %s was written by a newer dot (state schema version %d, this binary understands %d)\n", path, version, currentSchemaVersion)
+	fmt.Fprintln(os.Stderr, "  Run 'dot update' to upgrade.")
+}
+
 // UserState holds user-configured settings persisted to disk.
 type UserState struct {
-	Name       string            `yaml:"name"`
-	Email      string            `yaml:"email"`
-	GithubUser string            `yaml:"github_user"`
-	Timezone   string            `yaml:"timezone"`
-	Profile    string            `yaml:"profile"`
-	Modules    UserModulesState  `yaml:"modules,omitempty"`
-	SSH        UserSSHState      `yaml:"ssh,omitempty"`
-	Secrets    SecretsUserConfig `yaml:"secrets,omitempty"`
+	SchemaVersion int               `yaml:"schema_version"`
+	Name          string            `yaml:"name"`
+	Email         string            `yaml:"email"`
+	GithubUser    string            `yaml:"github_user"`
+	Timezone      string            `yaml:"timezone"`
+	Profile       string            `yaml:"profile"`
+	Modules       UserModulesState  `yaml:"modules,omitempty"`
+	SSH           UserSSHState      `yaml:"ssh,omitempty"`
+	Secrets       SecretsUserConfig `yaml:"secrets,omitempty"`
+
+	// carriedLegacy names the legacy keys the file this state was read from
+	// still used, in the order applyLegacyKeys applies them. It is unexported,
+	// so yaml.v3 cannot see it: the flag can never be written to disk and
+	// needs no tag. saveStateAt reads it to print one note per converted write.
+	carriedLegacy []string
 }
 
 // UserModulesState holds module opt-in/config from user state.
@@ -79,70 +205,10 @@ func (a *UserAIState) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*raw)(a))
 }
 
-// UnmarshalYAML accepts legacy read-only input:
-//   - modules.ai_tools -> modules.ai.enabled
-//   - modules.warp -> modules.terminal_apps.apps: [warp]
-func (s *UserModulesState) UnmarshalYAML(value *yaml.Node) error {
-	type raw UserModulesState
-	aux := struct {
-		*raw       `yaml:",inline"`
-		LegacyAI   bool `yaml:"ai_tools"`
-		LegacyWarp bool `yaml:"warp"`
-	}{
-		raw: (*raw)(s),
-	}
-	if err := value.Decode(&aux); err != nil {
-		return err
-	}
-	if !s.AI.Enabled && aux.LegacyAI {
-		s.AI.Enabled = true
-	}
-	if aux.LegacyWarp {
-		s.Warp = true
-		if !s.TerminalApps.Enabled && len(s.TerminalApps.Apps) == 0 {
-			s.TerminalApps.Enabled = true
-			s.TerminalApps.Apps = []string{"warp"}
-		}
-	}
-	return nil
-}
-
 // UserTerminalAppsState holds cross-platform GUI terminal app selections.
 type UserTerminalAppsState struct {
 	Enabled bool     `yaml:"enabled,omitempty"`
 	Apps    []string `yaml:"apps,omitempty"`
-}
-
-// UnmarshalYAML accepts the legacy `casks` key as read-only input. When both
-// keys are present, the canonical `apps` key wins, including an explicit empty
-// list.
-func (s *UserTerminalAppsState) UnmarshalYAML(value *yaml.Node) error {
-	var raw struct {
-		Enabled bool     `yaml:"enabled"`
-		Apps    []string `yaml:"apps"`
-		Casks   []string `yaml:"casks"`
-	}
-	if err := value.Decode(&raw); err != nil {
-		return err
-	}
-
-	appsSet := false
-	if value.Kind == yaml.MappingNode {
-		for i := 0; i+1 < len(value.Content); i += 2 {
-			if value.Content[i].Value == "apps" {
-				appsSet = true
-				break
-			}
-		}
-	}
-
-	s.Enabled = raw.Enabled
-	if appsSet {
-		s.Apps = append([]string(nil), raw.Apps...)
-	} else {
-		s.Apps = append([]string(nil), raw.Casks...)
-	}
-	return nil
 }
 
 // IsZero lets yaml.v3 omit an unset terminal_apps block from user state.
@@ -427,30 +493,91 @@ func LoadState() (*UserState, error) {
 	return loadStateAt(StatePath())
 }
 
-func loadStateAt(path string) (*UserState, error) {
+// readStateFile is the one place a state file is read and decoded. Both read
+// entry points route through it, because a version check attached only to
+// loadStateAt would leave `dot init --from`, internal/cli/onestop.go and
+// internal/profilesnap unversioned (D-03 as corrected).
+//
+// It returns the peeked schema version even when the decode fails, so the
+// wrapper can warn about a forward-version file before returning that error.
+// The noun ("state" or "config") keeps each wrapper's error wording byte-exact:
+// the differential harness compares stderr byte for byte and the wordings are
+// pinned by tests, so a merge that rewords either path is the thing that is
+// wrong, not the wording.
+func readStateFile(path, noun string) (*UserState, int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &UserState{}, nil
-		}
-		return nil, fmt.Errorf("reading state: %w", err)
+		return nil, 0, fmt.Errorf("reading %s: %w", noun, err)
 	}
+
+	version := peekSchemaVersion(data)
 
 	var state UserState
 	if err := yaml.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("parsing state: %w", err)
+		return nil, version, fmt.Errorf("parsing %s: %w", noun, err)
+	}
+	applyLegacyKeys(&state, data)
+	return &state, version, nil
+}
+
+func loadStateAt(path string) (*UserState, error) {
+	state, version, err := readStateFile(path, "state")
+	if version > currentSchemaVersion {
+		warnForwardSchema(path, version)
+	}
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return &UserState{}, nil
+		}
+		return nil, err
 	}
 	if err := state.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: state file has invalid values: %v\n", err)
 		fmt.Fprintln(os.Stderr, "  Run 'dot reconfigure' to fix.")
 	}
-	return &state, nil
+	return state, nil
 }
 
 // SaveState writes user state to disk atomically.
 // Validates before writing — invalid state is never persisted.
 func SaveState(state *UserState) error {
 	return saveStateAt(StatePath(), state)
+}
+
+// MarshalState serializes state as a state-file document, stamping the schema
+// version this binary writes.
+//
+// The stamp happens here rather than in callers so one place decides and no
+// caller can forget (DEBT-01). A copy keeps the caller's value untouched.
+//
+// It is exported because saveStateAt is NOT the only place a UserState becomes
+// a file: `dot config export` writes one to an arbitrary path. Before this
+// existed that path marshaled the struct directly, which meant a state loaded
+// from a forward-version file was re-emitted still CLAIMING that version while
+// yaml.v3 had already dropped the keys this binary has no fields for. The
+// exported document was a v1 payload wearing a v2 label, and a newer binary
+// reading it would trust the label. Found by review on PR #88.
+//
+// Refusing a forward-version source is the same rule saveStateAt applies to a
+// forward-version destination, and it takes the same override.
+func MarshalState(state *UserState) ([]byte, error) {
+	if state.SchemaVersion > currentSchemaVersion && os.Getenv(schemaForceEnv) != "1" {
+		return nil, fmt.Errorf(
+			"refusing to write out state read from a newer dot (state schema version %d, this binary writes %d).\n"+
+				"  Keys this binary does not know were already dropped when the file was read, so writing it\n"+
+				"  back would produce a document claiming version %d without its version %d data.\n"+
+				"  To upgrade this machine: dot update\n"+
+				"  To write it anyway and lose those keys: %s=1",
+			state.SchemaVersion, currentSchemaVersion,
+			state.SchemaVersion, state.SchemaVersion, schemaForceEnv)
+	}
+	out := *state
+	out.SchemaVersion = currentSchemaVersion
+	data, err := yaml.Marshal(&out)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling state: %w", err)
+	}
+	return data, nil
 }
 
 // saveStateAt performs an atomic write: marshal → temp file → fsync → rename.
@@ -460,15 +587,18 @@ func saveStateAt(path string, state *UserState) error {
 	if err := state.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid state: %w", err)
 	}
+	if err := checkSchemaDowngrade(path); err != nil {
+		return err
+	}
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating state dir: %w", err)
 	}
 
-	data, err := yaml.Marshal(state)
+	data, err := MarshalState(state)
 	if err != nil {
-		return fmt.Errorf("marshaling state: %w", err)
+		return err
 	}
 
 	// Write to temp file in the same directory (same filesystem → rename is atomic)
@@ -501,7 +631,61 @@ func saveStateAt(path string, state *UserState) error {
 		cleanup()
 		return fmt.Errorf("rename temp file: %w", err)
 	}
+
+	// The write choke point is the smallest correct site for this notice: it
+	// fires once per write, from every write command, and no read path can
+	// reach it. `note: ` is the prefix internal/syncer/sync.go:217 already uses
+	// for a non-actionable informational line.
+	if len(state.carriedLegacy) > 0 {
+		fmt.Fprintf(os.Stderr, "note: migrated legacy state keys to their canonical form: %s\n",
+			strings.Join(state.carriedLegacy, ", "))
+	}
 	return nil
+}
+
+// schemaForceEnv overrides the downgrade refusal below. It ships with the name
+// DEBT-02 gives it. Three naming conventions are in play in this tree and none
+// of them is this one -- the single existing DOT_* variable is an internal
+// scheduler signal, all seven user-facing variables use the DOTFILES_ prefix,
+// and the closest boolean read (internal/cli/apply.go:42) compares against an
+// exact string -- so the comparison is a decision rather than a default: the
+// exact string "1" and nothing else. It is documented in the README's
+// environment-variable table, because an escape hatch that appears only inside
+// an error message is a worse outcome than the refusal it relieves (D-20).
+const schemaForceEnv = "DOT_SCHEMA_FORCE"
+
+// checkSchemaDowngrade refuses to overwrite a state file written by a newer
+// dot. yaml.v3 drops keys it does not know with a nil error, so the loss would
+// otherwise be silent, and the state file physically arrives from other
+// machines through the synced workspace.
+//
+// A missing destination is the ordinary first write, not a downgrade. An
+// unreadable or unparseable destination peeks as 0 and is overwritten
+// deliberately: refusing to write over a file we cannot read would brick
+// recovery from a corrupt state file.
+//
+// Accepted risk: the destination is read here and renamed over later, so the
+// file could change in between. It lives under the user's own config directory
+// and closing the window means rewriting the atomic-write path around a single
+// descriptor for no realistic gain.
+func checkSchemaDowngrade(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	onDisk := peekSchemaVersion(data)
+	if onDisk <= currentSchemaVersion {
+		return nil
+	}
+	if os.Getenv(schemaForceEnv) == "1" {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to overwrite %s: it was written by a newer dot (state schema version %d, this binary writes %d).\n"+
+			"  Writing it here would drop every key this binary does not know, with no error anywhere.\n"+
+			"  To upgrade this machine: dot update\n"+
+			"  To overwrite it anyway and lose those keys: %s=1",
+		path, onDisk, currentSchemaVersion, schemaForceEnv)
 }
 
 // StateDirForHome returns the state directory for a specific home directory.
@@ -517,13 +701,12 @@ func StatePathForHome(homeDir string) string {
 // LoadStateFrom reads user state from an arbitrary file path.
 // Unlike LoadState, it returns an error if the file does not exist.
 func LoadStateFrom(path string) (*UserState, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading config: %w", err)
+	state, version, err := readStateFile(path, "config")
+	if version > currentSchemaVersion {
+		warnForwardSchema(path, version)
 	}
-	var state UserState
-	if err := yaml.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
+	if err != nil {
+		return nil, err
 	}
 	if err := state.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: imported config has invalid values: %v\n", err)
@@ -531,7 +714,7 @@ func LoadStateFrom(path string) (*UserState, error) {
 	if state.Name == "" && state.Profile == "" {
 		return nil, fmt.Errorf("imported config is empty (no name or profile set)")
 	}
-	return &state, nil
+	return state, nil
 }
 
 // LoadStateForHome reads user state from a specific home directory.
