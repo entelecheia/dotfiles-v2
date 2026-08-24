@@ -544,6 +544,42 @@ func SaveState(state *UserState) error {
 	return saveStateAt(StatePath(), state)
 }
 
+// MarshalState serializes state as a state-file document, stamping the schema
+// version this binary writes.
+//
+// The stamp happens here rather than in callers so one place decides and no
+// caller can forget (DEBT-01). A copy keeps the caller's value untouched.
+//
+// It is exported because saveStateAt is NOT the only place a UserState becomes
+// a file: `dot config export` writes one to an arbitrary path. Before this
+// existed that path marshaled the struct directly, which meant a state loaded
+// from a forward-version file was re-emitted still CLAIMING that version while
+// yaml.v3 had already dropped the keys this binary has no fields for. The
+// exported document was a v1 payload wearing a v2 label, and a newer binary
+// reading it would trust the label. Found by review on PR #88.
+//
+// Refusing a forward-version source is the same rule saveStateAt applies to a
+// forward-version destination, and it takes the same override.
+func MarshalState(state *UserState) ([]byte, error) {
+	if state.SchemaVersion > currentSchemaVersion && os.Getenv(schemaForceEnv) != "1" {
+		return nil, fmt.Errorf(
+			"refusing to write out state read from a newer dot (state schema version %d, this binary writes %d).\n"+
+				"  Keys this binary does not know were already dropped when the file was read, so writing it\n"+
+				"  back would produce a document claiming version %d without its version %d data.\n"+
+				"  To upgrade this machine: dot update\n"+
+				"  To write it anyway and lose those keys: %s=1",
+			state.SchemaVersion, currentSchemaVersion,
+			state.SchemaVersion, state.SchemaVersion, schemaForceEnv)
+	}
+	out := *state
+	out.SchemaVersion = currentSchemaVersion
+	data, err := yaml.Marshal(&out)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling state: %w", err)
+	}
+	return data, nil
+}
+
 // saveStateAt performs an atomic write: marshal → temp file → fsync → rename.
 // On POSIX filesystems, rename is atomic, so partial writes cannot corrupt
 // the existing config file.
@@ -560,15 +596,9 @@ func saveStateAt(path string, state *UserState) error {
 		return fmt.Errorf("creating state dir: %w", err)
 	}
 
-	// Stamp the version here rather than trusting callers to populate the
-	// struct, so one place decides and no caller can forget (DEBT-01). A copy
-	// keeps the caller's value untouched.
-	out := *state
-	out.SchemaVersion = currentSchemaVersion
-
-	data, err := yaml.Marshal(&out)
+	data, err := MarshalState(state)
 	if err != nil {
-		return fmt.Errorf("marshaling state: %w", err)
+		return err
 	}
 
 	// Write to temp file in the same directory (same filesystem → rename is atomic)

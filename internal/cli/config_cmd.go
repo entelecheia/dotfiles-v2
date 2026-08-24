@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
@@ -53,9 +52,13 @@ func runConfigExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no configuration found — run 'dot init' first")
 	}
 
-	data, err := yaml.Marshal(state)
+	// Not yaml.Marshal: export is a second door onto the same file format, and
+	// it must stamp the version the same way saveStateAt does. Marshaling the
+	// struct directly re-emitted a forward-version label over a payload yaml.v3
+	// had already stripped (found by review on PR #88).
+	data, err := config.MarshalState(state)
 	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
+		return err
 	}
 
 	p := printerFrom(cmd)
