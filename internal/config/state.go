@@ -539,6 +539,9 @@ func saveStateAt(path string, state *UserState) error {
 	if err := state.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid state: %w", err)
 	}
+	if err := checkSchemaDowngrade(path); err != nil {
+		return err
+	}
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -587,6 +590,51 @@ func saveStateAt(path string, state *UserState) error {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
+}
+
+// schemaForceEnv overrides the downgrade refusal below. It ships with the name
+// DEBT-02 gives it. Three naming conventions are in play in this tree and none
+// of them is this one -- the single existing DOT_* variable is an internal
+// scheduler signal, all seven user-facing variables use the DOTFILES_ prefix,
+// and the closest boolean read (internal/cli/apply.go:42) compares against an
+// exact string -- so the comparison is a decision rather than a default: the
+// exact string "1" and nothing else. It is documented in the README's
+// environment-variable table, because an escape hatch that appears only inside
+// an error message is a worse outcome than the refusal it relieves (D-20).
+const schemaForceEnv = "DOT_SCHEMA_FORCE"
+
+// checkSchemaDowngrade refuses to overwrite a state file written by a newer
+// dot. yaml.v3 drops keys it does not know with a nil error, so the loss would
+// otherwise be silent, and the state file physically arrives from other
+// machines through the synced workspace.
+//
+// A missing destination is the ordinary first write, not a downgrade. An
+// unreadable or unparseable destination peeks as 0 and is overwritten
+// deliberately: refusing to write over a file we cannot read would brick
+// recovery from a corrupt state file.
+//
+// Accepted risk: the destination is read here and renamed over later, so the
+// file could change in between. It lives under the user's own config directory
+// and closing the window means rewriting the atomic-write path around a single
+// descriptor for no realistic gain.
+func checkSchemaDowngrade(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	onDisk := peekSchemaVersion(data)
+	if onDisk <= currentSchemaVersion {
+		return nil
+	}
+	if os.Getenv(schemaForceEnv) == "1" {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to overwrite %s: it was written by a newer dot (state schema version %d, this binary writes %d).\n"+
+			"  Writing it here would drop every key this binary does not know, with no error anywhere.\n"+
+			"  To upgrade this machine: dot update\n"+
+			"  To overwrite it anyway and lose those keys: %s=1",
+		path, onDisk, currentSchemaVersion, schemaForceEnv)
 }
 
 // StateDirForHome returns the state directory for a specific home directory.

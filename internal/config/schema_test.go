@@ -2,6 +2,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -291,5 +293,133 @@ func TestPeekSchemaVersion_TopLevelOnly(t *testing.T) {
 	anchored := "defaults: &d\n  name: Test\nschema_version: 5\nmodules:\n  <<: *d\n"
 	if got := peekSchemaVersion([]byte(anchored)); got != 5 {
 		t.Fatalf("anchored document peeked as %d, want 5", got)
+	}
+}
+
+func hashFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+// TestSaveState_RefusesForwardVersionDestination is DEBT-02's write half: a
+// v1.0 binary must not silently overwrite a file a v1.1 binary wrote, because
+// yaml.v3 drops the keys it does not know and the loss is silent.
+func TestSaveState_RefusesForwardVersionDestination(t *testing.T) {
+	path := writeStateFile(t, t.TempDir(),
+		"schema_version: 99\nname: Newer\nprofile: full\n")
+	before := hashFile(t, path)
+
+	err := saveStateAt(path, &UserState{Name: "Older", Profile: "minimal"})
+	if err == nil {
+		t.Fatal("save over a newer state file must be refused")
+	}
+	if after := hashFile(t, path); after != before {
+		t.Fatalf("refused save still modified the file:\n%s", mustRead(t, path))
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, path) {
+		t.Errorf("refusal does not name the file path: %q", msg)
+	}
+	if !strings.Contains(msg, "99") {
+		t.Errorf("refusal does not name the on-disk version: %q", msg)
+	}
+	if !strings.Contains(msg, fmt.Sprintf("%d", currentSchemaVersion)) {
+		t.Errorf("refusal does not name this binary's version: %q", msg)
+	}
+	if !strings.Contains(msg, "dot update") {
+		t.Errorf("refusal does not name the remedy: %q", msg)
+	}
+	if !strings.Contains(msg, "DOT_SCHEMA_FORCE") {
+		t.Errorf("refusal does not name the override variable: %q", msg)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// TestSaveState_ForceOverridesTheRefusal pins the one documented escape hatch.
+func TestSaveState_ForceOverridesTheRefusal(t *testing.T) {
+	path := writeStateFile(t, t.TempDir(),
+		"schema_version: 99\nname: Newer\nprofile: full\n")
+	t.Setenv("DOT_SCHEMA_FORCE", "1")
+
+	if err := saveStateAt(path, &UserState{Name: "Older", Profile: "minimal"}); err != nil {
+		t.Fatalf("DOT_SCHEMA_FORCE=1 did not override the refusal: %v", err)
+	}
+	data := mustRead(t, path)
+	if !strings.HasPrefix(data, "schema_version: 1\n") {
+		t.Fatalf("forced save did not rewrite with this binary's version:\n%s", data)
+	}
+	if !strings.Contains(data, "name: Older") {
+		t.Fatalf("forced save did not write the new state:\n%s", data)
+	}
+}
+
+// TestSaveState_ForceRequiresExactlyOne: an escape hatch that any non-empty
+// value satisfies is an escape hatch nobody set on purpose.
+func TestSaveState_ForceRequiresExactlyOne(t *testing.T) {
+	for _, value := range []string{"", "0", "true", "yes"} {
+		t.Run("value="+value, func(t *testing.T) {
+			path := writeStateFile(t, t.TempDir(),
+				"schema_version: 99\nname: Newer\nprofile: full\n")
+			t.Setenv("DOT_SCHEMA_FORCE", value)
+			if err := saveStateAt(path, &UserState{Name: "Older", Profile: "minimal"}); err == nil {
+				t.Fatalf("DOT_SCHEMA_FORCE=%q satisfied the override", value)
+			}
+		})
+	}
+}
+
+// TestSaveState_FirstWriteToMissingDestinationSucceeds: there is nothing to
+// compare against and a first write is not a downgrade.
+func TestSaveState_FirstWriteToMissingDestinationSucceeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.yaml")
+	if err := saveStateAt(path, &UserState{Name: "Test", Profile: "full"}); err != nil {
+		t.Fatalf("first write refused: %v", err)
+	}
+}
+
+// TestSaveState_EqualAndOlderDestinationsSucceed keeps the guard from firing on
+// the ordinary case, which is every write this release performs.
+func TestSaveState_EqualAndOlderDestinationsSucceed(t *testing.T) {
+	cases := map[string]string{
+		"equal version":  "schema_version: 1\nname: Old\nprofile: full\n",
+		"older version":  "schema_version: 0\nname: Old\nprofile: full\n",
+		"no version key": "name: Old\nprofile: full\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeStateFile(t, t.TempDir(), body)
+			if err := saveStateAt(path, &UserState{Name: "New", Profile: "full"}); err != nil {
+				t.Fatalf("ordinary overwrite refused: %v", err)
+			}
+			if !strings.Contains(mustRead(t, path), "name: New") {
+				t.Fatal("overwrite did not land")
+			}
+		})
+	}
+}
+
+// TestSaveState_UnparseableDestinationIsOverwrittenNotRefused: refusing to
+// write over a file we cannot read would brick recovery from a corrupt state
+// file, so a destination that peeks as 0 is overwritten deliberately.
+func TestSaveState_UnparseableDestinationIsOverwrittenNotRefused(t *testing.T) {
+	path := writeStateFile(t, t.TempDir(), "{{ this is not yaml\n")
+	if err := saveStateAt(path, &UserState{Name: "Recovered", Profile: "full"}); err != nil {
+		t.Fatalf("save over corrupt state file refused: %v", err)
+	}
+	if !strings.Contains(mustRead(t, path), "name: Recovered") {
+		t.Fatal("recovery write did not land")
 	}
 }

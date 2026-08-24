@@ -1589,6 +1589,7 @@ secrets:
 | `DOTFILES_REPO_DIR` | Dotfiles repo directory |
 | `DOTFILES_HOME` | Override home directory |
 | `GITHUB_TOKEN` | GitHub API token for `update` |
+| `DOT_SCHEMA_FORCE` | Set to `1` to overwrite a state file written by a newer `dot`, dropping any keys this binary does not know |
 
 ---
 
