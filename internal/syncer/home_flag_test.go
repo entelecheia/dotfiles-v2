@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/xml"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -161,6 +162,11 @@ func TestRenderedSchedulerUnitCarriesHome(t *testing.T) {
 	sched := NewScheduler(peerScheduleRunner(true), &Paths{}, cfg, template.NewEngine())
 	for _, tmpl := range []string{"sync/com.dotfiles.sync.plist.tmpl", "sync/dotfiles-sync.service.tmpl"} {
 		data := sched.templateDataFor(SchedulerKindPush)
+		if tmpl == "sync/com.dotfiles.sync.plist.tmpl" {
+			if err := preparePlistTemplateData(&data); err != nil {
+				t.Fatalf("prepare plist data: %v", err)
+			}
+		}
 		body, err := sched.Engine.Render(tmpl, data)
 		if err != nil {
 			t.Fatalf("rendering %s: %v", tmpl, err)
@@ -172,7 +178,13 @@ func TestRenderedSchedulerUnitCarriesHome(t *testing.T) {
 		// Non-vacuity: no override, no flag. A unit that always carried one
 		// would pin the running user's home into every machine's scheduler.
 		cfg.Home = ""
-		body, err = sched.Engine.Render(tmpl, sched.templateDataFor(SchedulerKindPush))
+		data = sched.templateDataFor(SchedulerKindPush)
+		if tmpl == "sync/com.dotfiles.sync.plist.tmpl" {
+			if err := preparePlistTemplateData(&data); err != nil {
+				t.Fatalf("prepare empty-home plist data: %v", err)
+			}
+		}
+		body, err = sched.Engine.Render(tmpl, data)
 		if err != nil {
 			t.Fatalf("rendering %s: %v", tmpl, err)
 		}
@@ -187,6 +199,9 @@ func TestRenderedSchedulerUnitCarriesHome(t *testing.T) {
 	specialHome := target + "/space & <tag> 'quote' \"double\" \\ % $ 유니코드"
 	cfg.Home = specialHome
 	data := sched.templateDataFor(SchedulerKindPush)
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare special plist data: %v", err)
+	}
 	body, err := sched.Engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		t.Fatalf("rendering special plist: %v", err)
@@ -237,5 +252,46 @@ func TestPeerSchedule_WritesUnderTheTargetHome(t *testing.T) {
 	}
 	if got := matchingHomeArguments(plist.ProgramArguments); !reflect.DeepEqual(got, []string{"--home=" + target}) {
 		t.Errorf("peer plist home arguments = %#v, want %#v", got, []string{"--home=" + target})
+	}
+}
+
+func TestPeerSchedule_PlistPathFieldsRoundTrip(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "peer & <paths>")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	names := MachineNames()
+	if len(names) == 0 {
+		t.Skip("this host reports no machine name, so CheckOwner cannot be satisfied")
+	}
+	localPath := filepath.Join(root, "workspace")
+	cfg := &Config{
+		Profile:   PeerProfile,
+		Home:      root,
+		Owner:     names[0],
+		LocalPath: localPath,
+		Target:    Target{Kind: TargetSSH, Host: "coordinator.example", Path: "/remote/workspace/work"},
+		LogFile:   filepath.Join(localPath, "logs", "peer.log"),
+	}
+	binDir := t.TempDir()
+	status := fmt.Sprintf(`{"schemaVersion":%d,"kind":"peer","profile":{"configured":true,"owner":%q,"workspacePath":%q,"target":{"path":%q}}}`,
+		PeerStatusSchemaVersion, cfg.Owner, cfg.Target.Path, localPath)
+	writeStub(t, filepath.Join(binDir, "ssh"), "#!/bin/sh\necho '"+status+"'\n")
+	writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+
+	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("PeerSchedule: %v", err)
+	}
+	body, err := os.ReadFile(res.Plist)
+	if err != nil {
+		t.Fatalf("read persisted peer plist: %v", err)
+	}
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("persisted peer plist must parse: %v\n%s", err, body)
 	}
 }
