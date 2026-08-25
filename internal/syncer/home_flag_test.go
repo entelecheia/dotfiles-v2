@@ -231,7 +231,11 @@ func TestPeerSchedule_WritesUnderTheTargetHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the written plist: %v", err)
 	}
-	if !strings.Contains(string(body), "--home="+target) {
-		t.Errorf("the scheduled peer job runs without the override:\n%s", string(body))
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("the written peer plist must parse: %v\n%s", err, body)
+	}
+	if got := matchingHomeArguments(plist.ProgramArguments); !reflect.DeepEqual(got, []string{"--home=" + target}) {
+		t.Errorf("peer plist home arguments = %#v, want %#v", got, []string{"--home=" + target})
 	}
 }

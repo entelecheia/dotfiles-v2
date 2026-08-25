@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,4 +165,47 @@ func TestPeerSchedule_ValidationPrecedenceUnderDryRun(t *testing.T) {
 			t.Errorf("off-arm result changed shape: %+v", res)
 		}
 	})
+}
+
+func TestPeerSchedule_RejectsInvalidHomeBeforeMutation(t *testing.T) {
+	for _, invalidHome := range []string{
+		string([]byte{'/', 't', 'm', 'p', '/', 0xff}),
+		"/tmp/control\x01home",
+	} {
+		for _, off := range []bool{false, true} {
+			t.Run(fmt.Sprintf("off=%t home=%q", off, invalidHome), func(t *testing.T) {
+				cfg, _ := peerScheduleSandbox(t)
+				cfg.Home = invalidHome
+				plist := filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+				const seeded = "seeded peer plist"
+				seededOnFS := os.MkdirAll(filepath.Dir(plist), 0o755) == nil
+				if seededOnFS {
+					seededOnFS = os.WriteFile(plist, []byte(seeded), 0o644) == nil
+				}
+
+				res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+					Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false),
+					Interval: time.Hour, Off: off,
+				})
+				if err == nil {
+					t.Fatal("invalid home unexpectedly reached peer scheduler mutation")
+				}
+				if res != nil {
+					t.Fatalf("rejected peer scheduler returned result: %+v", res)
+				}
+				if seededOnFS {
+					if got, readErr := os.ReadFile(plist); readErr != nil || string(got) != seeded {
+						t.Fatalf("rejection changed seeded plist: got %q, read error %v", got, readErr)
+					}
+				} else if _, statErr := os.Stat(plist); !os.IsNotExist(statErr) {
+					t.Fatalf("rejection created unseedable invalid-byte plist: %v", statErr)
+				}
+				for _, want := range []string{fmt.Sprintf("%q", invalidHome), plist, "XML 1.0", "left untouched", "dot peer setup"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q missing %q", err, want)
+					}
+				}
+			})
+		}
+	}
 }
