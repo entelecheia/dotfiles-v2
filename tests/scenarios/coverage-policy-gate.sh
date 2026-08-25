@@ -160,7 +160,7 @@ run_gate
 expect_red_with "zero override floor" '^internal/aisettings$' '0'
 
 echo "--- package default numeric domain ---"
-for value in 0 -1 101 nope; do
+for value in 0 010 0100 0x64 0o100 +1 1.0 1e2 1_0 -1 101 nope; do
   copy_inputs
   replace_package_default "$value"
   run_gate
@@ -181,7 +181,7 @@ run_gate
 expect_red_with "duplicate threshold.package" 'threshold.package' "$PACKAGE_DEFAULT" '2'
 
 echo "--- override numeric domain ---"
-for value in 0 -1 101 nope; do
+for value in 0 010 0100 0x64 0o100 +1 1.0 1e2 1_0 -1 101 nope; do
   copy_inputs
   replace_package_default 1
   replace_first_override "$value"

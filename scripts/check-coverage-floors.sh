@@ -73,8 +73,9 @@ fi
 
 # Keep the package default's raw token until it has passed the same contract as
 # override floors. `go-test-coverage` accepts zero, but zero means a missing
-# override silently measures nothing, so this first-party policy requires a
-# positive integer floor before invoking the pinned checker.
+# override silently measures nothing. It also decodes leading-zero YAML
+# integers as octal, so this first-party policy requires a canonical decimal
+# floor before invoking the pinned checker.
 awk '
   /^threshold:[[:space:]]*$/ { section = "threshold"; next }
   /^[^[:space:]#]/ { section = "" }
@@ -93,22 +94,16 @@ IFS=$'\t' read -r package_default_count package_default_values <"$work_dir/packa
 
 floor_findings=0
 validate_package_floor() {
-  local label="$1" count="$2" raw="$3" numeric
+  local label="$1" count="$2" raw="$3"
   if [[ "$count" -eq 0 || ( "$count" -eq 1 && -z "$raw" ) ]]; then
-    echo "check-coverage-floors: $label has invalid threshold value '<missing>'; package floors must be one unquoted decimal integer from 1 through 100" >&2
+    echo "check-coverage-floors: $label has invalid threshold value '<missing>'; package floors must be one unquoted canonical decimal integer from 1 through 100" >&2
     floor_findings=$((floor_findings + 1))
   elif [[ "$count" -ne 1 ]]; then
-    echo "check-coverage-floors: $label has duplicate threshold values '$raw'; package floors must be one unquoted decimal integer from 1 through 100" >&2
+    echo "check-coverage-floors: $label has duplicate threshold values '$raw'; package floors must be one unquoted canonical decimal integer from 1 through 100" >&2
     floor_findings=$((floor_findings + 1))
-  elif [[ ! "$raw" =~ ^[0-9]+$ ]]; then
-    echo "check-coverage-floors: $label has invalid threshold value '$raw'; package floors must be one unquoted decimal integer from 1 through 100" >&2
+  elif [[ ! "$raw" =~ ^([1-9]|[1-9][0-9]|100)$ ]]; then
+    echo "check-coverage-floors: $label has invalid threshold value '$raw'; package floors must be one unquoted canonical decimal integer from 1 through 100" >&2
     floor_findings=$((floor_findings + 1))
-  else
-    numeric=$((10#$raw))
-    if [[ "$numeric" -lt 1 || "$numeric" -gt 100 ]]; then
-      echo "check-coverage-floors: $label has invalid threshold value '$raw'; package floors must be from 1 through 100" >&2
-      floor_findings=$((floor_findings + 1))
-    fi
   fi
 }
 
