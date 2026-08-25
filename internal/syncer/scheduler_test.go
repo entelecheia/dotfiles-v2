@@ -1,13 +1,95 @@
 package syncer
 
 import (
+	"encoding/xml"
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
+
+type plistProgramArguments struct {
+	ProgramArguments []string `xml:"dict>array>string"`
+}
+
+func renderedPlistProgramArguments(t *testing.T, data SchedulerTemplateData) []string {
+	t.Helper()
+	body, err := template.NewEngine().Render("sync/com.dotfiles.sync.plist.tmpl", data)
+	if err != nil {
+		t.Fatalf("render plist: %v", err)
+	}
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("parse plist: %v\n--- rendered ---\n%s", err, body)
+	}
+	return plist.ProgramArguments
+}
+
+func TestPlistHomeArgument_SupportedHome(t *testing.T) {
+	home := "/tmp/a b\tline\nnext\rreturn & <tag> 'quote' \"double\" \\ % $ 유니코드/" + strings.Repeat("long-", 64)
+	want := "--home=" + home
+
+	got, err := plistHomeArgument(home)
+	if err != nil {
+		t.Fatalf("plistHomeArgument(%q): %v", home, err)
+	}
+	again, err := plistHomeArgument(home)
+	if err != nil {
+		t.Fatalf("second plistHomeArgument(%q): %v", home, err)
+	}
+	if got != again {
+		t.Fatalf("serializer is not deterministic:\nfirst:  %q\nsecond: %q", got, again)
+	}
+
+	args := renderedPlistProgramArguments(t, SchedulerTemplateData{
+		DotfilesPath: "/usr/local/bin/dot", Home: home, PlistHomeArg: got,
+		LogFile: "/tmp/dot.log", Interval: 60, Label: launchdLabel,
+		Action: "push", Mode: ModeClean.String(), Description: "test", ServiceName: systemdServiceName,
+	})
+	if gotArgs := matchingHomeArguments(args); !reflect.DeepEqual(gotArgs, []string{want}) {
+		t.Fatalf("ProgramArguments home items = %q, want %q", gotArgs, []string{want})
+	}
+}
+
+func TestPlistHomeArgument_RejectsXMLIllegalHome(t *testing.T) {
+	cases := []struct {
+		name string
+		home string
+	}{
+		{name: "invalid UTF-8", home: string([]byte{'/', 't', 'm', 'p', '/', 0xff})},
+		{name: "U+0001", home: "/tmp/bad\x01home"},
+		{name: "U+000B", home: "/tmp/bad\x0bhome"},
+		{name: "U+000C", home: "/tmp/bad\x0chome"},
+		{name: "U+001F", home: "/tmp/bad\x1fhome"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := plistHomeArgument(tc.home)
+			if err == nil {
+				t.Fatalf("plistHomeArgument(%q) unexpectedly accepted XML-illegal home", tc.home)
+			}
+			for _, want := range []string{fmt.Sprintf("%q", tc.home), "XML 1.0", "rename or move", "valid UTF-8"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func matchingHomeArguments(args []string) []string {
+	var homes []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--home=") {
+			homes = append(homes, arg)
+		}
+	}
+	return homes
+}
 
 func TestSchedulerState_String(t *testing.T) {
 	cases := map[SchedulerState]string{

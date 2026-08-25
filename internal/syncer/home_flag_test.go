@@ -2,8 +2,10 @@ package syncer
 
 import (
 	"context"
+	"encoding/xml"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +180,23 @@ func TestRenderedSchedulerUnitCarriesHome(t *testing.T) {
 			t.Errorf("%s renders --home with no override set:\n%s", tmpl, string(body))
 		}
 		cfg.Home = target
+	}
+
+	// The plist must recover one exact argv item rather than merely contain a
+	// recognizable substring. Markup and whitespace are literal path data.
+	specialHome := target + "/space & <tag> 'quote' \"double\" \\ % $ 유니코드"
+	cfg.Home = specialHome
+	data := sched.templateDataFor(SchedulerKindPush)
+	body, err := sched.Engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
+	if err != nil {
+		t.Fatalf("rendering special plist: %v", err)
+	}
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("special plist must parse: %v\n%s", err, body)
+	}
+	if got := matchingHomeArguments(plist.ProgramArguments); !reflect.DeepEqual(got, []string{"--home=" + specialHome}) {
+		t.Fatalf("special plist home arguments = %#v, want %#v", got, []string{"--home=" + specialHome})
 	}
 }
 

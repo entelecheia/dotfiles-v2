@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"html"
 	osexec "os/exec"
 	"strings"
 
@@ -106,13 +107,14 @@ type SchedulerTemplateData struct {
 	// run; empty renders no flag. Without it a unit installed for another
 	// user's home runs `dot sync` against the invoking user's workspace on
 	// every tick, long after the install command exited.
-	Home        string
-	Label       string // launchd Label
-	Profile     string // sync profile the unit operates on ("" for the default)
-	Action      string // gsync subcommand to run
-	Mode        string // non-interactive run mode (clean|force)
-	Description string // systemd Description= line
-	ServiceName string // systemd Unit= reference (timer → service)
+	Home         string
+	PlistHomeArg string
+	Label        string // launchd Label
+	Profile      string // sync profile the unit operates on ("" for the default)
+	Action       string // gsync subcommand to run
+	Mode         string // non-interactive run mode (clean|force)
+	Description  string // systemd Description= line
+	ServiceName  string // systemd Unit= reference (timer → service)
 }
 
 // Scheduler manages the platform-specific periodic gsync timers.
@@ -168,6 +170,15 @@ type Scheduler struct {
 	Paths  *Paths
 	Config *Config
 	Engine *template.Engine
+}
+
+// plistHomeArgument prepares a complete --home flag for XML character data.
+// XML representability validation is added with the green implementation.
+func plistHomeArgument(home string) (string, error) {
+	if home == "" {
+		return "", nil
+	}
+	return html.EscapeString("--home=" + home), nil
 }
 
 // NewScheduler wires a Scheduler with all the things it needs to render
@@ -242,9 +253,11 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 	if mode == "" {
 		mode = ModeClean
 	}
+	plistHomeArg, _ := plistHomeArgument(s.Config.Home)
 	return SchedulerTemplateData{
 		DotfilesPath: dotfilesPath,
 		Home:         s.Config.Home,
+		PlistHomeArg: plistHomeArg,
 		LogFile:      s.Config.LogFile,
 		Interval:     interval,
 		Label:        profiledLabel(kind, s.profile()),
