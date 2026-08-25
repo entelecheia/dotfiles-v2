@@ -84,6 +84,33 @@ func backupNames(t *testing.T, home string) []string {
 	return names
 }
 
+func backupRoot(home string) string {
+	return filepath.Join(home, backupDir)
+}
+
+func onlyBackup(t *testing.T, home string) string {
+	t.Helper()
+	names := backupNames(t, home)
+	if len(names) != 1 {
+		t.Fatalf("backups = %v, want exactly one recovery copy", names)
+	}
+	return filepath.Join(backupRoot(home), names[0])
+}
+
+func assertOwnerOnlyMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Errorf("%s mode = %04o, want %04o", path, got, want)
+	}
+	if got := info.Mode().Perm() & 0o077; got != 0 {
+		t.Errorf("%s exposes group/world bits %04o", path, got)
+	}
+}
+
 // assertNoBackupDir fails when home received a dotfiles backup tree at all.
 func assertNoBackupDir(t *testing.T, label, home string) {
 	t.Helper()
@@ -165,6 +192,66 @@ func TestWriteHelpers_BackupLandsUnderTheCallersHome(t *testing.T) {
 			// And nothing anywhere else under the target either.
 			assertOnlyFiles(t, target, path, copied)
 		})
+	}
+}
+
+func TestEnsureFileAtomic_BackupPermissionsOwnerOnly(t *testing.T) {
+	_, home := twoHomes(t)
+	path := filepath.Join(home, ".codex", "config.toml")
+	const before = "private hud configuration\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runner, log := runnerWithLog()
+	written, err := EnsureFileAtomic(runner, home, path, []byte("updated hud configuration\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !written {
+		t.Fatal("EnsureFileAtomic reported no write")
+	}
+	if strings.Contains(log.String(), "backup failed") {
+		t.Errorf("backup warned: %s", log.String())
+	}
+	if got, err := os.ReadFile(onlyBackup(t, home)); err != nil || string(got) != before {
+		t.Errorf("recovery bytes = %q, err = %v, want %q", got, err, before)
+	}
+	assertOwnerOnlyMode(t, backupRoot(home), 0o700)
+	assertOwnerOnlyMode(t, onlyBackup(t, home), 0o600)
+	assertOwnerOnlyMode(t, path, 0o600)
+}
+
+func TestWriteHelpers_BackupPermissionsOwnerOnly(t *testing.T) {
+	for _, h := range writeHelpers {
+		for _, mode := range []os.FileMode{0o600, 0o644, 0o755} {
+			t.Run(h.name+"/"+mode.String(), func(t *testing.T) {
+				_, home := twoHomes(t)
+				path := filepath.Join(home, ".config", "settings.toml")
+				const before = "private setting before overwrite\n"
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(before), mode); err != nil {
+					t.Fatal(err)
+				}
+
+				runner, _ := runnerWithLog()
+				written, err := h.fn(runner, home, path, []byte("replacement\n"), mode)
+				if err != nil || !written {
+					t.Fatalf("written=%t err=%v", written, err)
+				}
+				copy := onlyBackup(t, home)
+				if got, err := os.ReadFile(copy); err != nil || string(got) != before {
+					t.Errorf("recovery bytes = %q, err = %v, want %q", got, err, before)
+				}
+				assertOwnerOnlyMode(t, backupRoot(home), 0o700)
+				assertOwnerOnlyMode(t, copy, 0o600)
+			})
+		}
 	}
 }
 
