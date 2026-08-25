@@ -168,11 +168,15 @@ func PeerHomePathsFile(paths *LocalPaths) string {
 // every scheduled run, or nothing when the job was installed without an
 // override. The value is interpolated raw, exactly as the executable path and
 // the log path already are.
-func peerHomeArg(cfg *Config) string {
+func peerHomeArg(cfg *Config) (string, error) {
 	if cfg == nil || cfg.Home == "" {
-		return ""
+		return "", nil
 	}
-	return "\n    <string>--home=" + cfg.Home + "</string>"
+	arg, err := plistHomeArgument(cfg.Home)
+	if err != nil {
+		return "", err
+	}
+	return "\n    <string>" + arg + "</string>", nil
 }
 
 func seedFileIfAbsent(path, body string) error {
@@ -543,6 +547,9 @@ type PeerScheduleResult struct {
 func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleResult, error) {
 	cfg, runner := opts.Config, opts.Runner
 	plist := filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+	if err := validateSchedulerMutationHome(cfg.Home); err != nil {
+		return nil, fmt.Errorf("peer scheduler home %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", cfg.Home, plist, err)
+	}
 
 	if opts.Off {
 		_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
@@ -593,9 +600,13 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 		return nil, err
 	}
-	body := fmt.Sprintf(peerPlistTmpl, exe, peerHomeArg(cfg), int(opts.Interval.Seconds()), logFile, logFile)
-	if err := os.WriteFile(plist, []byte(body), 0o644); err != nil {
-		return nil, err
+	homeArg, err := peerHomeArg(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("peer scheduler home %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", cfg.Home, plist, err)
+	}
+	body := fmt.Sprintf(peerPlistTmpl, exe, homeArg, int(opts.Interval.Seconds()), logFile, logFile)
+	if err := runner.WriteFileAtomic(plist, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("writing peer plist %s for home %q: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", plist, cfg.Home, err)
 	}
 	label := "gui/" + strconv.Itoa(os.Getuid()) + "/com.dotfiles.peer"
 	_, _ = runner.Run(ctx, "launchctl", "bootout", label)

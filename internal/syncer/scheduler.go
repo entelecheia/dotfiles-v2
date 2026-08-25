@@ -216,6 +216,14 @@ func invalidXMLHomeError(home string, offset int, reason string) error {
 	return fmt.Errorf("scheduler home %q is not XML 1.0 representable: %s at byte offset %d; rename or move it to a valid UTF-8 path without XML-illegal controls, then rerun scheduler setup", home, reason, offset)
 }
 
+// validateSchedulerMutationHome is the common pre-mutation guard for all
+// scheduler entry points. plistHomeArgument remains the sole XML serializer
+// and representability validator; scheduler mutations only need its verdict.
+func validateSchedulerMutationHome(home string) error {
+	_, err := plistHomeArgument(home)
+	return err
+}
+
 func systemdHomeArgument(home string) string {
 	if home == "" {
 		return ""
