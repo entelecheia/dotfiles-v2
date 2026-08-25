@@ -13,6 +13,15 @@ import (
 
 const backupDir = ".local/share/dotfiles/backup"
 
+var (
+	backupNow       = time.Now
+	writeBackupFile = func(runner *exec.Runner, path string, data []byte, perm os.FileMode) error {
+		return runner.WriteFile(path, data, perm)
+	}
+	writeReservedBackup = func(file *os.File, data []byte) (int, error) { return file.Write(data) }
+	closeReservedBackup = func(file *os.File) error { return file.Close() }
+)
+
 // EnsureFile writes content to path if it differs from current content.
 // Returns true if the file was written.
 func EnsureFile(runner *exec.Runner, home, path string, content []byte, perm os.FileMode) (bool, error) {
@@ -24,7 +33,7 @@ func EnsureFile(runner *exec.Runner, home, path string, content []byte, perm os.
 	// Backup existing file
 	if err == nil {
 		if backupErr := backup(runner, home, path); backupErr != nil {
-			runner.Logger.Warn("backup failed", "path", path, "err", backupErr)
+			return false, fmt.Errorf("backing up %q: %w", path, backupErr)
 		}
 	}
 
@@ -52,7 +61,7 @@ func EnsureFileAtomic(runner *exec.Runner, home, path string, content []byte, pe
 
 	if err == nil {
 		if backupErr := backup(runner, home, path); backupErr != nil {
-			runner.Logger.Warn("backup failed", "path", path, "err", backupErr)
+			return false, fmt.Errorf("backing up %q: %w", path, backupErr)
 		}
 	}
 
@@ -93,14 +102,21 @@ func backup(runner *exec.Runner, home, path string) error {
 	}
 
 	base := filepath.Base(path)
-	timestamp := time.Now().Format("20060102-150405")
-	dest := filepath.Join(bdir, fmt.Sprintf("%s.%s", base, timestamp))
-
 	data, err := runner.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	return runner.WriteFile(dest, data, 0644)
+	_, err = writeBackupCopy(runner, bdir, base, data)
+	return err
+}
+
+// writeBackupCopy preserves the existing seconds-format backup spelling.
+func writeBackupCopy(runner *exec.Runner, bdir, base string, data []byte) (string, error) {
+	dest := filepath.Join(bdir, fmt.Sprintf("%s.%s", base, backupNow().Format("20060102-150405")))
+	if err := writeBackupFile(runner, dest, data, 0644); err != nil {
+		return "", err
+	}
+	return dest, nil
 }
 
 func hashBytes(data []byte) string {

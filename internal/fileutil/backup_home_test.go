@@ -2,14 +2,24 @@ package fileutil
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+func pinBackupClock(t *testing.T, instant time.Time) {
+	t.Helper()
+	previous := backupNow
+	backupNow = func() time.Time { return instant }
+	t.Cleanup(func() { backupNow = previous })
+}
 
 // BUG-15: backup() resolved its root from the process environment, so a run
 // pointed at another home deposited that home's overwritten files into the
@@ -201,7 +211,7 @@ func TestWriteHelpers_NoBackupWhenNothingIsOverwritten(t *testing.T) {
 	}
 }
 
-func TestWriteHelpers_EmptyHomeRefusesTheBackupAndStillWrites(t *testing.T) {
+func TestWriteHelpers_EmptyHome(t *testing.T) {
 	// An empty home would join the backup path relative to the process
 	// working directory, writing into whatever tree the operator was
 	// standing in. Refusing it names the caller's mistake instead.
@@ -216,24 +226,13 @@ func TestWriteHelpers_EmptyHomeRefusesTheBackupAndStillWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			runner, log := runnerWithLog()
+			runner, _ := runnerWithLog()
 			written, err := h.fn(runner, "", path, []byte("v2\n"), 0o644)
-			// A failed backup has always been a warning rather than a stop.
-			if err != nil {
-				t.Fatalf("%s must still write: %v", h.name, err)
+			if err == nil || written {
+				t.Fatalf("%s wrote=%t err=%v, want backup refusal", h.name, written, err)
 			}
-			if !written {
-				t.Fatalf("%s reported no write", h.name)
-			}
-			if got, _ := os.ReadFile(path); string(got) != "v2\n" {
-				t.Errorf("content = %q, want v2", got)
-			}
-
-			if !strings.Contains(log.String(), "backup failed") {
-				t.Errorf("no backup warning logged; log = %q", log.String())
-			}
-			if !strings.Contains(log.String(), "no home directory") {
-				t.Errorf("warning does not name the empty home; log = %q", log.String())
+			if got, _ := os.ReadFile(path); string(got) != "v1\n" {
+				t.Errorf("content = %q, want unchanged v1", got)
 			}
 
 			assertNoBackupDir(t, "invoking", invoking)
@@ -242,6 +241,122 @@ func TestWriteHelpers_EmptyHomeRefusesTheBackupAndStillWrites(t *testing.T) {
 			// relative join would have landed.
 			if _, err := os.Stat(filepath.Join(".local", "share", "dotfiles")); !os.IsNotExist(err) {
 				t.Errorf("backup landed relative to the working directory (stat err: %v)", err)
+			}
+		})
+	}
+}
+
+func TestWriteHelpers_SameSecondBackups(t *testing.T) {
+	pinBackupClock(t, time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC))
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			path := filepath.Join(home, ".config", "cfg.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("a"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runner, _ := runnerWithLog()
+			if _, err := h.fn(runner, home, path, []byte("b"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.fn(runner, home, path, []byte("c"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			names := backupNames(t, home)
+			if len(names) != 2 {
+				t.Fatalf("backups = %v, want two same-second recovery copies", names)
+			}
+			contents := map[string]bool{}
+			for _, name := range names {
+				data, err := os.ReadFile(filepath.Join(home, backupDir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				contents[string(data)] = true
+			}
+			if !contents["a"] || !contents["b"] {
+				t.Errorf("recovery contents = %v, want a and b", contents)
+			}
+		})
+	}
+}
+
+func TestWriteHelpers_ConcurrentBackupReservations(t *testing.T) {
+	pinBackupClock(t, time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC))
+	runner, _ := runnerWithLog()
+	home := t.TempDir()
+	bdir := filepath.Join(home, backupDir)
+	if err := os.MkdirAll(bdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	start := make(chan struct{})
+	paths := make(chan string, workers)
+	errs := make(chan error, workers)
+	var ready sync.WaitGroup
+	ready.Add(workers)
+	for i := range workers {
+		go func() {
+			payload := []byte("backup-" + string(rune('a'+i)))
+			ready.Done()
+			<-start
+			path, err := writeBackupCopy(runner, bdir, "cfg.toml", payload)
+			if err != nil {
+				errs <- err
+				return
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(payload) {
+				errs <- errors.New("backup contents were replaced")
+				return
+			}
+			paths <- path
+		}()
+	}
+	ready.Wait()
+	close(start)
+	seen := map[string]bool{}
+	for range workers {
+		select {
+		case err := <-errs:
+			t.Fatal(err)
+		case path := <-paths:
+			if seen[path] {
+				t.Fatalf("duplicate backup path %s", path)
+			}
+			seen[path] = true
+		}
+	}
+}
+
+func TestWriteHelpers_BackupFailure(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			path := filepath.Join(home, ".config", "cfg.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("before"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			previous := writeReservedBackup
+			writeReservedBackup = func(*os.File, []byte) (int, error) { return 0, errors.New("forced backup write failure") }
+			t.Cleanup(func() { writeReservedBackup = previous })
+
+			runner, _ := runnerWithLog()
+			written, err := h.fn(runner, home, path, []byte("after"), 0o644)
+			if err == nil || written {
+				t.Fatalf("written=%t err=%v, want backup failure", written, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "before" {
+				t.Errorf("live target = %q, want before", got)
+			}
+			if names := backupNames(t, home); len(names) != 0 {
+				t.Errorf("owned partial backups left behind: %v", names)
 			}
 		})
 	}
