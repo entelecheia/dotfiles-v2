@@ -141,6 +141,24 @@ func TestRunner_MutatingAreNoOpsUnderDryRun(t *testing.T) {
 	}
 }
 
+func TestRunner_ChmodChangesModeWhenLive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	if err := os.WriteFile(path, []byte("private settings"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := r.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %04o, want 0600", got)
+	}
+}
+
 // snapshotTree captures name + mode for every entry under root, plus a content
 // hash for regular files. DirEntry.Info() has Lstat semantics, so a symlink is
 // recorded as a symlink rather than followed - which is the whole point for a
