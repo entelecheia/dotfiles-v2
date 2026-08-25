@@ -71,6 +71,49 @@ if ! grep -Fxq '.testcoverage.yml' "$work_dir/pull-request-paths"; then
   exit 1
 fi
 
+# Keep the package default's raw token until it has passed the same contract as
+# override floors. `go-test-coverage` accepts zero, but zero means a missing
+# override silently measures nothing, so this first-party policy requires a
+# positive integer floor before invoking the pinned checker.
+awk '
+  /^threshold:[[:space:]]*$/ { section = "threshold"; next }
+  /^[^[:space:]#]/ { section = "" }
+  section == "threshold" && /^  package:/ {
+    value = $0
+    sub(/^  package:[[:space:]]*/, "", value)
+    sub(/[[:space:]]*#.*$/, "", value)
+    sub(/[[:space:]]+$/, "", value)
+    count++
+    values = values == "" ? value : values " | " value
+  }
+  END { print count "\t" values }
+' "$config_file" >"$work_dir/package-default.raw"
+
+IFS=$'\t' read -r package_default_count package_default_values <"$work_dir/package-default.raw"
+
+floor_findings=0
+validate_package_floor() {
+  local label="$1" count="$2" raw="$3" numeric
+  if [[ "$count" -eq 0 || ( "$count" -eq 1 && -z "$raw" ) ]]; then
+    echo "check-coverage-floors: $label has invalid threshold value '<missing>'; package floors must be one unquoted decimal integer from 1 through 100" >&2
+    floor_findings=$((floor_findings + 1))
+  elif [[ "$count" -ne 1 ]]; then
+    echo "check-coverage-floors: $label has duplicate threshold values '$raw'; package floors must be one unquoted decimal integer from 1 through 100" >&2
+    floor_findings=$((floor_findings + 1))
+  elif [[ ! "$raw" =~ ^[0-9]+$ ]]; then
+    echo "check-coverage-floors: $label has invalid threshold value '$raw'; package floors must be one unquoted decimal integer from 1 through 100" >&2
+    floor_findings=$((floor_findings + 1))
+  else
+    numeric=$((10#$raw))
+    if [[ "$numeric" -lt 1 || "$numeric" -gt 100 ]]; then
+      echo "check-coverage-floors: $label has invalid threshold value '$raw'; package floors must be from 1 through 100" >&2
+      floor_findings=$((floor_findings + 1))
+    fi
+  fi
+}
+
+validate_package_floor "threshold.package" "$package_default_count" "$package_default_values"
+
 # --- normalisation -----------------------------------------------------------
 #
 # The two sides spell the same package differently and a literal comparison
@@ -185,10 +228,9 @@ echo "check-coverage-floors: $package_count package(s), $override_count override
 # nothing, and both were found by review on PR #87 rather than by design:
 #
 #   - An entry with a `path` but no `threshold` is not an error to the coverage
-#     tool. It falls back to `threshold.package`, which this config sets to 0
-#     deliberately, so the package is measured against nothing while every gate
-#     stays green. Reproduced: dropping `internal/guard`'s threshold left a
-#     92.3% package enforced at 0 with both CI steps passing.
+#     tool. It falls back to `threshold.package`; the policy keeps that default
+#     positive and rejects the malformed entry locally, so neither layer can
+#     quietly treat a missing package floor as enforcement.
 #   - An override path missing its trailing `$` still normalises to a live
 #     package name here, so this script blesses it, while the coverage tool's
 #     FIRST matching override wins and shadows the sibling's own entry.
@@ -202,21 +244,18 @@ incomplete=0
 while IFS=$'\t' read -r path threshold_count threshold_value; do
   [[ -z "$path" ]] && continue
   if [[ "$threshold_count" -eq 0 ]]; then
-    echo "check-coverage-floors: override '$path' has no 'threshold:' line, so it falls back to threshold.package (0) and enforces nothing" >&2
+    echo "check-coverage-floors: override '$path' has no 'threshold:' line; raw value is '<missing>'" >&2
     incomplete=$((incomplete + 1))
   fi
-  if [[ "$threshold_count" -eq 1 && "$threshold_value" == "0" ]]; then
-    echo "check-coverage-floors: override '$path' has invalid threshold value '0'; package floors must be greater than 0" >&2
-    incomplete=$((incomplete + 1))
-  fi
+  validate_package_floor "override '$path'" "$threshold_count" "$threshold_value"
   if [[ "$path" != "^"* || "$path" != *'$' ]]; then
     echo "check-coverage-floors: override '$path' is not anchored at both ends (^...\$), so it can also match a sibling package and shadow that package's own floor" >&2
     incomplete=$((incomplete + 1))
   fi
 done <"$work_dir/overrides.raw"
 
-if [[ "$incomplete" -gt 0 ]]; then
-  echo "check-coverage-floors: $incomplete malformed override entr(ies); a floor that matches loosely or carries no threshold is not enforcement" >&2
+if [[ "$incomplete" -gt 0 || "$floor_findings" -gt 0 ]]; then
+  echo "check-coverage-floors: $incomplete malformed override entr(ies), $floor_findings invalid package floor(s); every package floor must be explicit, anchored, and in range" >&2
   exit 1
 fi
 

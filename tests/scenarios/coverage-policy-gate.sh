@@ -61,7 +61,7 @@ copy_inputs() {
   cp "$REPO_ROOT/.github/workflows/test.yaml" "$WORKFLOW"
 }
 
-PACKAGE_DEFAULT=$(awk '/^  package:/ { print $3; exit }' "$REPO_ROOT/.testcoverage.yml")
+PACKAGE_DEFAULT=$(awk '/^  package:/ { print $2; exit }' "$REPO_ROOT/.testcoverage.yml")
 
 replace_package_default() {
   sed "s/^  package: $PACKAGE_DEFAULT$/  package: $1/" "$CONFIG" >"$CONFIG.next"
@@ -108,6 +108,14 @@ sed "/^  package: $PACKAGE_DEFAULT$/d" "$CONFIG" >"$CONFIG.next"
 mv "$CONFIG.next" "$CONFIG"
 run_gate
 expect_red_with "missing threshold.package" 'threshold.package' '<missing>'
+copy_inputs
+awk '
+  /^  package:/ && !added { print; print "  package: 2"; added = 1; next }
+  { print }
+' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "duplicate threshold.package" 'threshold.package' "$PACKAGE_DEFAULT" '2'
 
 echo "--- override numeric domain ---"
 for value in 0 -1 101 nope; do
