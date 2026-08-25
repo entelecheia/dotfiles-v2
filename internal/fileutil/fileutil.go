@@ -3,7 +3,9 @@ package fileutil
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -112,11 +114,44 @@ func backup(runner *exec.Runner, home, path string) error {
 
 // writeBackupCopy preserves the existing seconds-format backup spelling.
 func writeBackupCopy(runner *exec.Runner, bdir, base string, data []byte) (string, error) {
-	dest := filepath.Join(bdir, fmt.Sprintf("%s.%s", base, backupNow().Format("20060102-150405")))
-	if err := writeBackupFile(runner, dest, data, 0644); err != nil {
-		return "", err
+	name := fmt.Sprintf("%s.%s", base, backupNow().Format("20060102-150405"))
+	if runner.DryRun {
+		dest := filepath.Join(bdir, name)
+		if err := writeBackupFile(runner, dest, data, 0644); err != nil {
+			return "", err
+		}
+		return dest, nil
 	}
-	return dest, nil
+
+	for suffix := 0; ; suffix++ {
+		candidate := name
+		if suffix > 0 {
+			candidate = fmt.Sprintf("%s-%d", name, suffix)
+		}
+		dest := filepath.Join(bdir, candidate)
+		file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("reserving %s: %w", dest, err)
+		}
+
+		written, writeErr := writeReservedBackup(file, data)
+		if writeErr == nil && written != len(data) {
+			writeErr = io.ErrShortWrite
+		}
+		if writeErr != nil {
+			_ = file.Close()
+			_ = os.Remove(dest)
+			return "", fmt.Errorf("writing %s: %w", dest, writeErr)
+		}
+		if err := closeReservedBackup(file); err != nil {
+			_ = os.Remove(dest)
+			return "", fmt.Errorf("closing %s: %w", dest, err)
+		}
+		return dest, nil
+	}
 }
 
 func hashBytes(data []byte) string {
