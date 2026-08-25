@@ -267,6 +267,47 @@ func TestSystemdTemplates_RenderIntakeUnit(t *testing.T) {
 	}
 }
 
+func TestSystemdTemplate_SpecialHome(t *testing.T) {
+	longHome := "/tmp/a b\tline\nnext\rreturn % $ ' \" \\ ; | ( ) [ ] { } * ? ! 유니코드/" + strings.Repeat("long-", 64)
+	longExpectedArg := "\"--home=/tmp/a b\\tline\\nnext\\rreturn %% $$ ' \\\" \\\\ ; | ( ) [ ] { } * ? ! 유니코드/" + strings.Repeat("long-", 64) + "\""
+	cases := []struct {
+		name string
+		home string
+		arg  string
+	}{
+		{name: "empty", home: "", arg: ""},
+		{name: "special long literal", home: longHome, arg: longExpectedArg},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := SchedulerTemplateData{
+				DotfilesPath: "/home/u/.local/bin/dot", Home: tc.home, SystemdHomeArg: tc.arg,
+				LogFile: "/tmp/dot.log", Interval: 60, Label: launchdLabel,
+				Action: "push", Mode: ModeClean.String(), Description: "test", ServiceName: systemdServiceName,
+			}
+			first, err := template.NewEngine().Render("sync/dotfiles-sync.service.tmpl", data)
+			if err != nil {
+				t.Fatalf("render service: %v", err)
+			}
+			second, err := template.NewEngine().Render("sync/dotfiles-sync.service.tmpl", data)
+			if err != nil {
+				t.Fatalf("render service a second time: %v", err)
+			}
+			if string(first) != string(second) {
+				t.Fatalf("render is not deterministic:\nfirst:  %q\nsecond: %q", first, second)
+			}
+			want := "ExecStart=/home/u/.local/bin/dot sync push --mode=clean"
+			if tc.arg != "" {
+				want += " " + tc.arg
+			}
+			if !strings.Contains(string(first), want) {
+				t.Fatalf("ExecStart does not preserve one target-ready home item:\n got: %q\nwant: %q", string(first), want)
+			}
+		})
+	}
+}
+
 func TestSchedulerKind_LabelsAreDistinct(t *testing.T) {
 	if SchedulerKindPush.LaunchdLabel() == SchedulerKindIntake.LaunchdLabel() {
 		t.Error("push and intake share a launchd label")

@@ -109,14 +109,15 @@ type SchedulerTemplateData struct {
 	// run; empty renders no flag. Without it a unit installed for another
 	// user's home runs `dot sync` against the invoking user's workspace on
 	// every tick, long after the install command exited.
-	Home         string
-	PlistHomeArg string
-	Label        string // launchd Label
-	Profile      string // sync profile the unit operates on ("" for the default)
-	Action       string // gsync subcommand to run
-	Mode         string // non-interactive run mode (clean|force)
-	Description  string // systemd Description= line
-	ServiceName  string // systemd Unit= reference (timer → service)
+	Home           string
+	PlistHomeArg   string
+	SystemdHomeArg string
+	Label          string // launchd Label
+	Profile        string // sync profile the unit operates on ("" for the default)
+	Action         string // gsync subcommand to run
+	Mode           string // non-interactive run mode (clean|force)
+	Description    string // systemd Description= line
+	ServiceName    string // systemd Unit= reference (timer → service)
 }
 
 // Scheduler manages the platform-specific periodic gsync timers.
