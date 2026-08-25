@@ -3,9 +3,11 @@ package fileutil
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +110,28 @@ func assertOwnerOnlyMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm() & 0o077; got != 0 {
 		t.Errorf("%s exposes group/world bits %04o", path, got)
+	}
+}
+
+func assertBackupTreeOwnerOnly(t *testing.T, home string) {
+	t.Helper()
+	root := backupRoot(home)
+	assertOwnerOnlyMode(t, root, 0o700)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read backup root %s: %v", root, err)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("lstat %s: %v", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Errorf("backup entry %s mode = %s, want regular file", path, info.Mode())
+			continue
+		}
+		assertOwnerOnlyMode(t, path, 0o600)
 	}
 }
 
@@ -250,6 +274,209 @@ func TestWriteHelpers_BackupPermissionsOwnerOnly(t *testing.T) {
 				}
 				assertOwnerOnlyMode(t, backupRoot(home), 0o700)
 				assertOwnerOnlyMode(t, copy, 0o600)
+			})
+		}
+	}
+}
+
+func TestWriteHelpers_HardensExistingBackupPermissions(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			root := backupRoot(home)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := map[string]string{
+				"settings.toml.legacy-one": "first preserved backup",
+				"settings.toml.legacy-two": "second preserved backup",
+			}
+			for name, contents := range legacy {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(home, ".config", "settings.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("live before"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			runner, _ := runnerWithLog()
+			written, err := h.fn(runner, home, path, []byte("live after"), 0o644)
+			if err != nil || !written {
+				t.Fatalf("written=%t err=%v", written, err)
+			}
+			for name, want := range legacy {
+				got, err := os.ReadFile(filepath.Join(root, name))
+				if err != nil || string(got) != want {
+					t.Errorf("legacy %s = %q, err = %v, want %q", name, got, err, want)
+				}
+			}
+			assertBackupTreeOwnerOnly(t, home)
+
+			if _, err := h.fn(runner, home, path, []byte("live after again"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			assertBackupTreeOwnerOnly(t, home)
+		})
+	}
+}
+
+func TestWriteHelpers_RejectsUnsafeBackupEntry(t *testing.T) {
+	for _, h := range writeHelpers {
+		for _, kind := range []string{"symlink", "directory"} {
+			t.Run(h.name+"/"+kind, func(t *testing.T) {
+				_, home := twoHomes(t)
+				root := backupRoot(home)
+				if err := os.MkdirAll(root, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				outside := filepath.Join(t.TempDir(), "outside-secret")
+				if err := os.WriteFile(outside, []byte("outside bytes"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+				unsafe := filepath.Join(root, "unexpected")
+				if kind == "symlink" {
+					if err := os.Symlink(outside, unsafe); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.Mkdir(unsafe, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(home, ".config", "settings.toml")
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				outsideInfo, err := os.Lstat(outside)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				runner, _ := runnerWithLog()
+				written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+				if err == nil || written {
+					t.Fatalf("written=%t err=%v, want unsafe backup entry refusal", written, err)
+				}
+				if got, _ := os.ReadFile(path); string(got) != "live before" {
+					t.Errorf("live target = %q, want unchanged", got)
+				}
+				if got, _ := os.ReadFile(outside); string(got) != "outside bytes" {
+					t.Errorf("outside target = %q, want unchanged", got)
+				}
+				if after, err := os.Lstat(outside); err != nil || after.Mode().Perm() != outsideInfo.Mode().Perm() {
+					t.Errorf("outside mode changed from %04o to %v, err=%v", outsideInfo.Mode().Perm(), after, err)
+				}
+				if names := backupNames(t, home); len(names) != 1 || names[0] != "unexpected" {
+					t.Errorf("backup entries = %v, want only unsafe fixture", names)
+				}
+			})
+		}
+	}
+}
+
+func TestWriteHelpers_BackupPermissionHardeningFailure(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			root := backupRoot(home)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := filepath.Join(root, "settings.toml.legacy")
+			if err := os.WriteFile(legacy, []byte("prior recovery bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(home, ".config", "settings.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runner, _ := runnerWithLog()
+			previous := chmodBackupPath
+			chmodBackupPath = func(_ *exec.Runner, path string, _ os.FileMode) error {
+				if path == root {
+					return errors.New("forced backup hardening failure")
+				}
+				return previous(runner, path, 0o600)
+			}
+			t.Cleanup(func() { chmodBackupPath = previous })
+
+			written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+			if err == nil || written {
+				t.Fatalf("written=%t err=%v, want hardening failure", written, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "live before" {
+				t.Errorf("live target = %q, want unchanged", got)
+			}
+			if got, _ := os.ReadFile(legacy); string(got) != "prior recovery bytes" {
+				t.Errorf("legacy backup = %q, want unchanged", got)
+			}
+			if names := backupNames(t, home); len(names) != 1 || names[0] != filepath.Base(legacy) {
+				t.Errorf("backup entries = %v, want only legacy backup", names)
+			}
+		})
+	}
+}
+
+func TestWriteHelpers_DryRunDoesNotHardenOrCreateBackup(t *testing.T) {
+	for _, h := range writeHelpers {
+		for _, legacy := range []bool{false, true} {
+			t.Run(h.name+"/legacy="+strconv.FormatBool(legacy), func(t *testing.T) {
+				_, home := twoHomes(t)
+				root := backupRoot(home)
+				if legacy {
+					if err := os.MkdirAll(root, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(root, "legacy"), []byte("legacy bytes"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				path := filepath.Join(home, ".config", "settings.toml")
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+
+				runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+				written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+				if err != nil || !written {
+					t.Fatalf("written=%t err=%v", written, err)
+				}
+				if got, _ := os.ReadFile(path); string(got) != "live before" {
+					t.Errorf("dry-run live target = %q, want unchanged", got)
+				}
+				if !legacy {
+					if _, err := os.Lstat(root); !os.IsNotExist(err) {
+						t.Errorf("dry-run created backup root (err=%v)", err)
+					}
+					return
+				}
+				rootInfo, err := os.Lstat(root)
+				if err != nil || rootInfo.Mode().Perm() != 0o755 {
+					t.Errorf("dry-run backup root mode = %v, err=%v, want 0755", rootInfo, err)
+				}
+				legacyPath := filepath.Join(root, "legacy")
+				info, err := os.Lstat(legacyPath)
+				if err != nil || info.Mode().Perm() != 0o644 {
+					t.Errorf("dry-run legacy mode = %v, err=%v, want 0644", info, err)
+				}
+				if got, _ := os.ReadFile(legacyPath); string(got) != "legacy bytes" {
+					t.Errorf("dry-run legacy bytes = %q, want unchanged", got)
+				}
+				if names := backupNames(t, home); len(names) != 1 || names[0] != "legacy" {
+					t.Errorf("dry-run backup entries = %v, want only legacy", names)
+				}
 			})
 		}
 	}

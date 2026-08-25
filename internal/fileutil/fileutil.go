@@ -22,6 +22,7 @@ var (
 	}
 	writeReservedBackup = func(file *os.File, data []byte) (int, error) { return file.Write(data) }
 	closeReservedBackup = func(file *os.File) error { return file.Close() }
+	chmodBackupPath     = func(runner *exec.Runner, path string, mode os.FileMode) error { return runner.Chmod(path, mode) }
 )
 
 // EnsureFile writes content to path if it differs from current content.
