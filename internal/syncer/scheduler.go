@@ -242,7 +242,12 @@ func NewScheduler(runner *exec.Runner, paths *Paths, cfg *Config, engine *templa
 // gdrive-sync / workspace-sync units are always removed first so a renamed
 // scheduler never leaves a stale twin firing in parallel.
 func (s *Scheduler) Install(ctx context.Context) error {
-	s.CleanupLegacyUnits(ctx)
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
+	if err := s.CleanupLegacyUnits(ctx); err != nil {
+		return err
+	}
 	if s.Config.Interval > 0 {
 		if err := s.InstallKind(ctx, SchedulerKindPush); err != nil {
 			return err
@@ -259,7 +264,12 @@ func (s *Scheduler) Install(ctx context.Context) error {
 // Uninstall removes both the push and intake units. Missing units are
 // silently skipped (handled by the per-kind helpers).
 func (s *Scheduler) Uninstall(ctx context.Context) error {
-	s.CleanupLegacyUnits(ctx)
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
+	if err := s.CleanupLegacyUnits(ctx); err != nil {
+		return err
+	}
 	if err := s.UninstallKind(ctx, SchedulerKindPush); err != nil {
 		return err
 	}
@@ -268,6 +278,9 @@ func (s *Scheduler) Uninstall(ctx context.Context) error {
 
 // Pause stops both units (intake only if installed).
 func (s *Scheduler) Pause(ctx context.Context) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	if err := s.PauseKind(ctx, SchedulerKindPush); err != nil {
 		return err
 	}
@@ -276,6 +289,9 @@ func (s *Scheduler) Pause(ctx context.Context) error {
 
 // Resume restarts both units (intake only if installed).
 func (s *Scheduler) Resume(ctx context.Context) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	if err := s.ResumeKind(ctx, SchedulerKindPush); err != nil {
 		return err
 	}

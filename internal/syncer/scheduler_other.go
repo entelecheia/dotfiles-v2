@@ -13,6 +13,9 @@ import (
 // and enables them. Idempotent — daemon-reload is safe on every
 // invocation, and `enable --now` accepts an already-enabled unit.
 func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	data := s.templateDataFor(kind)
 	if data.DotfilesPath == "" {
 		return fmt.Errorf("cannot find dot binary in PATH; run `make install` first")
@@ -33,10 +36,10 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 	if err := s.Runner.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating systemd dir: %w", err)
 	}
-	if err := s.Runner.WriteFile(servicePath, svcContent, 0644); err != nil {
+	if err := s.Runner.WriteFileAtomic(servicePath, svcContent, 0644); err != nil {
 		return fmt.Errorf("writing service: %w", err)
 	}
-	if err := s.Runner.WriteFile(timerPath, timerContent, 0644); err != nil {
+	if err := s.Runner.WriteFileAtomic(timerPath, timerContent, 0644); err != nil {
 		return fmt.Errorf("writing timer: %w", err)
 	}
 
@@ -52,6 +55,9 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 // UninstallKind disables the timer and removes the systemd unit files
 // for the given kind. Missing-file is not an error.
 func (s *Scheduler) UninstallKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	timer := s.Paths.SystemdTimerFor(kind)
 	service := s.Paths.SystemdServiceFor(kind)
 	_, _ = s.Runner.Run(ctx, "systemctl", "--user", "disable", "--now", kind.SystemdTimerName())
@@ -64,6 +70,9 @@ func (s *Scheduler) UninstallKind(ctx context.Context, kind SchedulerKind) error
 // PauseKind stops the timer for the kind (units stay on disk; Resume
 // restarts).
 func (s *Scheduler) PauseKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	if !s.Runner.FileExists(s.Paths.SystemdTimerFor(kind)) {
 		return nil
 	}
@@ -73,6 +82,9 @@ func (s *Scheduler) PauseKind(ctx context.Context, kind SchedulerKind) error {
 
 // ResumeKind starts the timer for the kind.
 func (s *Scheduler) ResumeKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	if !s.Runner.FileExists(s.Paths.SystemdTimerFor(kind)) {
 		return nil
 	}
@@ -90,7 +102,10 @@ var legacySystemdUnits = []string{
 
 // CleanupLegacyUnits disables and removes systemd units left behind by the
 // pre-rename gdrive-sync schedulers. Best-effort.
-func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) {
+func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	dir := filepath.Dir(s.Paths.SystemdService)
 	removed := false
 	for _, unit := range legacySystemdUnits {
@@ -106,6 +121,7 @@ func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) {
 	if removed {
 		_, _ = s.Runner.Run(ctx, "systemctl", "--user", "daemon-reload")
 	}
+	return nil
 }
 
 // StateKind asks systemctl for the timer's runtime status for the kind.
