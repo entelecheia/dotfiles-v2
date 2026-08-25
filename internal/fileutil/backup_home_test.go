@@ -594,6 +594,7 @@ func TestWriteHelpers_SameSecondBackups(t *testing.T) {
 			if !contents["a"] || !contents["b"] {
 				t.Errorf("recovery contents = %v, want a and b", contents)
 			}
+			assertBackupTreeOwnerOnly(t, home)
 		})
 	}
 }
@@ -603,7 +604,7 @@ func TestWriteHelpers_ConcurrentBackupReservations(t *testing.T) {
 	runner, _ := runnerWithLog()
 	home := t.TempDir()
 	bdir := filepath.Join(home, backupDir)
-	if err := os.MkdirAll(bdir, 0o755); err != nil {
+	if err := os.MkdirAll(bdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	const workers = 8
@@ -644,6 +645,7 @@ func TestWriteHelpers_ConcurrentBackupReservations(t *testing.T) {
 			seen[path] = true
 		}
 	}
+	assertBackupTreeOwnerOnly(t, home)
 }
 
 func TestWriteHelpers_BackupFailure(t *testing.T) {
@@ -672,6 +674,7 @@ func TestWriteHelpers_BackupFailure(t *testing.T) {
 			if names := backupNames(t, home); len(names) != 0 {
 				t.Errorf("owned partial backups left behind: %v", names)
 			}
+			assertOwnerOnlyMode(t, backupRoot(home), 0o700)
 		})
 	}
 }

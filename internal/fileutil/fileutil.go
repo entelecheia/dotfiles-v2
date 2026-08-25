@@ -106,17 +106,8 @@ func backup(runner *exec.Runner, home, path string) error {
 	if err := runner.MkdirAll(bdir, 0o700); err != nil {
 		return err
 	}
-	if !runner.DryRun {
-		info, err := os.Lstat(bdir)
-		if err != nil {
-			return fmt.Errorf("inspecting backup directory %q: %w", bdir, err)
-		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("backup path %q must be a real directory", bdir)
-		}
-	}
-	if err := runner.Chmod(bdir, 0o700); err != nil {
-		return fmt.Errorf("restricting backup directory %q: %w", bdir, err)
+	if err := hardenBackupDirectory(runner, bdir); err != nil {
+		return err
 	}
 
 	base := filepath.Base(path)
@@ -126,6 +117,51 @@ func backup(runner *exec.Runner, home, path string) error {
 	}
 	_, err = writeBackupCopy(runner, bdir, base, data)
 	return err
+}
+
+// hardenBackupDirectory establishes the owner-only recovery boundary before a
+// new copy is reserved. It inspects with Lstat and ReadDir so it never follows
+// a link, and routes every permission change through Runner.Chmod so dry-run
+// remains a truthful no-op.
+func hardenBackupDirectory(runner *exec.Runner, bdir string) error {
+	info, err := os.Lstat(bdir)
+	if err != nil {
+		if runner.DryRun && errors.Is(err, os.ErrNotExist) {
+			if err := chmodBackupPath(runner, bdir, 0o700); err != nil {
+				return fmt.Errorf("restricting backup directory %q: %w", bdir, err)
+			}
+			return nil
+		}
+		return fmt.Errorf("inspecting backup directory %q: %w", bdir, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("backup directory %q must be a real directory; remove or relocate it before retrying", bdir)
+	}
+	if err := chmodBackupPath(runner, bdir, 0o700); err != nil {
+		return fmt.Errorf("restricting backup directory %q: %w", bdir, err)
+	}
+
+	entries, err := os.ReadDir(bdir)
+	if err != nil {
+		return fmt.Errorf("reading backup directory %q: %w", bdir, err)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(bdir, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspecting backup entry %q: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("backup entry %q is a symbolic link; remove or relocate it before retrying", path)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("backup entry %q must be a regular file; remove or relocate it before retrying", path)
+		}
+		if err := chmodBackupPath(runner, path, 0o600); err != nil {
+			return fmt.Errorf("restricting backup entry %q: %w", path, err)
+		}
+	}
+	return nil
 }
 
 // writeBackupCopy preserves the existing seconds-format backup spelling.
