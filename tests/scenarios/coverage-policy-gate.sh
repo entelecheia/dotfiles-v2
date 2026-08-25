@@ -77,7 +77,7 @@ expect_red_with "missing floor-policy pull-request path" '.testcoverage.yml'
 
 echo "--- zero override mutation ---"
 copy_inputs
-sed '0,/threshold: 62/s//threshold: 0/' "$CONFIG" >"$CONFIG.next"
+sed 's/^    threshold: 62$/    threshold: 0/' "$CONFIG" >"$CONFIG.next"
 mv "$CONFIG.next" "$CONFIG"
 run_gate
 expect_red_with "zero override floor" '^internal/aisettings$'

@@ -28,15 +28,48 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 config_file=${1:-$repo_root/.testcoverage.yml}
+workflow_file=${2:-$repo_root/.github/workflows/test.yaml}
 
 if [[ ! -f "$config_file" ]]; then
   echo "check-coverage-floors: config not found: $config_file" >&2
+  exit 1
+fi
+if [[ ! -f "$workflow_file" ]]; then
+  echo "check-coverage-floors: workflow not found: $workflow_file" >&2
   exit 1
 fi
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/check-coverage-floors-XXXXXX")
 cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
+
+# The coverage table is only enforcement when a pull request that changes the
+# table starts the workflow that runs this guard. Read the checked-in YAML
+# declaration rather than attempting to emulate a GitHub event: the exact
+# allowlist is the contract GitHub evaluates.
+awk '
+  /^  pull_request:[[:space:]]*$/ { in_pr = 1; next }
+  in_pr && /^  [^[:space:]#]/ { exit }
+  in_pr && /^    paths:[[:space:]]*$/ { in_paths = 1; next }
+  in_paths && /^    [^[:space:]#]/ { exit }
+  in_paths && /^      -[[:space:]]/ {
+    value = $0
+    sub(/^      -[[:space:]]*/, "", value)
+    sub(/[[:space:]]*#.*$/, "", value)
+    sub(/^[\047\042]/, "", value)
+    sub(/[\047\042][[:space:]]*$/, "", value)
+    print value
+  }
+' "$workflow_file" >"$work_dir/pull-request-paths"
+
+if [[ ! -s "$work_dir/pull-request-paths" ]]; then
+  echo "check-coverage-floors: $workflow_file has no pull_request.paths entries; required policy path .testcoverage.yml is not scheduled" >&2
+  exit 1
+fi
+if ! grep -Fxq '.testcoverage.yml' "$work_dir/pull-request-paths"; then
+  echo "check-coverage-floors: $workflow_file pull_request.paths omits required policy path .testcoverage.yml" >&2
+  exit 1
+fi
 
 # --- normalisation -----------------------------------------------------------
 #
@@ -74,19 +107,25 @@ awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
     else if (section == "override" && line ~ /^[[:space:]]*-[[:space:]]+path:/) {
       # A new entry begins, so the previous one can no longer acquire a
       # threshold. Flush it with the verdict it ended up with.
-      if (pending != "") print pending_thr "\t" pending >ov
+      if (pending != "") print pending "\t" pending_thr "\t" pending_value >ov
       v = line
       sub(/^[[:space:]]*-[[:space:]]+path:[[:space:]]*/, "", v)
       sub(/[[:space:]]*#.*$/, "", v)
       sub(/[[:space:]]+$/, "", v)
       pending = v
       pending_thr = 0
+      pending_value = ""
     }
     # A `threshold:` belonging to the entry above it. Anchored to the list-item
     # indentation so a `threshold:` under `threshold:` at the top of the file
     # cannot be mistaken for one.
-    else if (section == "override" && pending != "" && line ~ /^[[:space:]]+threshold:[[:space:]]*-?[0-9]+/) {
-      pending_thr = 1
+    else if (section == "override" && pending != "" && line ~ /^[[:space:]]+threshold:/) {
+      v = line
+      sub(/^[[:space:]]+threshold:[[:space:]]*/, "", v)
+      sub(/[[:space:]]*#.*$/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      pending_thr++
+      pending_value = pending_value == "" ? v : pending_value " | " v
     }
     else if (section == "exclude_paths" && line ~ /^[[:space:]]*-[[:space:]]/) {
       v = line
@@ -98,12 +137,12 @@ awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
     }
     prev = line
   }
-  END { if (pending != "") print pending_thr "\t" pending >ov }
+  END { if (pending != "") print pending "\t" pending_thr "\t" pending_value >ov }
 ' "$config_file"
 
 touch "$work_dir/overrides.raw" "$work_dir/exclusions.raw"
 
-cut -f2 "$work_dir/overrides.raw" | sed 's/^\^//; s/\$$//' | sort -u >"$work_dir/overrides"
+cut -f1 "$work_dir/overrides.raw" | sed 's/^\^//; s/\$$//' | sort -u >"$work_dir/overrides"
 cut -f2 "$work_dir/exclusions.raw" | sed 's/^\^//; s|/$||' | sort -u >"$work_dir/exclusions"
 
 package_count=$(wc -l <"$work_dir/packages" | tr -d '[:space:]')
@@ -160,10 +199,14 @@ echo "check-coverage-floors: $package_count package(s), $override_count override
 # name and cannot tell a complete entry from a hollow one.
 
 incomplete=0
-while IFS=$'\t' read -r has_threshold path; do
+while IFS=$'\t' read -r path threshold_count threshold_value; do
   [[ -z "$path" ]] && continue
-  if [[ "$has_threshold" != "1" ]]; then
+  if [[ "$threshold_count" -eq 0 ]]; then
     echo "check-coverage-floors: override '$path' has no 'threshold:' line, so it falls back to threshold.package (0) and enforces nothing" >&2
+    incomplete=$((incomplete + 1))
+  fi
+  if [[ "$threshold_count" -eq 1 && "$threshold_value" == "0" ]]; then
+    echo "check-coverage-floors: override '$path' has invalid threshold value '0'; package floors must be greater than 0" >&2
     incomplete=$((incomplete + 1))
   fi
   if [[ "$path" != "^"* || "$path" != *'$' ]]; then
