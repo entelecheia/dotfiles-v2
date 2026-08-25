@@ -40,22 +40,37 @@ expect_green() {
 }
 
 expect_red_with() {
-  local what="$1" needle="$2"
+  local what="$1"
+  shift
   if [ "$GATE_EXIT" -ne 0 ]; then
     pass "$what exits non-zero"
   else
     fail "$what: expected non-zero exit, got 0\n$GATE_OUT"
   fi
-  if printf '%s' "$GATE_OUT" | grep -Fq "$needle"; then
-    pass "$what says $needle"
-  else
-    fail "$what: output did not mention $needle\n$GATE_OUT"
-  fi
+  for needle in "$@"; do
+    if printf '%s' "$GATE_OUT" | grep -Fq -- "$needle"; then
+      pass "$what says $needle"
+    else
+      fail "$what: output did not mention $needle\n$GATE_OUT"
+    fi
+  done
 }
 
 copy_inputs() {
   cp "$REPO_ROOT/.testcoverage.yml" "$CONFIG"
   cp "$REPO_ROOT/.github/workflows/test.yaml" "$WORKFLOW"
+}
+
+PACKAGE_DEFAULT=$(awk '/^  package:/ { print $3; exit }' "$REPO_ROOT/.testcoverage.yml")
+
+replace_package_default() {
+  sed "s/^  package: $PACKAGE_DEFAULT$/  package: $1/" "$CONFIG" >"$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+}
+
+replace_first_override() {
+  sed "s/^    threshold: 62$/    threshold: $1/" "$CONFIG" >"$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
 }
 
 echo "--- baseline ---"
@@ -73,15 +88,103 @@ copy_inputs
 grep -Fv '      - ".testcoverage.yml"' "$WORKFLOW" >"$WORKFLOW.next"
 mv "$WORKFLOW.next" "$WORKFLOW"
 run_gate
-expect_red_with "missing floor-policy pull-request path" '.testcoverage.yml'
+expect_red_with "missing floor-policy pull-request path" '.testcoverage.yml' 'pull_request.paths'
 
 echo "--- zero override mutation ---"
 copy_inputs
-sed 's/^    threshold: 62$/    threshold: 0/' "$CONFIG" >"$CONFIG.next"
+replace_first_override 0
+run_gate
+expect_red_with "zero override floor" '^internal/aisettings$' '0'
+
+echo "--- package default numeric domain ---"
+for value in 0 -1 101 nope; do
+  copy_inputs
+  replace_package_default "$value"
+  run_gate
+  expect_red_with "threshold.package $value" 'threshold.package' "$value"
+done
+copy_inputs
+sed "/^  package: $PACKAGE_DEFAULT$/d" "$CONFIG" >"$CONFIG.next"
 mv "$CONFIG.next" "$CONFIG"
 run_gate
-expect_red_with "zero override floor" '^internal/aisettings$'
-expect_red_with "zero override floor" '0'
+expect_red_with "missing threshold.package" 'threshold.package' '<missing>'
+
+echo "--- override numeric domain ---"
+for value in 0 -1 101 nope; do
+  copy_inputs
+  replace_package_default 1
+  replace_first_override "$value"
+  run_gate
+  expect_red_with "override floor $value" '^internal/aisettings$' "$value"
+done
+copy_inputs
+replace_package_default 1
+sed '/^    threshold: 62$/d' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "missing override threshold" '^internal/aisettings$' '<missing>'
+copy_inputs
+replace_package_default 1
+awk '
+  /^    threshold: 62$/ && !added { print; print "    threshold: 63"; added = 1; next }
+  { print }
+' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "duplicate override threshold" '^internal/aisettings$' '62' '63'
+
+echo "--- inclusive override boundaries ---"
+for value in 1 100; do
+  copy_inputs
+  replace_package_default 1
+  replace_first_override "$value"
+  run_gate
+  expect_green "override floor $value is accepted"
+done
+
+echo "--- preserved table invariants ---"
+copy_inputs
+awk '
+  /^  - path: \^internal\/aisettings\$/ { skip = 1; next }
+  skip && /^    threshold:/ { skip = 0; next }
+  { print }
+' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "missing override entry" 'internal/aisettings has no floor'
+
+copy_inputs
+sed 's|\^internal/aisettings\$|^internal/not-a-package$|' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "stale override path" '^internal/not-a-package$' 'matches no package'
+
+copy_inputs
+printf '%s\n' '    - ^internal/aisettings/ # scenario double listing' >>"$CONFIG"
+run_gate
+expect_red_with "double-listed package" 'internal/aisettings is in BOTH'
+
+copy_inputs
+awk '
+  /^exclude:/ { exclude = 1 }
+  exclude && /^[[:space:]]*#/ { next }
+  { print }
+' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "reasonless exclusion" 'carries no comment'
+
+copy_inputs
+sed '/^    threshold: 91$/d' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "missing preserved override threshold" '^internal/guard$' "has no 'threshold:' line"
+
+copy_inputs
+sed 's|\^internal/config\$|^internal/config|' "$CONFIG" >"$CONFIG.next"
+mv "$CONFIG.next" "$CONFIG"
+run_gate
+expect_red_with "unanchored override" '^internal/config' 'not anchored at both ends'
 
 if [ "$CONFIG_HASH" = "$(shasum -a 256 "$REPO_ROOT/.testcoverage.yml")" ] && \
   [ "$WORKFLOW_HASH" = "$(shasum -a 256 "$REPO_ROOT/.github/workflows/test.yaml")" ]; then
