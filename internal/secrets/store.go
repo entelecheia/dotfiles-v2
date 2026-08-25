@@ -22,6 +22,12 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
+var (
+	backupNow          = time.Now
+	writeRestoreBackup = func(file *os.File, data []byte) (int, error) { return file.Write(data) }
+	closeRestoreBackup = func(file *os.File) error { return file.Close() }
+)
+
 // StoreDirRel is the encrypted store's path relative to a user home. Callers
 // join it against the home for the run in hand — a --home override or the
 // process home. There is deliberately no process-home resolver beside it:
@@ -228,7 +234,18 @@ const (
 
 // backupTimestamp returns a filesystem-safe RFC3339 timestamp (UTC, ':'→'-').
 func backupTimestamp() string {
-	return strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339), ":", "-")
+	return strings.ReplaceAll(backupNow().UTC().Format(time.RFC3339), ":", "-")
+}
+
+// writeRestoreBackupFile preserves the existing seconds-format backup spelling.
+// It is deliberately local to secrets because restore backups are plaintext and
+// have different permissions and transaction rules than generic file backups.
+func writeRestoreBackupFile(path string, data []byte) (string, error) {
+	backupPath := path + ".bak-" + backupTimestamp()
+	if err := os.WriteFile(backupPath, data, 0600); err != nil {
+		return "", err
+	}
+	return backupPath, nil
 }
 
 // restoreFile decrypts srcAge to destPath without ever truncating an
@@ -299,8 +316,8 @@ func restoreFile(
 		if !ok {
 			return restoreSkipped, "", nil
 		}
-		backupPath = destPath + ".bak-" + backupTimestamp()
-		if err := os.WriteFile(backupPath, oldData, 0600); err != nil {
+		backupPath, err = writeRestoreBackupFile(destPath, oldData)
+		if err != nil {
 			return 0, "", fmt.Errorf("backing up %s: %w", destPath, err)
 		}
 	} else if !os.IsNotExist(err) {

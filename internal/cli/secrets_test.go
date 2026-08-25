@@ -1,11 +1,29 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/entelecheia/dotfiles-v2/internal/secrets"
 )
+
+func TestRenderSecretsEvent_RestoreBackupOrder(t *testing.T) {
+	var out, errOut bytes.Buffer
+	render := renderSecretsEvent(&Printer{Out: &out, Err: &errOut})
+	dest := "/very/long/path/with spaces/restored secret"
+	backup := dest + ".bak-2026-08-26T12-00-00"
+	render(secrets.Event{Kind: secrets.EventRestored, Path: dest})
+	render(secrets.Event{Kind: secrets.EventRestoreBackup, Path: backup})
+	if got, want := out.String(), "  Restored: "+dest+"\n  Backup:   "+backup+"\n"; got != want {
+		t.Errorf("rendered output = %q, want %q", got, want)
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("unexpected stderr: %q", errOut.String())
+	}
+}
 
 // stubAge installs an executable "age" stub and prepends its dir to PATH.
 // Args arrive as: -d -i <identity> -o <out> <src>, so $5 is the output path

@@ -2,16 +2,26 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+func pinBackupClock(t *testing.T, instant time.Time) {
+	t.Helper()
+	previous := backupNow
+	backupNow = func() time.Time { return instant }
+	t.Cleanup(func() { backupNow = previous })
+}
 
 // stubAge installs an executable "age" stub and prepends its dir to PATH.
 // Args arrive as: -d -i <identity> -o <out> <src>, so $5 is the output path
@@ -164,6 +174,106 @@ func TestRestoreFile_BackupOnOverwrite(t *testing.T) {
 	info, _ := os.Stat(backup)
 	if info.Mode().Perm() != 0600 {
 		t.Errorf("backup mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestRestoreFile_SameSecondBackups(t *testing.T) {
+	stubAge(t, false)
+	pinBackupClock(t, time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC))
+	f := newRestoreFixture(t, "new-content-a")
+	if err := os.MkdirAll(filepath.Dir(f.dest), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.dest, []byte("old-content-a"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, first, err := restoreFile(context.Background(), f.runner, f.identity, f.srcAge, f.dest, 0700, confirmAlways(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.srcAge, []byte("new-content-b"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := restoreFile(context.Background(), f.runner, f.identity, f.srcAge, f.dest, 0700, confirmAlways(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("same-second backups collapsed to %q", first)
+	}
+	for path, want := range map[string]string{first: "old-content-a", second: "new-content-a"} {
+		got, readErr := os.ReadFile(path)
+		if readErr != nil || string(got) != want {
+			t.Errorf("backup %s = %q, %v; want %q", path, got, readErr, want)
+		}
+	}
+}
+
+func TestRestoreFile_ConcurrentBackupReservations(t *testing.T) {
+	pinBackupClock(t, time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC))
+	dest := filepath.Join(t.TempDir(), "secret")
+	const workers = 8
+	start := make(chan struct{})
+	paths := make(chan string, workers)
+	errs := make(chan error, workers)
+	var ready sync.WaitGroup
+	ready.Add(workers)
+	for i := range workers {
+		go func() {
+			payload := []byte(fmt.Sprintf("backup-%d", i))
+			ready.Done()
+			<-start
+			path, err := writeRestoreBackupFile(dest, payload)
+			if err != nil {
+				errs <- err
+				return
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(payload) {
+				errs <- fmt.Errorf("backup %s = %q, %v", path, got, err)
+				return
+			}
+			paths <- path
+		}()
+	}
+	ready.Wait()
+	close(start)
+	seen := make(map[string]bool, workers)
+	for range workers {
+		select {
+		case err := <-errs:
+			t.Fatal(err)
+		case path := <-paths:
+			if seen[path] {
+				t.Fatalf("duplicate reserved path %s", path)
+			}
+			seen[path] = true
+		}
+	}
+}
+
+func TestRestoreFile_BackupFailureLeavesDestIntact(t *testing.T) {
+	stubAge(t, false)
+	f := newRestoreFixture(t, "new-content")
+	if err := os.MkdirAll(filepath.Dir(f.dest), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.dest, []byte("old-content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := writeRestoreBackup
+	writeRestoreBackup = func(*os.File, []byte) (int, error) { return 0, errors.New("forced backup write failure") }
+	t.Cleanup(func() { writeRestoreBackup = previous })
+
+	_, backup, err := restoreFile(context.Background(), f.runner, f.identity, f.srcAge, f.dest, 0700, confirmAlways(true))
+	if err == nil || backup != "" {
+		t.Fatalf("restore error=%v backup=%q, want failure without backup path", err, backup)
+	}
+	if got, readErr := os.ReadFile(f.dest); readErr != nil || string(got) != "old-content" {
+		t.Errorf("destination = %q, %v; want untouched old content", got, readErr)
+	}
+	if backups := globBackups(t, f.dest); len(backups) != 0 {
+		t.Errorf("failed owned backup left behind: %v", backups)
 	}
 }
 
