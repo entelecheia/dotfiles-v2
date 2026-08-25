@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	osexec "os/exec"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -215,6 +216,14 @@ func invalidXMLHomeError(home string, offset int, reason string) error {
 	return fmt.Errorf("scheduler home %q is not XML 1.0 representable: %s at byte offset %d; rename or move it to a valid UTF-8 path without XML-illegal controls, then rerun scheduler setup", home, reason, offset)
 }
 
+func systemdHomeArgument(home string) string {
+	if home == "" {
+		return ""
+	}
+	argument := strings.NewReplacer("%", "%%", "$", "$$").Replace("--home=" + home)
+	return strconv.Quote(argument)
+}
+
 // NewScheduler wires a Scheduler with all the things it needs to render
 // templates and execute platform commands.
 func NewScheduler(runner *exec.Runner, paths *Paths, cfg *Config, engine *template.Engine) *Scheduler {
@@ -289,16 +298,17 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 	}
 	plistHomeArg, _ := plistHomeArgument(s.Config.Home)
 	return SchedulerTemplateData{
-		DotfilesPath: dotfilesPath,
-		Home:         s.Config.Home,
-		PlistHomeArg: plistHomeArg,
-		LogFile:      s.Config.LogFile,
-		Interval:     interval,
-		Label:        profiledLabel(kind, s.profile()),
-		Profile:      profileArg(s.profile()),
-		Action:       kind.Action(),
-		Mode:         mode.String(),
-		Description:  kind.Description(),
-		ServiceName:  profiledServiceName(kind, s.profile()),
+		DotfilesPath:   dotfilesPath,
+		Home:           s.Config.Home,
+		PlistHomeArg:   plistHomeArg,
+		SystemdHomeArg: systemdHomeArgument(s.Config.Home),
+		LogFile:        s.Config.LogFile,
+		Interval:       interval,
+		Label:          profiledLabel(kind, s.profile()),
+		Profile:        profileArg(s.profile()),
+		Action:         kind.Action(),
+		Mode:           mode.String(),
+		Description:    kind.Description(),
+		ServiceName:    profiledServiceName(kind, s.profile()),
 	}
 }

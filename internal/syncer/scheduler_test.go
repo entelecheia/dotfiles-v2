@@ -281,6 +281,9 @@ func TestSystemdTemplate_SpecialHome(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if got := systemdHomeArgument(tc.home); got != tc.arg {
+				t.Fatalf("systemdHomeArgument(%q) = %q, want %q", tc.home, got, tc.arg)
+			}
 			data := SchedulerTemplateData{
 				DotfilesPath: "/home/u/.local/bin/dot", Home: tc.home, SystemdHomeArg: tc.arg,
 				LogFile: "/tmp/dot.log", Interval: 60, Label: launchdLabel,
