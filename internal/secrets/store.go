@@ -12,7 +12,9 @@ package secrets
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,11 +243,35 @@ func backupTimestamp() string {
 // It is deliberately local to secrets because restore backups are plaintext and
 // have different permissions and transaction rules than generic file backups.
 func writeRestoreBackupFile(path string, data []byte) (string, error) {
-	backupPath := path + ".bak-" + backupTimestamp()
-	if err := os.WriteFile(backupPath, data, 0600); err != nil {
-		return "", err
+	base := path + ".bak-" + backupTimestamp()
+	for suffix := 0; ; suffix++ {
+		backupPath := base
+		if suffix > 0 {
+			backupPath = fmt.Sprintf("%s-%d", base, suffix)
+		}
+		file, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("reserving %s: %w", backupPath, err)
+		}
+
+		written, writeErr := writeRestoreBackup(file, data)
+		if writeErr == nil && written != len(data) {
+			writeErr = io.ErrShortWrite
+		}
+		if writeErr != nil {
+			_ = file.Close()
+			_ = os.Remove(backupPath)
+			return "", fmt.Errorf("writing %s: %w", backupPath, writeErr)
+		}
+		if err := closeRestoreBackup(file); err != nil {
+			_ = os.Remove(backupPath)
+			return "", fmt.Errorf("closing %s: %w", backupPath, err)
+		}
+		return backupPath, nil
 	}
-	return backupPath, nil
 }
 
 // restoreFile decrypts srcAge to destPath without ever truncating an
