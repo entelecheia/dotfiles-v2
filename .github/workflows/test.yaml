@@ -98,6 +98,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+      - name: Require systemd scheduler parser evidence
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          command -v systemd-analyze
+          go test ./internal/syncer -run '^TestSystemdAnalyze_SpecialHome$' -count=1
       - name: Unit tests with coverage
         run: go test ./... -race -count=1 -coverprofile=coverage.out
       # `go test ./...` prints `ok` for a package whose test skipped, so a guard
