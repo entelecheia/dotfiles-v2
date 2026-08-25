@@ -246,6 +246,16 @@ func (r *Runner) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
+// Chmod changes the permission bits of an existing path. Respects dry-run.
+func (r *Runner) Chmod(path string, mode os.FileMode) error {
+	if r.DryRun {
+		r.Logger.Info("dry-run: chmod", "path", path, "mode", mode.Perm())
+		return nil
+	}
+	r.Logger.Info("chmod", "path", path, "mode", mode.Perm())
+	return os.Chmod(path, mode)
+}
+
 // Symlink creates a symbolic link. Respects dry-run.
 func (r *Runner) Symlink(target, link string) error {
 	if r.DryRun {

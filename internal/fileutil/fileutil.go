@@ -99,8 +99,23 @@ func backup(runner *exec.Runner, home, path string) error {
 		return fmt.Errorf("backing up %q: no home directory given", path)
 	}
 	bdir := filepath.Join(home, backupDir)
-	if err := runner.MkdirAll(bdir, 0755); err != nil {
+	if err := runner.MkdirAll(filepath.Dir(bdir), 0o755); err != nil {
 		return err
+	}
+	if err := runner.MkdirAll(bdir, 0o700); err != nil {
+		return err
+	}
+	if !runner.DryRun {
+		info, err := os.Lstat(bdir)
+		if err != nil {
+			return fmt.Errorf("inspecting backup directory %q: %w", bdir, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("backup path %q must be a real directory", bdir)
+		}
+	}
+	if err := runner.Chmod(bdir, 0o700); err != nil {
+		return fmt.Errorf("restricting backup directory %q: %w", bdir, err)
 	}
 
 	base := filepath.Base(path)
@@ -117,7 +132,7 @@ func writeBackupCopy(runner *exec.Runner, bdir, base string, data []byte) (strin
 	name := fmt.Sprintf("%s.%s", base, backupNow().Format("20060102-150405"))
 	if runner.DryRun {
 		dest := filepath.Join(bdir, name)
-		if err := writeBackupFile(runner, dest, data, 0644); err != nil {
+		if err := writeBackupFile(runner, dest, data, 0o600); err != nil {
 			return "", err
 		}
 		return dest, nil
@@ -129,7 +144,7 @@ func writeBackupCopy(runner *exec.Runner, bdir, base string, data []byte) (strin
 			candidate = fmt.Sprintf("%s-%d", name, suffix)
 		}
 		dest := filepath.Join(bdir, candidate)
-		file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		file, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			if errors.Is(err, os.ErrExist) {
 				continue
