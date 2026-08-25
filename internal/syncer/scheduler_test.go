@@ -18,6 +18,9 @@ type plistProgramArguments struct {
 
 func renderedPlistProgramArguments(t *testing.T, data SchedulerTemplateData) []string {
 	t.Helper()
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare plist data: %v", err)
+	}
 	body, err := template.NewEngine().Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		t.Fatalf("render plist: %v", err)
@@ -136,6 +139,9 @@ func TestPlistTemplate_RendersPushUnit(t *testing.T) {
 		Description:  SchedulerKindPush.Description(),
 		ServiceName:  SchedulerKindPush.SystemdServiceName(),
 	}
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare plist data: %v", err)
+	}
 	out, err := engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		t.Fatalf("render plist: %v", err)
@@ -180,6 +186,9 @@ func TestPlistTemplate_RendersIntakeUnit(t *testing.T) {
 		Mode:         ModeForce.String(),
 		Description:  SchedulerKindIntake.Description(),
 		ServiceName:  SchedulerKindIntake.SystemdServiceName(),
+	}
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare intake plist data: %v", err)
 	}
 	out, err := engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {

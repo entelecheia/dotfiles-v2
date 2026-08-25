@@ -20,13 +20,16 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 	if data.DotfilesPath == "" {
 		return fmt.Errorf("cannot find dot binary in PATH; run `make install` first")
 	}
+	plist := s.Paths.PlistFor(kind)
+	if err := preparePlistTemplateData(&data); err != nil {
+		return fmt.Errorf("cannot serialize shared scheduler plist %s: %w; existing artifact was left untouched; run dot sync setup after fixing the path", plist, err)
+	}
 
 	content, err := s.Engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		return fmt.Errorf("rendering plist: %w", err)
 	}
 
-	plist := s.Paths.PlistFor(kind)
 	dir := filepath.Dir(plist)
 	if err := s.Runner.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating LaunchAgents dir: %w", err)

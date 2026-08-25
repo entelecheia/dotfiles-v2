@@ -7,7 +7,7 @@
   <string>{{.Label}}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{.DotfilesPath}}</string>
+    <string>{{.PlistDotfilesPath}}</string>
     <string>sync</string>
     <string>{{.Action}}</string>
     <string>--mode={{.Mode}}</string>
@@ -32,8 +32,8 @@
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>{{.LogFile}}</string>
+  <string>{{.PlistLogFile}}</string>
   <key>StandardErrorPath</key>
-  <string>{{.LogFile}}</string>
+  <string>{{.PlistLogFile}}</string>
 </dict>
 </plist>
