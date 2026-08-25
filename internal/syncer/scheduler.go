@@ -2,9 +2,11 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"html"
 	osexec "os/exec"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
@@ -173,12 +175,43 @@ type Scheduler struct {
 }
 
 // plistHomeArgument prepares a complete --home flag for XML character data.
-// XML representability validation is added with the green implementation.
 func plistHomeArgument(home string) (string, error) {
 	if home == "" {
 		return "", nil
 	}
-	return html.EscapeString("--home=" + home), nil
+	if !utf8.ValidString(home) {
+		return "", invalidXMLHomeError(home, invalidUTF8Offset(home), "invalid UTF-8 byte")
+	}
+	for offset, r := range home {
+		if !xml10Character(r) {
+			return "", invalidXMLHomeError(home, offset, fmt.Sprintf("XML 1.0-illegal rune U+%04X", r))
+		}
+	}
+	// XML processors normalize literal carriage returns. Preserve a legal CR as
+	// a character reference after escaping the complete logical argument.
+	return strings.ReplaceAll(html.EscapeString("--home="+home), "\r", "&#13;"), nil
+}
+
+func invalidUTF8Offset(value string) int {
+	for offset := 0; offset < len(value); {
+		_, width := utf8.DecodeRuneInString(value[offset:])
+		if width == 1 && value[offset] >= utf8.RuneSelf {
+			return offset
+		}
+		offset += width
+	}
+	return 0
+}
+
+func xml10Character(r rune) bool {
+	return r == '\t' || r == '\n' || r == '\r' ||
+		(r >= 0x20 && r <= 0xD7FF) ||
+		(r >= 0xE000 && r <= 0xFFFD) ||
+		(r >= 0x10000 && r <= utf8.MaxRune)
+}
+
+func invalidXMLHomeError(home string, offset int, reason string) error {
+	return fmt.Errorf("scheduler home %q is not XML 1.0 representable: %s at byte offset %d; rename or move it to a valid UTF-8 path without XML-illegal controls, then rerun scheduler setup", home, reason, offset)
 }
 
 // NewScheduler wires a Scheduler with all the things it needs to render
