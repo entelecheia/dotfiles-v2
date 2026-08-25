@@ -73,6 +73,69 @@ replace_first_override() {
   mv "$CONFIG.next" "$CONFIG"
 }
 
+replace_first_override_with_nested_threshold() {
+  awk '
+    /^    threshold: 62$/ && !replaced {
+      print "    policy:"
+      print "      threshold: 1"
+      replaced = 1
+      next
+    }
+    { print }
+  ' "$CONFIG" >"$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+}
+
+replace_first_override_with_inline_policy() {
+  awk '
+    /^    threshold: 62$/ && !replaced {
+      print "    policy: { threshold: 1 }"
+      replaced = 1
+      next
+    }
+    { print }
+  ' "$CONFIG" >"$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+}
+
+add_nested_threshold_beside_direct_floor() {
+  awk '
+    /^    threshold: 62$/ && !replaced {
+      print "    policy:"
+      print "      threshold: 1"
+      print
+      replaced = 1
+      next
+    }
+    { print }
+  ' "$CONFIG" >"$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+}
+
+replace_first_override_with_bad_indentation() {
+  awk '
+    /^    threshold: 62$/ && !replaced {
+      print "   threshold: 62"
+      replaced = 1
+      next
+    }
+    { print }
+  ' "$CONFIG" >"$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+}
+
+replace_first_override_with_tab_indentation() {
+  awk '
+    /^    threshold: 62$/ && !replaced {
+      print "\tthreshold: 62"
+      replaced = 1
+      next
+    }
+    { print }
+  ' "$CONFIG" >"$CONFIG.next"
+  mv "$CONFIG.next" "$CONFIG"
+}
+
 echo "--- baseline ---"
 copy_inputs
 run_gate
@@ -149,6 +212,32 @@ for value in 1 100; do
   run_gate
   expect_green "override floor $value is accepted"
 done
+
+echo "--- override structure ---"
+copy_inputs
+replace_first_override_with_nested_threshold
+run_gate
+expect_red_with "nested override threshold without a direct floor" '^internal/aisettings$' '<missing>' 'nested threshold:'
+
+copy_inputs
+replace_first_override_with_inline_policy
+run_gate
+expect_red_with "inline override policy without a direct floor" '^internal/aisettings$' '<missing>' 'unexpected direct child'
+
+copy_inputs
+add_nested_threshold_beside_direct_floor
+run_gate
+expect_red_with "nested override threshold beside a direct floor" '^internal/aisettings$' 'nested threshold:'
+
+copy_inputs
+replace_first_override_with_bad_indentation
+run_gate
+expect_red_with "misindented override threshold" '^internal/aisettings$' 'threshold indentation'
+
+copy_inputs
+replace_first_override_with_tab_indentation
+run_gate
+expect_red_with "tab-indented override threshold" '^internal/aisettings$' 'tabs are not allowed'
 
 echo "--- preserved table invariants ---"
 copy_inputs

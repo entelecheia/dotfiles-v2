@@ -138,37 +138,73 @@ fi
 
 # One awk pass over the config for both lists. Sections are tracked rather than
 # grepped globally so an `override` entry cannot be mistaken for an exclusion.
+# Override entries deliberately use a stricter subset of YAML than the pinned
+# coverage tool: list items are indented two spaces and their only recognised
+# direct child is a four-space `threshold:`. That keeps an unknown nested map
+# such as `policy: { threshold: 1 }` from looking like a floor to this guard
+# while go-test-coverage ignores it and falls back to threshold.package.
 # `has_reason` is 1 when the entry carries a comment on its own line or on the
 # line directly above it, which is what D-04 requires of every exclusion.
-awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
+awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" -v er="$work_dir/override-errors.raw" '
+  function flush_override() {
+    if (pending != "") print pending "\t" pending_thr "\t" pending_value >ov
+  }
+  function override_error(message) {
+    print message >er
+  }
+  function indentation(line, first_non_space) {
+    first_non_space = match(line, /[^ ]/)
+    return first_non_space == 0 ? length(line) : first_non_space - 1
+  }
   {
     line = $0
+    if (index(line, "\t") != 0) {
+      override_error("line " NR " uses a tab; tabs are not allowed in coverage policy indentation")
+      prev = line
+      next
+    }
     if (line ~ /^[^[:space:]#]/) section = ""
     if (line ~ /^override:[[:space:]]*$/) section = "override"
     else if (line ~ /^exclude:[[:space:]]*$/) section = "exclude"
     else if (section == "exclude" && line ~ /^[[:space:]]+paths:[[:space:]]*$/) section = "exclude_paths"
-    else if (section == "override" && line ~ /^[[:space:]]*-[[:space:]]+path:/) {
+    else if (section == "override" && line ~ /^  - path:[[:space:]]*/) {
       # A new entry begins, so the previous one can no longer acquire a
       # threshold. Flush it with the verdict it ended up with.
-      if (pending != "") print pending "\t" pending_thr "\t" pending_value >ov
+      flush_override()
       v = line
-      sub(/^[[:space:]]*-[[:space:]]+path:[[:space:]]*/, "", v)
+      sub(/^  - path:[[:space:]]*/, "", v)
       sub(/[[:space:]]*#.*$/, "", v)
       sub(/[[:space:]]+$/, "", v)
       pending = v
       pending_thr = 0
       pending_value = ""
     }
-    # A `threshold:` belonging to the entry above it. Anchored to the list-item
-    # indentation so a `threshold:` under `threshold:` at the top of the file
-    # cannot be mistaken for one.
-    else if (section == "override" && pending != "" && line ~ /^[[:space:]]+threshold:/) {
-      v = line
-      sub(/^[[:space:]]+threshold:[[:space:]]*/, "", v)
-      sub(/[[:space:]]*#.*$/, "", v)
-      sub(/[[:space:]]+$/, "", v)
-      pending_thr++
-      pending_value = pending_value == "" ? v : pending_value " | " v
+    else if (section == "override" && line ~ /^[ ]*-[[:space:]]+path:/) {
+      override_error("line " NR " has malformed override list-item indentation; expected exactly two spaces before dash-path")
+    }
+    # Only a direct child of the list item is an override floor. Nested keys
+    # are rejected rather than ignored: accepting them would make the hand
+    # guard and the Go YAML decoder disagree about what is enforced.
+    else if (section == "override" && pending != "" && line ~ /^[ ]*threshold:/) {
+      indent = indentation(line)
+      if (indent == 4) {
+        v = line
+        sub(/^    threshold:[[:space:]]*/, "", v)
+        sub(/[[:space:]]*#.*$/, "", v)
+        sub(/[[:space:]]+$/, "", v)
+        pending_thr++
+        pending_value = pending_value == "" ? v : pending_value " | " v
+      } else if (indent > 4) {
+        override_error("override " pending " has nested threshold: at line " NR "; only a direct four-space threshold is allowed")
+      } else {
+        override_error("override " pending " has threshold indentation of " indent " spaces at line " NR "; expected exactly four spaces")
+      }
+    }
+    else if (section == "override" && pending != "" && line ~ /^    [^[:space:]#]/) {
+      override_error("override " pending " has unexpected direct child at line " NR "; only threshold: is allowed")
+    }
+    else if (section == "override" && pending != "" && line !~ /^[ ]*(#.*)?$/) {
+      override_error("override " pending " has malformed indentation at line " NR "; expected a two-space list item or four-space threshold")
     }
     else if (section == "exclude_paths" && line ~ /^[[:space:]]*-[[:space:]]/) {
       v = line
@@ -180,10 +216,10 @@ awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
     }
     prev = line
   }
-  END { if (pending != "") print pending "\t" pending_thr "\t" pending_value >ov }
+  END { flush_override() }
 ' "$config_file"
 
-touch "$work_dir/overrides.raw" "$work_dir/exclusions.raw"
+touch "$work_dir/overrides.raw" "$work_dir/exclusions.raw" "$work_dir/override-errors.raw"
 
 cut -f1 "$work_dir/overrides.raw" | sed 's/^\^//; s/\$$//' | sort -u >"$work_dir/overrides"
 cut -f2 "$work_dir/exclusions.raw" | sed 's/^\^//; s|/$||' | sort -u >"$work_dir/exclusions"
@@ -241,6 +277,13 @@ echo "check-coverage-floors: $package_count package(s), $override_count override
 # name and cannot tell a complete entry from a hollow one.
 
 incomplete=0
+structure_findings=0
+while IFS= read -r structure_error; do
+  [[ -z "$structure_error" ]] && continue
+  echo "check-coverage-floors: $structure_error" >&2
+  structure_findings=$((structure_findings + 1))
+done <"$work_dir/override-errors.raw"
+
 while IFS=$'\t' read -r path threshold_count threshold_value; do
   [[ -z "$path" ]] && continue
   if [[ "$threshold_count" -eq 0 ]]; then
@@ -254,8 +297,8 @@ while IFS=$'\t' read -r path threshold_count threshold_value; do
   fi
 done <"$work_dir/overrides.raw"
 
-if [[ "$incomplete" -gt 0 || "$floor_findings" -gt 0 ]]; then
-  echo "check-coverage-floors: $incomplete malformed override entr(ies), $floor_findings invalid package floor(s); every package floor must be explicit, anchored, and in range" >&2
+if [[ "$incomplete" -gt 0 || "$floor_findings" -gt 0 || "$structure_findings" -gt 0 ]]; then
+  echo "check-coverage-floors: $incomplete malformed override entr(ies), $floor_findings invalid package floor(s), $structure_findings invalid override structure(s); every package floor must be explicit, anchored, and in range" >&2
   exit 1
 fi
 
