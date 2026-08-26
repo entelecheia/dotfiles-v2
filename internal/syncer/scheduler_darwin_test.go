@@ -47,6 +47,95 @@ func TestLaunchdStateFromPrintStatus(t *testing.T) {
 	}
 }
 
+func TestSchedulerStateKind_ProfiledLaunchdTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile string
+		kind    SchedulerKind
+	}{
+		{name: "default push", profile: DefaultProfile, kind: SchedulerKindPush},
+		{name: "default intake", profile: DefaultProfile, kind: SchedulerKindIntake},
+		{name: "custom push", profile: "research", kind: SchedulerKindPush},
+		{name: "custom intake", profile: "research", kind: SchedulerKindIntake},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			binDir := filepath.Join(root, "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(root, "launchctl-args")
+			writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DOTFILES_TEST_LAUNCHCTL_ARGS\"\nexit 0\n")
+			t.Setenv("PATH", binDir)
+			t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", record)
+
+			paths := withProfile(pathsFor(root, filepath.Join(root, "cache")), tc.profile)
+			plist := paths.PlistFor(tc.kind)
+			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(plist, []byte("persisted plist"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			scheduler := NewScheduler(
+				exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
+				paths,
+				&Config{Home: root},
+				template.NewEngine(),
+			)
+			if got := scheduler.StateKind(context.Background(), tc.kind); got != SchedulerRunning {
+				t.Fatalf("StateKind = %s, want running", got)
+			}
+			got, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatalf("read launchctl arguments: %v", err)
+			}
+			want := "print\n" + launchdPrintTarget(os.Getuid(), paths.LaunchdLabelFor(tc.kind))
+			if strings.TrimSpace(string(got)) != want {
+				t.Fatalf("launchctl arguments = %q, want %q", strings.TrimSpace(string(got)), want)
+			}
+		})
+	}
+}
+
+func TestSchedulerInstallKind_ProfiledPlist(t *testing.T) {
+	for _, kind := range []SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		t.Run(kind.Action(), func(t *testing.T) {
+			root := t.TempDir()
+			binDir := filepath.Join(root, "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeStub(t, filepath.Join(binDir, "dot"), "#!/bin/sh\nexit 0\n")
+			writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\nexit 0\n")
+			t.Setenv("PATH", binDir)
+
+			paths := withProfile(pathsFor(root, filepath.Join(root, "cache")), "research")
+			scheduler := NewScheduler(
+				exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
+				paths,
+				&Config{Home: root, LocalPath: filepath.Join(root, "workspace"), LogFile: filepath.Join(root, "sync.log"), Interval: 60},
+				template.NewEngine(),
+			)
+			if err := scheduler.InstallKind(context.Background(), kind); err != nil {
+				t.Fatalf("InstallKind: %v", err)
+			}
+			body, err := os.ReadFile(paths.PlistFor(kind))
+			if err != nil {
+				t.Fatalf("read persisted plist: %v", err)
+			}
+			label, args := plistLabelAndProgramArguments(t, body)
+			if label != paths.LaunchdLabelFor(kind) {
+				t.Fatalf("persisted Label = %q, want %q", label, paths.LaunchdLabelFor(kind))
+			}
+			if got := matchingProfileArguments(args); len(got) != 1 || got[0] != "--profile=research" {
+				t.Fatalf("profile arguments = %q, want exactly --profile=research", got)
+			}
+		})
+	}
+}
+
 func TestSchedulerInstallKind_PlistPathFieldsRoundTrip(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "paths & <and>")
 	binDir := filepath.Join(root, "bin")
@@ -277,4 +366,54 @@ func plistStandardPaths(t *testing.T, body []byte) map[string]string {
 			}
 		}
 	}
+}
+
+func plistLabelAndProgramArguments(t *testing.T, body []byte) (string, []string) {
+	t.Helper()
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	var key, text, label string
+	var args []string
+	var inKey, inString bool
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return label, args
+		}
+		if err != nil {
+			t.Fatalf("decode plist: %v", err)
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			text = ""
+			inKey = token.Name.Local == "key"
+			inString = token.Name.Local == "string"
+		case xml.CharData:
+			if inKey || inString {
+				text += string(token)
+			}
+		case xml.EndElement:
+			switch token.Name.Local {
+			case "key":
+				key, inKey = text, false
+			case "string":
+				if key == "Label" {
+					label = text
+				}
+				if key == "ProgramArguments" {
+					args = append(args, text)
+				}
+				inString = false
+			}
+		}
+	}
+}
+
+func matchingProfileArguments(args []string) []string {
+	var found []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--profile=") {
+			found = append(found, arg)
+		}
+	}
+	return found
 }
