@@ -24,20 +24,6 @@ func writeAgeIdentity(t *testing.T, home, name, recipient string) {
 	}
 }
 
-func writeSSHIdentity(t *testing.T, home, name string) {
-	t.Helper()
-	sshDir := filepath.Join(home, ".ssh")
-	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sshDir, name), []byte("private key\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sshDir, name+".pub"), []byte("public key\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestInitHomeOverrideUsesTargetAgeKey(t *testing.T) {
 	invoker := t.TempDir()
 	target := t.TempDir()
@@ -82,7 +68,7 @@ func TestInitHomeOverrideDoesNotRecordInvokerAgeKey(t *testing.T) {
 }
 
 // TestInitDotfilesHomeUsesTargetIdentityAndState covers the environment-only
-// override. The distinct identities make a process-home fallback observable.
+// override. Distinct age identities make a process-home fallback observable.
 func TestInitDotfilesHomeUsesTargetIdentityAndState(t *testing.T) {
 	invoker := t.TempDir()
 	target := t.TempDir()
@@ -90,9 +76,7 @@ func TestInitDotfilesHomeUsesTargetIdentityAndState(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(invoker, ".config"))
 	t.Setenv("DOTFILES_HOME", target)
 	writeAgeIdentity(t, invoker, "age_key_invoker", "age1invoker")
-	writeSSHIdentity(t, invoker, "id_ed25519_invoker")
 	writeAgeIdentity(t, target, "age_key_target", "age1target")
-	writeSSHIdentity(t, target, "id_ed25519_target")
 
 	out, errOut, err := runDotForTest("--yes", "init")
 	if err != nil {
