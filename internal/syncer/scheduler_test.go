@@ -135,11 +135,12 @@ func TestSchedulerLabels_DistinctFromRsync(t *testing.T) {
 func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 	home := t.TempDir()
 	cfg := &Config{
-		Home:     home,
-		Profile:  "research",
-		Interval: 600,
-		PushMode: ModeClean,
-		LogFile:  filepath.Join(home, ".local", "log", "dotfiles-sync.log"),
+		Home:         home,
+		Profile:      "research-2.v1",
+		Interval:     600,
+		PullInterval: 600,
+		PushMode:     ModeClean,
+		LogFile:      filepath.Join(home, ".local", "log", "dotfiles-sync.log"),
 	}
 	scheduler, paths, err := ResolveScheduler(cfg, peerScheduleRunner(true))
 	if err != nil {
@@ -147,9 +148,9 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 	}
 
 	for path, want := range map[string]string{
-		"launchd plist":   "com.dotfiles.research.plist",
-		"systemd service": "dotfiles-research.service",
-		"systemd timer":   "dotfiles-research.timer",
+		"launchd plist":   "com.dotfiles.research-2.v1.plist",
+		"systemd service": "dotfiles-research-2.v1.service",
+		"systemd timer":   "dotfiles-research-2.v1.timer",
 	} {
 		var got string
 		switch path {
@@ -165,16 +166,31 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 		}
 	}
 
-	data := scheduler.templateDataFor(SchedulerKindPush)
-	if data.Label != "com.dotfiles.research" {
-		t.Errorf("rendered launchd label = %q, want research profile", data.Label)
-	}
-	service, err := scheduler.Engine.Render("sync/dotfiles-sync.service.tmpl", data)
-	if err != nil {
-		t.Fatalf("render systemd service: %v", err)
-	}
-	if !strings.Contains(string(service), "--profile=research \"--home="+home) {
-		t.Errorf("systemd ExecStart does not carry the same profile before --home:\n%s", service)
+	for _, kind := range []SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		data := scheduler.templateDataFor(kind)
+		if got, want := filepath.Base(paths.PlistFor(kind)), data.Label+".plist"; got != want {
+			t.Errorf("%s plist basename = %q, want rendered label %q", kind.Action(), got, want)
+		}
+		if got, want := filepath.Base(paths.SystemdServiceFor(kind)), data.ServiceName; got != want {
+			t.Errorf("%s service basename = %q, want rendered service %q", kind.Action(), got, want)
+		}
+		if got, want := filepath.Base(paths.SystemdTimerFor(kind)), strings.TrimSuffix(data.ServiceName, ".service")+".timer"; got != want {
+			t.Errorf("%s timer basename = %q, want rendered timer %q", kind.Action(), got, want)
+		}
+		if data.Profile != "research-2.v1" {
+			t.Errorf("%s rendered profile = %q, want research-2.v1", kind.Action(), data.Profile)
+		}
+		service, err := scheduler.Engine.Render("sync/dotfiles-sync.service.tmpl", data)
+		if err != nil {
+			t.Fatalf("render %s systemd service: %v", kind.Action(), err)
+		}
+		if !strings.Contains(string(service), "--profile=research-2.v1 \"--home="+home) {
+			t.Errorf("%s systemd ExecStart does not carry the same profile before --home:\n%s", kind.Action(), service)
+		}
+		args := renderedPlistProgramArguments(t, data)
+		if !containsString(args, "--profile=research-2.v1") {
+			t.Errorf("%s plist profile argument = %q, want research-2.v1", kind.Action(), args)
+		}
 	}
 
 	defaultCfg := *cfg
@@ -201,6 +217,31 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 			t.Errorf("default %s path = %q, want %q", path, got, want)
 		}
 	}
+	for _, kind := range []SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		data := defaultPathsSchedulerData(t, &defaultCfg, defaultPaths, kind)
+		if data.Profile != "" {
+			t.Errorf("default %s profile argument = %q, want omitted", kind.Action(), data.Profile)
+		}
+		if got, want := filepath.Base(defaultPaths.PlistFor(kind)), data.Label+".plist"; got != want {
+			t.Errorf("default %s plist basename = %q, want %q", kind.Action(), got, want)
+		}
+		if got, want := filepath.Base(defaultPaths.SystemdServiceFor(kind)), data.ServiceName; got != want {
+			t.Errorf("default %s service basename = %q, want %q", kind.Action(), got, want)
+		}
+		service, err := scheduler.Engine.Render("sync/dotfiles-sync.service.tmpl", data)
+		if err != nil {
+			t.Fatalf("render default %s systemd service: %v", kind.Action(), err)
+		}
+		if strings.Contains(string(service), "--profile=") {
+			t.Errorf("default %s service unexpectedly renders --profile:\n%s", kind.Action(), service)
+		}
+	}
+}
+
+func defaultPathsSchedulerData(t *testing.T, cfg *Config, paths *Paths, kind SchedulerKind) SchedulerTemplateData {
+	t.Helper()
+	scheduler := NewScheduler(peerScheduleRunner(true), paths, cfg, template.NewEngine())
+	return scheduler.templateDataFor(kind)
 }
 
 func TestPlistTemplate_RendersPushUnit(t *testing.T) {
@@ -410,7 +451,7 @@ func TestSchedulerKind_LabelsAreDistinct(t *testing.T) {
 }
 
 func TestPathsFor_Kind(t *testing.T) {
-	paths, err := ResolvePaths()
+	paths, err := ResolvePathsForHomeProfile(t.TempDir(), DefaultProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
