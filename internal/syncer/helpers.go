@@ -177,9 +177,6 @@ func cacheDirForHome(home string) string {
 	if runtime.GOOS == "darwin" {
 		return filepath.Join(home, "Library", "Caches")
 	}
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return xdg
-	}
 	return filepath.Join(home, ".cache")
 }
 
