@@ -37,6 +37,9 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 	if err := s.Runner.WriteFileAtomic(plist, content, 0644); err != nil {
 		return fmt.Errorf("writing plist: %w", err)
 	}
+	if s.requiresTargetUserServiceDomain() {
+		return &SchedulerTargetUserActionRequiredError{}
+	}
 
 	// Unload first (ignore the error if it wasn't loaded already).
 	_, _ = s.Runner.Run(ctx, "launchctl", "unload", plist)
@@ -54,6 +57,14 @@ func (s *Scheduler) UninstallKind(ctx context.Context, kind SchedulerKind) error
 		return err
 	}
 	plist := s.Paths.PlistFor(kind)
+	if s.requiresTargetUserServiceDomain() {
+		if s.Runner.FileExists(plist) {
+			if err := s.Runner.Remove(plist); err != nil {
+				return fmt.Errorf("removing plist: %w", err)
+			}
+		}
+		return &SchedulerTargetUserActionRequiredError{}
+	}
 	_, _ = s.Runner.Run(ctx, "launchctl", "unload", plist)
 	if !s.Runner.FileExists(plist) {
 		return nil
@@ -71,6 +82,9 @@ func (s *Scheduler) PauseKind(ctx context.Context, kind SchedulerKind) error {
 	if !s.Runner.FileExists(plist) {
 		return nil
 	}
+	if s.requiresTargetUserServiceDomain() {
+		return &SchedulerTargetUserActionRequiredError{}
+	}
 	_, err := s.Runner.Run(ctx, "launchctl", "unload", plist)
 	return err
 }
@@ -84,6 +98,9 @@ func (s *Scheduler) ResumeKind(ctx context.Context, kind SchedulerKind) error {
 	if !s.Runner.FileExists(plist) {
 		return nil
 	}
+	if s.requiresTargetUserServiceDomain() {
+		return &SchedulerTargetUserActionRequiredError{}
+	}
 	_, err := s.Runner.Run(ctx, "launchctl", "load", plist)
 	return err
 }
@@ -94,6 +111,9 @@ func (s *Scheduler) StateKind(ctx context.Context, kind SchedulerKind) Scheduler
 	plist := s.Paths.PlistFor(kind)
 	if !s.Runner.FileExists(plist) {
 		return SchedulerNotInstalled
+	}
+	if s.requiresTargetUserServiceDomain() {
+		return SchedulerTargetUserActionRequired
 	}
 	target := launchdPrintTarget(os.Getuid(), s.Paths.LaunchdLabelFor(kind))
 	result, err := s.Runner.RunQuery(ctx, "launchctl", "print", target)
@@ -115,6 +135,17 @@ func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) error {
 		return err
 	}
 	dir := filepath.Dir(s.Paths.LaunchdPlist)
+	if s.requiresTargetUserServiceDomain() {
+		for _, label := range legacyLaunchdLabels {
+			plist := filepath.Join(dir, label+".plist")
+			if s.Runner.FileExists(plist) {
+				if err := s.Runner.Remove(plist); err != nil {
+					return fmt.Errorf("removing legacy plist: %w", err)
+				}
+			}
+		}
+		return &SchedulerTargetUserActionRequiredError{}
+	}
 	for _, label := range legacyLaunchdLabels {
 		plist := filepath.Join(dir, label+".plist")
 		_, _ = s.Runner.Run(ctx, "launchctl", "unload", plist)
