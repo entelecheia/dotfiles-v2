@@ -16,6 +16,8 @@ on:
       - "tests/**"
       - "tools/**"
       - "docs/commands/**"
+      - "docs/**"
+      - "README.md"
       - ".github/workflows/**"
       - ".goreleaser.yaml"
       - ".golangci.yml"

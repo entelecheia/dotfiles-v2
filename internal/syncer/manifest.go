@@ -177,6 +177,7 @@ const (
 		"# relpath\tbaseline-fingerprint\tdetected-rfc3339\n"
 )
 
+// ponytail: known ceiling. See docs/CEILINGS.md (manifest serialization).
 // manifestMu serializes manifest writes within a process. Cross-process
 // coordination is the lock-dir's job (AcquireLock); within-process,
 // this guards the read-modify-write nature of rewrite-style saves.
