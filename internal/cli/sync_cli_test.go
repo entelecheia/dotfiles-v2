@@ -66,7 +66,10 @@ func (f *syncCLIFixture) seedOldConflict(t *testing.T, tree, stamp string) strin
 func TestSyncSetupRequiresOwnerBeforeInstallingScheduler(t *testing.T) {
 	f := newSyncCLIFixture(t)
 	paths := syncer.ResolveLocalPaths(f.local)
-	if err := syncer.SaveLocalConfig(paths, &syncer.LocalConfig{Target: "local:" + f.mirror}); err != nil {
+	if err := syncer.SaveLocalConfig(paths, &syncer.LocalConfig{
+		Target:      "local:" + f.mirror,
+		Propagation: syncer.DefaultPropagationPolicy(),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(paths.ConfigFile)
@@ -96,7 +99,10 @@ func TestSyncSetupRequiresOwnerBeforeInstallingScheduler(t *testing.T) {
 func TestSyncSetupOwnerFlagRecordsOwnerAndRejectsUnresolvableSelf(t *testing.T) {
 	f := newSyncCLIFixture(t)
 	paths := syncer.ResolveLocalPaths(f.local)
-	if err := syncer.SaveLocalConfig(paths, &syncer.LocalConfig{Target: "local:" + f.mirror}); err != nil {
+	if err := syncer.SaveLocalConfig(paths, &syncer.LocalConfig{
+		Target:      "local:" + f.mirror,
+		Propagation: syncer.DefaultPropagationPolicy(),
+	}); err != nil {
 		t.Fatal(err)
 	}
 

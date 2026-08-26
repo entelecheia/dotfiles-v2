@@ -575,12 +575,6 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer target is not configured; run dot peer init first")
 	}
-	if err := CheckSSH(ctx, opts.Probe, cfg.Target.Host); err != nil {
-		return nil, fmt.Errorf("checking peer coordinator before scheduler setup: %w", err)
-	}
-	if err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
-		return nil, err
-	}
 	exe, err := peerExecutable()
 	if err != nil {
 		return nil, err
@@ -596,6 +590,16 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	homeArg, err := peerHomeArg(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("peer scheduler home %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", cfg.Home, plist, err)
+	}
+	// All remaining local inputs are now representable in a plist. Check the
+	// coordinator immediately before the dry-run/mutation branch so actual
+	// scheduler installs still require bilateral owner agreement, while an
+	// invalid local artifact can be rejected without a network dependency.
+	if err := CheckSSH(ctx, opts.Probe, cfg.Target.Host); err != nil {
+		return nil, fmt.Errorf("checking peer coordinator before scheduler setup: %w", err)
+	}
+	if err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
+		return nil, err
 	}
 	// Mirror the off-arm above. The write below bypasses the runner entirely
 	// (os.MkdirAll + os.WriteFile), so without this a preview leaves a plist on

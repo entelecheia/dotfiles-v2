@@ -372,6 +372,10 @@ func TestPeerSchedule_RejectsUnrepresentablePlistPathBeforeMutation(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, plist := peerScheduleSandbox(t)
+			// This regression must remain independent of coordinator reachability:
+			// malformed local plist text is rejected before peer preflight. If the
+			// order regresses, the missing ssh binary returns that failure instead.
+			t.Setenv("PATH", t.TempDir())
 			const seeded = "seeded peer plist"
 			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 				t.Fatal(err)
