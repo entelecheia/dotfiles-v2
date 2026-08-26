@@ -11,7 +11,10 @@ alphabet_file="$repo_root/internal/ui/markers.go"
 # permanently red on correct code.
 glyph_pattern='(["`])[✓✗·★◆⚠]\1'
 
-mapfile -t go_files < <(find "$repo_root" -type f -name '*.go' -print | LC_ALL=C sort)
+go_files=()
+while IFS= read -r file; do
+  go_files+=("$file")
+done < <(find "$repo_root" -type f -name '*.go' -print | LC_ALL=C sort)
 
 # This precondition is deliberately before the definition file is excluded
 # below. If the pattern no longer recognizes the alphabet it is meant to
