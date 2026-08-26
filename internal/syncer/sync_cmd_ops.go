@@ -150,10 +150,14 @@ func RecordResult(state *config.UserState, cfg *Config, op string, syncErr error
 // was resolved for: a unit written into the invoking user's LaunchAgents for
 // another user's workspace fires forever against the wrong tree.
 func ResolveScheduler(cfg *Config, runner *exec.Runner) (*Scheduler, *Paths, error) {
-	paths, err := ResolvePathsForHome(cfg.Home)
+	paths, err := ResolvePathsForHomeProfile(cfg.Home, cfg.Profile)
 	if err != nil {
 		return nil, nil, err
 	}
+	// ponytail: known ceiling. A scheduler installed by an older binary for a
+	// non-default profile remains at the old default path and can keep firing
+	// beside the corrected unit. See docs/ceilings.md (plan 07-05); cleanup must
+	// enumerate unknown historical profiles without violating dry-run semantics.
 	return NewScheduler(runner, paths, cfg, template.NewEngine()), paths, nil
 }
 
