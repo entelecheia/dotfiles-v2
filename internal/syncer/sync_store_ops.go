@@ -560,13 +560,22 @@ func SyncResume(ctx context.Context, cfg *Config, runner *exec.Runner) (*ResumeR
 		// The state save succeeded; the scheduler is best-effort.
 		return res, nil
 	}
-	if sched.State(ctx) != SchedulerNotInstalled {
-		if err := sched.Resume(ctx); err != nil {
+	states := [2]SchedulerState{
+		sched.StateKind(ctx, SchedulerKindPush),
+		sched.StateKind(ctx, SchedulerKindIntake),
+	}
+	resumed := false
+	for index, kind := range [2]SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		if states[index] == SchedulerNotInstalled {
+			continue
+		}
+		resumed = true
+		if err := sched.ResumeKind(ctx, kind); err != nil {
 			res.SchedulerErr = err
-		} else {
-			res.SchedulerResumed = true
+			return res, nil
 		}
 	}
+	res.SchedulerResumed = resumed
 	return res, nil
 }
 
@@ -590,12 +599,21 @@ func SyncPause(ctx context.Context, cfg *Config, runner *exec.Runner) (*PauseRes
 	if err != nil {
 		return res, nil
 	}
-	if sched.State(ctx) == SchedulerRunning {
-		if err := sched.Pause(ctx); err != nil {
+	states := [2]SchedulerState{
+		sched.StateKind(ctx, SchedulerKindPush),
+		sched.StateKind(ctx, SchedulerKindIntake),
+	}
+	stopped := false
+	for index, kind := range [2]SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		if states[index] != SchedulerRunning {
+			continue
+		}
+		stopped = true
+		if err := sched.PauseKind(ctx, kind); err != nil {
 			res.SchedulerErr = err
-		} else {
-			res.SchedulerStopped = true
+			return res, nil
 		}
 	}
+	res.SchedulerStopped = stopped
 	return res, nil
 }
