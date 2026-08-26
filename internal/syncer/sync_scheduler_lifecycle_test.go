@@ -92,6 +92,7 @@ func TestSyncSchedulerLifecycle_InstalledKinds(t *testing.T) {
 func schedulerLifecycleConfig(t *testing.T, push, intake bool, operation string, failFirst bool) (*Config, string, *Paths) {
 	t.Helper()
 	root := t.TempDir()
+	t.Setenv("HOME", root)
 	binDir := filepath.Join(root, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -138,7 +139,6 @@ func schedulerLifecycleConfig(t *testing.T, push, intake bool, operation string,
 	}
 	return &Config{
 		Profile:      DefaultProfile,
-		Home:         root,
 		LocalPath:    filepath.Join(root, "workspace"),
 		LocalPaths:   localPaths,
 		Interval:     schedulerInterval(push),

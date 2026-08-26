@@ -81,7 +81,7 @@ func TestSchedulerStateKind_ProfiledLaunchdTarget(t *testing.T) {
 			scheduler := NewScheduler(
 				exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
 				paths,
-				&Config{Home: root},
+				&Config{},
 				template.NewEngine(),
 			)
 			if got := scheduler.StateKind(context.Background(), tc.kind); got != SchedulerRunning {
@@ -115,7 +115,7 @@ func TestSchedulerInstallKind_ProfiledPlist(t *testing.T) {
 			scheduler := NewScheduler(
 				exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
 				paths,
-				&Config{Home: root, LocalPath: filepath.Join(root, "workspace"), LogFile: filepath.Join(root, "sync.log"), Interval: 60},
+				&Config{LocalPath: filepath.Join(root, "workspace"), LogFile: filepath.Join(root, "sync.log"), Interval: 60},
 				template.NewEngine(),
 			)
 			if err := scheduler.InstallKind(context.Background(), kind); err != nil {
@@ -156,8 +156,8 @@ func TestSchedulerInstallKind_PlistPathFieldsRoundTrip(t *testing.T) {
 		template.NewEngine(),
 	)
 
-	if err := scheduler.InstallKind(context.Background(), SchedulerKindPush); err != nil {
-		t.Fatalf("InstallKind: %v", err)
+	if err := scheduler.InstallKind(context.Background(), SchedulerKindPush); err == nil || !strings.Contains(err.Error(), "no service-manager action ran in the caller domain") {
+		t.Fatalf("InstallKind explicit-home error = %v, want target-user instruction", err)
 	}
 	body, err := os.ReadFile(plistPath)
 	if err != nil {
@@ -262,7 +262,7 @@ func TestSchedulerMutators_RejectInvalidHomeBeforeMutation(t *testing.T) {
 
 	for _, action := range darwinMutatorActions() {
 		t.Run("valid non-vacuity/"+action.name, func(t *testing.T) {
-			scheduler, _, _, actions := darwinMutatorSandbox(t, t.TempDir())
+			scheduler, _, _, actions := darwinMutatorSandbox(t, "")
 			binDir := t.TempDir()
 			writeStub(t, filepath.Join(binDir, "dot"), "#!/bin/sh\nexit 0\n")
 			t.Setenv("PATH", binDir)
@@ -274,6 +274,173 @@ func TestSchedulerMutators_RejectInvalidHomeBeforeMutation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSchedulerExplicitHome_DarwinServiceDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		prepare     func(t *testing.T, paths *Paths)
+		run         func(*Scheduler) error
+		wantPresent []SchedulerKind
+		wantAbsent  []SchedulerKind
+		legacy      bool
+	}{
+		{
+			name: "install stages artifacts only",
+			run: func(s *Scheduler) error {
+				return s.Install(context.Background())
+			},
+			wantPresent: []SchedulerKind{SchedulerKindPush, SchedulerKindIntake},
+			legacy:      true,
+		},
+		{
+			name: "uninstall retires artifacts only",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedDarwinSchedulerArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.Uninstall(context.Background())
+			},
+			wantAbsent: []SchedulerKind{SchedulerKindPush, SchedulerKindIntake},
+			legacy:     true,
+		},
+		{
+			name: "pause leaves persisted artifacts alone",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedDarwinSchedulerArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.PauseKind(context.Background(), SchedulerKindPush)
+			},
+			wantPresent: []SchedulerKind{SchedulerKindPush},
+		},
+		{
+			name: "resume leaves persisted artifacts alone",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedDarwinSchedulerArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.ResumeKind(context.Background(), SchedulerKindPush)
+			},
+			wantPresent: []SchedulerKind{SchedulerKindPush},
+		},
+		{
+			name: "legacy cleanup retires files only",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedDarwinLegacyArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.CleanupLegacyUnits(context.Background())
+			},
+			legacy: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := t.TempDir()
+			paths := pathsFor(target, filepath.Join(target, "cache"))
+			binDir := filepath.Join(t.TempDir(), "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(t.TempDir(), "launchctl-args")
+			writeStub(t, filepath.Join(binDir, "dot"), "#!/bin/sh\nexit 0\n")
+			writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DOTFILES_TEST_LAUNCHCTL_ARGS\"\nexit 0\n")
+			t.Setenv("PATH", binDir)
+			t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", record)
+
+			if tc.prepare != nil {
+				tc.prepare(t, paths)
+			}
+			scheduler := NewScheduler(
+				exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
+				paths,
+				&Config{Home: target, LocalPath: filepath.Join(target, "workspace"), LogFile: filepath.Join(target, "sync.log"), Interval: 60, PullInterval: 120},
+				template.NewEngine(),
+			)
+			err := tc.run(scheduler)
+			if err == nil || !strings.Contains(err.Error(), "no service-manager action ran in the caller domain") {
+				t.Fatalf("explicit-home action error = %v, want target-user instruction", err)
+			}
+			if got := readDarwinSchedulerActions(t, record); len(got) != 0 {
+				t.Fatalf("explicit-home action invoked caller launchctl: %q", got)
+			}
+			for _, kind := range tc.wantPresent {
+				if !scheduler.Runner.FileExists(paths.PlistFor(kind)) {
+					t.Errorf("%s plist was not staged", kind.Action())
+				}
+			}
+			for _, kind := range tc.wantAbsent {
+				if scheduler.Runner.FileExists(paths.PlistFor(kind)) {
+					t.Errorf("%s plist was not retired", kind.Action())
+				}
+			}
+			for _, label := range legacyLaunchdLabels {
+				path := filepath.Join(filepath.Dir(paths.LaunchdPlist), label+".plist")
+				if tc.legacy && scheduler.Runner.FileExists(path) {
+					t.Errorf("legacy plist %s was not retired", label)
+				}
+			}
+		})
+	}
+
+	t.Run("status is actionable without a caller query", func(t *testing.T) {
+		target := t.TempDir()
+		paths := pathsFor(target, filepath.Join(target, "cache"))
+		seedDarwinSchedulerArtifacts(t, paths)
+		record := filepath.Join(t.TempDir(), "launchctl-args")
+		binDir := filepath.Join(t.TempDir(), "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DOTFILES_TEST_LAUNCHCTL_ARGS\"\nexit 0\n")
+		t.Setenv("PATH", binDir)
+		t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", record)
+		scheduler := NewScheduler(exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))), paths, &Config{Home: target}, template.NewEngine())
+		if got := scheduler.StateKind(context.Background(), SchedulerKindPush).String(); !strings.Contains(got, "target user") {
+			t.Fatalf("explicit-home state = %q, want actionable target-user state", got)
+		}
+		if got := readDarwinSchedulerActions(t, record); len(got) != 0 {
+			t.Fatalf("explicit-home status invoked caller launchctl: %q", got)
+		}
+	})
+}
+
+func seedDarwinSchedulerArtifacts(t *testing.T, paths *Paths) {
+	t.Helper()
+	for _, kind := range []SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		path := paths.PlistFor(kind)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("persisted plist"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func seedDarwinLegacyArtifacts(t *testing.T, paths *Paths) {
+	t.Helper()
+	for _, label := range legacyLaunchdLabels {
+		path := filepath.Join(filepath.Dir(paths.LaunchdPlist), label+".plist")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("legacy plist"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func readDarwinSchedulerActions(t *testing.T, record string) []string {
+	t.Helper()
+	body, err := os.ReadFile(record)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(body)), "\n")
 }
 
 type darwinMutatorAction struct {

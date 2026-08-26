@@ -59,7 +59,7 @@ func TestSchedulerLifecycle_ProfiledUnits(t *testing.T) {
 			scheduler := NewScheduler(
 				exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
 				paths,
-				&Config{Home: root, LocalPath: filepath.Join(root, "workspace"), LogFile: filepath.Join(root, "sync.log"), Interval: 60},
+				&Config{LocalPath: filepath.Join(root, "workspace"), LogFile: filepath.Join(root, "sync.log"), Interval: 60},
 				template.NewEngine(),
 			)
 
