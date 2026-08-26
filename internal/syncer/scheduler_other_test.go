@@ -123,3 +123,171 @@ func TestSchedulerMutators_RejectInvalidHomeBeforeMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestSchedulerExplicitHome_SystemdServiceDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		prepare     func(t *testing.T, paths *Paths)
+		run         func(*Scheduler) error
+		wantPresent []SchedulerKind
+		wantAbsent  []SchedulerKind
+		legacy      bool
+	}{
+		{
+			name: "install stages artifacts only",
+			run: func(s *Scheduler) error {
+				return s.Install(context.Background())
+			},
+			wantPresent: []SchedulerKind{SchedulerKindPush, SchedulerKindIntake},
+			legacy:      true,
+		},
+		{
+			name: "uninstall retires artifacts only",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedSystemdSchedulerArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.Uninstall(context.Background())
+			},
+			wantAbsent: []SchedulerKind{SchedulerKindPush, SchedulerKindIntake},
+			legacy:     true,
+		},
+		{
+			name: "pause leaves persisted artifacts alone",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedSystemdSchedulerArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.PauseKind(context.Background(), SchedulerKindPush)
+			},
+			wantPresent: []SchedulerKind{SchedulerKindPush},
+		},
+		{
+			name: "resume leaves persisted artifacts alone",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedSystemdSchedulerArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.ResumeKind(context.Background(), SchedulerKindPush)
+			},
+			wantPresent: []SchedulerKind{SchedulerKindPush},
+		},
+		{
+			name: "legacy cleanup retires files only",
+			prepare: func(t *testing.T, paths *Paths) {
+				seedSystemdLegacyArtifacts(t, paths)
+			},
+			run: func(s *Scheduler) error {
+				return s.CleanupLegacyUnits(context.Background())
+			},
+			legacy: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := t.TempDir()
+			paths := pathsFor(target, filepath.Join(target, "cache"))
+			binDir := filepath.Join(t.TempDir(), "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(t.TempDir(), "systemctl-args")
+			writeStub(t, filepath.Join(binDir, "dot"), "#!/bin/sh\nexit 0\n")
+			writeStub(t, filepath.Join(binDir, "systemctl"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DOTFILES_TEST_SYSTEMCTL_ARGS\"\nexit 0\n")
+			t.Setenv("PATH", binDir)
+			t.Setenv("DOTFILES_TEST_SYSTEMCTL_ARGS", record)
+
+			if tc.prepare != nil {
+				tc.prepare(t, paths)
+			}
+			scheduler := NewScheduler(
+				exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
+				paths,
+				&Config{Home: target, LocalPath: filepath.Join(target, "workspace"), LogFile: filepath.Join(target, "sync.log"), Interval: 60, PullInterval: 120},
+				template.NewEngine(),
+			)
+			err := tc.run(scheduler)
+			if err == nil || !strings.Contains(err.Error(), "no service-manager action ran in the caller domain") {
+				t.Fatalf("explicit-home action error = %v, want target-user instruction", err)
+			}
+			if got := readSystemdSchedulerActions(t, record); len(got) != 0 {
+				t.Fatalf("explicit-home action invoked caller systemctl: %q", got)
+			}
+			for _, kind := range tc.wantPresent {
+				if !scheduler.Runner.FileExists(paths.SystemdTimerFor(kind)) || !scheduler.Runner.FileExists(paths.SystemdServiceFor(kind)) {
+					t.Errorf("%s systemd artifacts were not staged", kind.Action())
+				}
+			}
+			for _, kind := range tc.wantAbsent {
+				if scheduler.Runner.FileExists(paths.SystemdTimerFor(kind)) || scheduler.Runner.FileExists(paths.SystemdServiceFor(kind)) {
+					t.Errorf("%s systemd artifacts were not retired", kind.Action())
+				}
+			}
+			for _, unit := range legacySystemdUnits {
+				path := filepath.Join(filepath.Dir(paths.SystemdService), unit)
+				if tc.legacy && scheduler.Runner.FileExists(path) {
+					t.Errorf("legacy systemd unit %s was not retired", unit)
+				}
+			}
+		})
+	}
+
+	t.Run("status is actionable without a caller query", func(t *testing.T) {
+		target := t.TempDir()
+		paths := pathsFor(target, filepath.Join(target, "cache"))
+		seedSystemdSchedulerArtifacts(t, paths)
+		record := filepath.Join(t.TempDir(), "systemctl-args")
+		binDir := filepath.Join(t.TempDir(), "bin")
+		if err := os.MkdirAll(binDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeStub(t, filepath.Join(binDir, "systemctl"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DOTFILES_TEST_SYSTEMCTL_ARGS\"\nexit 0\n")
+		t.Setenv("PATH", binDir)
+		t.Setenv("DOTFILES_TEST_SYSTEMCTL_ARGS", record)
+		scheduler := NewScheduler(exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))), paths, &Config{Home: target}, template.NewEngine())
+		if got := scheduler.StateKind(context.Background(), SchedulerKindPush).String(); !strings.Contains(got, "target user") {
+			t.Fatalf("explicit-home state = %q, want actionable target-user state", got)
+		}
+		if got := readSystemdSchedulerActions(t, record); len(got) != 0 {
+			t.Fatalf("explicit-home status invoked caller systemctl: %q", got)
+		}
+	})
+}
+
+func seedSystemdSchedulerArtifacts(t *testing.T, paths *Paths) {
+	t.Helper()
+	for _, kind := range []SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		for _, path := range []string{paths.SystemdServiceFor(kind), paths.SystemdTimerFor(kind)} {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("persisted systemd unit"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func seedSystemdLegacyArtifacts(t *testing.T, paths *Paths) {
+	t.Helper()
+	for _, unit := range legacySystemdUnits {
+		path := filepath.Join(filepath.Dir(paths.SystemdService), unit)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("legacy systemd unit"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func readSystemdSchedulerActions(t *testing.T, record string) []string {
+	t.Helper()
+	body, err := os.ReadFile(record)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(body)), "\n")
+}
