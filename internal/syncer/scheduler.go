@@ -134,27 +134,6 @@ type SchedulerTemplateData struct {
 // Methods Install*Kind / Uninstall*Kind / Pause*Kind / Resume*Kind /
 // StateKind are defined per platform in scheduler_darwin.go and
 // scheduler_other.go.
-// profiledLabel/profiledServiceName keep a non-default profile's units distinct.
-//
-// Making only the file PATHS profile-aware is not enough: the unit identifier
-// lives inside the rendered file, so two profiles would write different files
-// carrying the same launchd Label. The second load either collides with the
-// first or silently replaces it, and the survivor would sync the wrong target.
-func profiledLabel(kind SchedulerKind, profile string) string {
-	base := kind.LaunchdLabel()
-	if profile == "" || profile == DefaultProfile {
-		return base
-	}
-	return strings.Replace(base, "com.dotfiles.sync", "com.dotfiles."+profile, 1)
-}
-
-func profiledServiceName(kind SchedulerKind, profile string) string {
-	base := kind.SystemdServiceName()
-	if profile == "" || profile == DefaultProfile {
-		return base
-	}
-	return strings.Replace(base, "dotfiles-sync", "dotfiles-"+profile, 1)
-}
 
 // profileArg is the value rendered into the unit's command line. Empty for the
 // default profile so existing units render byte-identical to before.
@@ -163,13 +142,6 @@ func profileArg(profile string) string {
 		return ""
 	}
 	return profile
-}
-
-func (s *Scheduler) profile() string {
-	if s == nil || s.Config == nil {
-		return DefaultProfile
-	}
-	return NormalizeProfile(s.Config.Profile)
 }
 
 type Scheduler struct {
@@ -349,18 +321,23 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 	if mode == "" {
 		mode = ModeClean
 	}
+	paths := s.Paths
+	if paths == nil {
+		paths = &Paths{}
+	}
+	profile := paths.schedulerProfile()
 	return SchedulerTemplateData{
 		DotfilesPath:   dotfilesPath,
 		Home:           s.Config.Home,
 		SystemdHomeArg: systemdHomeArgument(s.Config.Home),
 		LogFile:        s.Config.LogFile,
 		Interval:       interval,
-		Label:          profiledLabel(kind, s.profile()),
-		Profile:        profileArg(s.profile()),
+		Label:          paths.LaunchdLabelFor(kind),
+		Profile:        profileArg(profile),
 		Action:         kind.Action(),
 		Mode:           mode.String(),
 		Description:    kind.Description(),
-		ServiceName:    profiledServiceName(kind, s.profile()),
+		ServiceName:    paths.SystemdServiceNameFor(kind),
 	}
 }
 

@@ -146,6 +146,9 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveScheduler: %v", err)
 	}
+	if paths.Profile != "research-2.v1" {
+		t.Fatalf("Paths profile = %q, want normalized research-2.v1", paths.Profile)
+	}
 
 	for path, want := range map[string]string{
 		"launchd plist":   "com.dotfiles.research-2.v1.plist",
@@ -166,6 +169,9 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 		}
 	}
 
+	// Template data must read the identity Paths already normalized and used for
+	// persisted files, rather than independently reading mutable Config.Profile.
+	cfg.Profile = "mismatch"
 	for _, kind := range []SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
 		data := scheduler.templateDataFor(kind)
 		if got, want := filepath.Base(paths.PlistFor(kind)), data.Label+".plist"; got != want {
