@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -126,6 +127,10 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 			p.Line("  ~ would install pull unit (interval: %s, mode: %s)", formatInterval(cfg.PullInterval), cfg.PullMode)
 		} else {
 			p.Line("  ~ would ensure pull scheduler is off")
+		}
+		if cfg.Home != "" {
+			p.Line("  ~ would stage or retire target-home scheduler files only; no caller-domain service manager would run")
+			p.Line("  ~ then log in as the target user or rerun this command without --home via sudo -iu <target-user>")
 		}
 		p.Line("  log:  %s", cfg.LogFile)
 		p.Blank()
@@ -254,7 +259,12 @@ func runSyncResume(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	if res.SchedulerErr != nil {
-		p.Warn("scheduler resume failed: %v", res.SchedulerErr)
+		var targetUserErr *syncer.SchedulerTargetUserActionRequiredError
+		if errors.As(res.SchedulerErr, &targetUserErr) {
+			p.Warn("scheduler resume requires target-user action: %v", res.SchedulerErr)
+		} else {
+			p.Warn("scheduler resume failed: %v", res.SchedulerErr)
+		}
 	} else if res.SchedulerResumed {
 		p.Line("✓ scheduler resumed.")
 	}
@@ -290,7 +300,12 @@ func runSyncPause(cmd *cobra.Command, _ []string) error {
 		p.Line("gsync was already paused.")
 	}
 	if res.SchedulerErr != nil {
-		p.Warn("scheduler pause failed: %v", res.SchedulerErr)
+		var targetUserErr *syncer.SchedulerTargetUserActionRequiredError
+		if errors.As(res.SchedulerErr, &targetUserErr) {
+			p.Warn("scheduler pause requires target-user action: %v", res.SchedulerErr)
+		} else {
+			p.Warn("scheduler pause failed: %v", res.SchedulerErr)
+		}
 	} else if res.SchedulerStopped {
 		p.Line("✓ scheduler stopped.")
 	}
