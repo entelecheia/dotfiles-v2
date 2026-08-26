@@ -51,10 +51,10 @@ profile: coverage.out
 
 threshold:
   # File-level floors are noise on a repo this size; per-package floors below
-  # are the enforcement. Package-level default is 0 because `override` carries
-  # every package explicitly and the completeness guard proves it.
+  # are the enforcement. Package-level default is 1, so a missing override
+  # fails closed even before the completeness guard reports it.
   file: 0
-  package: 0
+  package: 1
   # Repo total measured 50.2542% (9588/19079).
   total: 49
 

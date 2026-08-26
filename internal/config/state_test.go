@@ -513,6 +513,7 @@ func TestLoad_MissingReturnsEmpty(t *testing.T) {
 	}
 	if state == nil {
 		t.Fatal("expected empty state, got nil")
+		return
 	}
 	if state.Name != "" || state.Profile != "" {
 		t.Errorf("expected zero value, got %+v", state)

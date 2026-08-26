@@ -28,15 +28,86 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 config_file=${1:-$repo_root/.testcoverage.yml}
+workflow_file=${2:-$repo_root/.github/workflows/test.yaml}
 
 if [[ ! -f "$config_file" ]]; then
   echo "check-coverage-floors: config not found: $config_file" >&2
+  exit 1
+fi
+if [[ ! -f "$workflow_file" ]]; then
+  echo "check-coverage-floors: workflow not found: $workflow_file" >&2
   exit 1
 fi
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/check-coverage-floors-XXXXXX")
 cleanup() { rm -rf "$work_dir"; }
 trap cleanup EXIT
+
+# The coverage table is only enforcement when a pull request that changes the
+# table starts the workflow that runs this guard. Read the checked-in YAML
+# declaration rather than attempting to emulate a GitHub event: the exact
+# allowlist is the contract GitHub evaluates.
+awk '
+  /^  pull_request:[[:space:]]*$/ { in_pr = 1; next }
+  in_pr && /^  [^[:space:]#]/ { exit }
+  in_pr && /^    paths:[[:space:]]*$/ { in_paths = 1; next }
+  in_paths && /^    [^[:space:]#]/ { exit }
+  in_paths && /^      -[[:space:]]/ {
+    value = $0
+    sub(/^      -[[:space:]]*/, "", value)
+    sub(/[[:space:]]*#.*$/, "", value)
+    sub(/^[\047\042]/, "", value)
+    sub(/[\047\042][[:space:]]*$/, "", value)
+    print value
+  }
+' "$workflow_file" >"$work_dir/pull-request-paths"
+
+if [[ ! -s "$work_dir/pull-request-paths" ]]; then
+  echo "check-coverage-floors: $workflow_file has no pull_request.paths entries; required policy path .testcoverage.yml is not scheduled" >&2
+  exit 1
+fi
+if ! grep -Fxq '.testcoverage.yml' "$work_dir/pull-request-paths"; then
+  echo "check-coverage-floors: $workflow_file pull_request.paths omits required policy path .testcoverage.yml" >&2
+  exit 1
+fi
+
+# Keep the package default's raw token until it has passed the same contract as
+# override floors. `go-test-coverage` accepts zero, but zero means a missing
+# override silently measures nothing. It also decodes leading-zero YAML
+# integers as octal, so this first-party policy requires a canonical decimal
+# floor before invoking the pinned checker.
+awk '
+  /^threshold:[[:space:]]*$/ { section = "threshold"; next }
+  /^[^[:space:]#]/ { section = "" }
+  section == "threshold" && /^  package:/ {
+    value = $0
+    sub(/^  package:[[:space:]]*/, "", value)
+    sub(/[[:space:]]*#.*$/, "", value)
+    sub(/[[:space:]]+$/, "", value)
+    count++
+    values = values == "" ? value : values " | " value
+  }
+  END { print count "\t" values }
+' "$config_file" >"$work_dir/package-default.raw"
+
+IFS=$'\t' read -r package_default_count package_default_values <"$work_dir/package-default.raw"
+
+floor_findings=0
+validate_package_floor() {
+  local label="$1" count="$2" raw="$3"
+  if [[ "$count" -eq 0 || ( "$count" -eq 1 && -z "$raw" ) ]]; then
+    echo "check-coverage-floors: $label has invalid threshold value '<missing>'; package floors must be one unquoted canonical decimal integer from 1 through 100" >&2
+    floor_findings=$((floor_findings + 1))
+  elif [[ "$count" -ne 1 ]]; then
+    echo "check-coverage-floors: $label has duplicate threshold values '$raw'; package floors must be one unquoted canonical decimal integer from 1 through 100" >&2
+    floor_findings=$((floor_findings + 1))
+  elif [[ ! "$raw" =~ ^([1-9]|[1-9][0-9]|100)$ ]]; then
+    echo "check-coverage-floors: $label has invalid threshold value '$raw'; package floors must be one unquoted canonical decimal integer from 1 through 100" >&2
+    floor_findings=$((floor_findings + 1))
+  fi
+}
+
+validate_package_floor "threshold.package" "$package_default_count" "$package_default_values"
 
 # --- normalisation -----------------------------------------------------------
 #
@@ -62,31 +133,73 @@ fi
 
 # One awk pass over the config for both lists. Sections are tracked rather than
 # grepped globally so an `override` entry cannot be mistaken for an exclusion.
+# Override entries deliberately use a stricter subset of YAML than the pinned
+# coverage tool: list items are indented two spaces and their only recognised
+# direct child is a four-space `threshold:`. That keeps an unknown nested map
+# such as `policy: { threshold: 1 }` from looking like a floor to this guard
+# while go-test-coverage ignores it and falls back to threshold.package.
 # `has_reason` is 1 when the entry carries a comment on its own line or on the
 # line directly above it, which is what D-04 requires of every exclusion.
-awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
+awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" -v er="$work_dir/override-errors.raw" '
+  function flush_override() {
+    if (pending != "") print pending "\t" pending_thr "\t" pending_value >ov
+  }
+  function override_error(message) {
+    print message >er
+  }
+  function indentation(line, first_non_space) {
+    first_non_space = match(line, /[^ ]/)
+    return first_non_space == 0 ? length(line) : first_non_space - 1
+  }
   {
     line = $0
+    if (index(line, "\t") != 0) {
+      override_error("line " NR " uses a tab; tabs are not allowed in coverage policy indentation")
+      prev = line
+      next
+    }
     if (line ~ /^[^[:space:]#]/) section = ""
     if (line ~ /^override:[[:space:]]*$/) section = "override"
     else if (line ~ /^exclude:[[:space:]]*$/) section = "exclude"
     else if (section == "exclude" && line ~ /^[[:space:]]+paths:[[:space:]]*$/) section = "exclude_paths"
-    else if (section == "override" && line ~ /^[[:space:]]*-[[:space:]]+path:/) {
+    else if (section == "override" && line ~ /^  - path:[[:space:]]*/) {
       # A new entry begins, so the previous one can no longer acquire a
       # threshold. Flush it with the verdict it ended up with.
-      if (pending != "") print pending_thr "\t" pending >ov
+      flush_override()
       v = line
-      sub(/^[[:space:]]*-[[:space:]]+path:[[:space:]]*/, "", v)
+      sub(/^  - path:[[:space:]]*/, "", v)
       sub(/[[:space:]]*#.*$/, "", v)
       sub(/[[:space:]]+$/, "", v)
       pending = v
       pending_thr = 0
+      pending_value = ""
     }
-    # A `threshold:` belonging to the entry above it. Anchored to the list-item
-    # indentation so a `threshold:` under `threshold:` at the top of the file
-    # cannot be mistaken for one.
-    else if (section == "override" && pending != "" && line ~ /^[[:space:]]+threshold:[[:space:]]*-?[0-9]+/) {
-      pending_thr = 1
+    else if (section == "override" && line ~ /^[ ]*-[[:space:]]+path:/) {
+      override_error("line " NR " has malformed override list-item indentation; expected exactly two spaces before dash-path")
+    }
+    # Only a direct child of the list item is an override floor. Nested keys
+    # are rejected rather than ignored: accepting them would make the hand
+    # guard and the Go YAML decoder disagree about what is enforced.
+    else if (section == "override" && pending != "" && line ~ /^[ ]*threshold:/) {
+      indent = indentation(line)
+      if (indent == 4) {
+        v = line
+        sub(/^    threshold:[[:space:]]*/, "", v)
+        sub(/[[:space:]]*#.*$/, "", v)
+        sub(/[[:space:]]+$/, "", v)
+        pending_thr++
+        pending_value = pending_value == "" ? v : pending_value " | " v
+      } else if (indent > 4) {
+        override_error("override " pending " has nested threshold: at line " NR "; only a direct four-space threshold is allowed")
+      } else {
+        override_error("override " pending " has threshold indentation of " indent " spaces at line " NR "; expected exactly four spaces")
+      }
+    }
+    else if (section == "override" && pending != "" && line ~ /^    [^[:space:]#]/) {
+      override_error("override " pending " has unexpected direct child at line " NR "; only threshold: is allowed")
+    }
+    else if (section == "override" && pending != "" && line !~ /^[ ]*(#.*)?$/) {
+      override_error("override " pending " has malformed indentation at line " NR "; expected a two-space list item or four-space threshold")
     }
     else if (section == "exclude_paths" && line ~ /^[[:space:]]*-[[:space:]]/) {
       v = line
@@ -98,12 +211,12 @@ awk -v ov="$work_dir/overrides.raw" -v ex="$work_dir/exclusions.raw" '
     }
     prev = line
   }
-  END { if (pending != "") print pending_thr "\t" pending >ov }
+  END { flush_override() }
 ' "$config_file"
 
-touch "$work_dir/overrides.raw" "$work_dir/exclusions.raw"
+touch "$work_dir/overrides.raw" "$work_dir/exclusions.raw" "$work_dir/override-errors.raw"
 
-cut -f2 "$work_dir/overrides.raw" | sed 's/^\^//; s/\$$//' | sort -u >"$work_dir/overrides"
+cut -f1 "$work_dir/overrides.raw" | sed 's/^\^//; s/\$$//' | sort -u >"$work_dir/overrides"
 cut -f2 "$work_dir/exclusions.raw" | sed 's/^\^//; s|/$||' | sort -u >"$work_dir/exclusions"
 
 package_count=$(wc -l <"$work_dir/packages" | tr -d '[:space:]')
@@ -146,10 +259,9 @@ echo "check-coverage-floors: $package_count package(s), $override_count override
 # nothing, and both were found by review on PR #87 rather than by design:
 #
 #   - An entry with a `path` but no `threshold` is not an error to the coverage
-#     tool. It falls back to `threshold.package`, which this config sets to 0
-#     deliberately, so the package is measured against nothing while every gate
-#     stays green. Reproduced: dropping `internal/guard`'s threshold left a
-#     92.3% package enforced at 0 with both CI steps passing.
+#     tool. It falls back to `threshold.package`; the policy keeps that default
+#     positive and rejects the malformed entry locally, so neither layer can
+#     quietly treat a missing package floor as enforcement.
 #   - An override path missing its trailing `$` still normalises to a live
 #     package name here, so this script blesses it, while the coverage tool's
 #     FIRST matching override wins and shadows the sibling's own entry.
@@ -160,20 +272,28 @@ echo "check-coverage-floors: $package_count package(s), $override_count override
 # name and cannot tell a complete entry from a hollow one.
 
 incomplete=0
-while IFS=$'\t' read -r has_threshold path; do
+structure_findings=0
+while IFS= read -r structure_error; do
+  [[ -z "$structure_error" ]] && continue
+  echo "check-coverage-floors: $structure_error" >&2
+  structure_findings=$((structure_findings + 1))
+done <"$work_dir/override-errors.raw"
+
+while IFS=$'\t' read -r path threshold_count threshold_value; do
   [[ -z "$path" ]] && continue
-  if [[ "$has_threshold" != "1" ]]; then
-    echo "check-coverage-floors: override '$path' has no 'threshold:' line, so it falls back to threshold.package (0) and enforces nothing" >&2
+  if [[ "$threshold_count" -eq 0 ]]; then
+    echo "check-coverage-floors: override '$path' has no 'threshold:' line; raw value is '<missing>'" >&2
     incomplete=$((incomplete + 1))
   fi
+  validate_package_floor "override '$path'" "$threshold_count" "$threshold_value"
   if [[ "$path" != "^"* || "$path" != *'$' ]]; then
     echo "check-coverage-floors: override '$path' is not anchored at both ends (^...\$), so it can also match a sibling package and shadow that package's own floor" >&2
     incomplete=$((incomplete + 1))
   fi
 done <"$work_dir/overrides.raw"
 
-if [[ "$incomplete" -gt 0 ]]; then
-  echo "check-coverage-floors: $incomplete malformed override entr(ies); a floor that matches loosely or carries no threshold is not enforcement" >&2
+if [[ "$incomplete" -gt 0 || "$floor_findings" -gt 0 || "$structure_findings" -gt 0 ]]; then
+  echo "check-coverage-floors: $incomplete malformed override entr(ies), $floor_findings invalid package floor(s), $structure_findings invalid override structure(s); every package floor must be explicit, anchored, and in range" >&2
   exit 1
 fi
 

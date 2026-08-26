@@ -10,6 +10,7 @@ on:
       - "internal/**"
       - "go.mod"
       - "go.sum"
+      - ".testcoverage.yml"
       - "Makefile"
       - "scripts/**"
       - "tests/**"
@@ -54,6 +55,8 @@ jobs:
       # vulnerability finding.
       - name: Dependency vulnerability gate is not a no-op
         run: bash tests/scenarios/govulncheck-gate.sh
+      - name: Coverage floor policy gate is not a no-op
+        run: bash tests/scenarios/coverage-policy-gate.sh
       # Runs here, not in the linux container: it copies the harness and
       # assert.sh out of the repo, and /tests/scenarios in the image has no repo
       # above it. ubuntu-latest also gives it the GNU `find -printf` the copied
@@ -138,8 +141,8 @@ jobs:
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4

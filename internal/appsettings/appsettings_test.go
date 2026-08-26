@@ -502,6 +502,7 @@ func TestAdoptArchivedAppsSynthesizesEntries(t *testing.T) {
 	entry := eng.Manifest.App("Moom Classic")
 	if entry == nil {
 		t.Fatal("synthesized entry not appended to manifest")
+		return
 	}
 	wantPaths := map[string]bool{
 		filepath.Join("Preferences", "com.manytricks.Moom.plist"): true,
