@@ -30,7 +30,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 func runInitFlow(cmd *cobra.Command, skipExistingGate bool) error {
 	yes, _ := cmd.Flags().GetBool("yes")
-	homeOverride, _ := cmd.Flags().GetString("home")
+	homeOverride := homeOverrideFrom(cmd)
 	wizardHome := homeOverride
 	if wizardHome == "" {
 		wizardHome, _ = os.UserHomeDir()
