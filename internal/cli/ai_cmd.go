@@ -166,13 +166,13 @@ func runAIStatus(cmd *cobra.Command, _ []string) error {
 	}
 	p.Section("Paths")
 	for _, st := range report.Entries {
-		live := "·"
-		backup := "·"
+		live := ui.MarkPartial
+		backup := ui.MarkPartial
 		if st.PresentLive {
-			live = "✓"
+			live = ui.MarkPresent
 		}
 		if st.PresentBackup {
-			backup = "✓"
+			backup = ui.MarkPresent
 		}
 		marker := ui.StyleHint.Render(ui.MarkPartial)
 		if st.PresentLive && st.PresentBackup {

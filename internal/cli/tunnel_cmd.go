@@ -219,7 +219,7 @@ func confirmTunnelStep(kind tunnel.ConfirmKind, yes bool) (bool, error) {
 // flow printed for it. tunnelName and hostname are the caller's own resolved
 // inputs; the engine does not send them back.
 func renderTunnelEvent(p *Printer, tunnelName, hostname string, event tunnel.Event) {
-	check := ui.StyleSuccess.Render("✓")
+	check := ui.StyleSuccess.Render(ui.MarkPresent)
 	switch event.Kind {
 	case tunnel.EventCloudflaredFound:
 		p.Line("  %s cloudflared found at %s", check, event.Path)
