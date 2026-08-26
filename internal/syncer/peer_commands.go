@@ -127,6 +127,8 @@ const peerPlistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
+var peerExecutable = os.Executable
+
 // peerClockTolerance is how far the two clocks may drift before "newer wins"
 // stops being a meaningful comparison.
 const peerClockTolerance = 2 * time.Second
@@ -168,11 +170,15 @@ func PeerHomePathsFile(paths *LocalPaths) string {
 // every scheduled run, or nothing when the job was installed without an
 // override. The value is interpolated raw, exactly as the executable path and
 // the log path already are.
-func peerHomeArg(cfg *Config) string {
+func peerHomeArg(cfg *Config) (string, error) {
 	if cfg == nil || cfg.Home == "" {
-		return ""
+		return "", nil
 	}
-	return "\n    <string>--home=" + cfg.Home + "</string>"
+	arg, err := plistHomeArgument(cfg.Home)
+	if err != nil {
+		return "", err
+	}
+	return "\n    <string>" + arg + "</string>", nil
 }
 
 func seedFileIfAbsent(path, body string) error {
@@ -543,6 +549,9 @@ type PeerScheduleResult struct {
 func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleResult, error) {
 	cfg, runner := opts.Config, opts.Runner
 	plist := filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+	if err := validateSchedulerMutationHome(cfg.Home); err != nil {
+		return nil, fmt.Errorf("peer scheduler home %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", cfg.Home, plist, err)
+	}
 
 	if opts.Off {
 		_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
@@ -572,6 +581,22 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
 		return nil, err
 	}
+	exe, err := peerExecutable()
+	if err != nil {
+		return nil, err
+	}
+	preparedExe, err := plistXMLText(exe, "")
+	if err != nil {
+		return nil, peerPlistPathError("executable", exe, plist, err)
+	}
+	preparedLogFile, err := plistXMLText(cfg.LogFile, "")
+	if err != nil {
+		return nil, peerPlistPathError("log file", cfg.LogFile, plist, err)
+	}
+	homeArg, err := peerHomeArg(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("peer scheduler home %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", cfg.Home, plist, err)
+	}
 	// Mirror the off-arm above. The write below bypasses the runner entirely
 	// (os.MkdirAll + os.WriteFile), so without this a preview leaves a plist on
 	// disk with no loaded job behind it — the same inconsistent state the
@@ -585,17 +610,13 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if opts.DryRun || (runner != nil && runner.DryRun) {
 		return &PeerScheduleResult{DryRun: true, Plist: plist, LogFile: cfg.LogFile, Interval: opts.Interval}, nil
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
 	logFile := cfg.LogFile
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 		return nil, err
 	}
-	body := fmt.Sprintf(peerPlistTmpl, exe, peerHomeArg(cfg), int(opts.Interval.Seconds()), logFile, logFile)
-	if err := os.WriteFile(plist, []byte(body), 0o644); err != nil {
-		return nil, err
+	body := fmt.Sprintf(peerPlistTmpl, preparedExe, homeArg, int(opts.Interval.Seconds()), preparedLogFile, preparedLogFile)
+	if err := runner.WriteFileAtomic(plist, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("writing peer plist %s for home %q: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", plist, cfg.Home, err)
 	}
 	label := "gui/" + strconv.Itoa(os.Getuid()) + "/com.dotfiles.peer"
 	_, _ = runner.Run(ctx, "launchctl", "bootout", label)
@@ -603,6 +624,10 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 		return nil, fmt.Errorf("loading %s: %w", plist, err)
 	}
 	return &PeerScheduleResult{Plist: plist, LogFile: logFile, Interval: opts.Interval}, nil
+}
+
+func peerPlistPathError(field, value, plist string, err error) error {
+	return fmt.Errorf("peer scheduler %s %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the path", field, value, plist, err)
 }
 
 // PeerDoctorOptions controls PeerDoctor. The runner is always live: every

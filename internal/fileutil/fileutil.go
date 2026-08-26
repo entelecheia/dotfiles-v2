@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
@@ -24,7 +23,7 @@ func EnsureFile(runner *exec.Runner, home, path string, content []byte, perm os.
 	// Backup existing file
 	if err == nil {
 		if backupErr := backup(runner, home, path); backupErr != nil {
-			runner.Logger.Warn("backup failed", "path", path, "err", backupErr)
+			return false, fmt.Errorf("backing up %q: %w", path, backupErr)
 		}
 	}
 
@@ -52,7 +51,7 @@ func EnsureFileAtomic(runner *exec.Runner, home, path string, content []byte, pe
 
 	if err == nil {
 		if backupErr := backup(runner, home, path); backupErr != nil {
-			runner.Logger.Warn("backup failed", "path", path, "err", backupErr)
+			return false, fmt.Errorf("backing up %q: %w", path, backupErr)
 		}
 	}
 
@@ -74,33 +73,6 @@ func NeedsUpdate(runner *exec.Runner, path string, content []byte) bool {
 		return true
 	}
 	return hashBytes(existing) != hashBytes(content)
-}
-
-// backup copies an existing file to the backup directory under home.
-//
-// The root is the home the CALLER resolved, not the one the process happens
-// to run under: reading it from the environment sent every backup taken
-// during a run pointed at another home into the invoking user's own tree
-// (BUG-15). An empty home is refused rather than joined, since a relative
-// join would write into whatever directory the operator was standing in.
-func backup(runner *exec.Runner, home, path string) error {
-	if home == "" {
-		return fmt.Errorf("backing up %q: no home directory given", path)
-	}
-	bdir := filepath.Join(home, backupDir)
-	if err := runner.MkdirAll(bdir, 0755); err != nil {
-		return err
-	}
-
-	base := filepath.Base(path)
-	timestamp := time.Now().Format("20060102-150405")
-	dest := filepath.Join(bdir, fmt.Sprintf("%s.%s", base, timestamp))
-
-	data, err := runner.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return runner.WriteFile(dest, data, 0644)
 }
 
 func hashBytes(data []byte) string {

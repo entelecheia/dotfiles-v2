@@ -13,9 +13,16 @@ import (
 // Idempotent — unloads any pre-existing copy before reload so config
 // changes (e.g. new Interval) take effect on rerun.
 func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	data := s.templateDataFor(kind)
 	if data.DotfilesPath == "" {
 		return fmt.Errorf("cannot find dot binary in PATH; run `make install` first")
+	}
+	plist := s.Paths.PlistFor(kind)
+	if err := preparePlistTemplateData(&data); err != nil {
+		return fmt.Errorf("cannot serialize shared scheduler plist %s: %w; existing artifact was left untouched; run dot sync setup after fixing the path", plist, err)
 	}
 
 	content, err := s.Engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
@@ -23,12 +30,11 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 		return fmt.Errorf("rendering plist: %w", err)
 	}
 
-	plist := s.Paths.PlistFor(kind)
 	dir := filepath.Dir(plist)
 	if err := s.Runner.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("creating LaunchAgents dir: %w", err)
 	}
-	if err := s.Runner.WriteFile(plist, content, 0644); err != nil {
+	if err := s.Runner.WriteFileAtomic(plist, content, 0644); err != nil {
 		return fmt.Errorf("writing plist: %w", err)
 	}
 
@@ -44,6 +50,9 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 // UninstallKind unloads the launchd job and removes the plist file
 // for the given kind. Missing-file is not an error.
 func (s *Scheduler) UninstallKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	plist := s.Paths.PlistFor(kind)
 	_, _ = s.Runner.Run(ctx, "launchctl", "unload", plist)
 	if !s.Runner.FileExists(plist) {
@@ -55,6 +64,9 @@ func (s *Scheduler) UninstallKind(ctx context.Context, kind SchedulerKind) error
 // PauseKind unloads the launchd job (file stays on disk so Resume
 // re-attaches).
 func (s *Scheduler) PauseKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	plist := s.Paths.PlistFor(kind)
 	if !s.Runner.FileExists(plist) {
 		return nil
@@ -65,6 +77,9 @@ func (s *Scheduler) PauseKind(ctx context.Context, kind SchedulerKind) error {
 
 // ResumeKind re-loads the launchd job from its persisted plist.
 func (s *Scheduler) ResumeKind(ctx context.Context, kind SchedulerKind) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	plist := s.Paths.PlistFor(kind)
 	if !s.Runner.FileExists(plist) {
 		return nil
@@ -95,7 +110,10 @@ var legacyLaunchdLabels = []string{
 // CleanupLegacyUnits unloads and removes launchd plists left behind by the
 // pre-rename schedulers (gdrive-sync push/intake, SSH-only workspace-sync).
 // Best-effort: missing files and unload failures are ignored.
-func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) {
+func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) error {
+	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
+		return err
+	}
 	dir := filepath.Dir(s.Paths.LaunchdPlist)
 	for _, label := range legacyLaunchdLabels {
 		plist := filepath.Join(dir, label+".plist")
@@ -104,6 +122,7 @@ func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) {
 			_ = s.Runner.Remove(plist)
 		}
 	}
+	return nil
 }
 
 func launchdPrintTarget(uid int, label string) string {

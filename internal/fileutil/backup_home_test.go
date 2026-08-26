@@ -1,15 +1,29 @@
+//go:build darwin || linux
+
 package fileutil
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
+
+func pinBackupClock(t *testing.T, instant time.Time) {
+	t.Helper()
+	previous := backupNow
+	backupNow = func() time.Time { return instant }
+	t.Cleanup(func() { backupNow = previous })
+}
 
 // BUG-15: backup() resolved its root from the process environment, so a run
 // pointed at another home deposited that home's overwritten files into the
@@ -74,6 +88,55 @@ func backupNames(t *testing.T, home string) []string {
 	return names
 }
 
+func backupRoot(home string) string {
+	return filepath.Join(home, backupDir)
+}
+
+func onlyBackup(t *testing.T, home string) string {
+	t.Helper()
+	names := backupNames(t, home)
+	if len(names) != 1 {
+		t.Fatalf("backups = %v, want exactly one recovery copy", names)
+	}
+	return filepath.Join(backupRoot(home), names[0])
+}
+
+func assertOwnerOnlyMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Errorf("%s mode = %04o, want %04o", path, got, want)
+	}
+	if got := info.Mode().Perm() & 0o077; got != 0 {
+		t.Errorf("%s exposes group/world bits %04o", path, got)
+	}
+}
+
+func assertBackupTreeOwnerOnly(t *testing.T, home string) {
+	t.Helper()
+	root := backupRoot(home)
+	assertOwnerOnlyMode(t, root, 0o700)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read backup root %s: %v", root, err)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("lstat %s: %v", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Errorf("backup entry %s mode = %s, want regular file", path, info.Mode())
+			continue
+		}
+		assertOwnerOnlyMode(t, path, 0o600)
+	}
+}
+
 // assertNoBackupDir fails when home received a dotfiles backup tree at all.
 func assertNoBackupDir(t *testing.T, label, home string) {
 	t.Helper()
@@ -81,6 +144,41 @@ func assertNoBackupDir(t *testing.T, label, home string) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("%s home received %s (stat err: %v)", label, dir, err)
 	}
+}
+
+// snapshotExternalTarget is deliberately small and exact: the attack tests
+// need to prove that an outside target kept its directory mode, entries and
+// bytes, not merely that the expected recovery file is absent.
+func snapshotExternalTarget(t *testing.T, root string) string {
+	t.Helper()
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		t.Fatalf("lstat external target %s: %v", root, err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read external target %s: %v", root, err)
+	}
+	var snapshot strings.Builder
+	snapshot.WriteString(rootInfo.Mode().String())
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("lstat external entry %s: %v", path, err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read external entry %s: %v", path, err)
+		}
+		snapshot.WriteString("\n")
+		snapshot.WriteString(entry.Name())
+		snapshot.WriteString("\t")
+		snapshot.WriteString(info.Mode().String())
+		snapshot.WriteString("\t")
+		snapshot.Write(data)
+	}
+	return snapshot.String()
 }
 
 // assertOnlyFiles walks root and fails on any file outside want. It catches
@@ -158,6 +256,367 @@ func TestWriteHelpers_BackupLandsUnderTheCallersHome(t *testing.T) {
 	}
 }
 
+func TestEnsureFileAtomic_BackupPermissionsOwnerOnly(t *testing.T) {
+	_, home := twoHomes(t)
+	path := filepath.Join(home, ".codex", "config.toml")
+	const before = "private hud configuration\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runner, log := runnerWithLog()
+	written, err := EnsureFileAtomic(runner, home, path, []byte("updated hud configuration\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !written {
+		t.Fatal("EnsureFileAtomic reported no write")
+	}
+	if strings.Contains(log.String(), "backup failed") {
+		t.Errorf("backup warned: %s", log.String())
+	}
+	if got, err := os.ReadFile(onlyBackup(t, home)); err != nil || string(got) != before {
+		t.Errorf("recovery bytes = %q, err = %v, want %q", got, err, before)
+	}
+	assertOwnerOnlyMode(t, backupRoot(home), 0o700)
+	assertOwnerOnlyMode(t, onlyBackup(t, home), 0o600)
+	assertOwnerOnlyMode(t, path, 0o600)
+}
+
+func TestWriteHelpers_BackupPermissionsOwnerOnly(t *testing.T) {
+	for _, h := range writeHelpers {
+		for _, mode := range []os.FileMode{0o600, 0o644, 0o755} {
+			t.Run(h.name+"/"+mode.String(), func(t *testing.T) {
+				_, home := twoHomes(t)
+				path := filepath.Join(home, ".config", "settings.toml")
+				const before = "private setting before overwrite\n"
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(before), mode); err != nil {
+					t.Fatal(err)
+				}
+
+				runner, _ := runnerWithLog()
+				written, err := h.fn(runner, home, path, []byte("replacement\n"), mode)
+				if err != nil || !written {
+					t.Fatalf("written=%t err=%v", written, err)
+				}
+				copy := onlyBackup(t, home)
+				if got, err := os.ReadFile(copy); err != nil || string(got) != before {
+					t.Errorf("recovery bytes = %q, err = %v, want %q", got, err, before)
+				}
+				assertOwnerOnlyMode(t, backupRoot(home), 0o700)
+				assertOwnerOnlyMode(t, copy, 0o600)
+			})
+		}
+	}
+}
+
+func TestWriteHelpers_HardensExistingBackupPermissions(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			root := backupRoot(home)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := map[string]string{
+				"settings.toml.legacy-one": "first preserved backup",
+				"settings.toml.legacy-two": "second preserved backup",
+			}
+			for name, contents := range legacy {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(home, ".config", "settings.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("live before"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			runner, _ := runnerWithLog()
+			written, err := h.fn(runner, home, path, []byte("live after"), 0o644)
+			if err != nil || !written {
+				t.Fatalf("written=%t err=%v", written, err)
+			}
+			for name, want := range legacy {
+				got, err := os.ReadFile(filepath.Join(root, name))
+				if err != nil || string(got) != want {
+					t.Errorf("legacy %s = %q, err = %v, want %q", name, got, err, want)
+				}
+			}
+			assertBackupTreeOwnerOnly(t, home)
+
+			if _, err := h.fn(runner, home, path, []byte("live after again"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			assertBackupTreeOwnerOnly(t, home)
+		})
+	}
+}
+
+func TestWriteHelpers_RejectsUnsafeBackupEntry(t *testing.T) {
+	for _, h := range writeHelpers {
+		for _, kind := range []string{"symlink", "directory"} {
+			t.Run(h.name+"/"+kind, func(t *testing.T) {
+				_, home := twoHomes(t)
+				root := backupRoot(home)
+				if err := os.MkdirAll(root, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				outside := filepath.Join(t.TempDir(), "outside-secret")
+				if err := os.WriteFile(outside, []byte("outside bytes"), 0o640); err != nil {
+					t.Fatal(err)
+				}
+				unsafe := filepath.Join(root, "unexpected")
+				if kind == "symlink" {
+					if err := os.Symlink(outside, unsafe); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.Mkdir(unsafe, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(home, ".config", "settings.toml")
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				outsideInfo, err := os.Lstat(outside)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				runner, _ := runnerWithLog()
+				written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+				if err == nil || written {
+					t.Fatalf("written=%t err=%v, want unsafe backup entry refusal", written, err)
+				}
+				if got, _ := os.ReadFile(path); string(got) != "live before" {
+					t.Errorf("live target = %q, want unchanged", got)
+				}
+				if got, _ := os.ReadFile(outside); string(got) != "outside bytes" {
+					t.Errorf("outside target = %q, want unchanged", got)
+				}
+				if after, err := os.Lstat(outside); err != nil || after.Mode().Perm() != outsideInfo.Mode().Perm() {
+					t.Errorf("outside mode changed from %04o to %v, err=%v", outsideInfo.Mode().Perm(), after, err)
+				}
+				if names := backupNames(t, home); len(names) != 1 || names[0] != "unexpected" {
+					t.Errorf("backup entries = %v, want only unsafe fixture", names)
+				}
+			})
+		}
+	}
+}
+
+func TestWriteHelpers_BackupPermissionHardeningFailure(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			root := backupRoot(home)
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := filepath.Join(root, "settings.toml.legacy")
+			if err := os.WriteFile(legacy, []byte("prior recovery bytes"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(home, ".config", "settings.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runner, _ := runnerWithLog()
+			previous := chmodBackupFD
+			chmodBackupFD = func(fd int, path string, mode os.FileMode) error {
+				if path == root {
+					return errors.New("forced backup hardening failure")
+				}
+				return previous(fd, path, mode)
+			}
+			t.Cleanup(func() { chmodBackupFD = previous })
+
+			written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+			if err == nil || written {
+				t.Fatalf("written=%t err=%v, want hardening failure", written, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "live before" {
+				t.Errorf("live target = %q, want unchanged", got)
+			}
+			if got, _ := os.ReadFile(legacy); string(got) != "prior recovery bytes" {
+				t.Errorf("legacy backup = %q, want unchanged", got)
+			}
+			if names := backupNames(t, home); len(names) != 1 || names[0] != filepath.Base(legacy) {
+				t.Errorf("backup entries = %v, want only legacy backup", names)
+			}
+		})
+	}
+}
+
+func TestWriteHelpers_RejectSymlinkedBackupAncestor(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			external := t.TempDir()
+			if err := os.Chmod(external, 0o751); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(external, "sentinel"), []byte("outside bytes"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotExternalTarget(t, external)
+			if err := os.Symlink(external, filepath.Join(home, ".local")); err != nil {
+				t.Fatal(err)
+			}
+
+			path := filepath.Join(home, ".config", "settings.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			runner, _ := runnerWithLog()
+			written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+			if err == nil || written {
+				t.Fatalf("written=%t err=%v, want symlinked ancestor refusal", written, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "live before" {
+				t.Errorf("live target = %q, want unchanged", got)
+			}
+			if after := snapshotExternalTarget(t, external); after != before {
+				t.Errorf("external target changed:\nbefore=%s\nafter=%s", before, after)
+			}
+			if info, err := os.Lstat(filepath.Join(home, ".local")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("backup ancestor = %v, err=%v, want unchanged symlink", info, err)
+			}
+		})
+	}
+}
+
+func TestWriteHelpers_RejectFinalBackupDirectorySwapBeforeHardening(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			root := backupRoot(home)
+			if err := os.MkdirAll(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			external := t.TempDir()
+			if err := os.Chmod(external, 0o751); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(external, "sentinel"), []byte("outside bytes"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotExternalTarget(t, external)
+			path := filepath.Join(home, ".config", "settings.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			previous := beforeBackupDirectoryHarden
+			beforeBackupDirectoryHarden = func(backupPath string) error {
+				if backupPath != root {
+					return errors.New("unexpected backup path for swap seam")
+				}
+				held := root + "-held"
+				if err := os.Rename(root, held); err != nil {
+					return err
+				}
+				return os.Symlink(external, root)
+			}
+			t.Cleanup(func() { beforeBackupDirectoryHarden = previous })
+
+			runner, _ := runnerWithLog()
+			written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+			if err == nil || written {
+				t.Fatalf("written=%t err=%v, want swapped backup directory refusal", written, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "live before" {
+				t.Errorf("live target = %q, want unchanged", got)
+			}
+			if after := snapshotExternalTarget(t, external); after != before {
+				t.Errorf("external target changed:\nbefore=%s\nafter=%s", before, after)
+			}
+			heldEntries, err := os.ReadDir(root + "-held")
+			if err != nil || len(heldEntries) != 0 {
+				t.Errorf("held backup directory entries = %v, err=%v, want no reservation", heldEntries, err)
+			}
+		})
+	}
+}
+
+func TestWriteHelpers_DryRunDoesNotHardenOrCreateBackup(t *testing.T) {
+	for _, h := range writeHelpers {
+		for _, legacy := range []bool{false, true} {
+			t.Run(h.name+"/legacy="+strconv.FormatBool(legacy), func(t *testing.T) {
+				_, home := twoHomes(t)
+				root := backupRoot(home)
+				if legacy {
+					if err := os.MkdirAll(root, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(root, "legacy"), []byte("legacy bytes"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				path := filepath.Join(home, ".config", "settings.toml")
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("live before"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+
+				runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+				written, err := h.fn(runner, home, path, []byte("live after"), 0o600)
+				if err != nil || !written {
+					t.Fatalf("written=%t err=%v", written, err)
+				}
+				if got, _ := os.ReadFile(path); string(got) != "live before" {
+					t.Errorf("dry-run live target = %q, want unchanged", got)
+				}
+				if !legacy {
+					if _, err := os.Lstat(root); !os.IsNotExist(err) {
+						t.Errorf("dry-run created backup root (err=%v)", err)
+					}
+					return
+				}
+				rootInfo, err := os.Lstat(root)
+				if err != nil || rootInfo.Mode().Perm() != 0o755 {
+					t.Errorf("dry-run backup root mode = %v, err=%v, want 0755", rootInfo, err)
+				}
+				legacyPath := filepath.Join(root, "legacy")
+				info, err := os.Lstat(legacyPath)
+				if err != nil || info.Mode().Perm() != 0o644 {
+					t.Errorf("dry-run legacy mode = %v, err=%v, want 0644", info, err)
+				}
+				if got, _ := os.ReadFile(legacyPath); string(got) != "legacy bytes" {
+					t.Errorf("dry-run legacy bytes = %q, want unchanged", got)
+				}
+				if names := backupNames(t, home); len(names) != 1 || names[0] != "legacy" {
+					t.Errorf("dry-run backup entries = %v, want only legacy", names)
+				}
+			})
+		}
+	}
+}
+
 func TestWriteHelpers_NoBackupWhenNothingIsOverwritten(t *testing.T) {
 	for _, h := range writeHelpers {
 		t.Run(h.name, func(t *testing.T) {
@@ -201,7 +660,7 @@ func TestWriteHelpers_NoBackupWhenNothingIsOverwritten(t *testing.T) {
 	}
 }
 
-func TestWriteHelpers_EmptyHomeRefusesTheBackupAndStillWrites(t *testing.T) {
+func TestWriteHelpers_EmptyHome(t *testing.T) {
 	// An empty home would join the backup path relative to the process
 	// working directory, writing into whatever tree the operator was
 	// standing in. Refusing it names the caller's mistake instead.
@@ -216,24 +675,13 @@ func TestWriteHelpers_EmptyHomeRefusesTheBackupAndStillWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			runner, log := runnerWithLog()
+			runner, _ := runnerWithLog()
 			written, err := h.fn(runner, "", path, []byte("v2\n"), 0o644)
-			// A failed backup has always been a warning rather than a stop.
-			if err != nil {
-				t.Fatalf("%s must still write: %v", h.name, err)
+			if err == nil || written {
+				t.Fatalf("%s wrote=%t err=%v, want backup refusal", h.name, written, err)
 			}
-			if !written {
-				t.Fatalf("%s reported no write", h.name)
-			}
-			if got, _ := os.ReadFile(path); string(got) != "v2\n" {
-				t.Errorf("content = %q, want v2", got)
-			}
-
-			if !strings.Contains(log.String(), "backup failed") {
-				t.Errorf("no backup warning logged; log = %q", log.String())
-			}
-			if !strings.Contains(log.String(), "no home directory") {
-				t.Errorf("warning does not name the empty home; log = %q", log.String())
+			if got, _ := os.ReadFile(path); string(got) != "v1\n" {
+				t.Errorf("content = %q, want unchanged v1", got)
 			}
 
 			assertNoBackupDir(t, "invoking", invoking)
@@ -243,6 +691,125 @@ func TestWriteHelpers_EmptyHomeRefusesTheBackupAndStillWrites(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(".local", "share", "dotfiles")); !os.IsNotExist(err) {
 				t.Errorf("backup landed relative to the working directory (stat err: %v)", err)
 			}
+		})
+	}
+}
+
+func TestWriteHelpers_SameSecondBackups(t *testing.T) {
+	pinBackupClock(t, time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC))
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			path := filepath.Join(home, ".config", "cfg.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("a"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runner, _ := runnerWithLog()
+			if _, err := h.fn(runner, home, path, []byte("b"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.fn(runner, home, path, []byte("c"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			names := backupNames(t, home)
+			if len(names) != 2 {
+				t.Fatalf("backups = %v, want two same-second recovery copies", names)
+			}
+			contents := map[string]bool{}
+			for _, name := range names {
+				data, err := os.ReadFile(filepath.Join(home, backupDir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				contents[string(data)] = true
+			}
+			if !contents["a"] || !contents["b"] {
+				t.Errorf("recovery contents = %v, want a and b", contents)
+			}
+			assertBackupTreeOwnerOnly(t, home)
+		})
+	}
+}
+
+func TestWriteHelpers_ConcurrentBackupReservations(t *testing.T) {
+	pinBackupClock(t, time.Date(2026, time.August, 26, 12, 0, 0, 0, time.UTC))
+	home := t.TempDir()
+	dir, err := openBackupDirectory(home, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	const workers = 8
+	start := make(chan struct{})
+	paths := make(chan string, workers)
+	errs := make(chan error, workers)
+	var ready sync.WaitGroup
+	ready.Add(workers)
+	for i := range workers {
+		go func() {
+			payload := []byte("backup-" + string(rune('a'+i)))
+			ready.Done()
+			<-start
+			path, err := writeBackupCopy(dir, "cfg.toml", payload)
+			if err != nil {
+				errs <- err
+				return
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(payload) {
+				errs <- errors.New("backup contents were replaced")
+				return
+			}
+			paths <- path
+		}()
+	}
+	ready.Wait()
+	close(start)
+	seen := map[string]bool{}
+	for range workers {
+		select {
+		case err := <-errs:
+			t.Fatal(err)
+		case path := <-paths:
+			if seen[path] {
+				t.Fatalf("duplicate backup path %s", path)
+			}
+			seen[path] = true
+		}
+	}
+	assertBackupTreeOwnerOnly(t, home)
+}
+
+func TestWriteHelpers_BackupFailure(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			path := filepath.Join(home, ".config", "cfg.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("before"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			previous := writeReservedBackup
+			writeReservedBackup = func(*os.File, []byte) (int, error) { return 0, errors.New("forced backup write failure") }
+			t.Cleanup(func() { writeReservedBackup = previous })
+
+			runner, _ := runnerWithLog()
+			written, err := h.fn(runner, home, path, []byte("after"), 0o644)
+			if err == nil || written {
+				t.Fatalf("written=%t err=%v, want backup failure", written, err)
+			}
+			if got, _ := os.ReadFile(path); string(got) != "before" {
+				t.Errorf("live target = %q, want before", got)
+			}
+			if names := backupNames(t, home); len(names) != 0 {
+				t.Errorf("owned partial backups left behind: %v", names)
+			}
+			assertOwnerOnlyMode(t, backupRoot(home), 0o700)
 		})
 	}
 }

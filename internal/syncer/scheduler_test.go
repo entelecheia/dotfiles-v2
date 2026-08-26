@@ -1,13 +1,98 @@
 package syncer
 
 import (
+	"encoding/xml"
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
+
+type plistProgramArguments struct {
+	ProgramArguments []string `xml:"dict>array>string"`
+}
+
+func renderedPlistProgramArguments(t *testing.T, data SchedulerTemplateData) []string {
+	t.Helper()
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare plist data: %v", err)
+	}
+	body, err := template.NewEngine().Render("sync/com.dotfiles.sync.plist.tmpl", data)
+	if err != nil {
+		t.Fatalf("render plist: %v", err)
+	}
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("parse plist: %v\n--- rendered ---\n%s", err, body)
+	}
+	return plist.ProgramArguments
+}
+
+func TestPlistHomeArgument_SupportedHome(t *testing.T) {
+	home := "/tmp/a b\tline\nnext\rreturn & <tag> 'quote' \"double\" \\ % $ 유니코드/" + strings.Repeat("long-", 64)
+	want := "--home=" + home
+
+	got, err := plistHomeArgument(home)
+	if err != nil {
+		t.Fatalf("plistHomeArgument(%q): %v", home, err)
+	}
+	again, err := plistHomeArgument(home)
+	if err != nil {
+		t.Fatalf("second plistHomeArgument(%q): %v", home, err)
+	}
+	if got != again {
+		t.Fatalf("serializer is not deterministic:\nfirst:  %q\nsecond: %q", got, again)
+	}
+
+	args := renderedPlistProgramArguments(t, SchedulerTemplateData{
+		DotfilesPath: "/usr/local/bin/dot", Home: home, PlistHomeArg: got,
+		LogFile: "/tmp/dot.log", Interval: 60, Label: launchdLabel,
+		Action: "push", Mode: ModeClean.String(), Description: "test", ServiceName: systemdServiceName,
+	})
+	if gotArgs := matchingHomeArguments(args); !reflect.DeepEqual(gotArgs, []string{want}) {
+		t.Fatalf("ProgramArguments home items = %q, want %q", gotArgs, []string{want})
+	}
+}
+
+func TestPlistHomeArgument_RejectsXMLIllegalHome(t *testing.T) {
+	cases := []struct {
+		name string
+		home string
+	}{
+		{name: "invalid UTF-8", home: string([]byte{'/', 't', 'm', 'p', '/', 0xff})},
+		{name: "U+0001", home: "/tmp/bad\x01home"},
+		{name: "U+000B", home: "/tmp/bad\x0bhome"},
+		{name: "U+000C", home: "/tmp/bad\x0chome"},
+		{name: "U+001F", home: "/tmp/bad\x1fhome"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := plistHomeArgument(tc.home)
+			if err == nil {
+				t.Fatalf("plistHomeArgument(%q) unexpectedly accepted XML-illegal home", tc.home)
+			}
+			for _, want := range []string{fmt.Sprintf("%q", tc.home), "XML 1.0", "rename or move", "valid UTF-8"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func matchingHomeArguments(args []string) []string {
+	var homes []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--home=") {
+			homes = append(homes, arg)
+		}
+	}
+	return homes
+}
 
 func TestSchedulerState_String(t *testing.T) {
 	cases := map[SchedulerState]string{
@@ -54,6 +139,9 @@ func TestPlistTemplate_RendersPushUnit(t *testing.T) {
 		Description:  SchedulerKindPush.Description(),
 		ServiceName:  SchedulerKindPush.SystemdServiceName(),
 	}
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare plist data: %v", err)
+	}
 	out, err := engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
 		t.Fatalf("render plist: %v", err)
@@ -98,6 +186,9 @@ func TestPlistTemplate_RendersIntakeUnit(t *testing.T) {
 		Mode:         ModeForce.String(),
 		Description:  SchedulerKindIntake.Description(),
 		ServiceName:  SchedulerKindIntake.SystemdServiceName(),
+	}
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare intake plist data: %v", err)
 	}
 	out, err := engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
 	if err != nil {
@@ -182,6 +273,50 @@ func TestSystemdTemplates_RenderIntakeUnit(t *testing.T) {
 	}
 	if !strings.Contains(string(timer), "Unit=dotfiles-sync-intake.service") {
 		t.Errorf("intake timer must reference -intake service:\n%s", timer)
+	}
+}
+
+func TestSystemdTemplate_SpecialHome(t *testing.T) {
+	longHome := "/tmp/a b\tline\nnext\rreturn % $ ' \" \\ ; | ( ) [ ] { } * ? ! 유니코드/" + strings.Repeat("long-", 64)
+	longExpectedArg := "\"--home=/tmp/a b\\tline\\nnext\\rreturn %% $$ ' \\\" \\\\ ; | ( ) [ ] { } * ? ! 유니코드/" + strings.Repeat("long-", 64) + "\""
+	cases := []struct {
+		name string
+		home string
+		arg  string
+	}{
+		{name: "empty", home: "", arg: ""},
+		{name: "special long literal", home: longHome, arg: longExpectedArg},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := systemdHomeArgument(tc.home); got != tc.arg {
+				t.Fatalf("systemdHomeArgument(%q) = %q, want %q", tc.home, got, tc.arg)
+			}
+			data := SchedulerTemplateData{
+				DotfilesPath: "/home/u/.local/bin/dot", Home: tc.home, SystemdHomeArg: tc.arg,
+				LogFile: "/tmp/dot.log", Interval: 60, Label: launchdLabel,
+				Action: "push", Mode: ModeClean.String(), Description: "test", ServiceName: systemdServiceName,
+			}
+			first, err := template.NewEngine().Render("sync/dotfiles-sync.service.tmpl", data)
+			if err != nil {
+				t.Fatalf("render service: %v", err)
+			}
+			second, err := template.NewEngine().Render("sync/dotfiles-sync.service.tmpl", data)
+			if err != nil {
+				t.Fatalf("render service a second time: %v", err)
+			}
+			if string(first) != string(second) {
+				t.Fatalf("render is not deterministic:\nfirst:  %q\nsecond: %q", first, second)
+			}
+			want := "ExecStart=/home/u/.local/bin/dot sync push --mode=clean"
+			if tc.arg != "" {
+				want += " " + tc.arg
+			}
+			if !strings.Contains(string(first), want) {
+				t.Fatalf("ExecStart does not preserve one target-ready home item:\n got: %q\nwant: %q", string(first), want)
+			}
+		})
 	}
 }
 

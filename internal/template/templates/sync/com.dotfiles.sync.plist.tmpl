@@ -7,7 +7,7 @@
   <string>{{.Label}}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{.DotfilesPath}}</string>
+    <string>{{.PlistDotfilesPath}}</string>
     <string>sync</string>
     <string>{{.Action}}</string>
     <string>--mode={{.Mode}}</string>
@@ -15,14 +15,14 @@
     <string>--profile={{.Profile}}</string>
 {{- end }}
 {{- if .Home }}
-    <string>--home={{.Home}}</string>
+    <string>{{.PlistHomeArg}}</string>
 {{- end }}
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <!-- launchd inherits a minimal PATH that finds Apple's old /usr/bin/rsync
          (openrsync, "rsync 2.6.9 compatible") instead of Homebrew's modern
-         rsync 3.x. List Homebrew prefixes first so `--info=stats2,progress2`
+         rsync 3.x. List Homebrew prefixes first so rsync 3.x-only status
          and other 3.x-only flags resolve correctly on both arches. -->
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
@@ -32,8 +32,8 @@
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>{{.LogFile}}</string>
+  <string>{{.PlistLogFile}}</string>
   <key>StandardErrorPath</key>
-  <string>{{.LogFile}}</string>
+  <string>{{.PlistLogFile}}</string>
 </dict>
 </plist>

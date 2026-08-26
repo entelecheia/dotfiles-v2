@@ -32,6 +32,7 @@ var runnerMethods = map[string]bool{
 	"WriteFile":       true,
 	"WriteFileAtomic": true,
 	"MkdirAll":        true,
+	"Chmod":           true,
 	"Symlink":         true,
 	"Remove":          true,
 	"RemoveAll":       true,
@@ -101,6 +102,7 @@ func TestRunner_MutatingAreNoOpsUnderDryRun(t *testing.T) {
 		"WriteFile":       func() error { return r.WriteFile(p("e"), []byte("x"), 0o644) },
 		"WriteFileAtomic": func() error { return r.WriteFileAtomic(p("f"), []byte("x"), 0o644) },
 		"MkdirAll":        func() error { return r.MkdirAll(p("g"), 0o755) },
+		"Chmod":           func() error { return r.Chmod(p("seed.txt"), 0o600) },
 		"Symlink":         func() error { return r.Symlink(p("e"), p("h")) },
 		"Remove":          func() error { return r.Remove(dir) },
 		"RemoveAll":       func() error { return r.RemoveAll(dir) },
@@ -136,6 +138,24 @@ func TestRunner_MutatingAreNoOpsUnderDryRun(t *testing.T) {
 	}
 	if after := snapshotTree(t, dir); before != after {
 		t.Errorf("dry-run mutated the tree:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestRunner_ChmodChangesModeWhenLive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	if err := os.WriteFile(path, []byte("private settings"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := r.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %04o, want 0600", got)
 	}
 }
 

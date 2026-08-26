@@ -1,13 +1,20 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
 
@@ -159,6 +166,11 @@ func TestRenderedSchedulerUnitCarriesHome(t *testing.T) {
 	sched := NewScheduler(peerScheduleRunner(true), &Paths{}, cfg, template.NewEngine())
 	for _, tmpl := range []string{"sync/com.dotfiles.sync.plist.tmpl", "sync/dotfiles-sync.service.tmpl"} {
 		data := sched.templateDataFor(SchedulerKindPush)
+		if tmpl == "sync/com.dotfiles.sync.plist.tmpl" {
+			if err := preparePlistTemplateData(&data); err != nil {
+				t.Fatalf("prepare plist data: %v", err)
+			}
+		}
 		body, err := sched.Engine.Render(tmpl, data)
 		if err != nil {
 			t.Fatalf("rendering %s: %v", tmpl, err)
@@ -170,7 +182,13 @@ func TestRenderedSchedulerUnitCarriesHome(t *testing.T) {
 		// Non-vacuity: no override, no flag. A unit that always carried one
 		// would pin the running user's home into every machine's scheduler.
 		cfg.Home = ""
-		body, err = sched.Engine.Render(tmpl, sched.templateDataFor(SchedulerKindPush))
+		data = sched.templateDataFor(SchedulerKindPush)
+		if tmpl == "sync/com.dotfiles.sync.plist.tmpl" {
+			if err := preparePlistTemplateData(&data); err != nil {
+				t.Fatalf("prepare empty-home plist data: %v", err)
+			}
+		}
+		body, err = sched.Engine.Render(tmpl, data)
 		if err != nil {
 			t.Fatalf("rendering %s: %v", tmpl, err)
 		}
@@ -178,6 +196,26 @@ func TestRenderedSchedulerUnitCarriesHome(t *testing.T) {
 			t.Errorf("%s renders --home with no override set:\n%s", tmpl, string(body))
 		}
 		cfg.Home = target
+	}
+
+	// The plist must recover one exact argv item rather than merely contain a
+	// recognizable substring. Markup and whitespace are literal path data.
+	specialHome := target + "/space & <tag> 'quote' \"double\" \\ % $ 유니코드"
+	cfg.Home = specialHome
+	data := sched.templateDataFor(SchedulerKindPush)
+	if err := preparePlistTemplateData(&data); err != nil {
+		t.Fatalf("prepare special plist data: %v", err)
+	}
+	body, err := sched.Engine.Render("sync/com.dotfiles.sync.plist.tmpl", data)
+	if err != nil {
+		t.Fatalf("rendering special plist: %v", err)
+	}
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("special plist must parse: %v\n%s", err, body)
+	}
+	if got := matchingHomeArguments(plist.ProgramArguments); !reflect.DeepEqual(got, []string{"--home=" + specialHome}) {
+		t.Fatalf("special plist home arguments = %#v, want %#v", got, []string{"--home=" + specialHome})
 	}
 }
 
@@ -212,7 +250,169 @@ func TestPeerSchedule_WritesUnderTheTargetHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the written plist: %v", err)
 	}
-	if !strings.Contains(string(body), "--home="+target) {
-		t.Errorf("the scheduled peer job runs without the override:\n%s", string(body))
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("the written peer plist must parse: %v\n%s", err, body)
+	}
+	if got := matchingHomeArguments(plist.ProgramArguments); !reflect.DeepEqual(got, []string{"--home=" + target}) {
+		t.Errorf("peer plist home arguments = %#v, want %#v", got, []string{"--home=" + target})
+	}
+}
+
+func TestPeerSchedule_PlistPathFieldsRoundTrip(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "peer & <paths>")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	names := MachineNames()
+	if len(names) == 0 {
+		t.Skip("this host reports no machine name, so CheckOwner cannot be satisfied")
+	}
+	localPath := filepath.Join(root, "workspace")
+	cfg := &Config{
+		Profile:   PeerProfile,
+		Home:      root,
+		Owner:     names[0],
+		LocalPath: localPath,
+		Target:    Target{Kind: TargetSSH, Host: "coordinator.example", Path: "/remote/workspace/work"},
+		LogFile:   filepath.Join(localPath, "logs", "peer.log"),
+	}
+	binDir := t.TempDir()
+	status := fmt.Sprintf(`{"schemaVersion":%d,"kind":"peer","profile":{"configured":true,"owner":%q,"workspacePath":%q,"target":{"path":%q}}}`,
+		PeerStatusSchemaVersion, cfg.Owner, cfg.Target.Path, localPath)
+	writeStub(t, filepath.Join(binDir, "ssh"), "#!/bin/sh\necho '"+status+"'\n")
+	writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", binDir)
+	peerBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(peerBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	peerPath := filepath.Join(peerBin, "dot")
+	writeStub(t, peerPath, "#!/bin/sh\nexit 0\n")
+	previousExecutable := peerExecutable
+	peerExecutable = func() (string, error) { return peerPath, nil }
+	t.Cleanup(func() { peerExecutable = previousExecutable })
+
+	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), Interval: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("PeerSchedule: %v", err)
+	}
+	body, err := os.ReadFile(res.Plist)
+	if err != nil {
+		t.Fatalf("read persisted peer plist: %v", err)
+	}
+	var plist plistProgramArguments
+	if err := xml.Unmarshal(body, &plist); err != nil {
+		t.Fatalf("persisted peer plist must parse: %v\n%s", err, body)
+	}
+	if len(plist.ProgramArguments) == 0 || plist.ProgramArguments[0] != peerPath {
+		t.Fatalf("ProgramArguments[0] = %q, want %q", plist.ProgramArguments, peerPath)
+	}
+	if got := matchingHomeArguments(plist.ProgramArguments); !reflect.DeepEqual(got, []string{"--home=" + root}) {
+		t.Fatalf("home arguments = %q, want %q", got, []string{"--home=" + root})
+	}
+	paths := peerPlistStandardPaths(t, body)
+	for _, key := range []string{"StandardOutPath", "StandardErrorPath"} {
+		if paths[key] != cfg.LogFile {
+			t.Errorf("%s = %q, want %q", key, paths[key], cfg.LogFile)
+		}
+	}
+}
+
+func peerPlistStandardPaths(t *testing.T, body []byte) map[string]string {
+	t.Helper()
+	decoder := xml.NewDecoder(strings.NewReader(string(body)))
+	values := map[string]string{}
+	var key, text string
+	var inKey, inString bool
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return values
+		}
+		if err != nil {
+			t.Fatalf("decode peer plist: %v", err)
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			text = ""
+			inKey = token.Name.Local == "key"
+			inString = token.Name.Local == "string"
+		case xml.CharData:
+			if inKey || inString {
+				text += string(token)
+			}
+		case xml.EndElement:
+			switch token.Name.Local {
+			case "key":
+				key, inKey = text, false
+			case "string":
+				if key == "StandardOutPath" || key == "StandardErrorPath" {
+					values[key] = text
+				}
+				inString = false
+			}
+		}
+	}
+}
+
+func TestPeerSchedule_RejectsUnrepresentablePlistPathBeforeMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		field      string
+		value      string
+		executable bool
+	}{
+		{name: "invalid executable UTF-8", field: "executable", value: string([]byte("/tmp/dot-\xff")), executable: true},
+		{name: "invalid executable control", field: "executable", value: "/tmp/dot-\x01", executable: true},
+		{name: "invalid log UTF-8", field: "log file", value: string([]byte("/tmp/log-\xff"))},
+		{name: "invalid log control", field: "log file", value: "/tmp/log-\x01"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, plist := peerScheduleSandbox(t)
+			const seeded = "seeded peer plist"
+			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(plist, []byte(seeded), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			previousExecutable := peerExecutable
+			if tc.executable {
+				peerExecutable = func() (string, error) { return tc.value, nil }
+			} else {
+				cfg.LogFile = tc.value
+				peerExecutable = func() (string, error) { return "/tmp/dot", nil }
+			}
+			t.Cleanup(func() { peerExecutable = previousExecutable })
+			var actions bytes.Buffer
+			runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(&actions, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+			res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+				Config: cfg, Runner: runner, Probe: peerScheduleRunner(false), Interval: time.Hour, DryRun: true,
+			})
+			if err == nil {
+				t.Fatal("unrepresentable plist path unexpectedly reached peer scheduler mutation")
+			}
+			if res != nil {
+				t.Fatalf("rejected peer scheduler returned result: %+v", res)
+			}
+			for _, want := range []string{tc.field, fmt.Sprintf("%q", tc.value), plist, "XML 1.0", "left untouched", "dot peer setup"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err, want)
+				}
+			}
+			if got, readErr := os.ReadFile(plist); readErr != nil || string(got) != seeded {
+				t.Fatalf("rejection changed seeded plist: %q, %v", got, readErr)
+			}
+			if temps, globErr := filepath.Glob(filepath.Join(filepath.Dir(plist), ".dot-write-*")); globErr != nil || len(temps) != 0 {
+				t.Fatalf("rejection left temporary plist files: %v, %v", temps, globErr)
+			}
+			if actions.Len() != 0 {
+				t.Fatalf("rejection performed runner or launchctl action:\n%s", actions.String())
+			}
+		})
 	}
 }
