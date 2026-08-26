@@ -4,10 +4,80 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
+
+func TestDetectKeysUseProvidedHome(t *testing.T) {
+	invoker := t.TempDir()
+	target := t.TempDir()
+	t.Setenv("HOME", invoker)
+	for _, home := range []string{invoker, target} {
+		if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pair := range []struct{ home, name string }{{invoker, "age_key_invoker"}, {target, "age_key_target"}} {
+		if err := os.WriteFile(filepath.Join(pair.home, ".ssh", pair.name), []byte("private"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pair := range []struct{ home, name string }{{invoker, "id_ed25519_invoker"}, {target, "id_ed25519_target"}} {
+		if err := os.WriteFile(filepath.Join(pair.home, ".ssh", pair.name), []byte("private"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pair.home, ".ssh", pair.name+".pub"), []byte("public"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, want := detectAgeKeys(target), []string{"~/.ssh/age_key_target"}; !slices.Equal(got, want) {
+		t.Errorf("detectAgeKeys(target) = %v, want %v", got, want)
+	}
+	if got, want := detectSSHKeys(target), []string{"id_ed25519_target"}; !slices.Equal(got, want) {
+		t.Errorf("detectSSHKeys(target) = %v, want %v", got, want)
+	}
+}
+
+func TestReadAgePublicKeyUsesProvidedHome(t *testing.T) {
+	invoker := t.TempDir()
+	target := t.TempDir()
+	for _, pair := range []struct{ home, recipient string }{{invoker, "age1invoker"}, {target, "age1target"}} {
+		if err := os.MkdirAll(filepath.Join(pair.home, ".ssh"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pair.home, ".ssh", "age_key.pub"), []byte(pair.recipient+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, want := readAgePublicKey(target, "~/.ssh/age_key"), "age1target"; got != want {
+		t.Errorf("readAgePublicKey(target) = %q, want %q", got, want)
+	}
+}
+
+func TestConfigureMacAppsUsesProvidedHomeForCloudBackup(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS app configuration is darwin-only")
+	}
+	invoker := t.TempDir()
+	target := t.TempDir()
+	t.Setenv("HOME", invoker)
+	secrets := filepath.Join(target, "Library", "CloudStorage", "Dropbox", "secrets")
+	if err := os.MkdirAll(secrets, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &config.UserState{}
+	if err := ConfigureMacApps(state, target, "full", true); err != nil {
+		t.Fatalf("ConfigureMacApps: %v", err)
+	}
+	if got, want := state.Modules.MacApps.BackupRoot, filepath.Join(secrets, "dotfiles-backup"); got != want {
+		t.Errorf("BackupRoot = %q, want %q", got, want)
+	}
+}
 
 func mkdirs(t *testing.T, paths ...string) {
 	t.Helper()

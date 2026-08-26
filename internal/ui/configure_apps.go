@@ -2,14 +2,12 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/config/catalog"
-	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
 
@@ -225,14 +223,14 @@ func ConfigureFonts(state *config.UserState, profile string, yes bool) error {
 }
 
 // ConfigureSecrets prompts for age encryption settings with auto-detection.
-func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
+func ConfigureSecrets(state *config.UserState, home, profile string, yes bool) error {
 	if profile == "server" || profile == "minimal" {
 		return nil
 	}
 
 	printSection("Secrets (age encryption)")
 
-	ageKeys := detectAgeKeys()
+	ageKeys := detectAgeKeys(home)
 
 	if len(ageKeys) == 0 && state.Secrets.AgeIdentity == "" {
 		fmt.Println(StyleHint.Render("  No age keys found. Skipping secrets configuration."))
@@ -295,7 +293,7 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 		recipientDefault = state.Secrets.AgeRecipients[0]
 	}
 	if recipientDefault == "" {
-		recipientDefault = readAgePublicKey(state.Secrets.AgeIdentity)
+		recipientDefault = readAgePublicKey(home, state.Secrets.AgeIdentity)
 	}
 
 	if recipientDefault != "" {
@@ -316,7 +314,7 @@ func ConfigureSecrets(state *config.UserState, profile string, yes bool) error {
 
 // ConfigureMacApps prompts for macOS cask selection and backup destination.
 // Skipped on non-darwin. Mutates state.Modules.MacApps in place.
-func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
+func ConfigureMacApps(state *config.UserState, home, profile string, yes bool) error {
 	if runtime.GOOS != "darwin" {
 		state.Modules.MacApps = config.UserMacAppsState{}
 		return nil
@@ -411,11 +409,10 @@ func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
 	rootDefault := state.Modules.MacApps.BackupRoot
 	detected := false
 	if rootDefault == "" {
-		if cloud := appsettings.DetectCloudCandidate(fileutil.ExpandHome("~")); cloud != "" {
+		if cloud := appsettings.DetectCloudCandidate(home); cloud != "" {
 			rootDefault = cloud
 			detected = true
 		} else {
-			home, _ := os.UserHomeDir()
 			rootDefault = appsettings.DefaultBackupRoot(home)
 		}
 	}
@@ -438,7 +435,6 @@ func ConfigureMacApps(state *config.UserState, profile string, yes bool) error {
 			state.Modules.MacApps.BackupRoot = path
 		}
 	case "local":
-		home, _ := os.UserHomeDir()
 		state.Modules.MacApps.BackupRoot = appsettings.DefaultBackupRoot(home)
 	case "custom":
 		path, inputErr := Input("Backup root path", rootDefault, yes)

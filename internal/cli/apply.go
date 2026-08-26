@@ -99,7 +99,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	// Interactive configuration
 	p := printerFrom(cmd)
 	state.Profile = profileName
-	if err := configureInteractive(p, state, profileName, sysInfo, yes); err != nil {
+	if err := configureInteractive(p, state, home, profileName, sysInfo, yes); err != nil {
 		if errors.Is(err, errAborted) {
 			p.Line("Aborted.")
 			return nil
@@ -225,6 +225,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 func configureInteractive(
 	p *Printer,
 	state *config.UserState,
+	home string,
 	profile string,
 	system *config.SystemInfo,
 	yes bool,
@@ -240,7 +241,7 @@ func configureInteractive(
 		return err
 	}
 
-	if err := ui.ConfigureSSH(state, false); err != nil {
+	if err := ui.ConfigureSSH(state, home, false); err != nil {
 		return err
 	}
 

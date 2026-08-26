@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +30,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 func runInitFlow(cmd *cobra.Command, skipExistingGate bool) error {
 	yes, _ := cmd.Flags().GetBool("yes")
-	homeOverride, _ := cmd.Flags().GetString("home")
+	homeOverride := homeOverrideFrom(cmd)
+	wizardHome := homeOverride
+	if wizardHome == "" {
+		wizardHome, _ = os.UserHomeDir()
+	}
 	fromPath, _ := cmd.Flags().GetString("from")
 	p := printerFrom(cmd)
 
@@ -91,7 +96,7 @@ func runInitFlow(cmd *cobra.Command, skipExistingGate bool) error {
 	}
 
 	// --- SSH ---
-	if err := ui.ConfigureSSH(state, yes); err != nil {
+	if err := ui.ConfigureSSH(state, wizardHome, yes); err != nil {
 		return err
 	}
 
@@ -116,12 +121,12 @@ func runInitFlow(cmd *cobra.Command, skipExistingGate bool) error {
 	}
 
 	// --- Secrets ---
-	if err := ui.ConfigureSecrets(state, state.Profile, yes); err != nil {
+	if err := ui.ConfigureSecrets(state, wizardHome, state.Profile, yes); err != nil {
 		return err
 	}
 
 	// --- macOS Apps ---
-	if err := ui.ConfigureMacApps(state, state.Profile, yes); err != nil {
+	if err := ui.ConfigureMacApps(state, wizardHome, state.Profile, yes); err != nil {
 		return err
 	}
 
