@@ -63,6 +63,66 @@ func (f *syncCLIFixture) seedOldConflict(t *testing.T, tree, stamp string) strin
 	return dir
 }
 
+func TestSyncSetupRequiresOwnerBeforeInstallingScheduler(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	paths := syncer.ResolveLocalPaths(f.local)
+	if err := syncer.SaveLocalConfig(paths, &syncer.LocalConfig{Target: "local:" + f.mirror}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &syncer.Config{LocalPaths: paths}
+	err = setupSchedulerOwner(cfg, "", false, false)
+	if err == nil {
+		t.Fatal("ownerless sync setup unexpectedly succeeded")
+	}
+	preferred := syncer.PreferredMachineName()
+	for _, want := range []string{preferred, "--owner"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("ownerless setup error %q missing %q", err, want)
+		}
+	}
+	after, readErr := os.ReadFile(paths.ConfigFile)
+	if readErr != nil {
+		t.Fatalf("read store config after rejected setup: %v", readErr)
+	}
+	if string(after) != string(before) {
+		t.Errorf("ownerless setup wrote scheduler config before rejection:\nwant %q\n got %q", before, after)
+	}
+}
+
+func TestSyncSetupOwnerFlagRecordsOwnerAndRejectsUnresolvableSelf(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	paths := syncer.ResolveLocalPaths(f.local)
+	if err := syncer.SaveLocalConfig(paths, &syncer.LocalConfig{Target: "local:" + f.mirror}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &syncer.Config{LocalPaths: paths}
+	if err := setupSchedulerOwner(cfg, "scheduler-host", true, false); err != nil {
+		t.Fatalf("--owner scheduler-host: %v", err)
+	}
+	stored, ok, err := syncer.LoadLocalConfig(paths)
+	if err != nil || !ok || stored.Owner != "scheduler-host" {
+		t.Fatalf("--owner did not persist scheduler owner: cfg=%#v ok=%t err=%v", stored, ok, err)
+	}
+	if err := setupSchedulerOwner(&syncer.Config{Owner: stored.Owner, LocalPaths: paths}, "", false, false); err != nil {
+		t.Fatalf("setup with an existing owner should succeed: %v", err)
+	}
+
+	oldPreferred := preferredMachineName
+	preferredMachineName = func() string { return "" }
+	defer func() { preferredMachineName = oldPreferred }()
+	if err := setupSchedulerOwner(&syncer.Config{LocalPaths: paths}, "self", true, false); err == nil || !strings.Contains(err.Error(), "cannot determine") {
+		t.Fatalf("unresolvable --owner self error = %v", err)
+	}
+	if err := setupSchedulerOwner(&syncer.Config{LocalPaths: paths}, "", false, true); err == nil || !strings.Contains(err.Error(), "cannot determine") {
+		t.Fatalf("ownerless dry-run should still fail name resolution: %v", err)
+	}
+}
+
 func TestSyncConflictsPruneCLI_DryRunThenYes(t *testing.T) {
 	f := newSyncCLIFixture(t)
 	wsConflict := f.seedOldConflict(t, f.local, "2026-01-01T00-00-00Z")

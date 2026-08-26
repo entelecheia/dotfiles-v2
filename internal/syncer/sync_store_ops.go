@@ -75,6 +75,31 @@ func SetLocalSchedule(cfg *Config, pushInterval, pullInterval int, pushMode, pul
 	return nil
 }
 
+// SetLocalOwner records the scheduler owner in the workspace-local config and
+// keeps the resolved config in sync. Dry runs update only the in-memory config
+// so later output can describe the setup they would install.
+func SetLocalOwner(cfg *Config, owner string, dryRun bool) error {
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("owner must not be empty")
+	}
+	local, err := EditableLocalConfig(cfg)
+	if err != nil {
+		return err
+	}
+	local.Owner = owner
+	if !dryRun {
+		if err := SaveLocalConfig(cfg.LocalPaths, local); err != nil {
+			return err
+		}
+	}
+	cfg.Owner = owner
+	return nil
+}
+
 // SetLocalPaused mutates the local config's Paused field, persists, and
 // keeps cfg in sync so callers see the new value without re-running
 // ResolveConfig.

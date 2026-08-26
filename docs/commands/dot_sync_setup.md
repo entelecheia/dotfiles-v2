@@ -13,6 +13,7 @@ interval flag to opt in.
   --pull-interval=DUR    Deploy automatic `dot sync pull --mode=MODE`.
   --push-mode=MODE       Automatic push mode: clean or force (default clean).
   --pull-mode=MODE       Automatic intake mode: clean or force (default clean).
+  --owner=NAME           Record the machine allowed to run this scheduler; use self for this machine.
 
 Idempotent — re-run safely after an interval change to reload the unit.
 
@@ -24,6 +25,7 @@ dot sync setup [flags]
 
 ```
   -h, --help                   help for setup
+      --owner string           machine allowed to run this scheduler (self or a machine name)
       --pull-interval string   deploy pull scheduler at this cadence (e.g. 15m, 1h, 0 to remove)
       --pull-mode string       automatic intake mode: clean or force (default "clean")
       --push-interval string   deploy push scheduler at this cadence (e.g. 15m, 1h, 0 to remove)

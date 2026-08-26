@@ -12,6 +12,8 @@ import (
 
 // dot sync setup, pause and resume: the opt-in scheduler and its gate.
 
+var preferredMachineName = syncer.PreferredMachineName
+
 func newSyncSetupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -25,6 +27,7 @@ interval flag to opt in.
   --pull-interval=DUR    Deploy automatic ` + "`dot sync pull --mode=MODE`" + `.
   --push-mode=MODE       Automatic push mode: clean or force (default clean).
   --pull-mode=MODE       Automatic intake mode: clean or force (default clean).
+  --owner=NAME           Record the machine allowed to run this scheduler; use self for this machine.
 
 Idempotent — re-run safely after an interval change to reload the unit.`,
 		RunE:         runSyncSetup,
@@ -34,6 +37,7 @@ Idempotent — re-run safely after an interval change to reload the unit.`,
 	cmd.Flags().String("pull-interval", "", "deploy pull scheduler at this cadence (e.g. 15m, 1h, 0 to remove)")
 	cmd.Flags().String("push-mode", syncer.ModeClean.String(), "automatic push mode: clean or force")
 	cmd.Flags().String("pull-mode", syncer.ModeClean.String(), "automatic intake mode: clean or force")
+	cmd.Flags().String("owner", "", "machine allowed to run this scheduler (self or a machine name)")
 	return cmd
 }
 
@@ -80,6 +84,10 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 	pullMode, err := parseAutomaticModeFlag(pullModeRaw)
 	if err != nil {
 		return fmt.Errorf("--pull-mode: %w", err)
+	}
+	owner, _ := cmd.Flags().GetString("owner")
+	if err := setupSchedulerOwner(cfg, owner, cmd.Flags().Changed("owner"), dryRun); err != nil {
+		return err
 	}
 	if err := syncer.SetLocalSchedule(cfg, pushInterval, pullInterval, pushMode, pullMode, dryRun); err != nil {
 		return fmt.Errorf("saving scheduler config: %w", err)
@@ -148,6 +156,36 @@ func runSyncSetup(cmd *cobra.Command, _ []string) error {
 		p.Line("  Run `dot sync push` or `dot sync pull` when you want to sync manually.")
 	}
 	return nil
+}
+
+// setupSchedulerOwner enforces the one-writer precondition before setup writes
+// scheduler settings or installs a unit. Existing workspaces remain opt-in for
+// push and pull; only this explicit unattended-writer setup path requires it.
+func setupSchedulerOwner(cfg *syncer.Config, rawOwner string, changed, dryRun bool) error {
+	if changed {
+		owner := strings.TrimSpace(rawOwner)
+		if owner == "self" {
+			owner = preferredMachineName()
+			if owner == "" {
+				return fmt.Errorf("cannot determine this machine's name for --owner self")
+			}
+		}
+		if owner == "" {
+			return fmt.Errorf("--owner requires self or a machine name")
+		}
+		if err := syncer.SetLocalOwner(cfg, owner, dryRun); err != nil {
+			return fmt.Errorf("saving scheduler owner: %w", err)
+		}
+		return nil
+	}
+	if strings.TrimSpace(cfg.Owner) != "" {
+		return nil
+	}
+	owner := preferredMachineName()
+	if owner == "" {
+		return fmt.Errorf("cannot determine this machine's name; set one before installing a sync scheduler")
+	}
+	return fmt.Errorf("cannot install a sync scheduler without an owner: two writers on one target can corrupt it\n\nRemedy: rerun `dot sync setup --owner %s`", owner)
 }
 
 // parseIntervalFlag accepts a Go duration string ("15m", "1h"),
