@@ -137,12 +137,14 @@ jobs:
       # later command addition that re-inflates a decomposed *_cmd.go fails here.
       - name: Decomposed command files stay in the line band
         run: bash scripts/check-cli-line-band.sh
+      - name: Shared glyph alphabet has no inline literals
+        run: bash scripts/check-glyph-alphabet.sh
       - name: Ensure shellcheck (macOS)
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
