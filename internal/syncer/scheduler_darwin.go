@@ -95,7 +95,7 @@ func (s *Scheduler) StateKind(ctx context.Context, kind SchedulerKind) Scheduler
 	if !s.Runner.FileExists(plist) {
 		return SchedulerNotInstalled
 	}
-	target := launchdPrintTarget(os.Getuid(), kind.LaunchdLabel())
+	target := launchdPrintTarget(os.Getuid(), s.Paths.LaunchdLabelFor(kind))
 	result, err := s.Runner.RunQuery(ctx, "launchctl", "print", target)
 	return launchdStateFromPrintStatus(true, err == nil && result != nil && result.ExitCode == 0)
 }

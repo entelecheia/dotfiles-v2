@@ -46,7 +46,7 @@ func (s *Scheduler) InstallKind(ctx context.Context, kind SchedulerKind) error {
 	if _, err := s.Runner.Run(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
 		return fmt.Errorf("daemon-reload: %w", err)
 	}
-	if _, err := s.Runner.Run(ctx, "systemctl", "--user", "enable", "--now", kind.SystemdTimerName()); err != nil {
+	if _, err := s.Runner.Run(ctx, "systemctl", "--user", "enable", "--now", filepath.Base(timerPath)); err != nil {
 		return fmt.Errorf("enabling timer: %w", err)
 	}
 	return nil
@@ -60,7 +60,7 @@ func (s *Scheduler) UninstallKind(ctx context.Context, kind SchedulerKind) error
 	}
 	timer := s.Paths.SystemdTimerFor(kind)
 	service := s.Paths.SystemdServiceFor(kind)
-	_, _ = s.Runner.Run(ctx, "systemctl", "--user", "disable", "--now", kind.SystemdTimerName())
+	_, _ = s.Runner.Run(ctx, "systemctl", "--user", "disable", "--now", filepath.Base(timer))
 	_ = s.Runner.Remove(timer)
 	_ = s.Runner.Remove(service)
 	_, _ = s.Runner.Run(ctx, "systemctl", "--user", "daemon-reload")
@@ -73,10 +73,11 @@ func (s *Scheduler) PauseKind(ctx context.Context, kind SchedulerKind) error {
 	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
 		return err
 	}
-	if !s.Runner.FileExists(s.Paths.SystemdTimerFor(kind)) {
+	timer := s.Paths.SystemdTimerFor(kind)
+	if !s.Runner.FileExists(timer) {
 		return nil
 	}
-	_, err := s.Runner.Run(ctx, "systemctl", "--user", "stop", kind.SystemdTimerName())
+	_, err := s.Runner.Run(ctx, "systemctl", "--user", "stop", filepath.Base(timer))
 	return err
 }
 
@@ -85,10 +86,11 @@ func (s *Scheduler) ResumeKind(ctx context.Context, kind SchedulerKind) error {
 	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
 		return err
 	}
-	if !s.Runner.FileExists(s.Paths.SystemdTimerFor(kind)) {
+	timer := s.Paths.SystemdTimerFor(kind)
+	if !s.Runner.FileExists(timer) {
 		return nil
 	}
-	_, err := s.Runner.Run(ctx, "systemctl", "--user", "start", kind.SystemdTimerName())
+	_, err := s.Runner.Run(ctx, "systemctl", "--user", "start", filepath.Base(timer))
 	return err
 }
 
@@ -126,10 +128,11 @@ func (s *Scheduler) CleanupLegacyUnits(ctx context.Context) error {
 
 // StateKind asks systemctl for the timer's runtime status for the kind.
 func (s *Scheduler) StateKind(ctx context.Context, kind SchedulerKind) SchedulerState {
-	if !s.Runner.FileExists(s.Paths.SystemdTimerFor(kind)) {
+	timer := s.Paths.SystemdTimerFor(kind)
+	if !s.Runner.FileExists(timer) {
 		return SchedulerNotInstalled
 	}
-	result, err := s.Runner.Run(ctx, "systemctl", "--user", "is-active", kind.SystemdTimerName())
+	result, err := s.Runner.Run(ctx, "systemctl", "--user", "is-active", filepath.Base(timer))
 	if err != nil || result.ExitCode != 0 {
 		return SchedulerStopped
 	}
