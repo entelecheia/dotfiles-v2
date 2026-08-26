@@ -140,7 +140,7 @@ jobs:
       - name: Decomposed command files stay in the line band
         run: bash scripts/check-cli-line-band.sh
       - name: Shared glyph alphabet has no inline literals
-        run: bash scripts/check-glyph-alphabet.sh
+        run: /bin/bash scripts/check-glyph-alphabet.sh
       - name: Ensure shellcheck (macOS)
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
