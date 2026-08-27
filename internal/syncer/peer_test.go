@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,15 +54,27 @@ func TestPeerStoreIsNotGitTracked(t *testing.T) {
 	}
 }
 
-func TestValidateProfileRejectsPathEscapes(t *testing.T) {
-	for _, bad := range []string{"..", ".", "a/b", "a\\b", "../etc"} {
-		if err := ValidateProfile(bad); err == nil {
-			t.Errorf("ValidateProfile(%q) = nil, want error", bad)
-		}
-	}
-	for _, ok := range []string{"", "sync", "peer", "peer2"} {
+func TestValidateProfile(t *testing.T) {
+	for _, ok := range []string{"", " ", "s", "sync", "peer", "peer2", "research-2", "research.v2", "research_2", "  research-2.v1  "} {
 		if err := ValidateProfile(ok); err != nil {
 			t.Errorf("ValidateProfile(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		".", "..", ".research", "_research", "-research",
+		"research notes", "research\tnotes", "research\nnotes", "research\x00notes",
+		"a/b", "a\\b", "../etc", "research&ops", "research<ops", "research>ops",
+		"%i", "research%ops", "$HOME", "research\"ops", "research'ops", "café", string([]byte{'r', 0xff}),
+	} {
+		err := ValidateProfile(bad)
+		if err == nil {
+			t.Errorf("ValidateProfile(%q) = nil, want error", bad)
+			continue
+		}
+		for _, want := range []string{fmt.Sprintf("%q", bad), "ASCII token"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("ValidateProfile(%q) error = %q, want %q", bad, err, want)
+			}
 		}
 	}
 	if NormalizeProfile("") != DefaultProfile {
@@ -95,6 +108,31 @@ func TestProfilePathsKeepDefaultUnchanged(t *testing.T) {
 	}
 	if !strings.HasSuffix(peer.LaunchdPlist, "com.dotfiles.peer.plist") {
 		t.Errorf("peer plist = %s", peer.LaunchdPlist)
+	}
+}
+
+func TestProfilePathsRejectUnsafeProfile(t *testing.T) {
+	home := t.TempDir()
+	for _, profile := range []string{"research notes", "%i", "research&ops", "research\nops"} {
+		t.Run(fmt.Sprintf("%q", profile), func(t *testing.T) {
+			if _, err := ResolvePathsForProfile(profile); err == nil {
+				t.Fatalf("ResolvePathsForProfile(%q) = nil, want error", profile)
+			}
+			if _, err := ResolvePathsForHomeProfile(home, profile); err == nil {
+				t.Fatalf("ResolvePathsForHomeProfile(%q) = nil, want error", profile)
+			}
+			cfg := &Config{Home: home, Profile: profile, Interval: 60, PushMode: ModeClean}
+			if _, _, err := ResolveScheduler(cfg, peerScheduleRunner(true)); err == nil {
+				t.Fatalf("ResolveScheduler(%q) = nil, want error", profile)
+			}
+			entries, err := os.ReadDir(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("unsafe profile created target-home artifacts: %v", entries)
+			}
+		})
 	}
 }
 
@@ -367,10 +405,12 @@ func TestSchedulerUnitsAreProfileScoped(t *testing.T) {
 	// Profile-aware file paths are not enough: the unit identifier lives INSIDE
 	// the rendered file, so two profiles would write different files carrying
 	// the same launchd Label and the second load would collide with the first.
-	if got := profiledLabel(SchedulerKindPush, DefaultProfile); got != launchdLabel {
+	defaultPaths := &Paths{Profile: DefaultProfile}
+	if got := defaultPaths.LaunchdLabelFor(SchedulerKindPush); got != launchdLabel {
 		t.Errorf("default profile label changed: %s", got)
 	}
-	peer := profiledLabel(SchedulerKindPush, "peer")
+	peerPaths := &Paths{Profile: "peer"}
+	peer := peerPaths.LaunchdLabelFor(SchedulerKindPush)
 	if peer == launchdLabel {
 		t.Error("peer profile shares the default launchd label")
 	}
@@ -383,7 +423,7 @@ func TestSchedulerUnitsAreProfileScoped(t *testing.T) {
 	if got := profileArg("peer"); got != "peer" {
 		t.Errorf("profileArg(peer) = %q", got)
 	}
-	if svc := profiledServiceName(SchedulerKindPush, "peer"); svc == profiledServiceName(SchedulerKindPush, DefaultProfile) {
+	if svc := peerPaths.SystemdServiceNameFor(SchedulerKindPush); svc == defaultPaths.SystemdServiceNameFor(SchedulerKindPush) {
 		t.Error("systemd unit name is not profile-scoped")
 	}
 }

@@ -16,6 +16,8 @@ on:
       - "tests/**"
       - "tools/**"
       - "docs/commands/**"
+      - "docs/**"
+      - "README.md"
       - ".github/workflows/**"
       - ".goreleaser.yaml"
       - ".golangci.yml"
@@ -89,9 +91,19 @@ jobs:
             git status --porcelain docs/commands
             exit 1
           fi
+      # Structural guard for the unit job's tool/order/fail-fast contract
+      # (BUG-18, BUG-19, G-07-08). Placed after the real lint gates, same rule
+      # as the scenario gates above: a bug in this check must not mask a real
+      # lint finding.
+      - name: Unit CI contract gate
+        run: bash scripts/check-unit-ci-contract.sh
 
   unit:
     strategy:
+      # One failing leg must not cancel the other platform's BUG-18/BUG-19
+      # evidence (G-07-08): run 32977743165's macOS rg failure cancelled the
+      # still-running Ubuntu unit before its glyph step under the default.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -105,9 +117,21 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           command -v systemd-analyze
-          go test ./internal/syncer -run '^TestSystemdAnalyze_SpecialHome$' -count=1
+          set -o pipefail
+          go test ./internal/syncer -run '^TestSystemdAnalyze_(SpecialHome|ProfiledUnits)$' -count=1 -v 2>&1 | tee systemd-scheduler-parser.log
+          if grep -q '^ *--- SKIP: TestSystemdAnalyze_ProfiledUnits' systemd-scheduler-parser.log; then
+            echo "::error title=Profiled systemd parser evidence::TestSystemdAnalyze_ProfiledUnits skipped"
+            exit 1
+          fi
+          if ! grep -q '^ *--- PASS: TestSystemdAnalyze_ProfiledUnits' systemd-scheduler-parser.log; then
+            echo "::error title=Profiled systemd parser evidence::TestSystemdAnalyze_ProfiledUnits did not pass"
+            exit 1
+          fi
       - name: Unit tests with coverage
-        run: go test ./... -race -count=1 -coverprofile=coverage.out
+        # Verbose so named Linux scheduler, lock, and service-domain
+        # PASS/no-SKIP evidence is auditable (BUG-18); packages, race mode,
+        # count, and coverage file are unchanged.
+        run: go test ./... -race -count=1 -v -coverprofile=coverage.out
       # `go test ./...` prints `ok` for a package whose test skipped, so a guard
       # that never runs is indistinguishable from one that passed. GUARD-03's Go
       # half skips on any host carrying a Homebrew prefix, which is every hosted
@@ -137,12 +161,49 @@ jobs:
       # later command addition that re-inflates a decomposed *_cmd.go fails here.
       - name: Decomposed command files stay in the line band
         run: bash scripts/check-cli-line-band.sh
+      # The glyph gate's rg is unstated runner state, not a contract (G-07-08,
+      # T-07-54): run 32977743165 failed here on macOS with `rg: command not
+      # found`. Provision only when absent, only through the runner-native
+      # package manager, and always finish by proving the resolved executable
+      # and version so a preinstalled but unusable tool cannot pass by
+      # assumption.
+      - name: Ensure ripgrep for glyph evidence
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            case "$RUNNER_OS" in
+              macOS)
+                brew install ripgrep
+                ;;
+              Linux)
+                sudo apt-get update
+                sudo apt-get install -y ripgrep
+                ;;
+              *)
+                echo "::error::cannot provision ripgrep: unsupported RUNNER_OS '$RUNNER_OS'"
+                exit 1
+                ;;
+            esac
+          fi
+          command -v rg
+          rg --version
+      - name: Shared glyph alphabet has no inline literals
+        run: |
+          set -o pipefail
+          /bin/bash scripts/check-glyph-alphabet.sh 2>&1 | tee glyph-alphabet.log
+          if ! grep -Eq 'scanned [1-9][0-9]* Go file\(s\)' glyph-alphabet.log; then
+            echo "::error title=Glyph alphabet evidence::no positive Go-file scan count was observed"
+            exit 1
+          fi
+          if ! grep -Eq '[1-9][0-9]* Go file\(s\) measured; no inline glyph literals' glyph-alphabet.log; then
+            echo "::error title=Glyph alphabet evidence::no positive Go-file measurement count was observed"
+            exit 1
+          fi
       - name: Ensure shellcheck (macOS)
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-unit-ci-contract.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-unit-ci-contract.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4

@@ -20,6 +20,10 @@ import (
 //
 // The guard is deliberately opt-in (empty Owner = unrestricted) so upgrading
 // `dot` does not break a workspace that has not declared an owner yet.
+// `dot sync setup` is different: it explicitly installs the unattended writer
+// described above, so it requires an owner before that scheduler can run.
+// Existing unowned workspaces keep their unrestricted push and pull behavior;
+// this setup-time requirement never fires merely because an upgrade occurred.
 
 // scutilPath is where macOS keeps scutil. Resolving it by PATH is not safe:
 // see MachineNames.

@@ -75,6 +75,31 @@ func SetLocalSchedule(cfg *Config, pushInterval, pullInterval int, pushMode, pul
 	return nil
 }
 
+// SetLocalOwner records the scheduler owner in the workspace-local config and
+// keeps the resolved config in sync. Dry runs update only the in-memory config
+// so later output can describe the setup they would install.
+func SetLocalOwner(cfg *Config, owner string, dryRun bool) error {
+	if cfg.LocalPaths == nil {
+		return fmt.Errorf("local paths unresolved")
+	}
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("owner must not be empty")
+	}
+	local, err := EditableLocalConfig(cfg)
+	if err != nil {
+		return err
+	}
+	local.Owner = owner
+	if !dryRun {
+		if err := SaveLocalConfig(cfg.LocalPaths, local); err != nil {
+			return err
+		}
+	}
+	cfg.Owner = owner
+	return nil
+}
+
 // SetLocalPaused mutates the local config's Paused field, persists, and
 // keeps cfg in sync so callers see the new value without re-running
 // ResolveConfig.
@@ -535,13 +560,22 @@ func SyncResume(ctx context.Context, cfg *Config, runner *exec.Runner) (*ResumeR
 		// The state save succeeded; the scheduler is best-effort.
 		return res, nil
 	}
-	if sched.State(ctx) != SchedulerNotInstalled {
-		if err := sched.Resume(ctx); err != nil {
+	states := [2]SchedulerState{
+		sched.StateKind(ctx, SchedulerKindPush),
+		sched.StateKind(ctx, SchedulerKindIntake),
+	}
+	resumed := false
+	for index, kind := range [2]SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		if states[index] == SchedulerNotInstalled {
+			continue
+		}
+		resumed = true
+		if err := sched.ResumeKind(ctx, kind); err != nil {
 			res.SchedulerErr = err
-		} else {
-			res.SchedulerResumed = true
+			return res, nil
 		}
 	}
+	res.SchedulerResumed = resumed
 	return res, nil
 }
 
@@ -565,12 +599,21 @@ func SyncPause(ctx context.Context, cfg *Config, runner *exec.Runner) (*PauseRes
 	if err != nil {
 		return res, nil
 	}
-	if sched.State(ctx) == SchedulerRunning {
-		if err := sched.Pause(ctx); err != nil {
+	states := [2]SchedulerState{
+		sched.StateKind(ctx, SchedulerKindPush),
+		sched.StateKind(ctx, SchedulerKindIntake),
+	}
+	stopped := false
+	for index, kind := range [2]SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
+		if states[index] != SchedulerRunning && states[index] != SchedulerTargetUserActionRequired {
+			continue
+		}
+		stopped = true
+		if err := sched.PauseKind(ctx, kind); err != nil {
 			res.SchedulerErr = err
-		} else {
-			res.SchedulerStopped = true
+			return res, nil
 		}
 	}
+	res.SchedulerStopped = stopped
 	return res, nil
 }

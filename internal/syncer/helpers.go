@@ -13,6 +13,7 @@ import (
 
 // Paths holds well-known file locations for sync artifacts.
 type Paths struct {
+	Profile        string // normalized sync profile that owns every scheduler identity
 	ConfigDir      string // ~/.config/dotfiles (or $XDG_CONFIG_HOME/dotfiles)
 	ExcludesFile   string // <ConfigDir> legacy global excludes (superseded by the workspace store)
 	LogFile        string // ~/.local/log/dotfiles-sync.log
@@ -22,33 +23,59 @@ type Paths struct {
 	SystemdTimer   string // ~/.config/systemd/user/dotfiles-sync.timer (Linux, push)
 }
 
-// PlistFor returns the launchd plist path for the given kind. The push
-// variant is the historical LaunchdPlist value; the intake variant is
-// derived by name in the same directory.
+// PlistFor returns the launchd plist path for the given kind.
 func (p *Paths) PlistFor(kind SchedulerKind) string {
-	if kind == SchedulerKindPush {
-		return p.LaunchdPlist
-	}
 	dir := filepath.Dir(p.LaunchdPlist)
-	return filepath.Join(dir, kind.LaunchdLabel()+".plist")
+	return filepath.Join(dir, p.LaunchdLabelFor(kind)+".plist")
 }
 
 // SystemdServiceFor returns the systemd service unit path for the kind.
 func (p *Paths) SystemdServiceFor(kind SchedulerKind) string {
-	if kind == SchedulerKindPush {
-		return p.SystemdService
-	}
 	dir := filepath.Dir(p.SystemdService)
-	return filepath.Join(dir, kind.SystemdServiceName())
+	return filepath.Join(dir, p.SystemdServiceNameFor(kind))
 }
 
 // SystemdTimerFor returns the systemd timer unit path for the kind.
 func (p *Paths) SystemdTimerFor(kind SchedulerKind) string {
-	if kind == SchedulerKindPush {
-		return p.SystemdTimer
-	}
 	dir := filepath.Dir(p.SystemdTimer)
-	return filepath.Join(dir, kind.SystemdTimerName())
+	return filepath.Join(dir, p.SystemdTimerNameFor(kind))
+}
+
+// LaunchdLabelFor returns the label derived from this path set's normalized
+// profile. The default remains the historical static SchedulerKind label.
+func (p *Paths) LaunchdLabelFor(kind SchedulerKind) string {
+	profile := p.schedulerProfile()
+	if profile == DefaultProfile {
+		return kind.LaunchdLabel()
+	}
+	return strings.Replace(kind.LaunchdLabel(), "com.dotfiles.sync", "com.dotfiles."+profile, 1)
+}
+
+// SystemdServiceNameFor returns the service filename derived from this path
+// set's normalized profile. The default remains byte-identical.
+func (p *Paths) SystemdServiceNameFor(kind SchedulerKind) string {
+	profile := p.schedulerProfile()
+	if profile == DefaultProfile {
+		return kind.SystemdServiceName()
+	}
+	return strings.Replace(kind.SystemdServiceName(), "dotfiles-sync", "dotfiles-"+profile, 1)
+}
+
+// SystemdTimerNameFor returns the timer filename derived from this path set's
+// normalized profile. The default remains byte-identical.
+func (p *Paths) SystemdTimerNameFor(kind SchedulerKind) string {
+	profile := p.schedulerProfile()
+	if profile == DefaultProfile {
+		return kind.SystemdTimerName()
+	}
+	return strings.Replace(kind.SystemdTimerName(), "dotfiles-sync", "dotfiles-"+profile, 1)
+}
+
+func (p *Paths) schedulerProfile() string {
+	if p == nil || p.Profile == "" {
+		return DefaultProfile
+	}
+	return p.Profile
 }
 
 // ResolvePaths returns the standard gsync artifact paths for the
@@ -88,6 +115,9 @@ func ResolvePathsForHome(home string) (*Paths, error) {
 // "com.dotfiles.sync.plist" are exactly what the templated names produce when
 // the profile is "sync".
 func ResolvePathsForProfile(profile string) (*Paths, error) {
+	if err := ValidateProfile(profile); err != nil {
+		return nil, err
+	}
 	p, err := ResolvePaths()
 	if err != nil {
 		return nil, err
@@ -97,6 +127,9 @@ func ResolvePathsForProfile(profile string) (*Paths, error) {
 
 // ResolvePathsForHomeProfile is ResolvePathsForProfile with an explicit home.
 func ResolvePathsForHomeProfile(home, profile string) (*Paths, error) {
+	if err := ValidateProfile(profile); err != nil {
+		return nil, err
+	}
 	p, err := ResolvePathsForHome(home)
 	if err != nil {
 		return nil, err
@@ -110,12 +143,13 @@ func withProfile(p *Paths, profile string) *Paths {
 		return p
 	}
 	out := *p
+	out.Profile = prof
 	if prof != PeerProfile {
 		out.LockDir = filepath.Join(filepath.Dir(p.LockDir), prof+".lock")
 	}
-	out.LaunchdPlist = filepath.Join(filepath.Dir(p.LaunchdPlist), "com.dotfiles."+prof+".plist")
-	out.SystemdService = filepath.Join(filepath.Dir(p.SystemdService), "dotfiles-"+prof+".service")
-	out.SystemdTimer = filepath.Join(filepath.Dir(p.SystemdTimer), "dotfiles-"+prof+".timer")
+	out.LaunchdPlist = filepath.Join(filepath.Dir(p.LaunchdPlist), out.LaunchdLabelFor(SchedulerKindPush)+".plist")
+	out.SystemdService = filepath.Join(filepath.Dir(p.SystemdService), out.SystemdServiceNameFor(SchedulerKindPush))
+	out.SystemdTimer = filepath.Join(filepath.Dir(p.SystemdTimer), out.SystemdTimerNameFor(SchedulerKindPush))
 	return &out
 }
 
@@ -126,6 +160,7 @@ func pathsFor(home, cacheDir string) *Paths {
 		configDir = filepath.Join(xdg, "dotfiles")
 	}
 	return &Paths{
+		Profile:        DefaultProfile,
 		ConfigDir:      configDir,
 		ExcludesFile:   filepath.Join(configDir, excludesDiskName),
 		LogFile:        filepath.Join(home, ".local", "log", "dotfiles-sync.log"),
@@ -141,9 +176,6 @@ func pathsFor(home, cacheDir string) *Paths {
 func cacheDirForHome(home string) string {
 	if runtime.GOOS == "darwin" {
 		return filepath.Join(home, "Library", "Caches")
-	}
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return xdg
 	}
 	return filepath.Join(home, ".cache")
 }

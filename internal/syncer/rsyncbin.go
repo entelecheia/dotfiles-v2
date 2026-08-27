@@ -16,6 +16,7 @@ import (
 // modern client, and returns the value for --rsync-path (empty means "the
 // default is fine").
 //
+// ponytail: known ceiling. See docs/CEILINGS.md (preview protocol limit).
 // macOS 26 replaced rsync with openrsync, which reports "protocol version 29 /
 // rsync 2.6.9 compatible" and cannot receive -aHAX from a 3.x client: the real
 // transfer dies with "error in rsync protocol data stream (code 12)". A
@@ -116,6 +117,7 @@ func CheckSSH(ctx context.Context, runner *exec.Runner, host string) error {
 	_, err := runner.Run(timeoutCtx, "ssh",
 		"-o", "ConnectTimeout=5",
 		"-o", "BatchMode=yes",
+		// ponytail: known ceiling. See docs/CEILINGS.md (first-contact trust).
 		"-o", "StrictHostKeyChecking=accept-new",
 		host, "echo ok")
 	if err != nil {

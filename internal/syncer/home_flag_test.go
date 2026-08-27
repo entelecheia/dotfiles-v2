@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
@@ -141,6 +143,28 @@ func TestResolveScheduler_PathsFollowTheTargetHome(t *testing.T) {
 		if strings.HasPrefix(unit, invoker+string(os.PathSeparator)) {
 			t.Errorf("scheduler artifact under the invoking user's home: %s", unit)
 		}
+	}
+	// The scheduler and Config paths share the target's lock domain. Its layout
+	// follows cacheDirForHome: Library/Caches on darwin, .cache everywhere else.
+	// The !darwin companion test pins real lock acquisition under that layout.
+	wantLockDir := filepath.Join(target, ".cache", "dotfiles", "sync.lock")
+	if runtime.GOOS == "darwin" {
+		wantLockDir = filepath.Join(target, "Library", "Caches", "dotfiles", "sync.lock")
+	}
+	if paths.LockDir != wantLockDir {
+		t.Errorf("scheduler lock = %q, want target lock %q", paths.LockDir, wantLockDir)
+	}
+	state := &config.UserState{}
+	state.Modules.Gsync.LocalPath = filepath.Join(target, "workspace", "work")
+	resolved, err := ResolveConfigForHomeProfile(state, target, PeerProfile)
+	if err != nil {
+		t.Fatalf("ResolveConfigForHomeProfile: %v", err)
+	}
+	if resolved.LockDir != wantLockDir {
+		t.Errorf("Config.LockDir = %q, want target lock %q", resolved.LockDir, wantLockDir)
+	}
+	if strings.HasPrefix(resolved.LockDir, invoker+string(os.PathSeparator)) {
+		t.Errorf("Config.LockDir escaped into the invoking home: %s", resolved.LockDir)
 	}
 
 	// Non-vacuity: no override, and the same call resolves the process home.
@@ -372,6 +396,10 @@ func TestPeerSchedule_RejectsUnrepresentablePlistPathBeforeMutation(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, plist := peerScheduleSandbox(t)
+			// This regression must remain independent of coordinator reachability:
+			// malformed local plist text is rejected before peer preflight. If the
+			// order regresses, the missing ssh binary returns that failure instead.
+			t.Setenv("PATH", t.TempDir())
 			const seeded = "seeded peer plist"
 			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 				t.Fatal(err)

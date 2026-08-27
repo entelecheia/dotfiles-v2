@@ -86,6 +86,7 @@ const (
 	SchedulerNotInstalled SchedulerState = iota
 	SchedulerRunning
 	SchedulerStopped
+	SchedulerTargetUserActionRequired
 )
 
 func (s SchedulerState) String() string {
@@ -94,9 +95,27 @@ func (s SchedulerState) String() string {
 		return "running"
 	case SchedulerStopped:
 		return "stopped"
+	case SchedulerTargetUserActionRequired:
+		return "target user action required: " + SchedulerTargetUserInstruction()
 	default:
 		return "not installed"
 	}
+}
+
+// SchedulerTargetUserActionRequiredError means that scheduler artifacts were
+// reconciled for an explicit --home target, but its user service-manager
+// domain cannot be safely controlled by the invoking process.
+type SchedulerTargetUserActionRequiredError struct{}
+
+func (e *SchedulerTargetUserActionRequiredError) Error() string {
+	return SchedulerTargetUserInstruction()
+}
+
+// SchedulerTargetUserInstruction is shared by scheduler state, engine errors,
+// and CLI guidance. A home path does not identify a UID, login session, or
+// systemd user bus, so callers must never try to derive one from --home.
+func SchedulerTargetUserInstruction() string {
+	return "scheduler artifacts were reconciled, but no service-manager action ran in the caller domain; log in as the target user or rerun the same command without --home via sudo -iu <target-user>"
 }
 
 // SchedulerTemplateData feeds the launchd plist + systemd unit templates.
@@ -134,27 +153,6 @@ type SchedulerTemplateData struct {
 // Methods Install*Kind / Uninstall*Kind / Pause*Kind / Resume*Kind /
 // StateKind are defined per platform in scheduler_darwin.go and
 // scheduler_other.go.
-// profiledLabel/profiledServiceName keep a non-default profile's units distinct.
-//
-// Making only the file PATHS profile-aware is not enough: the unit identifier
-// lives inside the rendered file, so two profiles would write different files
-// carrying the same launchd Label. The second load either collides with the
-// first or silently replaces it, and the survivor would sync the wrong target.
-func profiledLabel(kind SchedulerKind, profile string) string {
-	base := kind.LaunchdLabel()
-	if profile == "" || profile == DefaultProfile {
-		return base
-	}
-	return strings.Replace(base, "com.dotfiles.sync", "com.dotfiles."+profile, 1)
-}
-
-func profiledServiceName(kind SchedulerKind, profile string) string {
-	base := kind.SystemdServiceName()
-	if profile == "" || profile == DefaultProfile {
-		return base
-	}
-	return strings.Replace(base, "dotfiles-sync", "dotfiles-"+profile, 1)
-}
 
 // profileArg is the value rendered into the unit's command line. Empty for the
 // default profile so existing units render byte-identical to before.
@@ -163,13 +161,6 @@ func profileArg(profile string) string {
 		return ""
 	}
 	return profile
-}
-
-func (s *Scheduler) profile() string {
-	if s == nil || s.Config == nil {
-		return DefaultProfile
-	}
-	return NormalizeProfile(s.Config.Profile)
 }
 
 type Scheduler struct {
@@ -274,20 +265,21 @@ func (s *Scheduler) Install(ctx context.Context) error {
 	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
 		return err
 	}
-	if err := s.CleanupLegacyUnits(ctx); err != nil {
-		return err
-	}
-	if s.Config.Interval > 0 {
-		if err := s.InstallKind(ctx, SchedulerKindPush); err != nil {
-			return err
-		}
-	} else if err := s.UninstallKind(ctx, SchedulerKindPush); err != nil {
-		return err
-	}
-	if s.Config.PullInterval > 0 {
-		return s.InstallKind(ctx, SchedulerKindIntake)
-	}
-	return s.UninstallKind(ctx, SchedulerKindIntake)
+	return s.runArtifactOperations(
+		func() error { return s.CleanupLegacyUnits(ctx) },
+		func() error {
+			if s.Config.Interval > 0 {
+				return s.InstallKind(ctx, SchedulerKindPush)
+			}
+			return s.UninstallKind(ctx, SchedulerKindPush)
+		},
+		func() error {
+			if s.Config.PullInterval > 0 {
+				return s.InstallKind(ctx, SchedulerKindIntake)
+			}
+			return s.UninstallKind(ctx, SchedulerKindIntake)
+		},
+	)
 }
 
 // Uninstall removes both the push and intake units. Missing units are
@@ -296,13 +288,11 @@ func (s *Scheduler) Uninstall(ctx context.Context) error {
 	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
 		return err
 	}
-	if err := s.CleanupLegacyUnits(ctx); err != nil {
-		return err
-	}
-	if err := s.UninstallKind(ctx, SchedulerKindPush); err != nil {
-		return err
-	}
-	return s.UninstallKind(ctx, SchedulerKindIntake)
+	return s.runArtifactOperations(
+		func() error { return s.CleanupLegacyUnits(ctx) },
+		func() error { return s.UninstallKind(ctx, SchedulerKindPush) },
+		func() error { return s.UninstallKind(ctx, SchedulerKindIntake) },
+	)
 }
 
 // Pause stops both units (intake only if installed).
@@ -310,10 +300,10 @@ func (s *Scheduler) Pause(ctx context.Context) error {
 	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
 		return err
 	}
-	if err := s.PauseKind(ctx, SchedulerKindPush); err != nil {
-		return err
-	}
-	return s.PauseKind(ctx, SchedulerKindIntake)
+	return s.runArtifactOperations(
+		func() error { return s.PauseKind(ctx, SchedulerKindPush) },
+		func() error { return s.PauseKind(ctx, SchedulerKindIntake) },
+	)
 }
 
 // Resume restarts both units (intake only if installed).
@@ -321,16 +311,32 @@ func (s *Scheduler) Resume(ctx context.Context) error {
 	if err := validateSchedulerMutationHome(s.Config.Home); err != nil {
 		return err
 	}
-	if err := s.ResumeKind(ctx, SchedulerKindPush); err != nil {
-		return err
-	}
-	return s.ResumeKind(ctx, SchedulerKindIntake)
+	return s.runArtifactOperations(
+		func() error { return s.ResumeKind(ctx, SchedulerKindPush) },
+		func() error { return s.ResumeKind(ctx, SchedulerKindIntake) },
+	)
 }
 
-// State reports the push unit's status. Use StateKind(ctx, SchedulerKindIntake)
-// for the optional intake unit's state.
-func (s *Scheduler) State(ctx context.Context) SchedulerState {
-	return s.StateKind(ctx, SchedulerKindPush)
+func (s *Scheduler) requiresTargetUserServiceDomain() bool {
+	return s != nil && s.Config != nil && s.Config.Home != ""
+}
+
+func (s *Scheduler) runArtifactOperations(operations ...func() error) error {
+	targetUserActionRequired := false
+	for _, operation := range operations {
+		if err := operation(); err != nil {
+			var targetUserErr *SchedulerTargetUserActionRequiredError
+			if errors.As(err, &targetUserErr) {
+				targetUserActionRequired = true
+				continue
+			}
+			return err
+		}
+	}
+	if targetUserActionRequired {
+		return &SchedulerTargetUserActionRequiredError{}
+	}
+	return nil
 }
 
 // templateDataFor resolves the binary path (preferring `dot` over the
@@ -349,18 +355,23 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 	if mode == "" {
 		mode = ModeClean
 	}
+	paths := s.Paths
+	if paths == nil {
+		paths = &Paths{}
+	}
+	profile := paths.schedulerProfile()
 	return SchedulerTemplateData{
 		DotfilesPath:   dotfilesPath,
 		Home:           s.Config.Home,
 		SystemdHomeArg: systemdHomeArgument(s.Config.Home),
 		LogFile:        s.Config.LogFile,
 		Interval:       interval,
-		Label:          profiledLabel(kind, s.profile()),
-		Profile:        profileArg(s.profile()),
+		Label:          paths.LaunchdLabelFor(kind),
+		Profile:        profileArg(profile),
 		Action:         kind.Action(),
 		Mode:           mode.String(),
 		Description:    kind.Description(),
-		ServiceName:    profiledServiceName(kind, s.profile()),
+		ServiceName:    paths.SystemdServiceNameFor(kind),
 	}
 }
 

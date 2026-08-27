@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -91,7 +92,7 @@ func TestPrinter_SectionEmitsLeadingBlankAndPrefix(t *testing.T) {
 // TestPrinter_BulletIndentsTwoSpaces locks in the canonical row layout.
 func TestPrinter_BulletIndentsTwoSpaces(t *testing.T) {
 	var out bytes.Buffer
-	(&Printer{Out: &out}).Bullet("✓", "ready")
+	(&Printer{Out: &out}).Bullet(ui.MarkPresent, "ready")
 
 	want := "  ✓  ready\n"
 	if got := out.String(); got != want {

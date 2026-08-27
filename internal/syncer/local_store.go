@@ -227,18 +227,29 @@ func NormalizeProfile(profile string) string {
 	return p
 }
 
-// ValidateProfile rejects names that would escape the store directory or
-// collide with the layout. Profiles become path segments and scheduler labels,
-// so they must be a single safe token.
+// ValidateProfile accepts one normalized ASCII-safe profile token. Profiles
+// become path segments, scheduler labels, unit names, and command arguments,
+// so the boundary must reject every target-specific metacharacter before any
+// of those sinks are constructed.
 func ValidateProfile(profile string) error {
 	p := NormalizeProfile(profile)
-	if p == "." || p == ".." {
-		return fmt.Errorf("invalid sync profile %q", profile)
+	if !isASCIILetterOrDigit(p[0]) {
+		return invalidProfileError(profile)
 	}
-	if strings.ContainsAny(p, `/\`) || strings.ContainsRune(p, os.PathSeparator) {
-		return fmt.Errorf("sync profile %q must not contain a path separator", profile)
+	for i := 1; i < len(p); i++ {
+		if !isASCIILetterOrDigit(p[i]) && p[i] != '.' && p[i] != '_' && p[i] != '-' {
+			return invalidProfileError(profile)
+		}
 	}
 	return nil
+}
+
+func isASCIILetterOrDigit(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+}
+
+func invalidProfileError(profile string) error {
+	return fmt.Errorf("invalid sync profile %q: must be an ASCII token beginning with a letter or digit and containing only letters, digits, dot, underscore, or hyphen", profile)
 }
 
 // ResolveLocalPathsForProfile returns the layout for one profile's store.
