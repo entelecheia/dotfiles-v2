@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -143,10 +144,13 @@ func TestResolveScheduler_PathsFollowTheTargetHome(t *testing.T) {
 			t.Errorf("scheduler artifact under the invoking user's home: %s", unit)
 		}
 	}
-	// The scheduler and Config paths must share the target's lock domain too.
-	// On Darwin that is Library/Caches; the !darwin companion test pins the
-	// target .cache layout and actual lock acquisition.
-	wantLockDir := filepath.Join(target, "Library", "Caches", "dotfiles", "sync.lock")
+	// The scheduler and Config paths share the target's lock domain. Its layout
+	// follows cacheDirForHome: Library/Caches on darwin, .cache everywhere else.
+	// The !darwin companion test pins real lock acquisition under that layout.
+	wantLockDir := filepath.Join(target, ".cache", "dotfiles", "sync.lock")
+	if runtime.GOOS == "darwin" {
+		wantLockDir = filepath.Join(target, "Library", "Caches", "dotfiles", "sync.lock")
+	}
 	if paths.LockDir != wantLockDir {
 		t.Errorf("scheduler lock = %q, want target lock %q", paths.LockDir, wantLockDir)
 	}
