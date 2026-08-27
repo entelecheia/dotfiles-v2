@@ -77,4 +77,11 @@ func TestNoOverridePreservesXDGCache(t *testing.T) {
 	if cfg.LockDir != want {
 		t.Fatalf("Config.LockDir = %q, want XDG cache lock %q", cfg.LockDir, want)
 	}
+	paths, err := ResolvePathsForHomeProfile("", DefaultProfile)
+	if err != nil {
+		t.Fatalf("ResolvePathsForHomeProfile: %v", err)
+	}
+	if paths.LockDir != cfg.LockDir {
+		t.Fatalf("resolver LockDir = %q, want Config.LockDir %q", paths.LockDir, cfg.LockDir)
+	}
 }

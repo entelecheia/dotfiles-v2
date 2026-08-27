@@ -193,7 +193,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	systemPaths, err := ResolvePathsForHomeProfile(home, profile)
+	systemPaths, err := ResolvePathsForHomeProfile(override, profile)
 	if err != nil {
 		return nil, err
 	}
