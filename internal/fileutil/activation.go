@@ -67,7 +67,6 @@ func ActivateOwnedComponent(runner *exec.Runner, opts ActivationOptions) error {
 	if err != nil {
 		return fmt.Errorf("creating rollback directory: %w", err)
 	}
-	defer os.RemoveAll(rollbackRoot)
 
 	moves := make([]activationMove, 0, len(opts.OwnedEntries))
 	for _, entry := range opts.OwnedEntries {
@@ -165,5 +164,11 @@ func rollbackActivation(opts ActivationOptions, rollbackRoot string, moves []act
 			}
 		}
 	}
-	return errors.Join(primary, rollbackErr)
+	if rollbackErr != nil {
+		return errors.Join(primary, fmt.Errorf("rollback artifacts preserved at %q: %w", rollbackRoot, rollbackErr))
+	}
+	if err := os.RemoveAll(rollbackRoot); err != nil {
+		return errors.Join(primary, fmt.Errorf("removing rollback directory: %w", err))
+	}
+	return primary
 }

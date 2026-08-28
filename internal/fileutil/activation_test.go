@@ -92,6 +92,51 @@ func TestActivateOwnedComponent(t *testing.T) {
 		}
 	})
 
+	t.Run("failed restoration preserves rollback entry", func(t *testing.T) {
+		root := t.TempDir()
+		dest := filepath.Join(root, "component")
+		stage := filepath.Join(root, ".component-stage")
+		writeActivationFile(t, filepath.Join(dest, "managed"), "old")
+		writeActivationFile(t, filepath.Join(stage, "managed"), "new")
+
+		oldRename := activationRename
+		t.Cleanup(func() { activationRename = oldRename })
+		activationRename = func(oldpath, newpath string) error {
+			if oldpath == filepath.Join(stage, "managed") && newpath == filepath.Join(dest, "managed") {
+				return errors.New("injected promotion failure")
+			}
+			if strings.Contains(oldpath, ".component.rollback-") && newpath == filepath.Join(dest, "managed") {
+				return errors.New("injected restoration failure")
+			}
+			return os.Rename(oldpath, newpath)
+		}
+
+		err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
+			DestinationRoot: dest,
+			StagedRoot:      stage,
+			OwnedEntries:    []string{"managed"},
+			Validate:        func(string) error { return nil },
+		})
+		if err == nil || !strings.Contains(err.Error(), "rollback artifacts preserved") {
+			t.Fatalf("activation error = %v, want preserved rollback artifact", err)
+		}
+		entries, readErr := os.ReadDir(root)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, entry := range entries {
+			if !strings.Contains(entry.Name(), "rollback") {
+				continue
+			}
+			data, readErr := os.ReadFile(filepath.Join(root, entry.Name(), "managed"))
+			if readErr != nil || string(data) != "old" {
+				t.Fatalf("preserved rollback entry = %q, %v", data, readErr)
+			}
+			return
+		}
+		t.Fatal("rollback directory was removed after restoration failure")
+	})
+
 	t.Run("staged validation preserves active component", func(t *testing.T) {
 		root := t.TempDir()
 		dest := filepath.Join(root, "component")
