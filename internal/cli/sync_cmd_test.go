@@ -11,6 +11,83 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
+func TestSyncStatusSensitiveOverridesZeroOneMany(t *testing.T) {
+	render := func(overrides []syncer.SensitiveOverride) string {
+		t.Helper()
+		var out bytes.Buffer
+		printSensitiveOverrides(&Printer{Out: &out, Err: io.Discard}, overrides, true)
+		return out.String()
+	}
+
+	if got := render(nil); got != "" {
+		t.Fatalf("zero overrides rendered %q", got)
+	}
+
+	one := render([]syncer.SensitiveOverride{{AllowPattern: "/.secrets/app.env", DenyPattern: "/.secrets/**"}})
+	for _, want := range []string{
+		"Sensitive overrides",
+		"1 allow rule(s) override built-in secret exclusions",
+		"/.secrets/app.env re-includes /.secrets/**",
+	} {
+		if !strings.Contains(one, want) {
+			t.Fatalf("one override output missing %q:\n%s", want, one)
+		}
+	}
+
+	many := render([]syncer.SensitiveOverride{
+		{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"},
+		{AllowPattern: "/.secrets/app.env", DenyPattern: "/.secrets/**"},
+	})
+	if !strings.Contains(many, "2 allow rule(s) override built-in secret exclusions") {
+		t.Fatalf("many override count missing:\n%s", many)
+	}
+	if strings.Index(many, "/.aws/credentials re-includes /.aws/credentials") > strings.Index(many, "/.secrets/app.env re-includes /.secrets/**") {
+		t.Fatalf("many overrides lost their sorted order:\n%s", many)
+	}
+}
+
+func TestSyncStatusSensitiveOverridesOrderingAndConstructionFailure(t *testing.T) {
+	var out bytes.Buffer
+	p := &Printer{Out: &out, Err: io.Discard}
+	p.KV("Secrets", "deny-by-default (allow.txt empty)")
+	printSensitiveOverrides(p, nil, true)
+	p.KV("Include file", "include.txt")
+	got := out.String()
+	if strings.Contains(got, "Sensitive overrides") {
+		t.Fatalf("empty or failed collection must not render a partial warning:\n%s", got)
+	}
+	if strings.Index(got, "Secrets") > strings.Index(got, "Include file") {
+		t.Fatalf("status adjacency changed:\n%s", got)
+	}
+}
+
+func TestSyncSensitiveOverridesLongControlEscaping(t *testing.T) {
+	long := "/.secrets/" + strings.Repeat("long-pattern-", 64) + "\x1b[31m\napp.env"
+	deny := "/.secrets/**\t"
+	var out bytes.Buffer
+	printSensitiveOverrides(&Printer{Out: &out, Err: io.Discard}, []syncer.SensitiveOverride{{
+		AllowPattern: long,
+		DenyPattern:  deny,
+	}}, true)
+	got := out.String()
+	for _, want := range []string{"long-pattern-", "\\x1b[31m", "\\napp.env", "\\t"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("escaped output missing %q:\n%s", want, got)
+		}
+	}
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	bullet := lines[len(lines)-1]
+	if strings.ContainsAny(bullet, "\x1b\n\t") {
+		t.Fatalf("escaped output contains a raw terminal control byte: %q", bullet)
+	}
+	if strings.Contains(got, "...") {
+		t.Fatalf("long output was truncated: %q", got)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("one override must occupy one logical line after its status KV, got %d lines:\n%s", len(lines), got)
+	}
+}
+
 func TestParseIntervalFlag(t *testing.T) {
 	cases := []struct {
 		raw     string
