@@ -156,8 +156,9 @@ func ResolveScheduler(cfg *Config, runner *exec.Runner) (*Scheduler, *Paths, err
 	}
 	// ponytail: known ceiling. A scheduler installed by an older binary for a
 	// non-default profile remains at the old default path and can keep firing
-	// beside the corrected unit. See docs/ceilings.md (plan 07-05); cleanup must
-	// enumerate unknown historical profiles without violating dry-run semantics.
+	// beside the corrected unit. Cleanup must enumerate unknown historical
+	// profiles without violating dry-run semantics.
+	// See docs/CEILINGS.md (stale per-profile scheduler units)
 	return NewScheduler(runner, paths, cfg, template.NewEngine()), paths, nil
 }
 
