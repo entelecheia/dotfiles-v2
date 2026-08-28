@@ -18,6 +18,7 @@ func TestParseTarget(t *testing.T) {
 		{spec: "local:~/Dropbox/work", wantKind: TargetLocal, wantPath: "~/Dropbox/work"},
 		{spec: "~/Dropbox/work", wantKind: TargetLocal, wantPath: "~/Dropbox/work"},
 		{spec: "ssh:me@host:~/workspace/work", wantKind: TargetSSH, wantHost: "me@host", wantPath: "~/workspace/work"},
+		{spec: "ssh:me@host:-relative-remote-path", wantKind: TargetSSH, wantHost: "me@host", wantPath: "-relative-remote-path"},
 		{spec: "ssh:me@host", wantErr: true},
 		{spec: "local:", wantErr: true},
 		{spec: "  ", wantErr: true},
@@ -60,7 +61,6 @@ func TestParseTarget_RejectsUnsafeRawFields(t *testing.T) {
 		{name: "dash local path", spec: "local:-/tmp/mirror", wantClass: "leading option marker"},
 		{name: "dash bare path", spec: "-mirror", wantClass: "leading option marker"},
 		{name: "dash ssh host", spec: "ssh:-oProxyCommand=bad:/srv/work", wantClass: "leading option marker"},
-		{name: "dash ssh path", spec: "ssh:me@host:-/srv/work", wantClass: "leading option marker"},
 	}
 
 	for _, tc := range cases {
