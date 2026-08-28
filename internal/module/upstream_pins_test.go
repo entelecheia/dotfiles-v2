@@ -41,7 +41,7 @@ func TestComponentPinLifecycle(t *testing.T) {
 		Component: "oh-my-zsh-base",
 		Source:    "https://github.com/ohmyzsh/ohmyzsh.git",
 		Commit:    "146461f7c6d95f4ba1220559d66eb113418b40a8",
-		Owned:     ohMyZshOwnedEntries(),
+		Owned:     ohMyZshOwnership().currentEntries(),
 		Files:     map[string]string{"oh-my-zsh.sh": "digest"},
 	}
 	if err := marker.validate(); err != nil {
@@ -99,7 +99,7 @@ func TestActivateGitComponent_TamperedMarkerCannotDeleteUnownedEntry(t *testing.
 	commit := "146461f7c6d95f4ba1220559d66eb113418b40a8"
 	pin := gitComponentPin{
 		Name: "fixture", Repository: "https://example.invalid/fixture.git", Commit: commit,
-		RequiredPaths: []string{"managed"}, OwnedEntries: []string{"managed"},
+		RequiredPaths: []string{"managed"}, Ownership: componentOwnership{Current: []string{"managed"}},
 	}
 	runPinnedGit = func(_ context.Context, _ *internalexec.Runner, args ...string) (*internalexec.Result, error) {
 		if args[0] == "clone" {
@@ -147,19 +147,59 @@ func TestActivateGitComponent_TamperedMarkerCannotDeleteUnownedEntry(t *testing.
 	}
 }
 
+func TestComponentOwnership_TrustedIncludesRetiredButNotArbitraryPaths(t *testing.T) {
+	ownership := componentOwnership{Current: []string{"managed"}, Retired: []string{"legacy-tools"}}
+	trusted := ownership.trustedEntries()
+	if _, ok := trusted["managed"]; !ok {
+		t.Fatal("current entry is not trusted")
+	}
+	if _, ok := trusted["legacy-tools"]; !ok {
+		t.Fatal("retired entry is not trusted")
+	}
+	if _, ok := trusted["custom"]; ok {
+		t.Fatal("arbitrary entry is trusted")
+	}
+	current := ownership.currentEntries()
+	current[0] = "changed"
+	if ownership.Current[0] != "managed" {
+		t.Fatal("currentEntries returned the ownership backing slice")
+	}
+}
+
 func TestTrustedStaleOwnedEntries(t *testing.T) {
 	commit := "146461f7c6d95f4ba1220559d66eb113418b40a8"
 	pin := gitComponentPin{
 		Name: "fixture", Repository: "https://example.invalid/fixture.git", Commit: commit,
-		OwnedEntries: []string{"managed"},
+		Ownership: componentOwnership{Current: []string{"managed"}, Retired: []string{"legacy-tools"}},
 	}
-	previous := componentPinMarker{
-		Schema: componentPinMarkerSchema, Component: pin.Name, Source: pin.Repository, Commit: commit,
-		Owned: []string{"legacy-tools", "managed"}, Files: map[string]string{"managed": "old"},
-	}
-
-	if got, want := trustedStaleOwnedEntries(previous, pin, []string{"managed"}), []string{"legacy-tools"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("trustedStaleOwnedEntries() = %#v, want %#v", got, want)
+	for _, tc := range []struct {
+		name     string
+		previous componentPinMarker
+		pin      gitComponentPin
+		want     []string
+	}{
+		{
+			name: "trusted retirement", previous: componentPinMarker{Component: pin.Name, Source: pin.Repository, Owned: []string{"legacy-tools", "managed"}}, pin: pin,
+			want: []string{"legacy-tools"},
+		},
+		{
+			name: "tampered marker is all or nothing", previous: componentPinMarker{Component: pin.Name, Source: pin.Repository, Owned: []string{"custom", "legacy-tools", "managed"}}, pin: pin,
+		},
+		{
+			name: "different component", previous: componentPinMarker{Component: "other", Source: pin.Repository, Owned: []string{"legacy-tools", "managed"}}, pin: pin,
+		},
+		{
+			name: "different source", previous: componentPinMarker{Component: pin.Name, Source: "https://example.invalid/other.git", Owned: []string{"legacy-tools", "managed"}}, pin: pin,
+		},
+		{
+			name: "staged ownership pins derive from stage", previous: componentPinMarker{Component: pin.Name, Source: pin.Repository, Owned: []string{"legacy-tools"}}, pin: gitComponentPin{Name: pin.Name, Repository: pin.Repository},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := trustedStaleOwnedEntries(tc.previous, tc.pin, []string{"managed"}); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("trustedStaleOwnedEntries() = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -169,7 +209,7 @@ func TestActivateGitComponent_RetiredOwnershipCleanup(t *testing.T) {
 	commit := "146461f7c6d95f4ba1220559d66eb113418b40a8"
 	pin := gitComponentPin{
 		Name: "fixture", Repository: "https://example.invalid/fixture.git", Commit: commit,
-		RequiredPaths: []string{"managed"}, OwnedEntries: []string{"managed"},
+		RequiredPaths: []string{"managed"}, Ownership: componentOwnership{Current: []string{"managed"}, Retired: []string{"legacy-tools"}},
 	}
 	runPinnedGit = func(_ context.Context, _ *internalexec.Runner, args ...string) (*internalexec.Result, error) {
 		if args[0] == "clone" {
@@ -188,8 +228,8 @@ func TestActivateGitComponent_RetiredOwnershipCleanup(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name          string
-		owned         []string
+		name           string
+		owned          []string
 		wantLegacyGone bool
 	}{
 		{name: "trusted retired entry", owned: []string{"legacy-tools", "managed"}, wantLegacyGone: true},

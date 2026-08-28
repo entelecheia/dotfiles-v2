@@ -14,7 +14,7 @@ var shellSourcePins = []gitComponentPin{
 		Name: "oh-my-zsh-base", Repository: "https://github.com/ohmyzsh/ohmyzsh.git",
 		Commit:        "146461f7c6d95f4ba1220559d66eb113418b40a8",
 		RequiredPaths: []string{"oh-my-zsh.sh", "lib", "plugins", "themes", "templates", "tools"},
-		PreservePaths: []string{"custom"}, OwnedEntries: ohMyZshOwnedEntries(),
+		PreservePaths: []string{"custom"}, Ownership: ohMyZshOwnership(),
 	},
 	{Name: "zsh-autosuggestions", Repository: "https://github.com/zsh-users/zsh-autosuggestions.git", Commit: "85919cd1ffa7d2d5412f6d3fe437ebdbeeec4fc5"},
 	{Name: "zsh-syntax-highlighting", Repository: "https://github.com/zsh-users/zsh-syntax-highlighting.git", Commit: "2fc57d63067c18b1100ecdbf684fa5baf49459d1"},
@@ -134,7 +134,7 @@ func (m *ShellModule) sourceDestination(homeDir string, pin gitComponentPin) str
 }
 
 func (m *ShellModule) sourcePinMatches(rc *RunContext, dir string, pin gitComponentPin) bool {
-	owned := pin.OwnedEntries
+	owned := pin.Ownership.currentEntries()
 	if len(owned) == 0 {
 		marker, err := readComponentPinMarker(filepath.Join(dir, markerFileName(pin.Name)))
 		if err != nil {
