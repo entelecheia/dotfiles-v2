@@ -105,33 +105,185 @@ fi
 
 VERSION="${LATEST#v}"
 
-# Download helper — uses --no-netrc to prevent stale credential interference
-download_binary() {
-  local url="$1" dest="$2"
-  if ! curl -fSL --no-netrc "$url" | tar xz -C "$dest" dot; then
-    err "Download failed: $url"
-    exit 1
+# Download, checksum, and activation helpers. Release bytes are never passed
+# to tar until checksums.txt has selected and verified the exact asset.
+select_checksum_tool() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    CHECKSUM_TOOL="sha256sum"
+    return 0
   fi
-  chmod +x "$dest/dot"
+  if command -v shasum >/dev/null 2>&1; then
+    CHECKSUM_TOOL="shasum"
+    return 0
+  fi
+  err "Cannot verify release checksum: install sha256sum or shasum -a 256; active binary remains unchanged"
+  return 1
 }
 
-# Skip download if already at latest version
+select_checksum_line() {
+  local checksums="$1" asset="$2" line="" match="" count=0 digest="" filename="" extra=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == *"$asset" ]]; then
+      digest="" filename="" extra=""
+      read -r digest filename extra <<< "$line"
+      filename="${filename#\*}"
+      if [[ "$filename" == "$asset" && -z "$extra" && ${#digest} -eq 64 && "$digest" != *[!0123456789abcdefABCDEF]* ]]; then
+        match="$digest"
+        count=$((count + 1))
+      else
+        err "Malformed checksum entry for ${asset}; active binary remains unchanged. Download the release again."
+        return 1
+      fi
+    fi
+  done < "$checksums"
+  if [[ "$count" -ne 1 ]]; then
+    err "Checksum entry for ${asset} is missing or duplicated; active binary remains unchanged. Download the release again."
+    return 1
+  fi
+  printf '%s\n' "$match"
+}
+
+verify_checksum() {
+  local stage="$1" asset="$2" checksum="$3"
+  printf '%s  %s\n' "$checksum" "$asset" > "$stage/selected-checksum"
+  if [[ "$CHECKSUM_TOOL" == "sha256sum" ]]; then
+    (cd "$stage" && sha256sum -c selected-checksum >/dev/null 2>&1)
+  else
+    (cd "$stage" && shasum -a 256 -c selected-checksum >/dev/null 2>&1)
+  fi
+}
+
+download_file() {
+  local url="$1" dest="$2"
+  if ! curl -fSL --no-netrc --proto '=https' --tlsv1.2 --retry 3 --retry-delay 1 -o "$dest" "$url" 2>/dev/null; then
+    err "Download failed for ${url}; active binary remains unchanged. Check your network and retry."
+    return 1
+  fi
+}
+
+validate_binary() {
+  local candidate="$1"
+  [[ -f "$candidate" && ! -L "$candidate" ]] || return 1
+  chmod 0755 "$candidate" || return 1
+  "$candidate" --version >/dev/null 2>&1
+}
+
+restore_active_binary() {
+  local dest="$1" binary_rollback="$2" link_rollback="$3" had_link="$4"
+  if [[ -e "$binary_rollback" ]]; then
+    rm -f "$dest/dot"
+    mv "$binary_rollback" "$dest/dot" || return 1
+  else
+    rm -f "$dest/dot"
+  fi
+  if [[ -e "$link_rollback" || -L "$link_rollback" ]]; then
+    rm -f "$dest/dotfiles"
+    mv "$link_rollback" "$dest/dotfiles" || return 1
+  elif [[ "$had_link" == "0" ]]; then
+    rm -f "$dest/dotfiles"
+  fi
+}
+
+install_binary() {
+  local candidate="$1" dest="$2"
+  local binary_rollback="$dest/.dot.rollback.$$" link_rollback="$dest/.dotfiles.rollback.$$"
+  local had_binary=0 had_link=0
+
+  if ! validate_binary "$candidate"; then
+    err "Downloaded ${ASSET_NAME} is not a valid dot binary; active binary remains unchanged. Download the release again."
+    return 1
+  fi
+  [[ -e "$dest/dot" ]] && had_binary=1
+  [[ -L "$dest/dotfiles" ]] && had_link=1
+  INSTALL_ACTIVE_DEST="$dest"
+  INSTALL_BINARY_ROLLBACK="$binary_rollback"
+  INSTALL_LINK_ROLLBACK="$link_rollback"
+  INSTALL_HAD_LINK="$had_link"
+
+  if [[ "$had_binary" == "1" ]] && ! mv "$dest/dot" "$binary_rollback"; then
+    err "Could not stage active binary replacement; active binary remains unchanged. Check permissions and retry."
+    return 1
+  fi
+  if ! mv "$candidate" "$dest/dot" || ! validate_binary "$dest/dot"; then
+    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_link" || err "Rollback failed; recover ${binary_rollback} manually."
+    err "Could not promote verified ${ASSET_NAME}; active binary remains unchanged. Check permissions and retry."
+    return 1
+  fi
+  if [[ "$had_link" == "1" ]] && ! mv "$dest/dotfiles" "$link_rollback"; then
+    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_link" || err "Rollback failed; recover ${binary_rollback} manually."
+    err "Could not update compatibility symlink; active binary remains unchanged. Check permissions and retry."
+    return 1
+  fi
+  if ! ln -s dot "$dest/dotfiles"; then
+    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_link" || err "Rollback failed; recover ${binary_rollback} manually."
+    err "Could not create compatibility symlink; active binary remains unchanged. Check permissions and retry."
+    return 1
+  fi
+  rm -f "$binary_rollback" "$link_rollback"
+  INSTALL_ACTIVE_DEST=""
+  INSTALL_BINARY_ROLLBACK=""
+  INSTALL_LINK_ROLLBACK=""
+}
+
+INSTALL_PARENT=$(dirname "$INSTALL_DIR")
+mkdir -p "$INSTALL_PARENT" "$INSTALL_DIR"
+ASSET_NAME="dot_${VERSION}_${OS}_${ARCH}.tar.gz"
+ASSET_URL="https://github.com/${REPO}/releases/download/${LATEST}/${ASSET_NAME}"
+CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${LATEST}/checksums.txt"
+
+# Skip download if already at latest version.
 if [[ -x "$INSTALL_DIR/dot" ]]; then
   CURRENT=$("$INSTALL_DIR/dot" --version 2>/dev/null || echo "")
-  if [[ "$CURRENT" == *"$VERSION"* ]]; then
-    info "dot v${VERSION} already installed, skipping download"
-  else
-    info "Upgrading dot to v${VERSION}..."
-    download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dot_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
-  fi
 else
-  info "Installing dot v${VERSION}..."
-  mkdir -p "$INSTALL_DIR"
-  download_binary "https://github.com/${REPO}/releases/download/${LATEST}/dot_${VERSION}_${OS}_${ARCH}.tar.gz" "$INSTALL_DIR"
+  CURRENT=""
 fi
 
-# Create 'dotfiles' back-compat symlink → dot
-ln -sf "$INSTALL_DIR/dot" "$INSTALL_DIR/dotfiles"
+if [[ "$CURRENT" == *"$VERSION"* ]]; then
+  info "dot v${VERSION} already installed, skipping download"
+else
+  if [[ -n "$CURRENT" ]]; then
+    info "Upgrading dot to v${VERSION}..."
+  else
+    info "Installing dot v${VERSION}..."
+  fi
+  STAGE_DIR=$(mktemp -d "$INSTALL_PARENT/.dot-install.XXXXXX")
+  cleanup_stage() { rm -rf "$STAGE_DIR"; }
+  INSTALL_ACTIVE_DEST=""
+  INSTALL_BINARY_ROLLBACK=""
+  INSTALL_LINK_ROLLBACK=""
+  INSTALL_HAD_LINK=0
+  abort_install() {
+    if [[ -n "$INSTALL_ACTIVE_DEST" ]]; then
+      restore_active_binary "$INSTALL_ACTIVE_DEST" "$INSTALL_BINARY_ROLLBACK" "$INSTALL_LINK_ROLLBACK" "$INSTALL_HAD_LINK" || err "Rollback failed; recover ${INSTALL_BINARY_ROLLBACK} manually."
+    fi
+    err "Installation interrupted; active binary remains unchanged. Retry the installation."
+    cleanup_stage
+    trap - EXIT HUP INT TERM
+    exit 1
+  }
+  trap cleanup_stage EXIT
+  trap abort_install HUP INT TERM
+
+  if ! select_checksum_tool || ! download_file "$ASSET_URL" "$STAGE_DIR/$ASSET_NAME" || ! download_file "$CHECKSUMS_URL" "$STAGE_DIR/checksums.txt"; then
+    exit 1
+  fi
+  EXPECTED_SUM=$(select_checksum_line "$STAGE_DIR/checksums.txt" "$ASSET_NAME") || exit 1
+  if ! verify_checksum "$STAGE_DIR" "$ASSET_NAME" "$EXPECTED_SUM"; then
+    err "Checksum verification failed for ${ASSET_NAME}; active binary remains unchanged. Download the release again."
+    exit 1
+  fi
+  EXTRACT_DIR="$STAGE_DIR/extract"
+  mkdir -p "$EXTRACT_DIR"
+  if ! tar xzf "$STAGE_DIR/$ASSET_NAME" -C "$EXTRACT_DIR" dot; then
+    err "Could not extract verified ${ASSET_NAME}; active binary remains unchanged. Download the release again."
+    exit 1
+  fi
+  if ! install_binary "$EXTRACT_DIR/dot" "$INSTALL_DIR"; then
+    exit 1
+  fi
+  trap - EXIT HUP INT TERM
+  cleanup_stage
+fi
 
 # --- Step 4: Ensure PATH ---
 
