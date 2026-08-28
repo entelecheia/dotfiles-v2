@@ -167,7 +167,11 @@ assert_noop_repairs_compatibility_symlink() {
 #!/bin/bash
 printf '{"tag_name":"v9.9.9"}\n'
 EOF
-  chmod 0755 "$fake/curl"
+  cat > "$fake/brew" <<'EOF'
+#!/bin/bash
+echo 'Homebrew test'
+EOF
+  chmod 0755 "$fake/curl" "$fake/brew"
   status=0
   output=$(HOME="$root/home" INSTALL_DIR="$install" PATH="$install:$fake" "$SCRIPT" 2>&1) || status=$?
   if [[ "$status" -eq 0 && -L "$install/dotfiles" && $(readlink "$install/dotfiles") == dot ]]; then
