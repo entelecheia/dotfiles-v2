@@ -182,7 +182,7 @@ func TestDownloadFile_RejectsChunkedBodyOverLimit(t *testing.T) {
 	limits.MaxCompressedBytes = 1
 	dest := filepath.Join(t.TempDir(), "asset.zip")
 	runner := exec.NewRunner(false, quietLogger())
-	if _, err := downloadFileWithLimits(context.Background(), runner, srv.URL, dest, limits); err == nil {
+	if _, err := downloadFileWithLimits(context.Background(), runner, newBulkHTTPClient(), srv.URL, dest, limits); err == nil {
 		t.Fatal("expected streamed body limit refusal")
 	}
 }
@@ -300,6 +300,27 @@ func TestDownloadCancellationCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		t.Fatal("cancelled bulk download must remove partial file")
+	}
+}
+
+func TestDownloadRetry(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("retry success"))
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "retry.tar.gz")
+	if _, err := DownloadFile(context.Background(), exec.NewRunner(false, quietLogger()), srv.URL, dest); err != nil {
+		t.Fatalf("retry download: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
 	}
 }
 

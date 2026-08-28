@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +22,13 @@ import (
 )
 
 const refreshFile = ".dotfiles-refresh"
+
+const (
+	metadataHTTPTimeout       = 15 * time.Second
+	bulkDialTimeout           = 10 * time.Second
+	bulkTLSHandshakeTimeout   = 10 * time.Second
+	bulkResponseHeaderTimeout = 15 * time.Second
+)
 
 // ArchiveLimits bounds untrusted archive resources before extraction. Values
 // describe compressed input, individual output entries, all output entries,
@@ -130,27 +138,49 @@ func (r *countingLimitReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func newMetadataHTTPClient() *http.Client {
+	return &http.Client{Timeout: metadataHTTPTimeout}
+}
+
+// MetadataHTTPClient returns the total-deadline client for small metadata
+// requests that need request headers beyond DownloadMetadataFile.
+func MetadataHTTPClient() *http.Client { return newMetadataHTTPClient() }
+
+func newBulkHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: bulkDialTimeout, KeepAlive: 30 * time.Second}
+	transport.DialContext = dialer.DialContext
+	transport.TLSHandshakeTimeout = bulkTLSHandshakeTimeout
+	transport.ResponseHeaderTimeout = bulkResponseHeaderTimeout
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	return &http.Client{Transport: transport}
+}
+
 // httpGetWithRetry performs an HTTP GET with exponential backoff on transient failures.
 // Retries on network errors and 5xx responses. 4xx responses returned immediately.
-func httpGetWithRetry(ctx context.Context, url string, attempts int) (*http.Response, error) {
+func httpGetWithRetry(ctx context.Context, client *http.Client, url string, attempts int) (*http.Response, error) {
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err == nil {
 			if resp.StatusCode < 500 {
 				return resp, nil
 			}
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			lastErr = errorsJoin(fmt.Errorf("HTTP %d", resp.StatusCode), resp.Body.Close())
 		} else {
 			lastErr = err
 		}
 		if i < attempts-1 {
-			time.Sleep(time.Duration(1<<i) * time.Second)
+			select {
+			case <-time.After(time.Duration(1<<i) * time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 	}
 	return nil, fmt.Errorf("after %d attempts: %w", attempts, lastErr)
@@ -163,7 +193,7 @@ func DownloadAndExtractTarGz(ctx context.Context, runner *exec.Runner, url, dest
 		return nil
 	}
 
-	resp, err := httpGetWithRetry(ctx, url, 3)
+	resp, err := httpGetWithRetry(ctx, newBulkHTTPClient(), url, 3)
 	if err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)
 	}
@@ -183,41 +213,65 @@ func DownloadAndExtractTarGz(ctx context.Context, runner *exec.Runner, url, dest
 // SHA-256 of the response body, so callers can verify the artifact before
 // using it. Respects dry-run (logs and returns "", nil).
 func DownloadFile(ctx context.Context, runner *exec.Runner, url, destPath string) (string, error) {
-	return downloadFileWithLimits(ctx, runner, url, destPath, DefaultArchiveLimits)
+	return downloadFileWithLimits(ctx, runner, newBulkHTTPClient(), url, destPath, DefaultArchiveLimits)
 }
 
-func downloadFileWithLimits(ctx context.Context, runner *exec.Runner, url, destPath string, limits ArchiveLimits) (string, error) {
+// DownloadMetadataFile uses a total deadline for small control-plane files
+// such as checksums and release metadata. Large archive transfers must use
+// DownloadFile so a steadily progressing body is not cut off by this limit.
+func DownloadMetadataFile(ctx context.Context, runner *exec.Runner, url, destPath string) (string, error) {
+	return downloadFileWithLimits(ctx, runner, newMetadataHTTPClient(), url, destPath, DefaultArchiveLimits)
+}
+
+func downloadFileWithLimits(ctx context.Context, runner *exec.Runner, client *http.Client, url, destPath string, limits ArchiveLimits) (sum string, err error) {
 	if runner.DryRun {
 		runner.Logger.Info("dry-run: download", "url", url, "dest", destPath)
 		return "", nil
 	}
 
-	resp, err := httpGetWithRetry(ctx, url, 3)
+	resp, err := httpGetWithRetry(ctx, client, url, 3)
 	if err != nil {
 		return "", fmt.Errorf("downloading %s: %w", url, err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+		statusErr := fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			return "", errorsJoin(statusErr, closeErr)
+		}
+		return "", statusErr
 	}
 	if err := checkContentLength(resp, limits); err != nil {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			err = errorsJoin(err, closeErr)
+		}
 		return "", fmt.Errorf("download %s: %w", url, err)
 	}
 
 	f, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			err = errorsJoin(err, closeErr)
+		}
 		return "", fmt.Errorf("creating %s: %w", destPath, err)
 	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			if removeErr := os.Remove(destPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errorsJoin(err, fmt.Errorf("removing partial %s: %w", destPath, removeErr))
+			}
+		}
+	}()
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), &countingLimitReader{r: resp.Body, limit: limits.MaxCompressedBytes}); err != nil {
-		f.Close()
-		return "", fmt.Errorf("saving download: %w", err)
+	_, copyErr := io.Copy(io.MultiWriter(f, h), &countingLimitReader{r: resp.Body, limit: limits.MaxCompressedBytes})
+	closeFileErr := f.Close()
+	closeBodyErr := resp.Body.Close()
+	if copyErr != nil || closeFileErr != nil || closeBodyErr != nil {
+		return "", fmt.Errorf("saving download: %w", errorsJoin(copyErr, closeFileErr, closeBodyErr))
 	}
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("closing %s: %w", destPath, err)
-	}
+	succeeded = true
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -334,7 +388,7 @@ func DownloadAndExtractZip(ctx context.Context, runner *exec.Runner, url, destDi
 	}
 
 	// Download to temp file
-	resp, err := httpGetWithRetry(ctx, url, 3)
+	resp, err := httpGetWithRetry(ctx, newBulkHTTPClient(), url, 3)
 	if err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)
 	}
