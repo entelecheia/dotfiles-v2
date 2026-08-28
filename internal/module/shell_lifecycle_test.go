@@ -268,3 +268,61 @@ func TestShellModule_InstalledDriftReinstallsAndPreservesOperatorPaths(t *testin
 		})
 	}
 }
+
+func TestShellModule_DowngradesToOlderCompiledPin(t *testing.T) {
+	withoutZsh(t)
+	newer := lifecycleFixturePin("0f1e2d3c4b5a69788796a5b4c3d2e1f009182736")
+	older := lifecycleFixturePin(lifecycleFixtureCommit)
+	rc, _ := shellLifecycleContext(t)
+	module := &ShellModule{}
+
+	withShellSourcePins(t, newer)
+	stageShellFixture(t, newer.Commit, map[string]string{"oh-my-zsh.sh": "newer upstream", "lib": ""})
+	if _, err := module.Apply(context.Background(), rc); err != nil {
+		t.Fatalf("installing newer pin: %v", err)
+	}
+	destination := module.sourceDestination(rc.HomeDir, newer)
+	if marker := readFixtureMarker(t, destination, newer.Name); marker.Commit != newer.Commit {
+		t.Fatalf("newer marker commit = %q, want %q", marker.Commit, newer.Commit)
+	}
+	if data, err := os.ReadFile(filepath.Join(destination, "oh-my-zsh.sh")); err != nil || string(data) != "newer upstream" {
+		t.Fatalf("newer managed file = %q, %v", data, err)
+	}
+	custom := filepath.Join(destination, "custom", "user.zsh")
+	if err := os.MkdirAll(filepath.Dir(custom), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(custom, []byte("operator"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	withShellSourcePins(t, older)
+	stageShellFixture(t, older.Commit, map[string]string{"oh-my-zsh.sh": "older upstream", "lib": ""})
+	// The labels identify fixture order only; the binary's compiled pin wins.
+	if module.sourcePinMatches(rc, destination, older) {
+		t.Fatal("older compiled pin accepted newer installed marker")
+	}
+	check, err := module.Check(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !sourceChangeScheduled(check, older.Name) {
+		t.Fatalf("Check changes = %#v, want source install", check.Changes)
+	}
+	apply, err := module.Apply(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !sourceMessageInstalled(apply, older.Name) {
+		t.Fatalf("Apply messages = %#v, want source install", apply.Messages)
+	}
+	if marker := readFixtureMarker(t, destination, older.Name); marker.Commit != older.Commit {
+		t.Fatalf("older marker commit = %q, want %q", marker.Commit, older.Commit)
+	}
+	if data, err := os.ReadFile(filepath.Join(destination, "oh-my-zsh.sh")); err != nil || string(data) != "older upstream" {
+		t.Fatalf("older managed file = %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(custom); err != nil || string(data) != "operator" {
+		t.Fatalf("operator path = %q, %v", data, err)
+	}
+}
