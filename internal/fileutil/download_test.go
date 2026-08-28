@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
@@ -377,6 +378,19 @@ func TestExtractTarGz_ArchiveLimits(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("wired expansion ratio is checked after the complete tar stream", func(t *testing.T) {
+		ratioLimits := DefaultArchiveLimits
+		ratioLimits.MaxCompressedBytes = 1024
+		ratioLimits.MaxEntryBytes = 1024
+		ratioLimits.MaxTotalExtractedBytes = 1024
+		ratioLimits.MaxEntries = 1
+		ratioLimits.MaxExpansionRatio = 1
+		archive := makeTarGzEntries(t, []archiveTestEntry{{name: "compressible", content: strings.Repeat("x", 128)}})
+		if err := extractTarGzWithLimits(bytes.NewReader(archive), t.TempDir(), 0, ratioLimits); err == nil {
+			t.Fatal("expected final expansion ratio error")
+		}
+	})
 }
 
 func TestExtractZip_ArchiveLimits(t *testing.T) {

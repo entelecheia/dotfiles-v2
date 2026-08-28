@@ -87,16 +87,20 @@ func (b *archiveBudget) reserve(name string, declared int64) error {
 	return nil
 }
 
-func (b *archiveBudget) add(name string, n int64, compressed int64) error {
+func (b *archiveBudget) add(name string, n int64) error {
 	if n < 0 || n > b.limits.MaxEntryBytes || n > b.limits.MaxTotalExtractedBytes-b.total {
 		return fmt.Errorf("archive entry %q exceeds extraction limit", name)
 	}
 	b.total += n
+	return nil
+}
+
+func (b *archiveBudget) checkExpansion(compressed int64) error {
 	if compressed == 0 && b.total > 0 {
-		return fmt.Errorf("archive %q expands before compressed input is read", name)
+		return errors.New("archive expands before compressed input is read")
 	}
 	if compressed > 0 && b.total > compressed*b.limits.MaxExpansionRatio {
-		return fmt.Errorf("archive %q exceeds expansion ratio limit", name)
+		return errors.New("archive exceeds expansion ratio limit")
 	}
 	return nil
 }
@@ -282,7 +286,7 @@ func extractTarGzWithLimits(r io.Reader, destDir string, stripComponents int, li
 			if closeErr != nil {
 				return fmt.Errorf("closing tar entry %q: %w", hdr.Name, closeErr)
 			}
-			if err := budget.add(hdr.Name, n, compressed.n); err != nil {
+			if err := budget.add(hdr.Name, n); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -304,6 +308,12 @@ func extractTarGzWithLimits(r io.Reader, destDir string, stripComponents int, li
 		default:
 			return fmt.Errorf("tar entry %q has unsupported type %d", hdr.Name, hdr.Typeflag)
 		}
+	}
+	if _, err := io.Copy(io.Discard, gz); err != nil {
+		return fmt.Errorf("reading tar archive tail: %w", err)
+	}
+	if err := budget.checkExpansion(compressed.n); err != nil {
+		return err
 	}
 
 	return nil
@@ -418,7 +428,7 @@ func extractZipWithLimits(r *zip.Reader, destDir string, limits ArchiveLimits) e
 			if err := root.Symlink(linkname, name); err != nil {
 				return fmt.Errorf("creating zip link %q: %w", f.Name, err)
 			}
-			if err := budget.add(f.Name, int64(len(linkBytes)), compressed); err != nil {
+			if err := budget.add(f.Name, int64(len(linkBytes))); err != nil {
 				return err
 			}
 		case mode.IsRegular():
@@ -439,12 +449,15 @@ func extractZipWithLimits(r *zip.Reader, destDir string, limits ArchiveLimits) e
 			if copyErr != nil || closeErr != nil {
 				return fmt.Errorf("writing zip entry %q: %w", f.Name, errorsJoin(copyErr, closeErr))
 			}
-			if err := budget.add(f.Name, n, compressed); err != nil {
+			if err := budget.add(f.Name, n); err != nil {
 				return err
 			}
 		default:
 			return fmt.Errorf("zip entry %q has unsupported type", f.Name)
 		}
+	}
+	if err := budget.checkExpansion(compressed); err != nil {
+		return err
 	}
 	return nil
 }
