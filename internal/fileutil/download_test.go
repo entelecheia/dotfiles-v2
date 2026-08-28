@@ -226,10 +226,10 @@ func TestMetadataTimeout(t *testing.T) {
 	go func() { <-started; cancel() }()
 	dest := filepath.Join(t.TempDir(), "checksums.txt")
 	if _, err := DownloadMetadataFile(ctx, exec.NewRunner(false, quietLogger()), srv.URL, dest); err == nil {
-		t.Fatal("expected cancelled metadata download to fail")
+		t.Fatal("expected canceled metadata download to fail")
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
-		t.Fatal("cancelled metadata download must remove the partial destination")
+		t.Fatal("canceled metadata download must remove the partial destination")
 	}
 }
 
@@ -299,7 +299,7 @@ func TestDownloadCancellationCleanup(t *testing.T) {
 		t.Fatal("expected cancellation to fail")
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
-		t.Fatal("cancelled bulk download must remove partial file")
+		t.Fatal("canceled bulk download must remove partial file")
 	}
 }
 
