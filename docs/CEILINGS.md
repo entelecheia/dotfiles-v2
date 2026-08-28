@@ -3,8 +3,8 @@
 This document records deliberate limits in dotfiles-v2 that are acceptable at
 today's operating scale. Each section names the code boundary, why the limit is
 accepted, and the concrete event that would require a different design. There
-are five required ceilings for DEBT-06 and one additional ceiling minted by
-Phase 07's schema-version work.
+are five required ceilings for DEBT-06 and two additional ceilings minted by
+Phase 07's schema-version and per-profile scheduler work.
 
 ## Process-wide manifest serialization
 
@@ -72,3 +72,23 @@ current types.
 This ceiling protects data rather than guessing at an unsafe migration. Replace
 it only when the state format supplies a backwards-compatible representation or
 a versioned migration that this binary can prove is lossless.
+
+## Stale per-profile scheduler units
+
+`internal/syncer/sync_cmd_ops.go` resolves scheduler artifacts per profile, so
+a unit installed for a non-default profile now lands at a per-profile path. A
+unit written by a binary from before that change sits at the default path
+instead, and `dot` does not remove it: it can keep firing beside the corrected
+unit, against the same tree.
+
+Cleanup is withheld rather than attempted because it cannot be done safely yet.
+Removing the stale unit means enumerating profile names that no longer appear
+in any config, and a scheduler subcommand that deletes service-manager
+artifacts has to carry its own dry-run and idempotence contract before it can
+be trusted to guess at them. A preview that removes a unit is the failure this
+would introduce.
+
+Replace this limit when scheduler cleanup gains that contract, or when the
+scheduler records the profile it was installed for so historical units can be
+identified without enumeration. Until then, operators upgrading across the
+per-profile change remove the stale default-path unit by hand.

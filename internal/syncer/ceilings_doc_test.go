@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,12 @@ func TestCeilingsDoc(t *testing.T) {
 	if !strings.Contains(doc, "## Newer state schema field shapes") {
 		t.Error("phase-minted schema ceiling missing from docs/CEILINGS.md")
 	}
+	// BUG-26 routes its cleanup to a documented ceiling. The marker at
+	// internal/syncer/sync_cmd_ops.go promised this section and it was never
+	// written, so the requirement pointed at nothing.
+	if !strings.Contains(doc, "## Stale per-profile scheduler units") {
+		t.Error("stale per-profile scheduler ceiling missing from docs/CEILINGS.md")
+	}
 
 	for _, path := range []string{
 		"internal/syncer/manifest.go",
@@ -43,6 +50,7 @@ func TestCeilingsDoc(t *testing.T) {
 		"internal/syncer/rsyncbin.go",
 		"internal/syncer/peer_commands.go",
 		"internal/config/state.go",
+		"internal/syncer/sync_cmd_ops.go",
 	} {
 		if !strings.Contains(doc, path) {
 			t.Errorf("document does not name %q", path)
@@ -59,6 +67,7 @@ func TestCeilingsDoc(t *testing.T) {
 		{"internal/syncer/manifest.go", "ponytail: known ceiling. See docs/CEILINGS.md (manifest serialization)."},
 		{"internal/syncer/rsyncbin.go", "ponytail: known ceiling. See docs/CEILINGS.md (preview protocol limit)."},
 		{"internal/syncer/rsyncbin.go", "ponytail: known ceiling. See docs/CEILINGS.md (first-contact trust)."},
+		{"internal/syncer/sync_cmd_ops.go", "See docs/CEILINGS.md (stale per-profile scheduler units)"},
 	} {
 		data, err := os.ReadFile(filepath.Join("..", "..", want.path))
 		if err != nil {
@@ -68,5 +77,70 @@ func TestCeilingsDoc(t *testing.T) {
 		if !strings.Contains(string(data), want.marker) {
 			t.Errorf("documented marker %q missing from %s", want.marker, want.path)
 		}
+	}
+}
+
+// TestCeilingMarkersNameTheDocumentCorrectly sweeps every `ponytail: known
+// ceiling` marker in the tree rather than the three the table above pins.
+//
+// The pinned list is an allowlist that has to be hand-extended, which is
+// exactly how the sync_cmd_ops.go marker came to say `docs/ceilings.md`: it
+// was never added, so neither its casing nor its missing section was reachable
+// by a test. Lowercase resolves only on a case-insensitive filesystem, so that
+// pointer was dead on Linux while passing CI on macOS.
+//
+// Markers that reference no document are left alone. A `ponytail: known
+// ceiling` comment is a local annotation first; only some are promoted to
+// docs/CEILINGS.md, and forcing every one of them into the document would
+// grow it into a list of notes rather than accepted ceilings.
+func TestCeilingMarkersNameTheDocumentCorrectly(t *testing.T) {
+	root := filepath.Join("..", "..")
+	const canonical = "docs/CEILINGS.md"
+
+	swept := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == ".git" || name == "vendor" || name == "graphify-out" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		// This file necessarily carries the lowercase spelling: it is the string
+		// the sweep matches on. Skipping it keeps the check from reporting its
+		// own machinery, which would train the reader to ignore the output.
+		if filepath.Base(path) == "ceilings_doc_test.go" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			lower := strings.ToLower(line)
+			if !strings.Contains(lower, "docs/ceilings.md") {
+				continue
+			}
+			swept++
+			if !strings.Contains(line, canonical) {
+				rel, _ := filepath.Rel(root, path)
+				t.Errorf("%s:%d names the ceilings document with the wrong casing\n  line: %s\n  want the exact string %q: a lowercase path resolves only on a case-insensitive filesystem, so this reference is dead on Linux",
+					rel, i+1, strings.TrimSpace(line), canonical)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("sweeping for ceiling markers: %v", err)
+	}
+	// Non-vacuity: the sweep must actually have found references. A walk that
+	// silently matched nothing would pass forever.
+	if swept < 4 {
+		t.Errorf("swept only %d reference(s) to the ceilings document, want at least the four pinned markers - the walk is not reaching the tree", swept)
 	}
 }
