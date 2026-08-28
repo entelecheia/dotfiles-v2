@@ -75,15 +75,6 @@ func (m componentPinMarker) validate() error {
 
 func ohMyZshOwnedEntries() []string { return append([]string(nil), expectedOhMyZshOwnedEntries...) }
 
-func containsShellSourcePin(name string) bool {
-	for _, pin := range shellSourcePins {
-		if pin.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func staleOwnedEntries(previous, desired []string) []string {
 	desiredSet := make(map[string]struct{}, len(desired))
 	for _, entry := range desired {
