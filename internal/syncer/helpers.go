@@ -198,6 +198,28 @@ func AcquireLock(lockDir string) (func(), error) {
 	return fileutil.AcquirePIDLock(lockDir, fileutil.LockOptions{})
 }
 
+// AcquireLockForRun is AcquireLock for a run that may be a preview. A preview
+// must leave the target tree byte-identical, and AcquirePIDLock creates the
+// lock parent unconditionally (internal/fileutil/lock.go), so acquiring the
+// lock is itself a write on a home no sync has ever run in.
+//
+// When the parent is absent no sync can be holding the lock, so a preview
+// proceeds lock-free and creates nothing. When the parent is present the real
+// lock is taken: the lock directory it adds is removed by release, so the tree
+// still comes back unchanged, and a preview run beside a live sync still
+// reports the busy lock rather than reading a tree being rewritten underneath
+// it. Skipping the lock outright would have traded the leak for a torn preview.
+//
+// The guard is here rather than at the seven call sites because a per-caller
+// guard leaves the next sibling caller broken: every one of them acquired the
+// lock as its first statement, above its own dry-run branch.
+func AcquireLockForRun(lockDir string, dryRun bool) (func(), error) {
+	if dryRun && !pathExists(filepath.Dir(lockDir)) {
+		return func() {}, nil
+	}
+	return AcquireLock(lockDir)
+}
+
 // lockIsStale returns true when the PID file inside lockDir points at a
 // process that no longer exists. A missing or unparseable PID file is
 // treated as stale (defensive: better to break a held-but-corrupted lock

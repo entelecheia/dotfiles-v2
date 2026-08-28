@@ -156,7 +156,7 @@ type ConflictsPruneResult struct {
 func ConflictsPrune(ctx context.Context, opts ConflictsPruneOptions) (*ConflictsPruneResult, error) {
 	cfg, runner := opts.Config, opts.Runner
 
-	release, lockErr := AcquireLock(cfg.LockDir)
+	release, lockErr := AcquireLockForRun(cfg.LockDir, opts.DryRun)
 	if lockErr != nil {
 		return &ConflictsPruneResult{Outcome: PruneLockBusy, LockErr: lockErr}, nil
 	}

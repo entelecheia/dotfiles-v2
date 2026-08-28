@@ -77,6 +77,10 @@ type runtimeFilters struct {
 	SubmodulesDyn string // git submodule paths — synced via Git, never rsync
 	TrackedDyn    string // include layer: tracked relpaths ∪ baseline keys
 	TombstonesDyn string // paths deleted locally — must not be pulled back
+
+	// cleanup removes the temp directory a preview's per-run filter files were
+	// written into. nil for a real run, which writes them into the store.
+	cleanup func()
 }
 
 // secretExcludePatterns is the deny-by-default secrets layer. These paths
@@ -498,4 +502,12 @@ func rsyncCaseFoldPattern(pattern string) string {
 		}
 	}
 	return b.String()
+}
+
+// Cleanup removes anything prepareRuntimeFilters created outside the workspace
+// for this run. Safe on the zero value and safe to call more than once.
+func (rf runtimeFilters) Cleanup() {
+	if rf.cleanup != nil {
+		rf.cleanup()
+	}
 }

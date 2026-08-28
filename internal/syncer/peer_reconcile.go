@@ -419,8 +419,18 @@ func PeerFilterArgs(cfg *Config) []string {
 // runtime filter files that a real peer transfer uses. The remote inventory
 // runs before the scoped transfer, so include-mode profiles need this hook or
 // a fresh profile would point rsync at a nonexistent tracked-includes file.
+//
+// This one materializes into the store even for a preview, so it still creates
+// the store on a workspace that has none. That is deliberate and not yet
+// fixable here: it writes for side effect, and its consumer PeerFilterArgs
+// reads the canonical cfg.LocalPaths.TrackedDynFile rather than the returned
+// paths, so redirecting a preview to a temp directory would point rsync at a
+// file that does not exist and break include-mode peer profiles. Closing it
+// means teaching PeerFilterArgs to take the materialized path, which needs a
+// live-peer fixture to verify. Tracked as the peer half of this class.
 func PreparePeerPlanFilters(cfg *Config) error {
-	_, err := prepareRuntimeFilters(cfg)
+	rf, err := prepareRuntimeFilters(cfg, false)
+	defer rf.Cleanup()
 	return err
 }
 
@@ -571,7 +581,8 @@ func PullPeerPlan(ctx context.Context, runner *exec.Runner, cfg *Config, plan *P
 	if plan == nil || len(plan.Pull) == 0 {
 		return nil
 	}
-	rf, err := prepareRuntimeFilters(cfg)
+	rf, err := prepareRuntimeFilters(cfg, dryRun)
+	defer rf.Cleanup()
 	if err != nil {
 		return err
 	}
@@ -587,7 +598,8 @@ func peerPushPass(ctx context.Context, runner *exec.Runner, cfg *Config, rels []
 	if len(rels) == 0 {
 		return nil
 	}
-	rf, err := prepareRuntimeFilters(cfg)
+	rf, err := prepareRuntimeFilters(cfg, dryRun)
+	defer rf.Cleanup()
 	if err != nil {
 		return err
 	}

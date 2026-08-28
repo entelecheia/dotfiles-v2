@@ -84,7 +84,7 @@ func TestUnionTrackedWithBaseline_DeletePropagation(t *testing.T) {
 
 func TestMaterializeSubmodulesAndTrackedFiles(t *testing.T) {
 	paths := ResolveLocalPaths(t.TempDir())
-	subPath, err := MaterializeSubmodulesDynFile(paths, []string{"dev", "sites/a"})
+	subPath, err := MaterializeSubmodulesDynFile(paths.StoreDir, []string{"dev", "sites/a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestMaterializeSubmodulesAndTrackedFiles(t *testing.T) {
 		}
 	}
 
-	trackedPath, err := MaterializeTrackedIncludesFile(paths, []string{"a/b.md", "c.pdf"})
+	trackedPath, err := MaterializeTrackedIncludesFile(paths.StoreDir, []string{"a/b.md", "c.pdf"})
 	if err != nil {
 		t.Fatal(err)
 	}

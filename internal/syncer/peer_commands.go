@@ -329,7 +329,7 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 		return nil, err
 	}
 	cfg.RemoteRsyncPath = rp
-	release, err := AcquireLock(cfg.LockDir)
+	release, err := AcquireLockForRun(cfg.LockDir, true)
 	if err != nil {
 		return nil, fmt.Errorf("another sync is already running: %w", err)
 	}
@@ -383,7 +383,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	// One peer run at a time. The scheduled job and a manual run would
 	// otherwise overlap and drive concurrent rsync writes into the same
 	// tree and the same conflict directory.
-	release, err := AcquireLock(cfg.LockDir)
+	release, err := AcquireLockForRun(cfg.LockDir, dryRun)
 	if err != nil {
 		return nil, fmt.Errorf("another peer sync is already running: %w", err)
 	}
