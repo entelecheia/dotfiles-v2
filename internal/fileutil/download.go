@@ -183,6 +183,10 @@ func DownloadAndExtractTarGz(ctx context.Context, runner *exec.Runner, url, dest
 // SHA-256 of the response body, so callers can verify the artifact before
 // using it. Respects dry-run (logs and returns "", nil).
 func DownloadFile(ctx context.Context, runner *exec.Runner, url, destPath string) (string, error) {
+	return downloadFileWithLimits(ctx, runner, url, destPath, DefaultArchiveLimits)
+}
+
+func downloadFileWithLimits(ctx context.Context, runner *exec.Runner, url, destPath string, limits ArchiveLimits) (string, error) {
 	if runner.DryRun {
 		runner.Logger.Info("dry-run: download", "url", url, "dest", destPath)
 		return "", nil
@@ -197,6 +201,9 @@ func DownloadFile(ctx context.Context, runner *exec.Runner, url, destPath string
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
+	if err := checkContentLength(resp, limits); err != nil {
+		return "", fmt.Errorf("download %s: %w", url, err)
+	}
 
 	f, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -204,7 +211,7 @@ func DownloadFile(ctx context.Context, runner *exec.Runner, url, destPath string
 	}
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
+	if _, err := io.Copy(io.MultiWriter(f, h), &countingLimitReader{r: resp.Body, limit: limits.MaxCompressedBytes}); err != nil {
 		f.Close()
 		return "", fmt.Errorf("saving download: %w", err)
 	}

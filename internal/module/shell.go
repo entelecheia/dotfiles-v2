@@ -5,19 +5,21 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
-const (
-	omzURL           = "https://github.com/ohmyzsh/ohmyzsh/archive/refs/heads/master.tar.gz"
-	omzRefreshPeriod = 168 * time.Hour // 7 days
-
-	zshAutosuggURL    = "https://github.com/zsh-users/zsh-autosuggestions/archive/refs/heads/master.tar.gz"
-	zshSyntaxURL      = "https://github.com/zsh-users/zsh-syntax-highlighting/archive/refs/heads/master.tar.gz"
-	zshCompletionsURL = "https://github.com/zsh-users/zsh-completions/archive/refs/heads/master.tar.gz"
-)
+var shellSourcePins = []gitComponentPin{
+	{
+		Name: "oh-my-zsh-base", Repository: "https://github.com/ohmyzsh/ohmyzsh.git",
+		Commit:        "146461f7c6d95f4ba1220559d66eb113418b40a8",
+		RequiredPaths: []string{"oh-my-zsh.sh", "lib", "plugins", "themes", "templates", "tools"},
+		PreservePaths: []string{"custom"}, OwnedEntries: ohMyZshOwnedEntries(),
+	},
+	{Name: "zsh-autosuggestions", Repository: "https://github.com/zsh-users/zsh-autosuggestions.git", Commit: "85919cd1ffa7d2d5412f6d3fe437ebdbeeec4fc5"},
+	{Name: "zsh-syntax-highlighting", Repository: "https://github.com/zsh-users/zsh-syntax-highlighting.git", Commit: "2fc57d63067c18b1100ecdbf684fa5baf49459d1"},
+	{Name: "zsh-completions", Repository: "https://github.com/zsh-users/zsh-completions.git", Commit: "8cd3bd78e8b1f17271cfdd8269074e5557d8d7b8"},
+}
 
 // shellFile describes a file managed by ShellModule.
 type shellFile struct {
@@ -57,28 +59,12 @@ func (m *ShellModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, 
 	cfg := rc.Config
 	data := cfg.TemplateData(rc.HomeDir)
 
-	omzDir := m.omzDir(rc.HomeDir)
-	if !rc.Runner.IsDir(omzDir) || fileutil.NeedsRefresh(omzDir, omzRefreshPeriod) {
-		changes = append(changes, Change{
-			Description: "download/refresh oh-my-zsh",
-			Command:     fmt.Sprintf("curl -L %s | tar xz --strip-components=1 -C %s", omzURL, omzDir),
-		})
-	}
-
-	plugins := []struct {
-		name string
-		url  string
-	}{
-		{"zsh-autosuggestions", zshAutosuggURL},
-		{"zsh-syntax-highlighting", zshSyntaxURL},
-		{"zsh-completions", zshCompletionsURL},
-	}
-	for _, p := range plugins {
-		dir := m.pluginDir(rc.HomeDir, p.name)
-		if !rc.Runner.IsDir(dir) || fileutil.NeedsRefresh(dir, omzRefreshPeriod) {
+	for _, pin := range shellSourcePins {
+		dir := m.sourceDestination(rc.HomeDir, pin)
+		if !rc.Runner.IsDir(dir) || !m.sourcePinMatches(rc, dir, pin) {
 			changes = append(changes, Change{
-				Description: fmt.Sprintf("download/refresh plugin %s", p.name),
-				Command:     fmt.Sprintf("curl -L %s | tar xz --strip-components=1 -C %s", p.url, dir),
+				Description: fmt.Sprintf("install pinned source %s", pin.Name),
+				Command:     fmt.Sprintf("git fetch %s %s", pin.Repository, pin.Commit),
 			})
 		}
 	}
@@ -104,43 +90,13 @@ func (m *ShellModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, 
 	cfg := rc.Config
 	data := cfg.TemplateData(rc.HomeDir)
 
-	// Oh My Zsh
-	omzDir := m.omzDir(rc.HomeDir)
-	if !rc.Runner.IsDir(omzDir) || fileutil.NeedsRefresh(omzDir, omzRefreshPeriod) {
-		if err := rc.Runner.MkdirAll(omzDir, 0755); err != nil {
-			return nil, fmt.Errorf("creating oh-my-zsh dir: %w", err)
-		}
-		if err := fileutil.DownloadAndExtractTarGz(ctx, rc.Runner, omzURL, omzDir, 1); err != nil {
-			return nil, fmt.Errorf("downloading oh-my-zsh: %w", err)
-		}
-		if err := fileutil.MarkRefreshed(rc.Runner, omzDir); err != nil {
-			rc.Runner.Logger.Warn("mark refreshed failed", "dir", omzDir, "err", err)
-		}
-		messages = append(messages, "oh-my-zsh downloaded/refreshed")
-	}
-
-	// Plugins
-	plugins := []struct {
-		name string
-		url  string
-	}{
-		{"zsh-autosuggestions", zshAutosuggURL},
-		{"zsh-syntax-highlighting", zshSyntaxURL},
-		{"zsh-completions", zshCompletionsURL},
-	}
-	for _, p := range plugins {
-		dir := m.pluginDir(rc.HomeDir, p.name)
-		if !rc.Runner.IsDir(dir) || fileutil.NeedsRefresh(dir, omzRefreshPeriod) {
-			if err := rc.Runner.MkdirAll(dir, 0755); err != nil {
-				return nil, fmt.Errorf("creating plugin dir %s: %w", p.name, err)
+	for _, pin := range shellSourcePins {
+		dir := m.sourceDestination(rc.HomeDir, pin)
+		if !rc.Runner.IsDir(dir) || !m.sourcePinMatches(rc, dir, pin) {
+			if err := activateGitComponent(ctx, rc, dir, pin); err != nil {
+				return nil, fmt.Errorf("installing pinned source %s: %w", pin.Name, err)
 			}
-			if err := fileutil.DownloadAndExtractTarGz(ctx, rc.Runner, p.url, dir, 1); err != nil {
-				return nil, fmt.Errorf("downloading plugin %s: %w", p.name, err)
-			}
-			if err := fileutil.MarkRefreshed(rc.Runner, dir); err != nil {
-				rc.Runner.Logger.Warn("mark refreshed failed", "dir", dir, "err", err)
-			}
-			messages = append(messages, fmt.Sprintf("plugin %s downloaded/refreshed", p.name))
+			messages = append(messages, fmt.Sprintf("installed pinned source %s", pin.Name))
 		}
 	}
 
@@ -168,6 +124,27 @@ func (m *ShellModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, 
 	}
 
 	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
+}
+
+func (m *ShellModule) sourceDestination(homeDir string, pin gitComponentPin) string {
+	if pin.Name == "oh-my-zsh-base" {
+		return m.omzDir(homeDir)
+	}
+	return m.pluginDir(homeDir, pin.Name)
+}
+
+func (m *ShellModule) sourcePinMatches(rc *RunContext, dir string, pin gitComponentPin) bool {
+	owned := pin.OwnedEntries
+	if len(owned) == 0 {
+		marker, err := readComponentPinMarker(filepath.Join(dir, markerFileName(pin.Name)))
+		if err != nil {
+			return false
+		}
+		owned = marker.Owned
+	}
+	marker := componentPinMarker{Schema: componentPinMarkerSchema, Component: pin.Name, Source: pin.Repository, Commit: pin.Commit, Owned: owned}
+	marker.Files, _ = hashManagedFiles(dir, owned)
+	return verifyInstalledComponent(rc.Runner, dir, marker) == nil
 }
 
 func (m *ShellModule) renderFile(rc *RunContext, f shellFile, data map[string]any) ([]byte, error) {

@@ -16,7 +16,11 @@ type ActivationOptions struct {
 	DestinationRoot string
 	StagedRoot      string
 	OwnedEntries    []string
-	Validate        func(string) error
+	// StaleEntries were owned by a prior marker but are absent from the staged
+	// component. They are moved into the same rollback transaction and removed
+	// only after the promoted component validates.
+	StaleEntries []string
+	Validate     func(string) error
 }
 
 // activationRename is a narrow test seam for promotion and rollback failures.
@@ -98,6 +102,23 @@ func ActivateOwnedComponent(runner *exec.Runner, opts ActivationOptions) error {
 		move.promoted = true
 		moves = append(moves, move)
 	}
+	for _, entry := range opts.StaleEntries {
+		move := activationMove{entry: entry}
+		destination := filepath.Join(opts.DestinationRoot, entry)
+		rollback := filepath.Join(rollbackRoot, entry)
+		if _, err := os.Lstat(destination); err == nil {
+			if err := os.MkdirAll(filepath.Dir(rollback), 0755); err != nil {
+				return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("preparing stale rollback parent for %q: %w", entry, err))
+			}
+			if err := activationRename(destination, rollback); err != nil {
+				return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("moving stale active entry %q to rollback: %w", entry, err))
+			}
+			move.hadPrevious = true
+		} else if !os.IsNotExist(err) {
+			return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("checking stale active entry %q: %w", entry, err))
+		}
+		moves = append(moves, move)
+	}
 
 	if err := opts.Validate(opts.DestinationRoot); err != nil {
 		return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("validating promoted component: %w", err))
@@ -128,12 +149,13 @@ func validateActivationOptions(opts ActivationOptions) error {
 	if len(opts.OwnedEntries) == 0 {
 		return errors.New("activation requires at least one owned entry")
 	}
-	for i, entry := range opts.OwnedEntries {
+	allEntries := append(append([]string(nil), opts.OwnedEntries...), opts.StaleEntries...)
+	for i, entry := range allEntries {
 		if entry == "." || entry == "" || !filepath.IsLocal(entry) {
 			return fmt.Errorf("unsafe owned entry %q", entry)
 		}
 		for j := 0; j < i; j++ {
-			other := opts.OwnedEntries[j]
+			other := allEntries[j]
 			if entry == other || strings.HasPrefix(entry, other+string(filepath.Separator)) || strings.HasPrefix(other, entry+string(filepath.Separator)) {
 				return fmt.Errorf("overlapping owned entries %q and %q", other, entry)
 			}
