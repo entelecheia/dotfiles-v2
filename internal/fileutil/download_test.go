@@ -169,6 +169,23 @@ func TestDownloadFile_HTTPError(t *testing.T) {
 	}
 }
 
+func TestDownloadFile_RejectsChunkedBodyOverLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Transfer-Encoding", "chunked")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("oversize"))
+	}))
+	defer srv.Close()
+
+	limits := DefaultArchiveLimits
+	limits.MaxCompressedBytes = 1
+	dest := filepath.Join(t.TempDir(), "asset.zip")
+	runner := exec.NewRunner(false, quietLogger())
+	if _, err := downloadFileWithLimits(context.Background(), runner, srv.URL, dest, limits); err == nil {
+		t.Fatal("expected streamed body limit refusal")
+	}
+}
+
 func TestDownloadFile_DryRun(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "asset.tar.gz")
 	runner := exec.NewRunner(true, quietLogger())

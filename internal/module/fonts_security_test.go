@@ -83,3 +83,61 @@ func TestActivateFontComponent_StagesAlongsideDestination(t *testing.T) {
 		t.Fatalf("activated font unavailable: %v", err)
 	}
 }
+
+func TestActivateFontWithLegacyMigration_ReplacesOnlySelectedLegacyFamily(t *testing.T) {
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	entry, err := writer.Create("FiraCode-Regular.ttf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("pinned font fixture")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDownload := downloadFontFile
+	t.Cleanup(func() { downloadFontFile = originalDownload })
+	digest := sha256.Sum256(archive.Bytes())
+	downloadFontFile = func(_ context.Context, _ *internalexec.Runner, _ string, destination string) (string, error) {
+		if err := os.WriteFile(destination, archive.Bytes(), 0600); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(digest[:]), nil
+	}
+
+	fontRoot := filepath.Join(t.TempDir(), "Library", "Fonts")
+	if err := os.MkdirAll(fontRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{
+		"FiraCodeNerdFont-Regular.ttf": "legacy floating font",
+		"JetBrainsMono-Regular.ttf":    "unrelated font",
+		".dotfiles-refresh":            "legacy marker",
+	} {
+		if err := os.WriteFile(filepath.Join(fontRoot, name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	destination := filepath.Join(fontRoot, "FiraCode")
+	rc := &RunContext{Runner: internalexec.NewRunner(false, slog.Default())}
+	pin := fontAssetPin{Family: "FiraCode", AssetName: "FiraCode.zip", URL: "https://example.invalid/FiraCode.zip", SHA256: hex.EncodeToString(digest[:])}
+	if err := activateFontWithLegacyMigration(context.Background(), rc, destination, pin); err != nil {
+		t.Fatalf("activateFontWithLegacyMigration: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "FiraCode-Regular.ttf")); err != nil {
+		t.Fatalf("activated pinned font unavailable: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(fontRoot, "FiraCodeNerdFont-Regular.ttf")); !os.IsNotExist(err) {
+		t.Fatalf("legacy selected-family font remains: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(fontRoot, "JetBrainsMono-Regular.ttf")); err != nil || string(data) != "unrelated font" {
+		t.Fatalf("unrelated root font changed: %q, %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(fontRoot, ".dotfiles-refresh")); !os.IsNotExist(err) {
+		t.Fatalf("legacy refresh marker remains: %v", err)
+	}
+}

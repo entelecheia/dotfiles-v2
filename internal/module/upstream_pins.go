@@ -337,9 +337,13 @@ func activateGitComponent(ctx context.Context, rc *RunContext, destination strin
 	if err := writeComponentPinMarker(filepath.Join(stage, markerName), marker); err != nil {
 		return err
 	}
+	var stale []string
+	if previous, err := readComponentPinMarker(filepath.Join(destination, markerName)); err == nil && previous.Component == pin.Name {
+		stale = staleOwnedEntries(previous.Owned, owned)
+	}
 	activationOwned := append(append([]string(nil), owned...), markerName)
 	if err := fileutil.ActivateOwnedComponent(rc.Runner, fileutil.ActivationOptions{
-		DestinationRoot: destination, StagedRoot: stage, OwnedEntries: activationOwned,
+		DestinationRoot: destination, StagedRoot: stage, OwnedEntries: activationOwned, StaleEntries: stale,
 		Validate: func(root string) error { return validateComponentLayout(root, pin.RequiredPaths) },
 	}); err != nil {
 		return fmt.Errorf("activating %s: %w", pin.Name, err)

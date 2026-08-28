@@ -187,6 +187,52 @@ func TestActivateOwnedComponent(t *testing.T) {
 		}
 	})
 
+	t.Run("stale entries are removed only after promoted validation", func(t *testing.T) {
+		root := t.TempDir()
+		dest := filepath.Join(root, "component")
+		stage := filepath.Join(root, ".component-stage")
+		writeActivationFile(t, filepath.Join(dest, "managed"), "old")
+		writeActivationFile(t, filepath.Join(dest, "stale"), "old stale")
+		writeActivationFile(t, filepath.Join(stage, "managed"), "new")
+
+		err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
+			DestinationRoot: dest,
+			StagedRoot:      stage,
+			OwnedEntries:    []string{"managed"},
+			StaleEntries:    []string{"stale"},
+			Validate: func(path string) error {
+				if path == dest {
+					return errors.New("invalid promoted state")
+				}
+				return nil
+			},
+		})
+		if err == nil {
+			t.Fatal("expected promoted validation failure")
+		}
+		if data, readErr := os.ReadFile(filepath.Join(dest, "managed")); readErr != nil || string(data) != "old" {
+			t.Fatalf("managed entry was not restored: %q, %v", data, readErr)
+		}
+		if data, readErr := os.ReadFile(filepath.Join(dest, "stale")); readErr != nil || string(data) != "old stale" {
+			t.Fatalf("stale entry was not restored: %q, %v", data, readErr)
+		}
+
+		stage = filepath.Join(root, ".component-stage-success")
+		writeActivationFile(t, filepath.Join(stage, "managed"), "new")
+		if err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
+			DestinationRoot: dest,
+			StagedRoot:      stage,
+			OwnedEntries:    []string{"managed"},
+			StaleEntries:    []string{"stale"},
+			Validate:        func(string) error { return nil },
+		}); err != nil {
+			t.Fatalf("successful stale activation: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(dest, "stale")); !os.IsNotExist(err) {
+			t.Fatalf("stale entry remains after success: %v", err)
+		}
+	})
+
 	t.Run("dry run does not mutate", func(t *testing.T) {
 		root := t.TempDir()
 		dest := filepath.Join(root, "component")
