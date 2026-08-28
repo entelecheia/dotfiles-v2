@@ -131,7 +131,7 @@ func TestSyncFilter_SecretInventoryBlockedAndBenignNeighbors(t *testing.T) {
 		blocked string
 		benign  string
 	}{
-		{blocked: ".ssh/id_rsa", benign: ".ssh-notes/known_hosts"},
+		{blocked: ".ssh/known_hosts", benign: ".ssh-notes/known_hosts"},
 		{blocked: ".gnupg/private-keys-v1.d/key", benign: ".gnupg-notes/key"},
 		{blocked: ".aws/credentials", benign: ".aws/credentials.example"},
 		{blocked: ".config/gcloud/credentials.db", benign: ".config/gcloud/credentials.db.bak"},
@@ -144,8 +144,19 @@ func TestSyncFilter_SecretInventoryBlockedAndBenignNeighbors(t *testing.T) {
 		{blocked: "credentials.json", benign: "credentials.example.json"},
 		{blocked: ".terraform.d/credentials.tfrc.json", benign: ".terraform.d/credentials.tfrc.example.json"},
 		{blocked: ".local/share/keyrings/login.keyring", benign: ".local/share/keyrings-notes/login.keyring"},
+		{blocked: "nested/ID_RSA", benign: "nested/id_rsa.pub"},
+		{blocked: "nested/ID_DSA", benign: "nested/id_dsa.pub"},
+		{blocked: "nested/ID_ECDSA", benign: "nested/id_ecdsa.pub"},
 		{blocked: "nested/ID_ED25519", benign: "nested/id_ed25519.pub"},
 		{blocked: "nested/certificate.PEM", benign: "nested/certificate.pem.txt"},
+		{blocked: "nested/private.KEY", benign: "nested/private.key.txt"},
+		{blocked: "nested/identity.P12", benign: "nested/identity.p12.txt"},
+		{blocked: "nested/identity.PFX", benign: "nested/identity.pfx.txt"},
+		{blocked: "nested/truststore.JKS", benign: "nested/truststore.jks.txt"},
+		{blocked: "nested/truststore.KEYSTORE", benign: "nested/truststore.keystore.txt"},
+		{blocked: "nested/secrets.KDBX", benign: "nested/secrets.kdbx.txt"},
+		{blocked: "nested/terraform.TFSTATE", benign: "nested/terraform.tfstate.txt"},
+		{blocked: "nested/terraform.TFSTATE.BACKUP", benign: "nested/terraform.tfstate.backup.txt"},
 		{blocked: "nested/serviceAccountKey.json", benign: "nested/serviceAccountKeys.json"},
 	}
 
@@ -187,6 +198,7 @@ func TestSensitiveOverrides(t *testing.T) {
 	})
 	want := []SensitiveOverride{
 		{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"},
+		{AllowPattern: "/.maru/secrets/app.token", DenyPattern: "/.maru/secrets"},
 		{AllowPattern: "/.maru/secrets/app.token", DenyPattern: "/.maru/secrets/**"},
 	}
 	if !slices.Equal(got, want) {

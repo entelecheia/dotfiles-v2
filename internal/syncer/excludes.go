@@ -8,6 +8,8 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/template"
@@ -87,6 +89,36 @@ var secretExcludePatterns = []string{
 	"/_sys/mcp.local.json",
 	".env",
 	".env.*",
+	// Root-anchored credential stores. Directory-only entries intentionally
+	// deny traversal at the root without classifying similarly named nested paths.
+	"/.ssh/",
+	"/.gnupg/",
+	"/.aws/credentials",
+	"/.config/gcloud/credentials.db",
+	"/.config/gh/hosts.yml",
+	"/.docker/config.json",
+	"/.kube/config",
+	"/.netrc",
+	"/.npmrc",
+	"/.pypirc",
+	"/credentials.json",
+	"/.terraform.d/credentials.tfrc.json",
+	"/.local/share/keyrings/",
+	// Private-key names and extensions are credential-bearing at any depth.
+	rsyncCaseFoldPattern("id_rsa"),
+	rsyncCaseFoldPattern("id_dsa"),
+	rsyncCaseFoldPattern("id_ecdsa"),
+	rsyncCaseFoldPattern("id_ed25519"),
+	rsyncCaseFoldPattern("*.pem"),
+	rsyncCaseFoldPattern("*.key"),
+	rsyncCaseFoldPattern("*.p12"),
+	rsyncCaseFoldPattern("*.pfx"),
+	rsyncCaseFoldPattern("*.jks"),
+	rsyncCaseFoldPattern("*.keystore"),
+	rsyncCaseFoldPattern("*.kdbx"),
+	rsyncCaseFoldPattern("*.tfstate"),
+	rsyncCaseFoldPattern("*.tfstate.backup"),
+	rsyncCaseFoldPattern("serviceAccountKey.json"),
 }
 
 // secretAllowBuiltins re-include harmless env templates ahead of the
@@ -95,6 +127,72 @@ var secretAllowBuiltins = []string{
 	".env.example",
 	".env.sample",
 	".env.template",
+}
+
+// SensitiveOverride reports an explicit allow.txt pattern that overlaps a
+// hardcoded secret deny pattern. It is raw engine data for callers to render;
+// it never changes the allow-before-deny transfer decision.
+type SensitiveOverride struct {
+	AllowPattern string
+	DenyPattern  string
+}
+
+// SensitiveOverrides returns de-duplicated, stable-sorted allow/deny overlaps.
+// The existing matcher remains the policy authority so this visibility helper
+// cannot alter rsync or preview filter ordering.
+func SensitiveOverrides(allowPatterns []string) []SensitiveOverride {
+	seen := make(map[SensitiveOverride]struct{})
+	var overrides []SensitiveOverride
+	for _, allow := range allowPatterns {
+		allow = strings.TrimSpace(allow)
+		if allow == "" || strings.HasPrefix(allow, "#") || isSecretAllowBuiltin(allow) {
+			continue
+		}
+		for _, deny := range secretExcludePatterns {
+			if !secretPatternsOverlap(allow, deny) {
+				continue
+			}
+			override := SensitiveOverride{AllowPattern: allow, DenyPattern: deny}
+			if _, ok := seen[override]; ok {
+				continue
+			}
+			seen[override] = struct{}{}
+			overrides = append(overrides, override)
+		}
+	}
+	sort.Slice(overrides, func(i, j int) bool {
+		if overrides[i].AllowPattern == overrides[j].AllowPattern {
+			return overrides[i].DenyPattern < overrides[j].DenyPattern
+		}
+		return overrides[i].AllowPattern < overrides[j].AllowPattern
+	})
+	return overrides
+}
+
+func isSecretAllowBuiltin(pattern string) bool {
+	return slices.Contains(secretAllowBuiltins, pattern)
+}
+
+func secretPatternsOverlap(allow, deny string) bool {
+	allowPattern := excludePattern{raw: allow}
+	denyPattern := excludePattern{raw: deny}
+	return patternMatchesPathOrAncestor(denyPattern, allow) ||
+		allowPattern.matches(deny, false) ||
+		allowPattern.matches(deny, true)
+}
+
+func patternMatchesPathOrAncestor(pattern excludePattern, path string) bool {
+	path = normalizeRel(path)
+	if pattern.matches(path, false) {
+		return true
+	}
+	parts := strings.Split(path, "/")
+	for i := 1; i < len(parts); i++ {
+		if pattern.matches(strings.Join(parts[:i], "/"), true) {
+			return true
+		}
+	}
+	return false
 }
 
 // commonArgs returns the rsync flags shared between pull and push.
