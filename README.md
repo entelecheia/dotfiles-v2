@@ -127,6 +127,14 @@ CLAUDE_CODE_TMPDIR="$MARU_TEMP/runtime/claude"
 
 Maru and external AI CLIs therefore resolve the same temporary-artifact root.
 
+### Sync secret policy
+
+`dot sync` excludes credential-bearing paths by default, including `.ssh`,
+`.gnupg`, common cloud and package-manager credentials, and private-key and
+keystore extensions. An operator can explicitly re-include a path in
+`allow.txt`; status and dry-run previews show every such sensitive override
+without changing the requested transfer decision.
+
 ### Build from source
 
 ```bash

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestParseTarget(t *testing.T) {
@@ -15,8 +16,10 @@ func TestParseTarget(t *testing.T) {
 		wantErr  bool
 	}{
 		{spec: "local:~/Dropbox/work", wantKind: TargetLocal, wantPath: "~/Dropbox/work"},
+		{spec: "local:/Volumes/Google Drive/work", wantKind: TargetLocal, wantPath: "/Volumes/Google Drive/work"},
 		{spec: "~/Dropbox/work", wantKind: TargetLocal, wantPath: "~/Dropbox/work"},
 		{spec: "ssh:me@host:~/workspace/work", wantKind: TargetSSH, wantHost: "me@host", wantPath: "~/workspace/work"},
+		{spec: "ssh:me@host:-relative-remote-path", wantKind: TargetSSH, wantHost: "me@host", wantPath: "-relative-remote-path"},
 		{spec: "ssh:me@host", wantErr: true},
 		{spec: "local:", wantErr: true},
 		{spec: "  ", wantErr: true},
@@ -37,6 +40,50 @@ func TestParseTarget(t *testing.T) {
 			t.Errorf("ParseTarget(%q) = %+v, want kind=%s path=%s host=%s",
 				c.spec, got, c.wantKind, c.wantPath, c.wantHost)
 		}
+	}
+}
+
+func TestParseTarget_RejectsUnsafeRawFields(t *testing.T) {
+	invalidUTF8 := string([]byte{'l', 'o', 'c', 'a', 'l', ':', 0xff})
+	cases := []struct {
+		name      string
+		spec      string
+		wantClass string
+	}{
+		{name: "empty spec", spec: "", wantClass: "empty"},
+		{name: "empty local path", spec: "local:", wantClass: "empty"},
+		{name: "empty ssh host", spec: "ssh::/srv/work", wantClass: "empty"},
+		{name: "empty ssh path", spec: "ssh:me@host:", wantClass: "empty"},
+		{name: "invalid UTF-8", spec: invalidUTF8, wantClass: "invalid UTF-8"},
+		{name: "unicode whitespace", spec: "local:/tmp\u00a0mirror", wantClass: "Unicode whitespace"},
+		{name: "tab", spec: "ssh:me\t@host:/srv/work", wantClass: "control"},
+		{name: "newline", spec: "local:/tmp\nmirror", wantClass: "control"},
+		{name: "c1 control", spec: "ssh:me@host:/srv/\u0085work", wantClass: "control"},
+		{name: "dash local path", spec: "local:-/tmp/mirror", wantClass: "leading option marker"},
+		{name: "dash bare path", spec: "-mirror", wantClass: "leading option marker"},
+		{name: "space ssh host", spec: "ssh:me @host:/srv/work", wantClass: "Unicode whitespace"},
+		{name: "dash ssh host", spec: "ssh:-oProxyCommand=bad:/srv/work", wantClass: "leading option marker"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseTarget(tc.spec)
+			if err == nil {
+				t.Fatalf("ParseTarget(%q) unexpectedly accepted %+v", tc.spec, got)
+			}
+			if got != (Target{}) {
+				t.Fatalf("ParseTarget(%q) returned target %+v with error %v", tc.spec, got, err)
+			}
+			if !strings.Contains(err.Error(), tc.wantClass) {
+				t.Errorf("ParseTarget(%q) error %q does not name %q", tc.spec, err, tc.wantClass)
+			}
+			if !utf8.ValidString(err.Error()) {
+				t.Errorf("ParseTarget(%q) error contains invalid UTF-8: %q", tc.spec, err)
+			}
+			if strings.ContainsAny(err.Error(), "\t\n\r\x00\u0085") {
+				t.Errorf("ParseTarget(%q) error leaks a raw control: %q", tc.spec, err)
+			}
+		})
 	}
 }
 

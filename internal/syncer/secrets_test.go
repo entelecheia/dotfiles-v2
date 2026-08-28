@@ -119,6 +119,139 @@ func TestSyncFilter_DoubleStarSecretAllowMatchesAtAnyDepth(t *testing.T) {
 	}
 }
 
+func TestSyncFilter_SecretInventoryBlockedAndBenignNeighbors(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.FilterMode = FilterModeExclude
+	f, err := newSyncFilter(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		blocked string
+		benign  string
+	}{
+		{blocked: ".ssh/known_hosts", benign: ".ssh-notes/known_hosts"},
+		{blocked: ".gnupg/private-keys-v1.d/key", benign: ".gnupg-notes/key"},
+		{blocked: ".aws/credentials", benign: ".aws/credentials.example"},
+		{blocked: ".config/gcloud/credentials.db", benign: ".config/gcloud/credentials.db.bak"},
+		{blocked: ".config/gh/hosts.yml", benign: ".config/gh/hosts.yaml"},
+		{blocked: ".docker/config.json", benign: ".docker/config.example.json"},
+		{blocked: ".kube/config", benign: ".kube/config.example"},
+		{blocked: ".netrc", benign: ".netrc.example"},
+		{blocked: ".npmrc", benign: ".npmrc.example"},
+		{blocked: ".pypirc", benign: ".pypirc.example"},
+		{blocked: "credentials.json", benign: "credentials.example.json"},
+		{blocked: ".terraform.d/credentials.tfrc.json", benign: ".terraform.d/credentials.tfrc.example.json"},
+		{blocked: ".local/share/keyrings/login.keyring", benign: ".local/share/keyrings-notes/login.keyring"},
+		{blocked: "nested/ID_RSA", benign: "nested/id_rsa.pub"},
+		{blocked: "nested/ID_DSA", benign: "nested/id_dsa.pub"},
+		{blocked: "nested/ID_ECDSA", benign: "nested/id_ecdsa.pub"},
+		{blocked: "nested/ID_ED25519", benign: "nested/id_ed25519.pub"},
+		{blocked: "nested/certificate.PEM", benign: "nested/certificate.pem.txt"},
+		{blocked: "nested/private.KEY", benign: "nested/private.key.txt"},
+		{blocked: "nested/identity.P12", benign: "nested/identity.p12.txt"},
+		{blocked: "nested/identity.PFX", benign: "nested/identity.pfx.txt"},
+		{blocked: "nested/truststore.JKS", benign: "nested/truststore.jks.txt"},
+		{blocked: "nested/truststore.KEYSTORE", benign: "nested/truststore.keystore.txt"},
+		{blocked: "nested/secrets.KDBX", benign: "nested/secrets.kdbx.txt"},
+		{blocked: "nested/terraform.TFSTATE", benign: "nested/terraform.tfstate.txt"},
+		{blocked: "nested/terraform.TFSTATE.BACKUP", benign: "nested/terraform.tfstate.backup.txt"},
+		{blocked: "nested/serviceAccountKey.json", benign: "nested/serviceAccountKeys.json"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.blocked, func(t *testing.T) {
+			if !f.shouldSkipFileOrAncestor(tc.blocked) {
+				t.Errorf("secret %q not skipped", tc.blocked)
+			}
+			if f.shouldSkipFileOrAncestor(tc.benign) {
+				t.Errorf("benign neighbor %q was skipped", tc.benign)
+			}
+		})
+	}
+}
+
+func TestSyncFilter_SecretRootAnchorsDoNotMatchNestedFiles(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.FilterMode = FilterModeExclude
+	f, err := newSyncFilter(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{
+		"nested/.npmrc",
+		"nested/.pypirc",
+		"nested/credentials.json",
+	} {
+		if f.shouldSkipFileOrAncestor(rel) {
+			t.Errorf("root-anchored secret rule incorrectly skipped %q", rel)
+		}
+	}
+}
+
+func TestSensitiveOverrides(t *testing.T) {
+	got := SensitiveOverrides([]string{
+		"/.maru/secrets/app.token",
+		"/.aws/credentials",
+		"/.aws/credentials",
+	})
+	want := []SensitiveOverride{
+		{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"},
+		{AllowPattern: "/.maru/secrets/app.token", DenyPattern: "/.maru/secrets"},
+		{AllowPattern: "/.maru/secrets/app.token", DenyPattern: "/.maru/secrets/**"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("SensitiveOverrides() = %#v, want %#v", got, want)
+	}
+	if got := SensitiveOverrides([]string{".env.example"}); got != nil {
+		t.Errorf("built-in template allow produced override findings: %#v", got)
+	}
+}
+
+func TestSensitiveOverrides_ReportsWildcardIntersections(t *testing.T) {
+	got := SensitiveOverrides([]string{"foo.*"})
+	want := SensitiveOverride{AllowPattern: "foo.*", DenyPattern: rsyncCaseFoldPattern("*.pem")}
+	if !slices.Contains(got, want) {
+		t.Errorf("SensitiveOverrides() = %#v, want wildcard intersection %#v", got, want)
+	}
+}
+
+func TestSecretPatternsOverlap_GlobIntersections(t *testing.T) {
+	pem := rsyncCaseFoldPattern("*.pem")
+	for _, tc := range []struct {
+		allow string
+		deny  string
+		want  bool
+	}{
+		{allow: "foo.*", deny: pem, want: true},
+		{allow: "docs/*", deny: pem, want: true},
+		{allow: "foo.txt", deny: pem, want: false},
+		{allow: "docs/*.txt", deny: pem, want: false},
+	} {
+		if got := secretPatternsOverlap(tc.allow, tc.deny); got != tc.want {
+			t.Errorf("secretPatternsOverlap(%q, %q) = %v, want %v", tc.allow, tc.deny, got, tc.want)
+		}
+	}
+}
+
+func TestSyncFilter_ExplicitSecretAllowPreservesTransferAndReportsOverride(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.FilterMode = FilterModeExclude
+	cfg.AllowPatterns = []string{"/.aws/credentials"}
+	f, err := newSyncFilter(cfg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.shouldSkipFileOrAncestor(".aws/credentials") {
+		t.Fatal("explicit allow no longer preserves transfer eligibility")
+	}
+	want := []SensitiveOverride{{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"}}
+	if got := SensitiveOverrides(cfg.AllowPatterns); !slices.Equal(got, want) {
+		t.Errorf("SensitiveOverrides() = %#v, want %#v", got, want)
+	}
+}
+
 func TestSyncFilter_SubmodulesAlwaysSkipped(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.FilterMode = FilterModeExclude

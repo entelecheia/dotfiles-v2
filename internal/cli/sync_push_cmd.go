@@ -48,7 +48,10 @@ disabled. Examples:
   dot sync push --propagate=update           # in-place updates only
 
 The per-workspace store (.dotfiles/) and intake staging area
-(inbox/gdrive/) are always excluded so they never round-trip to mirror.`,
+(inbox/gdrive/) are always excluded so they never round-trip to mirror.
+
+Previews, including --dry-run, display operator-approved sensitive overrides.
+Dry-run does not transfer files.`,
 		RunE:         runSyncPush,
 		SilenceUsage: true,
 	}
@@ -90,15 +93,21 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	overrides := syncer.SensitiveOverrides(cfg.AllowPatterns)
 
 	res, err := syncer.PushCommand(cmd.Context(), syncer.PushOptions{
-		State:    bs.State,
-		Config:   cfg,
-		Runner:   bs.Runner,
-		Mode:     mode,
-		DryRun:   dryRun,
-		Progress: renderSyncEvent(p, syncRender{cfg: cfg, mode: mode}),
-		Confirm:  confirmSync(cmd),
+		State:  bs.State,
+		Config: cfg,
+		Runner: bs.Runner,
+		Mode:   mode,
+		DryRun: dryRun,
+		Progress: renderSyncEvent(p, syncRender{
+			cfg:                cfg,
+			mode:               mode,
+			dryRun:             dryRun,
+			sensitiveOverrides: overrides,
+		}),
+		Confirm: confirmSync(cmd),
 	})
 	if err != nil {
 		return err

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "mirror",
   "profile": "sync",
   "configured": true,
@@ -19,6 +19,7 @@
   "machineNames": ["@MACHINE@"],
   "filterMode": "include",
   "allowCount": 0,
+  "sensitiveOverrides": [],
   "submoduleCount": 0,
   "propagation": {
     "create": true,

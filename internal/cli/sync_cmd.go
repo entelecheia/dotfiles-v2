@@ -3,6 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -11,6 +15,47 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/ws"
 )
+
+// printSensitiveOverrides renders the engine's complete, sorted policy
+// findings without changing the transfer decision they describe. statusMode
+// preserves status's key/value adjacency; push previews use a final section.
+func printSensitiveOverrides(p *Printer, overrides []syncer.SensitiveOverride, statusMode bool) {
+	if len(overrides) == 0 {
+		return
+	}
+	if statusMode {
+		p.KV("Sensitive overrides", fmt.Sprintf("%d allow rule(s) override built-in secret exclusions", len(overrides)))
+	} else {
+		p.Section(fmt.Sprintf("Sensitive overrides: %d", len(overrides)))
+	}
+	marker := ui.StyleWarning.Render(ui.MarkWarn)
+	for _, override := range overrides {
+		p.Bullet(marker, fmt.Sprintf("%s re-includes %s", escapeTerminalControls(override.AllowPattern), escapeTerminalControls(override.DenyPattern)))
+	}
+}
+
+// escapeTerminalControls preserves complete pattern text while replacing every
+// terminal control rune with its Go escape spelling. Invalid UTF-8 bytes are
+// represented as byte escapes instead of being dropped or replaced.
+func escapeTerminalControls(value string) string {
+	var escaped strings.Builder
+	for len(value) > 0 {
+		r, size := utf8.DecodeRuneInString(value)
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&escaped, "\\x%02x", value[0])
+			value = value[1:]
+			continue
+		}
+		if unicode.IsControl(r) {
+			quoted := strconv.QuoteRuneToASCII(r)
+			escaped.WriteString(quoted[1 : len(quoted)-1])
+		} else {
+			escaped.WriteRune(r)
+		}
+		value = value[size:]
+	}
+	return escaped.String()
+}
 
 func newSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -147,9 +192,11 @@ func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) bool {
 // command: the resolved config plus the two flag-derived tokens that appear
 // inside the progress lines.
 type syncRender struct {
-	cfg    *syncer.Config
-	mode   syncer.RunMode
-	strict bool
+	cfg                *syncer.Config
+	mode               syncer.RunMode
+	strict             bool
+	dryRun             bool
+	sensitiveOverrides []syncer.SensitiveOverride
 }
 
 // renderSyncEvent turns engine progress into the lines the sync commands have
@@ -164,10 +211,15 @@ func renderSyncEvent(p *Printer, r syncRender) func(syncer.SyncEvent) {
 		case syncer.SyncEventPushSSHStart:
 			p.Line("Push %s → %s (%s, direct rsync — no plan preview for ssh targets)",
 				cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
+			if r.dryRun {
+				p.Line("  (dry-run — no changes)")
+			}
+			printSensitiveOverrides(p, r.sensitiveOverrides, false)
 		case syncer.SyncEventPushPlanStart:
 			p.Line("Push plan for %s → %s (%s, mode=%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation, r.mode)
 		case syncer.SyncEventPushPlanReady:
 			printPushPlan(p, e.PushPlan)
+			printSensitiveOverrides(p, r.sensitiveOverrides, false)
 		case syncer.SyncEventPullSSHStart:
 			p.Line("Pull %s → %s (direct rsync --update; workspace files win ties)",
 				cfg.Target.RsyncDest(), cfg.LocalPath)

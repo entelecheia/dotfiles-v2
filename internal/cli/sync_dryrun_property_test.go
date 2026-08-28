@@ -10,10 +10,14 @@ package cli
 // builds it, not by passing the flag.
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
 // syncDryRunSandbox points every home-derived resolution at a fresh temp dir.
@@ -69,6 +73,33 @@ func TestSyncAndPeer_DryRunLeavesEmptyHomeUntouched(t *testing.T) {
 					strings.Join(tc.args, " "), len(added), strings.Join(added, "\n  "))
 			}
 		})
+	}
+}
+
+func TestSyncSensitiveOverridesDryRunNoMutation(t *testing.T) {
+	home := syncDryRunSandbox(t)
+	before := snapshotTree(t, home)
+	config := &syncer.Config{LocalPath: "/workspace/", MirrorPath: "/mirror/", Propagation: syncer.DefaultPropagationPolicy()}
+	var out bytes.Buffer
+	render := renderSyncEvent(&Printer{Out: &out, Err: io.Discard}, syncRender{
+		cfg:                config,
+		mode:               syncer.ModeManual,
+		dryRun:             true,
+		sensitiveOverrides: []syncer.SensitiveOverride{{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"}},
+	})
+	for _, event := range []syncer.SyncEvent{
+		{Kind: syncer.SyncEventPushPlanStart},
+		{Kind: syncer.SyncEventDryRunNotice},
+		{Kind: syncer.SyncEventPushPlanReady, PushPlan: &syncer.PushPlan{}},
+		{Kind: syncer.SyncEventPushSSHStart},
+	} {
+		render(event)
+	}
+	if after := snapshotTree(t, home); after != before {
+		t.Fatalf("sensitive dry-run diagnostics mutated the sandbox:\nbefore=%s\nafter=%s", before, after)
+	}
+	if strings.Contains(out.String(), "Apply this push plan?") || strings.Contains(out.String(), "Push to SSH target?") {
+		t.Fatalf("sensitive dry-run diagnostics prompted unexpectedly:\n%s", out.String())
 	}
 }
 

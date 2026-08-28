@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
+	"github.com/spf13/cobra"
 )
 
 func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
@@ -47,7 +51,7 @@ func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
 		LaunchdPlist: filepath.Join(root, "com.dotfiles.sync.plist"),
 	}}
 	document := buildSyncStatusJSON(cfg, status, scheduler)
-	if document.SchemaVersion != 1 || document.Kind != "mirror" || !document.Configured {
+	if document.SchemaVersion != 2 || document.Kind != "mirror" || !document.Configured {
 		t.Fatalf("unexpected status document: %+v", document)
 	}
 	if len(document.Jobs) != 2 || document.Jobs[0].IntervalSeconds != 600 {
@@ -63,6 +67,64 @@ func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
 	cfg.Profile = syncer.PeerProfile
 	if got := buildSyncStatusJSON(cfg, status, scheduler).Kind; got != "peer-profile" {
 		t.Fatalf("peer profile kind = %q, want peer-profile", got)
+	}
+}
+
+func TestSyncStatusJSONSensitiveOverridesZeroOneMany(t *testing.T) {
+	cfg := &syncer.Config{Profile: syncer.DefaultProfile, LocalPath: t.TempDir(), Target: syncer.Target{Kind: syncer.TargetLocal, Path: t.TempDir()}, Propagation: syncer.DefaultPropagationPolicy()}
+	scheduler := &syncer.Scheduler{Paths: &syncer.Paths{LaunchdPlist: filepath.Join(t.TempDir(), "com.dotfiles.sync.plist")}}
+
+	zero := buildSyncStatusJSON(cfg, &syncer.Status{LocalPath: cfg.LocalPath, Target: cfg.Target}, scheduler)
+	if zero.SensitiveOverrides == nil || len(zero.SensitiveOverrides) != 0 {
+		t.Fatalf("zero overrides = %#v, want non-nil empty array", zero.SensitiveOverrides)
+	}
+
+	status := &syncer.Status{
+		LocalPath: cfg.LocalPath,
+		Target:    cfg.Target,
+		SensitiveOverrides: []syncer.SensitiveOverride{
+			{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"},
+			{AllowPattern: "/.secrets/app.env", DenyPattern: "/.secrets/**"},
+		},
+	}
+	document := buildSyncStatusJSON(cfg, status, scheduler)
+	if got, want := document.SensitiveOverrides, []syncSensitiveOverrideJSON{
+		{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"},
+		{AllowPattern: "/.secrets/app.env", DenyPattern: "/.secrets/**"},
+	}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("sensitive overrides = %#v, want %#v", got, want)
+	}
+}
+
+func TestSyncStatusJSONSensitiveOverridesPurityAndEscaping(t *testing.T) {
+	cfg := &syncer.Config{Profile: syncer.DefaultProfile, LocalPath: t.TempDir(), Target: syncer.Target{Kind: syncer.TargetLocal, Path: t.TempDir()}, Propagation: syncer.DefaultPropagationPolicy()}
+	status := &syncer.Status{
+		LocalPath: cfg.LocalPath,
+		Target:    cfg.Target,
+		SensitiveOverrides: []syncer.SensitiveOverride{{
+			AllowPattern: "/.secrets/" + strings.Repeat("long-", 64) + "\x1b[31m\napp.env",
+			DenyPattern:  "/.secrets/**\t",
+		}},
+	}
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	if err := writeSyncStatusJSON(cmd, cfg, status, &syncer.Scheduler{Paths: &syncer.Paths{LaunchdPlist: filepath.Join(t.TempDir(), "com.dotfiles.sync.plist")}}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "Sensitive overrides:") {
+		t.Fatalf("JSON stdout is contaminated: %q", got)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("JSON stdout is incomplete or invalid: %v\n%s", err, got)
+	}
+	if !strings.Contains(got, "\\u001b") || !strings.Contains(got, "\\napp.env") || !strings.Contains(got, "\\t") {
+		t.Fatalf("control values were not JSON escaped completely:\n%s", got)
+	}
+	if strings.Index(got, "\"allowCount\"") > strings.Index(got, "\"sensitiveOverrides\"") || strings.Index(got, "\"sensitiveOverrides\"") > strings.Index(got, "\"submoduleCount\"") {
+		t.Fatalf("sensitiveOverrides field order drifted:\n%s", got)
 	}
 }
 

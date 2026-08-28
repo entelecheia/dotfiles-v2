@@ -22,6 +22,9 @@ disabled. Examples:
 The per-workspace store (.dotfiles/) and intake staging area
 (inbox/gdrive/) are always excluded so they never round-trip to mirror.
 
+Previews, including --dry-run, display operator-approved sensitive overrides.
+Dry-run does not transfer files.
+
 ```
 dot sync push [flags]
 ```
