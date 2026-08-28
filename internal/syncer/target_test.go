@@ -16,7 +16,6 @@ func TestParseTarget(t *testing.T) {
 		wantErr  bool
 	}{
 		{spec: "local:~/Dropbox/work", wantKind: TargetLocal, wantPath: "~/Dropbox/work"},
-		{spec: "local:/Volumes/Google Drive/work", wantKind: TargetLocal, wantPath: "/Volumes/Google Drive/work"},
 		{spec: "~/Dropbox/work", wantKind: TargetLocal, wantPath: "~/Dropbox/work"},
 		{spec: "ssh:me@host:~/workspace/work", wantKind: TargetSSH, wantHost: "me@host", wantPath: "~/workspace/work"},
 		{spec: "ssh:me@host:-relative-remote-path", wantKind: TargetSSH, wantHost: "me@host", wantPath: "-relative-remote-path"},
@@ -56,6 +55,15 @@ func TestParseTarget_RejectsUnsafeRawFields(t *testing.T) {
 		{name: "empty ssh path", spec: "ssh:me@host:", wantClass: "empty"},
 		{name: "invalid UTF-8", spec: invalidUTF8, wantClass: "invalid UTF-8"},
 		{name: "unicode whitespace", spec: "local:/tmp\u00a0mirror", wantClass: "Unicode whitespace"},
+		{name: "local leading ASCII space", spec: "local: /tmp/mirror", wantClass: "Unicode whitespace"},
+		{name: "local internal ASCII space", spec: "local:/tmp/mirror copy", wantClass: "Unicode whitespace"},
+		{name: "local trailing ASCII space", spec: "local:/tmp/mirror ", wantClass: "Unicode whitespace"},
+		{name: "bare leading ASCII space", spec: " /tmp/mirror", wantClass: "Unicode whitespace"},
+		{name: "bare internal ASCII space", spec: "/tmp/mirror copy", wantClass: "Unicode whitespace"},
+		{name: "bare trailing ASCII space", spec: "/tmp/mirror ", wantClass: "Unicode whitespace"},
+		{name: "ssh host ASCII space", spec: "ssh:me @host:/srv/work", wantClass: "Unicode whitespace"},
+		{name: "ssh path ASCII space", spec: "ssh:me@host:/srv/work copy", wantClass: "Unicode whitespace"},
+		{name: "ssh trailing ASCII space", spec: "ssh:me@host:/srv/work ", wantClass: "Unicode whitespace"},
 		{name: "tab", spec: "ssh:me\t@host:/srv/work", wantClass: "control"},
 		{name: "newline", spec: "local:/tmp\nmirror", wantClass: "control"},
 		{name: "c1 control", spec: "ssh:me@host:/srv/\u0085work", wantClass: "control"},
