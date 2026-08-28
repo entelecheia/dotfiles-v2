@@ -1,8 +1,18 @@
 package module
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	internalexec "github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 func TestFontsManifest_AllSelectableFamiliesPinned(t *testing.T) {
@@ -36,5 +46,40 @@ func TestFontsManifest_RejectsUnknownFamilyBeforeDownload(t *testing.T) {
 func TestFonts_RejectsSHA256MismatchWithoutActivation(t *testing.T) {
 	if fontDigestMatches("expected", "observed") {
 		t.Fatal("mismatched digest accepted")
+	}
+}
+
+func TestActivateFontComponent_StagesAlongsideDestination(t *testing.T) {
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	entry, err := writer.Create("FiraCode-Regular.ttf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("font fixture")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDownload := downloadFontFile
+	t.Cleanup(func() { downloadFontFile = originalDownload })
+	digest := sha256.Sum256(archive.Bytes())
+	downloadFontFile = func(_ context.Context, _ *internalexec.Runner, _ string, destination string) (string, error) {
+		if err := os.WriteFile(destination, archive.Bytes(), 0600); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(digest[:]), nil
+	}
+
+	destination := filepath.Join(t.TempDir(), "Library", "Fonts", "FiraCode")
+	rc := &RunContext{Runner: internalexec.NewRunner(false, slog.Default())}
+	pin := fontAssetPin{Family: "FiraCode", AssetName: "FiraCode.zip", URL: "https://example.invalid/FiraCode.zip", SHA256: hex.EncodeToString(digest[:])}
+	if err := activateFontComponent(context.Background(), rc, destination, pin); err != nil {
+		t.Fatalf("activateFontComponent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "FiraCode-Regular.ttf")); err != nil {
+		t.Fatalf("activated font unavailable: %v", err)
 	}
 }

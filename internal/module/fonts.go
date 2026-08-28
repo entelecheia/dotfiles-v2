@@ -130,29 +130,25 @@ func activateFontComponent(ctx context.Context, rc *RunContext, destination stri
 	if err != nil {
 		return fmt.Errorf("opening font archive: %w", err)
 	}
-	extractRoot := filepath.Join(stage, "content")
-	if err := os.MkdirAll(extractRoot, 0755); err != nil {
-		return err
-	}
-	if err := fileutil.ExtractZip(reader, extractRoot); err != nil {
+	if err := fileutil.ExtractZip(reader, stage); err != nil {
 		return fmt.Errorf("extracting font %s: %w", pin.Family, err)
 	}
-	owned, err := fontOwnedFiles(extractRoot)
+	owned, err := fontOwnedFiles(stage)
 	if err != nil {
 		return err
 	}
-	files, err := hashManagedFiles(extractRoot, owned)
+	files, err := hashManagedFiles(stage, owned)
 	if err != nil {
 		return err
 	}
 	component := "nerd-font-" + pin.Family
 	marker := componentPinMarker{Schema: componentPinMarkerSchema, Component: component, Source: pin.URL, Owned: owned, Files: files}
 	markerName := markerFileName(component)
-	if err := writeComponentPinMarker(filepath.Join(extractRoot, markerName), marker); err != nil {
+	if err := writeComponentPinMarker(filepath.Join(stage, markerName), marker); err != nil {
 		return err
 	}
 	activationOwned := append(append([]string(nil), owned...), markerName)
-	if err := fileutil.ActivateOwnedComponent(rc.Runner, fileutil.ActivationOptions{DestinationRoot: destination, StagedRoot: extractRoot, OwnedEntries: activationOwned, Validate: func(root string) error { return validateFontLayout(root, owned) }}); err != nil {
+	if err := fileutil.ActivateOwnedComponent(rc.Runner, fileutil.ActivationOptions{DestinationRoot: destination, StagedRoot: stage, OwnedEntries: activationOwned, Validate: func(root string) error { return validateFontLayout(root, owned) }}); err != nil {
 		return fmt.Errorf("activating font %s: %w", pin.Family, err)
 	}
 	return nil
