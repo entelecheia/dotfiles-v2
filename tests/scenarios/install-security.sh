@@ -48,7 +48,9 @@ assert_case() {
   old_sum=$($SYSTEM_SHA256SUM "$install/dot" | sed 's/ .*//')
   old_link=$(readlink "$install/dotfiles")
 
-  for tool in bash uname tr head grep sed dirname basename mkdir mktemp rm chmod ln readlink tar cp sleep; do
+  # GNU tar uses gzip from PATH for -z extraction. Keep that real decompressor
+  # available while the fixture deliberately controls curl, digest tools, and mv.
+  for tool in bash uname tr head grep sed dirname basename mkdir mktemp rm chmod ln readlink tar gzip cp sleep; do
     ln -s "$(command -v "$tool")" "$fake/$tool"
   done
   rm "$fake/uname"
