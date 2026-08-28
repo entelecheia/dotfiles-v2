@@ -343,8 +343,8 @@ func TestExtractTarGz_ArchiveLimits(t *testing.T) {
 		max  int64
 		want bool
 	}{
-		{"entry exact", 8388608, DefaultArchiveLimits.MaxEntryBytes, true},
-		{"entry boundary plus one", 8388609, DefaultArchiveLimits.MaxEntryBytes, false},
+		{"entry exact", 16777216, DefaultArchiveLimits.MaxEntryBytes, true},
+		{"entry boundary plus one", 16777217, DefaultArchiveLimits.MaxEntryBytes, false},
 		{"total exact", 402653184, DefaultArchiveLimits.MaxTotalExtractedBytes, true},
 		{"total boundary plus one", 402653185, DefaultArchiveLimits.MaxTotalExtractedBytes, false},
 		{"ratio exact", 8, DefaultArchiveLimits.MaxExpansionRatio, true},
@@ -380,7 +380,7 @@ func TestExtractTarGz_ArchiveLimits(t *testing.T) {
 }
 
 func TestExtractZip_ArchiveLimits(t *testing.T) {
-	if DefaultArchiveLimits.MaxEntries != 4096 || DefaultArchiveLimits.MaxCompressedBytes != 201326592 {
+	if DefaultArchiveLimits.MaxEntries != 4096 || DefaultArchiveLimits.MaxCompressedBytes != 201326592 || DefaultArchiveLimits.MaxEntryBytes != 16777216 {
 		t.Fatalf("unexpected production limits: %+v", DefaultArchiveLimits)
 	}
 	limits := DefaultArchiveLimits
@@ -416,20 +416,23 @@ func TestDownloadArchive_CompressedLimit(t *testing.T) {
 }
 
 func TestArchiveLimits_MeasuredSupportedArtifacts(t *testing.T) {
-	artifacts := map[string]struct{ compressed, extracted, entries int64 }{
+	artifacts := map[string]struct{ compressed, extracted, largestEntry, entries int64 }{
 		"FiraCode":                 {compressed: 28602426, extracted: 164000000, entries: 500},
 		"JetBrainsMono":            {compressed: 133975870, extracted: 243185440, entries: 98},
 		"Hack":                     {compressed: 18694868, extracted: 145000000, entries: 700},
-		"dot-darwin-amd64-v2.69.2": {compressed: 5766495, extracted: 14817700, entries: 3},
-		"dot-darwin-arm64-v2.69.2": {compressed: 5766495, extracted: 14817700, entries: 3},
-		"dot-linux-amd64-v2.69.2":  {compressed: 5766495, extracted: 14817700, entries: 3},
-		"dot-linux-arm64-v2.69.2":  {compressed: 5766495, extracted: 14817700, entries: 3},
+		"dot-darwin-amd64-v2.69.2": {compressed: 5766495, extracted: 14817700, largestEntry: 14734288, entries: 3},
+		"dot-darwin-arm64-v2.69.2": {compressed: 5355772, extracted: 13822278, largestEntry: 13738866, entries: 3},
+		"dot-linux-amd64-v2.69.2":  {compressed: 5646768, extracted: 14448268, largestEntry: 14364856, entries: 3},
+		"dot-linux-arm64-v2.69.2":  {compressed: 5135535, extracted: 13452940, largestEntry: 13369528, entries: 3},
 		"oh-my-zsh-146461f":        {compressed: 3340957, extracted: 7126554, entries: 1492},
 	}
 	for name, artifact := range artifacts {
 		t.Run(name, func(t *testing.T) {
 			if err := DefaultArchiveLimits.ValidateMeasured(artifact.compressed, artifact.extracted, artifact.entries); err != nil {
 				t.Fatal(err)
+			}
+			if artifact.largestEntry > DefaultArchiveLimits.MaxEntryBytes {
+				t.Fatalf("largest entry %d exceeds per-entry limit %d", artifact.largestEntry, DefaultArchiveLimits.MaxEntryBytes)
 			}
 		})
 	}

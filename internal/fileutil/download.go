@@ -37,7 +37,7 @@ type ArchiveLimits struct {
 // release assets while leaving no unbounded extraction surface.
 var DefaultArchiveLimits = ArchiveLimits{
 	MaxCompressedBytes:     201326592,
-	MaxEntryBytes:          8388608,
+	MaxEntryBytes:          16777216,
 	MaxTotalExtractedBytes: 402653184,
 	MaxEntries:             4096,
 	MaxExpansionRatio:      8,
