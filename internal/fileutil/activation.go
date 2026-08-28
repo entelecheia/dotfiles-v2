@@ -24,8 +24,12 @@ type ActivationOptions struct {
 }
 
 // activationRename is a narrow test seam for promotion and rollback failures.
-// Production always uses os.Rename.
-var activationRename = os.Rename
+// Production always uses the common parent Root, which keeps the complete
+// transaction below the component parent even if a path is replaced while the
+// transaction is in progress.
+var activationRename = func(root *os.Root, oldName, newName string) error {
+	return root.Rename(oldName, newName)
+}
 
 type activationMove struct {
 	entry       string
@@ -64,66 +68,93 @@ func ActivateOwnedComponent(runner *exec.Runner, opts ActivationOptions) error {
 		return nil
 	}
 
-	if err := os.MkdirAll(opts.DestinationRoot, 0755); err != nil {
-		return fmt.Errorf("preparing component destination: %w", err)
-	}
-	rollbackRoot, err := os.MkdirTemp(filepath.Dir(opts.DestinationRoot), "."+filepath.Base(opts.DestinationRoot)+".rollback-")
+	parentRoot, err := os.OpenRoot(filepath.Dir(opts.DestinationRoot))
 	if err != nil {
-		return fmt.Errorf("creating rollback directory: %w", err)
+		return fmt.Errorf("opening component parent: %w", err)
+	}
+	defer parentRoot.Close()
+
+	destinationName := filepath.Base(opts.DestinationRoot)
+	stageName := filepath.Base(opts.StagedRoot)
+	if err := rejectSymlinkComponents(parentRoot, destinationName, true); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("checking component destination: %w", err)
+	}
+	if _, err := parentRoot.Lstat(destinationName); os.IsNotExist(err) {
+		if err := parentRoot.Mkdir(destinationName, 0755); err != nil {
+			return fmt.Errorf("preparing component destination: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("checking component destination: %w", err)
+	}
+	if err := rejectSymlinkComponents(parentRoot, stageName, true); err != nil {
+		return fmt.Errorf("checking activation stage: %w", err)
+	}
+	rollbackName, err := makeActivationRollbackRoot(parentRoot, destinationName)
+	if err != nil {
+		return err
 	}
 
 	moves := make([]activationMove, 0, len(opts.OwnedEntries))
 	for _, entry := range opts.OwnedEntries {
 		move := activationMove{entry: entry}
-		destination := filepath.Join(opts.DestinationRoot, entry)
-		rollback := filepath.Join(rollbackRoot, entry)
-		stage := filepath.Join(opts.StagedRoot, entry)
+		destination := filepath.Join(destinationName, entry)
+		rollback := filepath.Join(rollbackName, entry)
+		stage := filepath.Join(stageName, entry)
 
-		if _, err := os.Lstat(destination); err == nil {
-			if err := os.MkdirAll(filepath.Dir(rollback), 0755); err != nil {
-				return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("preparing rollback parent for %q: %w", entry, err))
+		if err := rejectSymlinkComponents(parentRoot, destination, false); err != nil && !os.IsNotExist(err) {
+			return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("checking active entry %q: %w", entry, err))
+		}
+		if err := rejectSymlinkComponents(parentRoot, stage, false); err != nil {
+			return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("checking staged entry %q: %w", entry, err))
+		}
+		if _, err := parentRoot.Lstat(destination); err == nil {
+			if err := parentRoot.MkdirAll(filepath.Dir(rollback), 0755); err != nil {
+				return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("preparing rollback parent for %q: %w", entry, err))
 			}
-			if err := activationRename(destination, rollback); err != nil {
-				return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("moving active entry %q to rollback: %w", entry, err))
+			if err := activationRename(parentRoot, destination, rollback); err != nil {
+				return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("moving active entry %q to rollback: %w", entry, err))
 			}
 			move.hadPrevious = true
 		} else if !os.IsNotExist(err) {
-			return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("checking active entry %q: %w", entry, err))
+			return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("checking active entry %q: %w", entry, err))
 		}
 
-		if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+		if err := parentRoot.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 			moves = append(moves, move)
-			return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("preparing destination parent for %q: %w", entry, err))
+			return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("preparing destination parent for %q: %w", entry, err))
 		}
-		if err := activationRename(stage, destination); err != nil {
+		if err := activationRename(parentRoot, stage, destination); err != nil {
 			moves = append(moves, move)
-			return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("promoting staged entry %q: %w", entry, err))
+			return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("promoting staged entry %q: %w", entry, err))
 		}
 		move.promoted = true
 		moves = append(moves, move)
 	}
 	for _, entry := range opts.StaleEntries {
 		move := activationMove{entry: entry}
-		destination := filepath.Join(opts.DestinationRoot, entry)
-		rollback := filepath.Join(rollbackRoot, entry)
-		if _, err := os.Lstat(destination); err == nil {
-			if err := os.MkdirAll(filepath.Dir(rollback), 0755); err != nil {
-				return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("preparing stale rollback parent for %q: %w", entry, err))
+		destination := filepath.Join(destinationName, entry)
+		rollback := filepath.Join(rollbackName, entry)
+		if err := rejectSymlinkComponents(parentRoot, destination, false); err != nil && !os.IsNotExist(err) {
+			return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("checking stale entry %q: %w", entry, err))
+		}
+		if _, err := parentRoot.Lstat(destination); err == nil {
+			if err := parentRoot.MkdirAll(filepath.Dir(rollback), 0755); err != nil {
+				return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("preparing stale rollback parent for %q: %w", entry, err))
 			}
-			if err := activationRename(destination, rollback); err != nil {
-				return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("moving stale active entry %q to rollback: %w", entry, err))
+			if err := activationRename(parentRoot, destination, rollback); err != nil {
+				return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("moving stale active entry %q to rollback: %w", entry, err))
 			}
 			move.hadPrevious = true
 		} else if !os.IsNotExist(err) {
-			return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("checking stale active entry %q: %w", entry, err))
+			return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("checking stale active entry %q: %w", entry, err))
 		}
 		moves = append(moves, move)
 	}
 
 	if err := opts.Validate(opts.DestinationRoot); err != nil {
-		return rollbackActivation(opts, rollbackRoot, moves, fmt.Errorf("validating promoted component: %w", err))
+		return rollbackActivation(parentRoot, destinationName, rollbackName, moves, fmt.Errorf("validating promoted component: %w", err))
 	}
-	if err := os.RemoveAll(rollbackRoot); err != nil {
+	if err := parentRoot.RemoveAll(rollbackName); err != nil {
 		return fmt.Errorf("removing rollback directory: %w", err)
 	}
 	return nil
@@ -164,32 +195,64 @@ func validateActivationOptions(opts ActivationOptions) error {
 	return nil
 }
 
-func rollbackActivation(opts ActivationOptions, rollbackRoot string, moves []activationMove, primary error) error {
+func makeActivationRollbackRoot(root *os.Root, destinationName string) (string, error) {
+	for i := 0; i < 100; i++ {
+		name := fmt.Sprintf(".%s.rollback-%d", destinationName, i)
+		if err := root.Mkdir(name, 0700); err == nil {
+			return name, nil
+		} else if !os.IsExist(err) {
+			return "", fmt.Errorf("creating rollback directory: %w", err)
+		}
+	}
+	return "", errors.New("creating rollback directory: exhausted unique names")
+}
+
+func rejectSymlinkComponents(root *os.Root, path string, includeFinal bool) error {
+	parts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	for i := range parts {
+		if parts[i] == "." || parts[i] == "" {
+			continue
+		}
+		if i == len(parts)-1 && !includeFinal {
+			break
+		}
+		info, err := root.Lstat(filepath.Join(parts[:i+1]...))
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path component %q is a symbolic link", filepath.Join(parts[:i+1]...))
+		}
+	}
+	return nil
+}
+
+func rollbackActivation(root *os.Root, destinationName, rollbackName string, moves []activationMove, primary error) error {
 	var rollbackErr error
 	for i := len(moves) - 1; i >= 0; i-- {
 		move := moves[i]
-		destination := filepath.Join(opts.DestinationRoot, move.entry)
+		destination := filepath.Join(destinationName, move.entry)
 		if move.promoted {
-			if err := os.RemoveAll(destination); err != nil {
+			if err := root.RemoveAll(destination); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("removing promoted entry %q: %w", move.entry, err))
 				continue
 			}
 		}
 		if move.hadPrevious {
-			rollback := filepath.Join(rollbackRoot, move.entry)
-			if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+			rollback := filepath.Join(rollbackName, move.entry)
+			if err := root.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("preparing restore parent for %q: %w", move.entry, err))
 				continue
 			}
-			if err := activationRename(rollback, destination); err != nil {
+			if err := activationRename(root, rollback, destination); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restoring active entry %q: %w", move.entry, err))
 			}
 		}
 	}
 	if rollbackErr != nil {
-		return errors.Join(primary, fmt.Errorf("rollback artifacts preserved at %q: %w", rollbackRoot, rollbackErr))
+		return errors.Join(primary, fmt.Errorf("rollback artifacts preserved at %q: %w", rollbackName, rollbackErr))
 	}
-	if err := os.RemoveAll(rollbackRoot); err != nil {
+	if err := root.RemoveAll(rollbackName); err != nil {
 		return errors.Join(primary, fmt.Errorf("removing rollback directory: %w", err))
 	}
 	return primary

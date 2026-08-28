@@ -62,11 +62,11 @@ func TestActivateOwnedComponent(t *testing.T) {
 
 		oldRename := activationRename
 		t.Cleanup(func() { activationRename = oldRename })
-		activationRename = func(oldpath, newpath string) error {
-			if oldpath == filepath.Join(stage, "managed") && newpath == filepath.Join(dest, "managed") {
+		activationRename = func(root *os.Root, oldpath, newpath string) error {
+			if oldpath == filepath.Join(filepath.Base(stage), "managed") && newpath == filepath.Join(filepath.Base(dest), "managed") {
 				return errors.New("injected promotion failure")
 			}
-			return os.Rename(oldpath, newpath)
+			return root.Rename(oldpath, newpath)
 		}
 
 		err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
@@ -101,14 +101,14 @@ func TestActivateOwnedComponent(t *testing.T) {
 
 		oldRename := activationRename
 		t.Cleanup(func() { activationRename = oldRename })
-		activationRename = func(oldpath, newpath string) error {
-			if oldpath == filepath.Join(stage, "managed") && newpath == filepath.Join(dest, "managed") {
+		activationRename = func(root *os.Root, oldpath, newpath string) error {
+			if oldpath == filepath.Join(filepath.Base(stage), "managed") && newpath == filepath.Join(filepath.Base(dest), "managed") {
 				return errors.New("injected promotion failure")
 			}
-			if strings.Contains(oldpath, ".component.rollback-") && newpath == filepath.Join(dest, "managed") {
+			if strings.Contains(oldpath, ".component.rollback-") && newpath == filepath.Join(filepath.Base(dest), "managed") {
 				return errors.New("injected restoration failure")
 			}
-			return os.Rename(oldpath, newpath)
+			return root.Rename(oldpath, newpath)
 		}
 
 		err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
@@ -249,6 +249,59 @@ func TestActivateOwnedComponent(t *testing.T) {
 		}
 		if data, err := os.ReadFile(filepath.Join(dest, "managed")); err != nil || string(data) != "old" {
 			t.Fatalf("dry run changed active entry: %q, %v", data, err)
+		}
+	})
+
+	t.Run("rejects symlinked component root without touching its target", func(t *testing.T) {
+		root := t.TempDir()
+		external := filepath.Join(root, "external")
+		dest := filepath.Join(root, "component")
+		stage := filepath.Join(root, ".component-stage")
+		writeActivationFile(t, filepath.Join(external, "managed"), "outside old")
+		writeActivationFile(t, filepath.Join(stage, "managed"), "new")
+		if err := os.Symlink(external, dest); err != nil {
+			t.Fatal(err)
+		}
+
+		err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
+			DestinationRoot: dest,
+			StagedRoot:      stage,
+			OwnedEntries:    []string{"managed"},
+			Validate:        func(string) error { return nil },
+		})
+		if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+			t.Fatalf("activation error = %v, want symlink refusal", err)
+		}
+		if data, readErr := os.ReadFile(filepath.Join(external, "managed")); readErr != nil || string(data) != "outside old" {
+			t.Fatalf("external file changed: %q, %v", data, readErr)
+		}
+	})
+
+	t.Run("rejects symlinked intermediate path without touching its target", func(t *testing.T) {
+		root := t.TempDir()
+		dest := filepath.Join(root, "component")
+		stage := filepath.Join(root, ".component-stage")
+		external := filepath.Join(root, "external")
+		writeActivationFile(t, filepath.Join(external, "font.ttf"), "outside old")
+		writeActivationFile(t, filepath.Join(stage, "nested", "font.ttf"), "new")
+		if err := os.MkdirAll(dest, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(external, filepath.Join(dest, "nested")); err != nil {
+			t.Fatal(err)
+		}
+
+		err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
+			DestinationRoot: dest,
+			StagedRoot:      stage,
+			OwnedEntries:    []string{filepath.Join("nested", "font.ttf")},
+			Validate:        func(string) error { return nil },
+		})
+		if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+			t.Fatalf("activation error = %v, want symlink refusal", err)
+		}
+		if data, readErr := os.ReadFile(filepath.Join(external, "font.ttf")); readErr != nil || string(data) != "outside old" {
+			t.Fatalf("external file changed: %q, %v", data, readErr)
 		}
 	})
 }

@@ -75,15 +75,6 @@ func (m componentPinMarker) validate() error {
 
 func ohMyZshOwnedEntries() []string { return append([]string(nil), expectedOhMyZshOwnedEntries...) }
 
-func containsShellSourcePin(name string) bool {
-	for _, pin := range shellSourcePins {
-		if pin.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func staleOwnedEntries(previous, desired []string) []string {
 	desiredSet := make(map[string]struct{}, len(desired))
 	for _, entry := range desired {
@@ -97,6 +88,27 @@ func staleOwnedEntries(previous, desired []string) []string {
 	}
 	sort.Strings(stale)
 	return stale
+}
+
+// trustedStaleOwnedEntries returns entries eligible for deletion only when the
+// prior marker identifies the same compiled source and its ownership stays
+// within the immutable ownership set compiled into this binary. A marker is
+// integrity evidence for an installed component, not authority to nominate
+// arbitrary operator paths for removal.
+func trustedStaleOwnedEntries(previous componentPinMarker, pin gitComponentPin, desired []string) []string {
+	if previous.Component != pin.Name || previous.Source != pin.Repository || len(pin.OwnedEntries) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(pin.OwnedEntries))
+	for _, entry := range pin.OwnedEntries {
+		allowed[entry] = struct{}{}
+	}
+	for _, entry := range previous.Owned {
+		if _, ok := allowed[entry]; !ok {
+			return nil
+		}
+	}
+	return staleOwnedEntries(previous.Owned, desired)
 }
 
 func legacyRefreshRequiresInstall(hasRefresh, hasMarker bool) bool { return hasRefresh && !hasMarker }
@@ -338,8 +350,8 @@ func activateGitComponent(ctx context.Context, rc *RunContext, destination strin
 		return err
 	}
 	var stale []string
-	if previous, err := readComponentPinMarker(filepath.Join(destination, markerName)); err == nil && previous.Component == pin.Name {
-		stale = staleOwnedEntries(previous.Owned, owned)
+	if previous, err := readComponentPinMarker(filepath.Join(destination, markerName)); err == nil {
+		stale = trustedStaleOwnedEntries(previous, pin, owned)
 	}
 	activationOwned := append(append([]string(nil), owned...), markerName)
 	if err := fileutil.ActivateOwnedComponent(rc.Runner, fileutil.ActivationOptions{

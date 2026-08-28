@@ -2,6 +2,8 @@ package module
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -88,5 +90,59 @@ func TestHashManagedFiles_RecordsSafeSymlinkIdentity(t *testing.T) {
 	}
 	if _, err := hashManagedFiles(root, []string{"managed-link"}); err == nil {
 		t.Fatal("absolute managed symlink accepted")
+	}
+}
+
+func TestActivateGitComponent_TamperedMarkerCannotDeleteUnownedEntry(t *testing.T) {
+	original := runPinnedGit
+	t.Cleanup(func() { runPinnedGit = original })
+	commit := "146461f7c6d95f4ba1220559d66eb113418b40a8"
+	pin := gitComponentPin{
+		Name: "fixture", Repository: "https://example.invalid/fixture.git", Commit: commit,
+		RequiredPaths: []string{"managed"}, OwnedEntries: []string{"managed"},
+	}
+	runPinnedGit = func(_ context.Context, _ *internalexec.Runner, args ...string) (*internalexec.Result, error) {
+		if args[0] == "clone" {
+			stage := args[len(args)-1]
+			if err := os.MkdirAll(stage, 0755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(stage, "managed"), []byte("new"), 0600); err != nil {
+				return nil, err
+			}
+		}
+		if args[len(args)-2] == "rev-parse" {
+			return &internalexec.Result{Stdout: commit + "\n"}, nil
+		}
+		return &internalexec.Result{}, nil
+	}
+
+	destination := filepath.Join(t.TempDir(), "component")
+	if err := os.MkdirAll(destination, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "custom"), []byte("operator data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tampered, err := json.Marshal(componentPinMarker{
+		Schema: componentPinMarkerSchema, Component: pin.Name, Source: pin.Repository, Commit: commit,
+		Owned: []string{"custom"}, Files: map[string]string{"custom": "not trusted"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, markerFileName(pin.Name)), tampered, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	rc := &RunContext{Runner: internalexec.NewRunner(false, slog.Default())}
+	if err := activateGitComponent(context.Background(), rc, destination, pin); err != nil {
+		t.Fatalf("activateGitComponent: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(destination, "custom")); err != nil || string(data) != "operator data" {
+		t.Fatalf("unowned entry changed: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(destination, "managed")); err != nil || string(data) != "new" {
+		t.Fatalf("managed entry = %q, %v", data, err)
 	}
 }

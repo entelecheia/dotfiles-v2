@@ -91,89 +91,11 @@ func (m *FontsModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, 
 	return &ApplyResult{Changed: true, Messages: messages}, nil
 }
 
-// activateFontWithLegacyMigration removes only the selected family's old
-// root-level files when the prior timestamp marker proves the old layout was
-// installed by dot. Other font families remain outside this transaction.
+// activateFontWithLegacyMigration leaves root-level legacy files in place.
+// A refresh timestamp has no per-file inventory or digest, so it cannot prove
+// that a same-prefix font belongs to dot rather than the operator.
 func activateFontWithLegacyMigration(ctx context.Context, rc *RunContext, destination string, pin fontAssetPin) error {
-	fontRoot := filepath.Dir(destination)
-	legacy, err := legacyFontOwnedEntries(fontRoot, pin.Family)
-	if err != nil {
-		return err
-	}
-	if len(legacy) == 0 {
-		return activateFontComponent(ctx, rc, destination, pin)
-	}
-
-	rollback, err := os.MkdirTemp(fontRoot, "."+pin.Family+".legacy-")
-	if err != nil {
-		return fmt.Errorf("preparing legacy font rollback: %w", err)
-	}
-	moved := make([]string, 0, len(legacy))
-	for _, entry := range legacy {
-		from := filepath.Join(fontRoot, entry)
-		to := filepath.Join(rollback, entry)
-		if err := os.Rename(from, to); err != nil {
-			return restoreLegacyFontEntries(fontRoot, rollback, moved, fmt.Errorf("moving legacy font %q: %w", entry, err))
-		}
-		moved = append(moved, entry)
-	}
-	if err := activateFontComponent(ctx, rc, destination, pin); err != nil {
-		return restoreLegacyFontEntries(fontRoot, rollback, moved, err)
-	}
-	if err := os.RemoveAll(rollback); err != nil {
-		return fmt.Errorf("removing legacy font rollback: %w", err)
-	}
-	return nil
-}
-
-func legacyFontOwnedEntries(fontRoot, family string) ([]string, error) {
-	refresh := filepath.Join(fontRoot, ".dotfiles-refresh")
-	info, err := os.Lstat(refresh)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("checking legacy font marker: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("legacy font marker %q is not a regular file", refresh)
-	}
-
-	entries, err := os.ReadDir(fontRoot)
-	if err != nil {
-		return nil, fmt.Errorf("reading legacy font directory: %w", err)
-	}
-	prefix := strings.ToLower(family)
-	legacy := []string{".dotfiles-refresh"}
-	for _, entry := range entries {
-		if entry.IsDir() || !entry.Type().IsRegular() {
-			continue
-		}
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if (ext == ".ttf" || ext == ".otf") && strings.HasPrefix(strings.ToLower(name), prefix) {
-			legacy = append(legacy, name)
-		}
-	}
-	sort.Strings(legacy)
-	return legacy, nil
-}
-
-func restoreLegacyFontEntries(fontRoot, rollback string, moved []string, primary error) error {
-	var restoreErr error
-	for i := len(moved) - 1; i >= 0; i-- {
-		entry := moved[i]
-		if err := os.Rename(filepath.Join(rollback, entry), filepath.Join(fontRoot, entry)); err != nil {
-			restoreErr = errors.Join(restoreErr, fmt.Errorf("restoring legacy font %q: %w", entry, err))
-		}
-	}
-	if restoreErr != nil {
-		return errors.Join(primary, fmt.Errorf("legacy font rollback preserved at %q: %w", rollback, restoreErr))
-	}
-	if err := os.RemoveAll(rollback); err != nil {
-		return errors.Join(primary, fmt.Errorf("removing legacy font rollback: %w", err))
-	}
-	return primary
+	return activateFontComponent(ctx, rc, destination, pin)
 }
 
 func fontPinMatches(rc *RunContext, root string, pin fontAssetPin) bool {
