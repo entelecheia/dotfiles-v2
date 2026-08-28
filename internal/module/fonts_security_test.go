@@ -84,7 +84,7 @@ func TestActivateFontComponent_StagesAlongsideDestination(t *testing.T) {
 	}
 }
 
-func TestActivateFontWithLegacyMigration_ReplacesOnlySelectedLegacyFamily(t *testing.T) {
+func TestActivateFontWithLegacyMigration_PreservesUnverifiedRootFonts(t *testing.T) {
 	var archive bytes.Buffer
 	writer := zip.NewWriter(&archive)
 	entry, err := writer.Create("FiraCode-Regular.ttf")
@@ -113,9 +113,9 @@ func TestActivateFontWithLegacyMigration_ReplacesOnlySelectedLegacyFamily(t *tes
 		t.Fatal(err)
 	}
 	for name, contents := range map[string]string{
-		"FiraCodeNerdFont-Regular.ttf": "legacy floating font",
-		"JetBrainsMono-Regular.ttf":    "unrelated font",
-		".dotfiles-refresh":            "legacy marker",
+		"FiraCode-Custom.ttf":       "operator font",
+		"JetBrainsMono-Regular.ttf": "unrelated font",
+		".dotfiles-refresh":         "legacy marker",
 	} {
 		if err := os.WriteFile(filepath.Join(fontRoot, name), []byte(contents), 0600); err != nil {
 			t.Fatal(err)
@@ -131,13 +131,13 @@ func TestActivateFontWithLegacyMigration_ReplacesOnlySelectedLegacyFamily(t *tes
 	if _, err := os.Stat(filepath.Join(destination, "FiraCode-Regular.ttf")); err != nil {
 		t.Fatalf("activated pinned font unavailable: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(fontRoot, "FiraCodeNerdFont-Regular.ttf")); !os.IsNotExist(err) {
-		t.Fatalf("legacy selected-family font remains: %v", err)
+	if data, err := os.ReadFile(filepath.Join(fontRoot, "FiraCode-Custom.ttf")); err != nil || string(data) != "operator font" {
+		t.Fatalf("same-prefix root font changed: %q, %v", data, err)
 	}
 	if data, err := os.ReadFile(filepath.Join(fontRoot, "JetBrainsMono-Regular.ttf")); err != nil || string(data) != "unrelated font" {
 		t.Fatalf("unrelated root font changed: %q, %v", data, err)
 	}
-	if _, err := os.Lstat(filepath.Join(fontRoot, ".dotfiles-refresh")); !os.IsNotExist(err) {
-		t.Fatalf("legacy refresh marker remains: %v", err)
+	if data, err := os.ReadFile(filepath.Join(fontRoot, ".dotfiles-refresh")); err != nil || string(data) != "legacy marker" {
+		t.Fatalf("legacy refresh marker changed: %q, %v", data, err)
 	}
 }
