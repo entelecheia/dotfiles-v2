@@ -14,12 +14,14 @@ var shellSourcePins = []gitComponentPin{
 		Name: "oh-my-zsh-base", Repository: "https://github.com/ohmyzsh/ohmyzsh.git",
 		Commit:        "146461f7c6d95f4ba1220559d66eb113418b40a8",
 		RequiredPaths: []string{"oh-my-zsh.sh", "lib", "plugins", "themes", "templates", "tools"},
-		PreservePaths: []string{"custom"}, OwnedEntries: ohMyZshOwnedEntries(),
+		PreservePaths: []string{"custom"}, Ownership: ohMyZshOwnership(),
 	},
 	{Name: "zsh-autosuggestions", Repository: "https://github.com/zsh-users/zsh-autosuggestions.git", Commit: "85919cd1ffa7d2d5412f6d3fe437ebdbeeec4fc5"},
 	{Name: "zsh-syntax-highlighting", Repository: "https://github.com/zsh-users/zsh-syntax-highlighting.git", Commit: "2fc57d63067c18b1100ecdbf684fa5baf49459d1"},
 	{Name: "zsh-completions", Repository: "https://github.com/zsh-users/zsh-completions.git", Commit: "8cd3bd78e8b1f17271cfdd8269074e5557d8d7b8"},
 }
+
+var zshCandidatePaths = []string{"/usr/local/bin/zsh", "/opt/homebrew/bin/zsh", "/bin/zsh", "/usr/bin/zsh"}
 
 // shellFile describes a file managed by ShellModule.
 type shellFile struct {
@@ -134,7 +136,7 @@ func (m *ShellModule) sourceDestination(homeDir string, pin gitComponentPin) str
 }
 
 func (m *ShellModule) sourcePinMatches(rc *RunContext, dir string, pin gitComponentPin) bool {
-	owned := pin.OwnedEntries
+	owned := pin.Ownership.currentEntries()
 	if len(owned) == 0 {
 		marker, err := readComponentPinMarker(filepath.Join(dir, markerFileName(pin.Name)))
 		if err != nil {
@@ -157,7 +159,7 @@ func (m *ShellModule) renderFile(rc *RunContext, f shellFile, data map[string]an
 func (m *ShellModule) ensureZshDefault(ctx context.Context, rc *RunContext) (bool, error) {
 	// Find zsh path
 	zshPath := ""
-	for _, candidate := range []string{"/usr/local/bin/zsh", "/opt/homebrew/bin/zsh", "/bin/zsh", "/usr/bin/zsh"} {
+	for _, candidate := range zshCandidatePaths {
 		if rc.Runner.FileExists(candidate) {
 			zshPath = candidate
 			break

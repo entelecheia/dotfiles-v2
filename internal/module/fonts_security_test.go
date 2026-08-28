@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	internalexec "github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/template"
 )
 
 func TestFontsManifest_AllSelectableFamiliesPinned(t *testing.T) {
@@ -139,5 +141,53 @@ func TestActivateFontWithLegacyMigration_PreservesUnverifiedRootFonts(t *testing
 	}
 	if data, err := os.ReadFile(filepath.Join(fontRoot, ".dotfiles-refresh")); err != nil || string(data) != "legacy marker" {
 		t.Fatalf("legacy refresh marker changed: %q, %v", data, err)
+	}
+}
+
+func TestFontsModule_DigestDriftSchedulesReinstall(t *testing.T) {
+	var archive bytes.Buffer
+	writer := zip.NewWriter(&archive)
+	entry, err := writer.Create("FiraCode-Regular.ttf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("font fixture")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDownload, originalPins := downloadFontFile, nerdFontPins
+	t.Cleanup(func() {
+		downloadFontFile = originalDownload
+		nerdFontPins = originalPins
+	})
+	digest := sha256.Sum256(archive.Bytes())
+	pin := fontAssetPin{Family: "FiraCode", AssetName: "FiraCode.zip", URL: "https://example.invalid/FiraCode.zip", SHA256: hex.EncodeToString(digest[:])}
+	nerdFontPins = []fontAssetPin{pin}
+	downloadFontFile = func(_ context.Context, _ *internalexec.Runner, _ string, destination string) (string, error) {
+		if err := os.WriteFile(destination, archive.Bytes(), 0600); err != nil {
+			return "", err
+		}
+		return pin.SHA256, nil
+	}
+
+	home := t.TempDir()
+	rc := &RunContext{Config: &config.Config{Modules: config.ModulesConfig{Fonts: config.FontsConfig{Family: pin.Family}}}, Runner: internalexec.NewRunner(false, slog.Default()), Template: template.NewEngine(), HomeDir: home}
+	module := &FontsModule{}
+	destination := module.familyDir(rc, pin.Family)
+	if err := activateFontComponent(context.Background(), rc, destination, pin); err != nil {
+		t.Fatalf("installing fixture font: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "FiraCode-Regular.ttf"), []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	check, err := module.Check(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(check.Changes) != 1 || !strings.HasPrefix(check.Changes[0].Description, "install pinned Nerd Font") {
+		t.Fatalf("Check changes = %#v, want pinned font reinstall", check.Changes)
 	}
 }

@@ -53,8 +53,9 @@ func stageShellFixture(t *testing.T, commit string, files map[string]string) {
 }
 
 func shellBaseStageFiles(pin gitComponentPin) map[string]string {
-	files := make(map[string]string, len(pin.OwnedEntries))
-	for _, entry := range pin.OwnedEntries {
+	owned := pin.Ownership.currentEntries()
+	files := make(map[string]string, len(owned))
+	for _, entry := range owned {
 		if shellFixtureDirectories[entry] {
 			files[entry] = ""
 		} else {
@@ -114,7 +115,7 @@ func TestShellBase_RestoresRollbackAfterPromotionValidationFailure(t *testing.T)
 	commit := "146461f7c6d95f4ba1220559d66eb113418b40a8"
 	pin := gitComponentPin{
 		Name: "shell-fixture", Repository: "https://example.invalid/shell.git", Commit: commit,
-		RequiredPaths: []string{"managed", "required-but-unowned"}, OwnedEntries: []string{"managed"},
+		RequiredPaths: []string{"managed", "required-but-unowned"}, Ownership: componentOwnership{Current: []string{"managed"}},
 	}
 	stageShellFixture(t, commit, map[string]string{
 		"managed":              "new",

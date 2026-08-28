@@ -25,6 +25,36 @@ var expectedOhMyZshOwnedEntries = []string{
 	"cache", "lib", "log", "oh-my-zsh.sh", "plugins", "templates", "themes", "tools",
 }
 
+// retiredOhMyZshOwnedEntries records paths removed from the current manifest.
+// A release removing an entry from expectedOhMyZshOwnedEntries must add that
+// exact entry here in the same change, or the obsolete managed path remains.
+var retiredOhMyZshOwnedEntries = []string{}
+
+// componentOwnership is the compiled ownership identity for a managed source.
+// Current entries are installed by this binary; Retired entries may be removed
+// only when a trusted marker proves an older binary owned them.
+type componentOwnership struct {
+	Current []string
+	Retired []string
+}
+
+func (o componentOwnership) currentEntries() []string {
+	return append([]string(nil), o.Current...)
+}
+
+func (o componentOwnership) trustedEntries() map[string]struct{} {
+	entries := make(map[string]struct{}, len(o.Current)+len(o.Retired))
+	for _, entry := range o.Current {
+		entries[entry] = struct{}{}
+	}
+	for _, entry := range o.Retired {
+		entries[entry] = struct{}{}
+	}
+	return entries
+}
+
+func (o componentOwnership) isEmpty() bool { return len(o.Current) == 0 }
+
 // gitComponentPin identifies one executable upstream tree. Its marker is the
 // only freshness authority; timestamps deliberately have no role here.
 type gitComponentPin struct {
@@ -34,7 +64,7 @@ type gitComponentPin struct {
 	MarkerPath    string
 	RequiredPaths []string
 	PreservePaths []string
-	OwnedEntries  []string
+	Ownership     componentOwnership
 }
 
 // fontAssetPin identifies an uploaded release asset by immutable bytes.
@@ -73,7 +103,12 @@ func (m componentPinMarker) validate() error {
 	return nil
 }
 
-func ohMyZshOwnedEntries() []string { return append([]string(nil), expectedOhMyZshOwnedEntries...) }
+func ohMyZshOwnership() componentOwnership {
+	return componentOwnership{
+		Current: append([]string(nil), expectedOhMyZshOwnedEntries...),
+		Retired: append([]string(nil), retiredOhMyZshOwnedEntries...),
+	}
+}
 
 func staleOwnedEntries(previous, desired []string) []string {
 	desiredSet := make(map[string]struct{}, len(desired))
@@ -92,17 +127,16 @@ func staleOwnedEntries(previous, desired []string) []string {
 
 // trustedStaleOwnedEntries returns entries eligible for deletion only when the
 // prior marker identifies the same compiled source and its ownership stays
-// within the immutable ownership set compiled into this binary. A marker is
+// within the immutable ownership union compiled into this binary. A marker is
 // integrity evidence for an installed component, not authority to nominate
-// arbitrary operator paths for removal.
+// arbitrary operator paths for removal. The check is all-or-nothing: filtering
+// one untrusted entry while deleting another lets a tampered marker partially
+// authorize removal, including a legitimately retired path beside it.
 func trustedStaleOwnedEntries(previous componentPinMarker, pin gitComponentPin, desired []string) []string {
-	if previous.Component != pin.Name || previous.Source != pin.Repository || len(pin.OwnedEntries) == 0 {
+	if previous.Component != pin.Name || previous.Source != pin.Repository || pin.Ownership.isEmpty() {
 		return nil
 	}
-	allowed := make(map[string]struct{}, len(pin.OwnedEntries))
-	for _, entry := range pin.OwnedEntries {
-		allowed[entry] = struct{}{}
-	}
+	allowed := pin.Ownership.trustedEntries()
 	for _, entry := range previous.Owned {
 		if _, ok := allowed[entry]; !ok {
 			return nil
@@ -336,7 +370,7 @@ func activateGitComponent(ctx context.Context, rc *RunContext, destination strin
 	if err := stageGitComponent(ctx, rc, pin, stage); err != nil {
 		return err
 	}
-	owned, err := stageOwnedEntries(stage, pin.OwnedEntries)
+	owned, err := stageOwnedEntries(stage, pin.Ownership.currentEntries())
 	if err != nil {
 		return err
 	}
