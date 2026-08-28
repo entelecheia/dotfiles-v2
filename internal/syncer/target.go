@@ -33,13 +33,13 @@ type Target struct {
 //
 // An empty spec is an error; callers decide their own default.
 func ParseTarget(spec string) (Target, error) {
-	if err := validateTargetField("spec", spec, false); err != nil {
+	if err := validateTargetField("spec", spec, false, true); err != nil {
 		return Target{}, err
 	}
 	switch {
 	case strings.HasPrefix(spec, "local:"):
 		path := strings.TrimPrefix(spec, "local:")
-		if err := validateTargetField("local path", path, true); err != nil {
+		if err := validateTargetField("local path", path, true, true); err != nil {
 			return Target{}, err
 		}
 		return Target{Kind: TargetLocal, Path: path}, nil
@@ -49,24 +49,24 @@ func ParseTarget(spec string) (Target, error) {
 		if !ok {
 			return Target{}, fmt.Errorf("invalid target spec %q: expected ssh:user@host:path", spec)
 		}
-		if err := validateTargetField("ssh host", host, true); err != nil {
+		if err := validateTargetField("ssh host", host, true, false); err != nil {
 			return Target{}, err
 		}
-		if err := validateTargetField("ssh path", path, false); err != nil {
+		if err := validateTargetField("ssh path", path, false, false); err != nil {
 			return Target{}, err
 		}
 		return Target{Kind: TargetSSH, Host: host, Path: path}, nil
 	default:
 		// Bare paths keep legacy mirror_path values working.
-		if err := validateTargetField("local path", spec, true); err != nil {
+		if err := validateTargetField("local path", spec, true, true); err != nil {
 			return Target{}, err
 		}
 		return Target{Kind: TargetLocal, Path: spec}, nil
 	}
 }
 
-func validateTargetField(name, value string, rejectLeadingOption bool) error {
-	if value == "" {
+func validateTargetField(name, value string, rejectLeadingOption, allowASCIISpace bool) error {
+	if value == "" || strings.TrimSpace(value) == "" {
 		return fmt.Errorf("invalid target %s %q: empty", name, value)
 	}
 	if !utf8.ValidString(value) {
@@ -76,7 +76,7 @@ func validateTargetField(name, value string, rejectLeadingOption bool) error {
 		if unicode.IsControl(r) {
 			return fmt.Errorf("invalid target %s %q: contains control character", name, value)
 		}
-		if unicode.IsSpace(r) {
+		if unicode.IsSpace(r) && (!allowASCIISpace || r != ' ') {
 			return fmt.Errorf("invalid target %s %q: contains Unicode whitespace", name, value)
 		}
 	}

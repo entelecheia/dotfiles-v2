@@ -209,6 +209,32 @@ func TestSensitiveOverrides(t *testing.T) {
 	}
 }
 
+func TestSensitiveOverrides_ReportsWildcardIntersections(t *testing.T) {
+	got := SensitiveOverrides([]string{"foo.*"})
+	want := SensitiveOverride{AllowPattern: "foo.*", DenyPattern: rsyncCaseFoldPattern("*.pem")}
+	if !slices.Contains(got, want) {
+		t.Errorf("SensitiveOverrides() = %#v, want wildcard intersection %#v", got, want)
+	}
+}
+
+func TestSecretPatternsOverlap_GlobIntersections(t *testing.T) {
+	pem := rsyncCaseFoldPattern("*.pem")
+	for _, tc := range []struct {
+		allow string
+		deny  string
+		want  bool
+	}{
+		{allow: "foo.*", deny: pem, want: true},
+		{allow: "docs/*", deny: pem, want: true},
+		{allow: "foo.txt", deny: pem, want: false},
+		{allow: "docs/*.txt", deny: pem, want: false},
+	} {
+		if got := secretPatternsOverlap(tc.allow, tc.deny); got != tc.want {
+			t.Errorf("secretPatternsOverlap(%q, %q) = %v, want %v", tc.allow, tc.deny, got, tc.want)
+		}
+	}
+}
+
 func TestSyncFilter_ExplicitSecretAllowPreservesTransferAndReportsOverride(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.FilterMode = FilterModeExclude

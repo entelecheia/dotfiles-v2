@@ -178,7 +178,167 @@ func secretPatternsOverlap(allow, deny string) bool {
 	denyPattern := excludePattern{raw: deny}
 	return patternMatchesPathOrAncestor(denyPattern, allow) ||
 		allowPattern.matches(deny, false) ||
-		allowPattern.matches(deny, true)
+		allowPattern.matches(deny, true) ||
+		globPatternsMayOverlap(allow, deny)
+}
+
+// globPatternsMayOverlap detects intersections that matching one pattern
+// against the other pattern's literal text cannot see (for example foo.* and
+// *.[pP][eE][mM]). The parser is intentionally ASCII-only: an unfamiliar
+// pattern is treated as an overlap so visibility is conservative.
+func globPatternsMayOverlap(left, right string) bool {
+	leftHasPath := strings.Contains(strings.Trim(strings.TrimPrefix(left, "/"), "/"), "/")
+	rightHasPath := strings.Contains(strings.Trim(strings.TrimPrefix(right, "/"), "/"), "/")
+	if leftHasPath && rightHasPath {
+		return false
+	}
+	leftTokens, leftKnown := parseGlobTokens(globBasename(left))
+	rightTokens, rightKnown := parseGlobTokens(globBasename(right))
+	if !leftKnown || !rightKnown {
+		return true
+	}
+	type state struct{ left, right int }
+	queue := []state{{}}
+	seen := make(map[state]bool)
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if seen[current] {
+			continue
+		}
+		seen[current] = true
+		if current.left == len(leftTokens) && current.right == len(rightTokens) {
+			return true
+		}
+		if current.left < len(leftTokens) && leftTokens[current.left].star {
+			queue = append(queue, state{left: current.left + 1, right: current.right})
+		}
+		if current.right < len(rightTokens) && rightTokens[current.right].star {
+			queue = append(queue, state{left: current.left, right: current.right + 1})
+		}
+		if current.left == len(leftTokens) || current.right == len(rightTokens) {
+			continue
+		}
+		leftSet, nextLeft := leftTokens[current.left].consume(current.left)
+		rightSet, nextRight := rightTokens[current.right].consume(current.right)
+		if globSetsIntersect(leftSet, rightSet) {
+			queue = append(queue, state{left: nextLeft, right: nextRight})
+		}
+	}
+	return false
+}
+
+func globBasename(pattern string) string {
+	pattern = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(pattern, "/"), "/"))
+	if slash := strings.LastIndexByte(pattern, '/'); slash >= 0 {
+		return pattern[slash+1:]
+	}
+	return pattern
+}
+
+type globToken struct {
+	star bool
+	set  [128]bool
+}
+
+func (token globToken) consume(position int) ([128]bool, int) {
+	if token.star {
+		var all [128]bool
+		for index := range all {
+			all[index] = true
+		}
+		return all, position
+	}
+	return token.set, position + 1
+}
+
+func parseGlobTokens(pattern string) ([]globToken, bool) {
+	var tokens []globToken
+	for index := 0; index < len(pattern); index++ {
+		character := pattern[index]
+		if character >= 128 {
+			return nil, false
+		}
+		switch character {
+		case '*':
+			tokens = append(tokens, globToken{star: true})
+		case '?':
+			var set [128]bool
+			for char := range set {
+				set[char] = true
+			}
+			tokens = append(tokens, globToken{set: set})
+		case '[':
+			end := index + 1
+			for end < len(pattern) && pattern[end] != ']' {
+				end++
+			}
+			if end == len(pattern) || end == index+1 {
+				return nil, false
+			}
+			set, known := parseGlobClass(pattern[index+1 : end])
+			if !known {
+				return nil, false
+			}
+			tokens = append(tokens, globToken{set: set})
+			index = end
+		case '\\':
+			index++
+			if index == len(pattern) || pattern[index] >= 128 {
+				return nil, false
+			}
+			fallthrough
+		default:
+			var set [128]bool
+			set[pattern[index]] = true
+			tokens = append(tokens, globToken{set: set})
+		}
+	}
+	return tokens, true
+}
+
+func parseGlobClass(class string) ([128]bool, bool) {
+	var set [128]bool
+	invert := strings.HasPrefix(class, "!") || strings.HasPrefix(class, "^")
+	if invert {
+		class = class[1:]
+	}
+	if class == "" {
+		return set, false
+	}
+	for index := 0; index < len(class); index++ {
+		if class[index] >= 128 {
+			return set, false
+		}
+		start := class[index]
+		if index+2 < len(class) && class[index+1] == '-' {
+			end := class[index+2]
+			if end >= 128 || start > end {
+				return set, false
+			}
+			for character := start; character <= end; character++ {
+				set[character] = true
+			}
+			index += 2
+			continue
+		}
+		set[start] = true
+	}
+	if invert {
+		for index := range set {
+			set[index] = !set[index]
+		}
+	}
+	return set, true
+}
+
+func globSetsIntersect(left, right [128]bool) bool {
+	for index := range left {
+		if left[index] && right[index] {
+			return true
+		}
+	}
+	return false
 }
 
 func patternMatchesPathOrAncestor(pattern excludePattern, path string) bool {
