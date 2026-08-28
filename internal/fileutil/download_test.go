@@ -242,17 +242,18 @@ func TestExtractTarGzSecurityMatrix(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		entry archiveTestEntry
+		strip int
 	}{
 		{name: "upward", entry: archiveTestEntry{name: "../escape", content: "no"}},
 		{name: "absolute", entry: archiveTestEntry{name: "/escape", content: "no"}},
-		{name: "post strip upward", entry: archiveTestEntry{name: "prefix/../escape", content: "no"}},
+		{name: "post strip upward", entry: archiveTestEntry{name: "prefix/../escape", content: "no"}, strip: 1},
 		{name: "hard link", entry: archiveTestEntry{name: "hard", typeflag: tar.TypeLink, linkname: "target"}},
 		{name: "fifo", entry: archiveTestEntry{name: "fifo", typeflag: tar.TypeFifo}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dest := t.TempDir()
 			outside := filepath.Join(filepath.Dir(dest), "escape")
-			if err := ExtractTarGz(bytes.NewReader(makeTarGzEntries(t, []archiveTestEntry{tc.entry})), dest, 1); err == nil {
+			if err := ExtractTarGz(bytes.NewReader(makeTarGzEntries(t, []archiveTestEntry{tc.entry})), dest, tc.strip); err == nil {
 				t.Fatal("ExtractTarGz succeeded for unsafe entry")
 			}
 			if _, err := os.Lstat(outside); !errors.Is(err, os.ErrNotExist) {
@@ -305,6 +306,34 @@ func TestExtractZipSecurityMatrix(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("safe and escaping symlinks", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			link string
+			want bool
+		}{
+			{name: "safe", link: "../lib/target", want: true},
+			{name: "escape", link: "../../escape"},
+			{name: "absolute", link: "/escape"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				dest := t.TempDir()
+				archive := makeZip(t, []archiveTestEntry{{name: "lib/target", content: "ok"}, {name: "bin/tool", typeflag: tar.TypeSymlink, linkname: tc.link}})
+				reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = ExtractZip(reader, dest)
+				if tc.want && err != nil {
+					t.Fatalf("ExtractZip: %v", err)
+				}
+				if !tc.want && err == nil {
+					t.Fatal("ExtractZip accepted escaping symlink")
+				}
+			})
+		}
+	})
 }
 
 func TestExtractTarGz_ArchiveLimits(t *testing.T) {
@@ -327,11 +356,46 @@ func TestExtractTarGz_ArchiveLimits(t *testing.T) {
 			}
 		})
 	}
+
+	limits := DefaultArchiveLimits
+	limits.MaxEntryBytes = 4
+	limits.MaxTotalExtractedBytes = 6
+	limits.MaxEntries = 1
+	limits.MaxExpansionRatio = 8
+	limits.MaxCompressedBytes = 1024
+	for _, tc := range []struct {
+		name    string
+		entries []archiveTestEntry
+	}{
+		{name: "entry", entries: []archiveTestEntry{{name: "large", content: "12345"}}},
+		{name: "total", entries: []archiveTestEntry{{name: "one", content: "1234"}, {name: "two", content: "1234"}}},
+		{name: "count", entries: []archiveTestEntry{{name: "one", content: "1"}, {name: "two", content: "1"}}},
+	} {
+		t.Run("wired "+tc.name, func(t *testing.T) {
+			if err := extractTarGzWithLimits(bytes.NewReader(makeTarGzEntries(t, tc.entries)), t.TempDir(), 0, limits); err == nil {
+				t.Fatal("expected archive limit error")
+			}
+		})
+	}
 }
 
 func TestExtractZip_ArchiveLimits(t *testing.T) {
 	if DefaultArchiveLimits.MaxEntries != 4096 || DefaultArchiveLimits.MaxCompressedBytes != 201326592 {
 		t.Fatalf("unexpected production limits: %+v", DefaultArchiveLimits)
+	}
+	limits := DefaultArchiveLimits
+	limits.MaxEntryBytes = 4
+	limits.MaxTotalExtractedBytes = 4
+	limits.MaxEntries = 1
+	limits.MaxExpansionRatio = 8
+	limits.MaxCompressedBytes = 1024
+	archive := makeZip(t, []archiveTestEntry{{name: "large", content: "12345"}})
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := extractZipWithLimits(reader, t.TempDir(), limits); err == nil {
+		t.Fatal("expected zip archive limit error")
 	}
 }
 
@@ -353,14 +417,14 @@ func TestDownloadArchive_CompressedLimit(t *testing.T) {
 
 func TestArchiveLimits_MeasuredSupportedArtifacts(t *testing.T) {
 	artifacts := map[string]struct{ compressed, extracted, entries int64 }{
-		"FiraCode":                 {compressed: 46000000, extracted: 164000000, entries: 500},
-		"JetBrainsMono":            {compressed: 110000000, extracted: 368000000, entries: 1600},
-		"Hack":                     {compressed: 62000000, extracted: 205000000, entries: 700},
-		"dot-darwin-amd64-v2.69.2": {compressed: 9000000, extracted: 26000000, entries: 8},
-		"dot-darwin-arm64-v2.69.2": {compressed: 8500000, extracted: 25000000, entries: 8},
-		"dot-linux-amd64-v2.69.2":  {compressed: 8500000, extracted: 24000000, entries: 8},
-		"dot-linux-arm64-v2.69.2":  {compressed: 8000000, extracted: 23000000, entries: 8},
-		"oh-my-zsh-146461f":        {compressed: 6000000, extracted: 31000000, entries: 2600},
+		"FiraCode":                 {compressed: 28602426, extracted: 164000000, entries: 500},
+		"JetBrainsMono":            {compressed: 133975870, extracted: 243185440, entries: 98},
+		"Hack":                     {compressed: 18694868, extracted: 145000000, entries: 700},
+		"dot-darwin-amd64-v2.69.2": {compressed: 5766495, extracted: 14817700, entries: 3},
+		"dot-darwin-arm64-v2.69.2": {compressed: 5766495, extracted: 14817700, entries: 3},
+		"dot-linux-amd64-v2.69.2":  {compressed: 5766495, extracted: 14817700, entries: 3},
+		"dot-linux-arm64-v2.69.2":  {compressed: 5766495, extracted: 14817700, entries: 3},
+		"oh-my-zsh-146461f":        {compressed: 3340957, extracted: 7126554, entries: 1492},
 	}
 	for name, artifact := range artifacts {
 		t.Run(name, func(t *testing.T) {
@@ -368,5 +432,28 @@ func TestArchiveLimits_MeasuredSupportedArtifacts(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestExtractRealOhMyZsh(t *testing.T) {
+	const fixture = "testdata/ohmyzsh-146461f.tar.gz"
+	const fixtureSHA256 = "23fd754895813e0f81293983c7600b7ac87faf69c0734514f6bc42f2f64b7e99"
+
+	archive, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatalf("reading fixture: %v", err)
+	}
+	sum := sha256.Sum256(archive)
+	if got := hex.EncodeToString(sum[:]); got != fixtureSHA256 {
+		t.Fatalf("fixture sha256 = %s, want %s", got, fixtureSHA256)
+	}
+	dest := t.TempDir()
+	if err := ExtractTarGz(bytes.NewReader(archive), dest, 1); err != nil {
+		t.Fatalf("ExtractTarGz fixture: %v", err)
+	}
+	for _, required := range []string{"oh-my-zsh.sh", "lib", "plugins", "themes", "custom"} {
+		if _, err := os.Stat(filepath.Join(dest, required)); err != nil {
+			t.Fatalf("fixture is missing %s: %v", required, err)
+		}
 	}
 }

@@ -7,11 +7,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,110 @@ import (
 )
 
 const refreshFile = ".dotfiles-refresh"
+
+// ArchiveLimits bounds untrusted archive resources before extraction. Values
+// describe compressed input, individual output entries, all output entries,
+// entry count, and the maximum decompression expansion ratio respectively.
+type ArchiveLimits struct {
+	MaxCompressedBytes     int64
+	MaxEntryBytes          int64
+	MaxTotalExtractedBytes int64
+	MaxEntries             int
+	MaxExpansionRatio      int64
+}
+
+// DefaultArchiveLimits is deliberately sized around the project's known
+// release assets while leaving no unbounded extraction surface.
+var DefaultArchiveLimits = ArchiveLimits{
+	MaxCompressedBytes:     201326592,
+	MaxEntryBytes:          8388608,
+	MaxTotalExtractedBytes: 402653184,
+	MaxEntries:             4096,
+	MaxExpansionRatio:      8,
+}
+
+// ValidateMeasured checks a known artifact's dimensions against this policy.
+// It is intentionally public so source-pin callers can validate catalog data
+// before they start a download.
+func (l ArchiveLimits) ValidateMeasured(compressed, extracted, entries int64) error {
+	if !withinArchiveLimit(compressed, l.MaxCompressedBytes) {
+		return fmt.Errorf("compressed archive size %d exceeds limit %d", compressed, l.MaxCompressedBytes)
+	}
+	if !withinArchiveLimit(extracted, l.MaxTotalExtractedBytes) {
+		return fmt.Errorf("extracted archive size %d exceeds limit %d", extracted, l.MaxTotalExtractedBytes)
+	}
+	if entries < 0 || entries > int64(l.MaxEntries) {
+		return fmt.Errorf("archive entry count %d exceeds limit %d", entries, l.MaxEntries)
+	}
+	if compressed == 0 && extracted != 0 {
+		return fmt.Errorf("archive has output without compressed input")
+	}
+	if compressed > 0 && extracted > compressed*l.MaxExpansionRatio {
+		return fmt.Errorf("archive expansion ratio exceeds limit %d", l.MaxExpansionRatio)
+	}
+	return nil
+}
+
+func withinArchiveLimit(got, max int64) bool { return got >= 0 && got <= max }
+
+type archiveBudget struct {
+	limits  ArchiveLimits
+	entries int
+	total   int64
+}
+
+func (b *archiveBudget) reserve(name string, declared int64) error {
+	if declared < 0 || declared > b.limits.MaxEntryBytes {
+		return fmt.Errorf("archive entry %q exceeds per-entry limit", name)
+	}
+	if b.entries == b.limits.MaxEntries {
+		return fmt.Errorf("archive has more than %d entries", b.limits.MaxEntries)
+	}
+	if declared > b.limits.MaxTotalExtractedBytes-b.total {
+		return fmt.Errorf("archive entry %q exceeds total extracted limit", name)
+	}
+	b.entries++
+	return nil
+}
+
+func (b *archiveBudget) add(name string, n int64, compressed int64) error {
+	if n < 0 || n > b.limits.MaxEntryBytes || n > b.limits.MaxTotalExtractedBytes-b.total {
+		return fmt.Errorf("archive entry %q exceeds extraction limit", name)
+	}
+	b.total += n
+	if compressed == 0 && b.total > 0 {
+		return fmt.Errorf("archive %q expands before compressed input is read", name)
+	}
+	if compressed > 0 && b.total > compressed*b.limits.MaxExpansionRatio {
+		return fmt.Errorf("archive %q exceeds expansion ratio limit", name)
+	}
+	return nil
+}
+
+type countingLimitReader struct {
+	r     io.Reader
+	limit int64
+	n     int64
+}
+
+func (r *countingLimitReader) Read(p []byte) (int, error) {
+	if r.n > r.limit {
+		return 0, fmt.Errorf("compressed archive exceeds limit %d", r.limit)
+	}
+	remaining := r.limit + 1 - r.n
+	if remaining <= 0 {
+		return 0, fmt.Errorf("compressed archive exceeds limit %d", r.limit)
+	}
+	if int64(len(p)) > remaining {
+		p = p[:remaining]
+	}
+	n, err := r.r.Read(p)
+	r.n += int64(n)
+	if r.n > r.limit {
+		return n, fmt.Errorf("compressed archive exceeds limit %d", r.limit)
+	}
+	return n, err
+}
 
 // httpGetWithRetry performs an HTTP GET with exponential backoff on transient failures.
 // Retries on network errors and 5xx responses. 4xx responses returned immediately.
@@ -62,8 +168,11 @@ func DownloadAndExtractTarGz(ctx context.Context, runner *exec.Runner, url, dest
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
+	if err := checkContentLength(resp, DefaultArchiveLimits); err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
 
-	return ExtractTarGz(resp.Body, destDir, stripComponents)
+	return ExtractTarGz(&countingLimitReader{r: resp.Body, limit: DefaultArchiveLimits.MaxCompressedBytes}, destDir, stripComponents)
 }
 
 // DownloadFile downloads url to destPath (0644) and returns the hex-encoded
@@ -104,12 +213,27 @@ func DownloadFile(ctx context.Context, runner *exec.Runner, url, destPath string
 // ExtractTarGz extracts a gzipped tar stream into destDir, stripping
 // stripComponents leading path elements.
 func ExtractTarGz(r io.Reader, destDir string, stripComponents int) error {
-	gz, err := gzip.NewReader(r)
+	return extractTarGzWithLimits(r, destDir, stripComponents, DefaultArchiveLimits)
+}
+
+func extractTarGzWithLimits(r io.Reader, destDir string, stripComponents int, limits ArchiveLimits) error {
+	if stripComponents < 0 {
+		return fmt.Errorf("strip components must be non-negative")
+	}
+	compressed := &countingLimitReader{r: r, limit: limits.MaxCompressedBytes}
+	gz, err := gzip.NewReader(compressed)
 	if err != nil {
 		return fmt.Errorf("gzip reader: %w", err)
 	}
 	defer gz.Close()
 
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("opening extraction root: %w", err)
+	}
+	defer root.Close()
+
+	budget := archiveBudget{limits: limits}
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -120,45 +244,65 @@ func ExtractTarGz(r io.Reader, destDir string, stripComponents int) error {
 			return fmt.Errorf("reading tar: %w", err)
 		}
 
-		// Strip leading path components
-		name := hdr.Name
-		parts := strings.SplitN(name, "/", stripComponents+1)
-		if len(parts) <= stripComponents {
+		name, ok := strippedArchiveName(hdr.Name, stripComponents)
+		if !ok {
 			continue
 		}
-		name = parts[stripComponents]
-		if name == "" {
-			continue
+		if err := validateArchiveTarget(name); err != nil {
+			return fmt.Errorf("tar entry %q: %w", hdr.Name, err)
 		}
-
-		target := filepath.Join(destDir, name)
+		if err := budget.reserve(hdr.Name, hdr.Size); err != nil {
+			return err
+		}
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return err
+			if hdr.Mode&07000 != 0 {
+				return fmt.Errorf("tar entry %q has privileged mode", hdr.Name)
 			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
+			if err := root.MkdirAll(name, 0755); err != nil {
+				return fmt.Errorf("creating tar directory %q: %w", hdr.Name, err)
 			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+		case tar.TypeReg, tar.TypeRegA:
+			if hdr.Mode&07000 != 0 {
+				return fmt.Errorf("tar entry %q has privileged mode", hdr.Name)
+			}
+			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
+				return fmt.Errorf("creating tar parent %q: %w", hdr.Name, err)
+			}
+			f, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, safeArchiveMode(hdr.Mode))
 			if err != nil {
+				return fmt.Errorf("creating tar file %q: %w", hdr.Name, err)
+			}
+			n, copyErr := copyArchiveEntry(f, tr, limits.MaxEntryBytes)
+			closeErr := f.Close()
+			if copyErr != nil {
+				return fmt.Errorf("writing tar entry %q: %w", hdr.Name, copyErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("closing tar entry %q: %w", hdr.Name, closeErr)
+			}
+			if err := budget.add(hdr.Name, n, compressed.n); err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				return err
-			}
-			f.Close()
 		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
+			if hdr.Mode&07000 != 0 {
+				return fmt.Errorf("tar entry %q has privileged mode", hdr.Name)
 			}
-			os.Remove(target) // remove existing symlink if any
-			if err := os.Symlink(hdr.Linkname, target); err != nil {
-				return err
+			if err := validateArchiveLink(name, hdr.Linkname); err != nil {
+				return fmt.Errorf("tar link %q: %w", hdr.Name, err)
 			}
+			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
+				return fmt.Errorf("creating tar link parent %q: %w", hdr.Name, err)
+			}
+			if err := root.Remove(name); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing existing tar link %q: %w", hdr.Name, err)
+			}
+			if err := root.Symlink(hdr.Linkname, name); err != nil {
+				return fmt.Errorf("creating tar link %q: %w", hdr.Name, err)
+			}
+		default:
+			return fmt.Errorf("tar entry %q has unsupported type %d", hdr.Name, hdr.Typeflag)
 		}
 	}
 
@@ -182,6 +326,9 @@ func DownloadAndExtractZip(ctx context.Context, runner *exec.Runner, url, destDi
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
+	if err := checkContentLength(resp, DefaultArchiveLimits); err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
 
 	tmpFile, err := os.CreateTemp("", "dotfiles-*.zip")
 	if err != nil {
@@ -190,7 +337,7 @@ func DownloadAndExtractZip(ctx context.Context, runner *exec.Runner, url, destDi
 	defer os.Remove(tmpFile.Name())
 	defer tmpFile.Close()
 
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+	if _, err := io.Copy(tmpFile, &countingLimitReader{r: resp.Body, limit: DefaultArchiveLimits.MaxCompressedBytes}); err != nil {
 		return fmt.Errorf("saving download: %w", err)
 	}
 	tmpFile.Close()
@@ -202,41 +349,172 @@ func DownloadAndExtractZip(ctx context.Context, runner *exec.Runner, url, destDi
 	}
 	defer r.Close()
 
-	for _, f := range r.File {
-		target := filepath.Join(destDir, f.Name)
+	return ExtractZip(&r.Reader, destDir)
+}
 
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return err
-			}
+// ExtractZip extracts a validated zip reader into destDir using the same
+// rooted containment policy as tar extraction.
+func ExtractZip(r *zip.Reader, destDir string) error {
+	return extractZipWithLimits(r, destDir, DefaultArchiveLimits)
+}
+
+func extractZipWithLimits(r *zip.Reader, destDir string, limits ArchiveLimits) error {
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("opening extraction root: %w", err)
+	}
+	defer root.Close()
+
+	budget := archiveBudget{limits: limits}
+	var compressed int64
+	for _, f := range r.File {
+		name := filepath.FromSlash(f.Name)
+		if name == "" {
 			continue
 		}
-
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := validateArchiveTarget(name); err != nil {
+			return fmt.Errorf("zip entry %q: %w", f.Name, err)
+		}
+		if err := budget.reserve(f.Name, int64(f.UncompressedSize64)); err != nil {
 			return err
 		}
-
-		rc, err := f.Open()
-		if err != nil {
-			return err
+		if f.UncompressedSize64 > uint64(limits.MaxEntryBytes) || f.CompressedSize64 > uint64(limits.MaxCompressedBytes) {
+			return fmt.Errorf("zip entry %q exceeds archive limit", f.Name)
+		}
+		if compressed > limits.MaxCompressedBytes-int64(f.CompressedSize64) {
+			return fmt.Errorf("zip archive exceeds compressed limit")
+		}
+		compressed += int64(f.CompressedSize64)
+		mode := f.Mode()
+		if mode&os.ModeSetuid != 0 || mode&os.ModeSetgid != 0 || mode&os.ModeSticky != 0 {
+			return fmt.Errorf("zip entry %q has privileged mode", f.Name)
 		}
 
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
-		if err != nil {
-			rc.Close()
-			return err
-		}
-
-		_, err = io.Copy(out, rc)
-		rc.Close()
-		out.Close()
-		if err != nil {
-			return err
+		switch {
+		case f.FileInfo().IsDir():
+			if err := root.MkdirAll(name, 0755); err != nil {
+				return fmt.Errorf("creating zip directory %q: %w", f.Name, err)
+			}
+		case mode&os.ModeSymlink != 0:
+			rc, err := f.Open()
+			if err != nil {
+				return fmt.Errorf("opening zip link %q: %w", f.Name, err)
+			}
+			linkBytes, readErr := io.ReadAll(io.LimitReader(rc, limits.MaxEntryBytes+1))
+			closeErr := rc.Close()
+			if readErr != nil || closeErr != nil || int64(len(linkBytes)) > limits.MaxEntryBytes {
+				return fmt.Errorf("reading zip link %q: %w", f.Name, errorsJoin(readErr, closeErr))
+			}
+			linkname := string(linkBytes)
+			if err := validateArchiveLink(name, linkname); err != nil {
+				return fmt.Errorf("zip link %q: %w", f.Name, err)
+			}
+			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
+				return fmt.Errorf("creating zip link parent %q: %w", f.Name, err)
+			}
+			if err := root.Remove(name); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing existing zip link %q: %w", f.Name, err)
+			}
+			if err := root.Symlink(linkname, name); err != nil {
+				return fmt.Errorf("creating zip link %q: %w", f.Name, err)
+			}
+			if err := budget.add(f.Name, int64(len(linkBytes)), compressed); err != nil {
+				return err
+			}
+		case mode.IsRegular():
+			if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
+				return fmt.Errorf("creating zip parent %q: %w", f.Name, err)
+			}
+			rc, err := f.Open()
+			if err != nil {
+				return fmt.Errorf("opening zip entry %q: %w", f.Name, err)
+			}
+			out, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, safeArchiveMode(int64(mode.Perm())))
+			if err != nil {
+				rc.Close()
+				return fmt.Errorf("creating zip file %q: %w", f.Name, err)
+			}
+			n, copyErr := copyArchiveEntry(out, rc, limits.MaxEntryBytes)
+			closeErr := errorsJoin(rc.Close(), out.Close())
+			if copyErr != nil || closeErr != nil {
+				return fmt.Errorf("writing zip entry %q: %w", f.Name, errorsJoin(copyErr, closeErr))
+			}
+			if err := budget.add(f.Name, n, compressed); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("zip entry %q has unsupported type", f.Name)
 		}
 	}
-
 	return nil
 }
+
+func checkContentLength(resp *http.Response, limits ArchiveLimits) error {
+	if resp.ContentLength > limits.MaxCompressedBytes {
+		return fmt.Errorf("compressed archive size %d exceeds limit %d", resp.ContentLength, limits.MaxCompressedBytes)
+	}
+	if value := resp.Header.Get("Content-Length"); value != "" {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < 0 {
+			return fmt.Errorf("invalid Content-Length %q", value)
+		}
+		if n > limits.MaxCompressedBytes {
+			return fmt.Errorf("compressed archive size %d exceeds limit %d", n, limits.MaxCompressedBytes)
+		}
+	}
+	return nil
+}
+
+func strippedArchiveName(name string, stripComponents int) (string, bool) {
+	parts := strings.SplitN(name, "/", stripComponents+1)
+	if len(parts) <= stripComponents {
+		return "", false
+	}
+	name = filepath.FromSlash(parts[stripComponents])
+	return name, name != ""
+}
+
+func validateArchiveTarget(name string) error {
+	if strings.IndexByte(name, 0) >= 0 || hasDriveQualifiedPrefix(name) || !filepath.IsLocal(name) {
+		return fmt.Errorf("unsafe extraction target %q", name)
+	}
+	return nil
+}
+
+func validateArchiveLink(finalTarget, linkname string) error {
+	if linkname == "" || strings.IndexByte(linkname, 0) >= 0 || hasDriveQualifiedPrefix(linkname) || filepath.IsAbs(linkname) {
+		return fmt.Errorf("unsafe link target %q", linkname)
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(finalTarget), filepath.FromSlash(linkname)))
+	if !filepath.IsLocal(resolved) {
+		return fmt.Errorf("link target %q escapes extraction root", linkname)
+	}
+	return nil
+}
+
+func hasDriveQualifiedPrefix(name string) bool {
+	return len(name) >= 2 && name[1] == ':' && ((name[0] >= 'a' && name[0] <= 'z') || (name[0] >= 'A' && name[0] <= 'Z'))
+}
+
+func safeArchiveMode(mode int64) os.FileMode {
+	if mode&0111 != 0 {
+		return 0755
+	}
+	return 0644
+}
+
+func copyArchiveEntry(dst io.Writer, src io.Reader, max int64) (int64, error) {
+	n, err := io.Copy(dst, io.LimitReader(src, max+1))
+	if err != nil {
+		return n, err
+	}
+	if n > max {
+		return n, fmt.Errorf("entry exceeds per-entry limit %d", max)
+	}
+	return n, nil
+}
+
+func errorsJoin(errs ...error) error { return errors.Join(errs...) }
 
 // NeedsRefresh checks if a resource needs refreshing based on a timestamp file.
 func NeedsRefresh(dir string, period time.Duration) bool {
