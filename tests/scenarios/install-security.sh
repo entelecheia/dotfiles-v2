@@ -40,13 +40,17 @@ assert_case() {
   local mode="$1" digest_tool="$2" expect="$3"
   local root="$FIXTURE_ROOT/$mode-$digest_tool"
   local fake="$root/fake" install="$root/bin" archive="$VALID_ARCHIVE"
-  local old_sum old_link status output
+  local old_sum old_compatibility status output
   mkdir -p "$fake" "$install" "$root/home"
   printf '%s\n' '#!/bin/sh' 'echo "dot version 0.0.1"' > "$install/dot"
   chmod 0755 "$install/dot"
-  ln -s dot "$install/dotfiles"
+  if [[ "$mode" == "regular-promote" ]]; then
+    printf 'legacy compatibility command\n' > "$install/dotfiles"
+  else
+    ln -s dot "$install/dotfiles"
+  fi
   old_sum=$($SYSTEM_SHA256SUM "$install/dot" | sed 's/ .*//')
-  old_link=$(readlink "$install/dotfiles")
+  old_compatibility=$(cat "$install/dotfiles" 2>/dev/null || readlink "$install/dotfiles")
 
   # GNU tar uses gzip from PATH for -z extraction. Keep that real decompressor
   # available while the fixture deliberately controls curl, digest tools, and mv.
@@ -100,7 +104,7 @@ EOF
   cat > "$fake/mv" <<'EOF'
 #!/bin/bash
 set -euo pipefail
-if [[ "${INSTALL_FIXTURE_MODE:-}" == "promote" && "${2:-}" == "$INSTALL_DIR/dot" && "${1:-}" == */extract/dot ]]; then
+if [[ "${INSTALL_FIXTURE_MODE:-}" == "promote" || "${INSTALL_FIXTURE_MODE:-}" == "regular-promote" ]] && [[ "${2:-}" == "$INSTALL_DIR/dot" && "${1:-}" == */extract/dot ]]; then
   exit 1
 fi
 if [[ "${INSTALL_FIXTURE_MODE:-}" == "interrupt" && "${2:-}" == "$INSTALL_DIR/dot" && "${1:-}" == */extract/dot ]]; then
@@ -144,10 +148,32 @@ EOF
     fi
     return
   fi
-  if [[ "$status" -ne 0 && $($SYSTEM_SHA256SUM "$install/dot" | sed 's/ .*//') == "$old_sum" && $(readlink "$install/dotfiles") == "$old_link" && -z $(find "$root" -maxdepth 1 -name '.dot-install.*' -o -name '.dot.rollback.*' -o -name '.dotfiles.rollback.*') && "$output" == *'active binary remains unchanged'* ]]; then
+  if [[ "$status" -ne 0 && $($SYSTEM_SHA256SUM "$install/dot" | sed 's/ .*//') == "$old_sum" && $(cat "$install/dotfiles" 2>/dev/null || readlink "$install/dotfiles") == "$old_compatibility" && -z $(find "$root" -maxdepth 1 -name '.dot-install.*' -o -name '.dot.rollback.*' -o -name '.dotfiles.rollback.*') && "$output" == *'active binary remains unchanged'* ]]; then
     PASS=$((PASS + 1)); echo "  ✓ $mode preserves the active binary and symlink"
   else
     FAIL=$((FAIL + 1)); ERRORS+=("FAIL: $mode must preserve active state: $output")
+  fi
+}
+
+assert_noop_repairs_compatibility_symlink() {
+  local root="$FIXTURE_ROOT/noop" fake="$FIXTURE_ROOT/noop/fake" install="$FIXTURE_ROOT/noop/bin" status output
+  mkdir -p "$fake" "$install" "$root/home"
+  printf '%s\n' '#!/bin/sh' 'echo "dot version 9.9.9"' > "$install/dot"
+  chmod 0755 "$install/dot"
+  for tool in bash uname tr head grep sed dirname basename mkdir mktemp rm chmod ln readlink tar gzip cp sleep mv; do
+    ln -s "$(command -v "$tool")" "$fake/$tool"
+  done
+  cat > "$fake/curl" <<'EOF'
+#!/bin/bash
+printf '{"tag_name":"v9.9.9"}\n'
+EOF
+  chmod 0755 "$fake/curl"
+  status=0
+  output=$(HOME="$root/home" INSTALL_DIR="$install" PATH="$install:$fake" "$SCRIPT" 2>&1) || status=$?
+  if [[ "$status" -eq 0 && -L "$install/dotfiles" && $(readlink "$install/dotfiles") == dot ]]; then
+    PASS=$((PASS + 1)); echo "  ✓ no-op install repairs the compatibility symlink"
+  else
+    FAIL=$((FAIL + 1)); ERRORS+=("FAIL: no-op install should repair compatibility symlink: $output")
   fi
 }
 
@@ -156,8 +182,9 @@ echo "--- controlled checksum and rollback matrix ---"
 assert_case success sha256sum success
 assert_case success shasum success
 assert_case missingtool none failure
-for failure in missing malformed duplicate mismatch curlfail extract invalid-binary promote interrupt; do
+for failure in missing malformed duplicate mismatch curlfail extract invalid-binary promote regular-promote interrupt; do
   assert_case "$failure" sha256sum failure
 done
+assert_noop_repairs_compatibility_symlink
 
 report

@@ -169,7 +169,7 @@ validate_binary() {
 }
 
 restore_active_binary() {
-  local dest="$1" binary_rollback="$2" link_rollback="$3" had_link="$4"
+  local dest="$1" binary_rollback="$2" link_rollback="$3" had_compatibility="$4"
   if [[ -e "$binary_rollback" ]]; then
     rm -f "$dest/dot"
     mv "$binary_rollback" "$dest/dot" || return 1
@@ -179,43 +179,68 @@ restore_active_binary() {
   if [[ -e "$link_rollback" || -L "$link_rollback" ]]; then
     rm -f "$dest/dotfiles"
     mv "$link_rollback" "$dest/dotfiles" || return 1
-  elif [[ "$had_link" == "0" ]]; then
+  elif [[ "$had_compatibility" == "0" ]]; then
     rm -f "$dest/dotfiles"
   fi
+}
+
+ensure_compatibility_symlink() {
+  local dest="$1" had_compatibility=0
+  local link_rollback="$dest/.dotfiles.rollback.$$"
+
+  if [[ -L "$dest/dotfiles" ]] && [[ "$(readlink "$dest/dotfiles")" == "dot" ]]; then
+    return 0
+  fi
+  if [[ -e "$dest/dotfiles" || -L "$dest/dotfiles" ]]; then
+    had_compatibility=1
+    if ! mv "$dest/dotfiles" "$link_rollback"; then
+      err "Could not stage compatibility symlink; active binary remains unchanged. Check permissions and retry."
+      return 1
+    fi
+  fi
+  if ! ln -s dot "$dest/dotfiles"; then
+    rm -f "$dest/dotfiles"
+    if [[ "$had_compatibility" == "1" ]] && ! mv "$link_rollback" "$dest/dotfiles"; then
+      err "Could not restore compatibility command; recover ${link_rollback} manually."
+    fi
+    err "Could not create compatibility symlink; active binary remains unchanged. Check permissions and retry."
+    return 1
+  fi
+  rm -f "$link_rollback"
 }
 
 install_binary() {
   local candidate="$1" dest="$2"
   local binary_rollback="$dest/.dot.rollback.$$" link_rollback="$dest/.dotfiles.rollback.$$"
-  local had_binary=0 had_link=0
+  local had_binary=0 had_compatibility=0
 
   if ! validate_binary "$candidate"; then
     err "Downloaded ${ASSET_NAME} is not a valid dot binary; active binary remains unchanged. Download the release again."
     return 1
   fi
   [[ -e "$dest/dot" ]] && had_binary=1
-  [[ -L "$dest/dotfiles" ]] && had_link=1
+  [[ -e "$dest/dotfiles" || -L "$dest/dotfiles" ]] && had_compatibility=1
   INSTALL_ACTIVE_DEST="$dest"
   INSTALL_BINARY_ROLLBACK="$binary_rollback"
   INSTALL_LINK_ROLLBACK="$link_rollback"
-  INSTALL_HAD_LINK="$had_link"
+  INSTALL_HAD_LINK="$had_compatibility"
 
   if [[ "$had_binary" == "1" ]] && ! mv "$dest/dot" "$binary_rollback"; then
     err "Could not stage active binary replacement; active binary remains unchanged. Check permissions and retry."
     return 1
   fi
   if ! mv "$candidate" "$dest/dot" || ! validate_binary "$dest/dot"; then
-    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_link" || err "Rollback failed; recover ${binary_rollback} manually."
+    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_compatibility" || err "Rollback failed; recover ${binary_rollback} manually."
     err "Could not promote verified ${ASSET_NAME}; active binary remains unchanged. Check permissions and retry."
     return 1
   fi
-  if [[ "$had_link" == "1" ]] && ! mv "$dest/dotfiles" "$link_rollback"; then
-    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_link" || err "Rollback failed; recover ${binary_rollback} manually."
+  if [[ "$had_compatibility" == "1" ]] && ! mv "$dest/dotfiles" "$link_rollback"; then
+    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_compatibility" || err "Rollback failed; recover ${binary_rollback} manually."
     err "Could not update compatibility symlink; active binary remains unchanged. Check permissions and retry."
     return 1
   fi
   if ! ln -s dot "$dest/dotfiles"; then
-    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_link" || err "Rollback failed; recover ${binary_rollback} manually."
+    restore_active_binary "$dest" "$binary_rollback" "$link_rollback" "$had_compatibility" || err "Rollback failed; recover ${binary_rollback} manually."
     err "Could not create compatibility symlink; active binary remains unchanged. Check permissions and retry."
     return 1
   fi
@@ -240,6 +265,7 @@ fi
 
 if [[ "$CURRENT" == *"$VERSION"* ]]; then
   info "dot v${VERSION} already installed, skipping download"
+  ensure_compatibility_symlink "$INSTALL_DIR" || exit 1
 else
   if [[ -n "$CURRENT" ]]; then
     info "Upgrading dot to v${VERSION}..."
