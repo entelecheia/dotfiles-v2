@@ -292,6 +292,9 @@ func stageOwnedEntries(stage string, explicit []string) ([]string, error) {
 }
 
 func activateGitComponent(ctx context.Context, rc *RunContext, destination string, pin gitComponentPin) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+		return fmt.Errorf("preparing component parent: %w", err)
+	}
 	stage, err := os.MkdirTemp(filepath.Dir(destination), "."+filepath.Base(destination)+".stage-")
 	if err != nil {
 		return err
