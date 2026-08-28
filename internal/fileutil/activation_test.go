@@ -112,6 +112,36 @@ func TestActivateOwnedComponent(t *testing.T) {
 		}
 	})
 
+	t.Run("promoted validation rolls back in order", func(t *testing.T) {
+		root := t.TempDir()
+		dest := filepath.Join(root, "component")
+		stage := filepath.Join(root, ".component-stage")
+		writeActivationFile(t, filepath.Join(dest, "managed"), "old")
+		writeActivationFile(t, filepath.Join(stage, "managed"), "new")
+		var validations []string
+		err := ActivateOwnedComponent(activationRunner(false), ActivationOptions{
+			DestinationRoot: dest,
+			StagedRoot:      stage,
+			OwnedEntries:    []string{"managed"},
+			Validate: func(path string) error {
+				validations = append(validations, path)
+				if path == dest {
+					return errors.New("invalid promoted state")
+				}
+				return nil
+			},
+		})
+		if err == nil {
+			t.Fatal("expected promoted validation failure")
+		}
+		if got, want := strings.Join(validations, ","), stage+","+dest; got != want {
+			t.Fatalf("validation order = %q, want %q", got, want)
+		}
+		if data, readErr := os.ReadFile(filepath.Join(dest, "managed")); readErr != nil || string(data) != "old" {
+			t.Fatalf("old entry was not restored after promoted validation: %q, %v", data, readErr)
+		}
+	})
+
 	t.Run("dry run does not mutate", func(t *testing.T) {
 		root := t.TempDir()
 		dest := filepath.Join(root, "component")
@@ -141,14 +171,18 @@ func TestActivateOwnedComponent_Concurrent(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan error, 1)
+	validatedStage := false
 	go func() {
 		done <- ActivateOwnedComponent(activationRunner(false), ActivationOptions{
 			DestinationRoot: dest,
 			StagedRoot:      stage,
 			OwnedEntries:    []string{"managed"},
-			Validate: func(string) error {
-				close(entered)
-				<-release
+			Validate: func(path string) error {
+				if path == stage && !validatedStage {
+					validatedStage = true
+					close(entered)
+					<-release
+				}
 				return nil
 			},
 		})
