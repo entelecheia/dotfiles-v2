@@ -192,9 +192,11 @@ func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) bool {
 // command: the resolved config plus the two flag-derived tokens that appear
 // inside the progress lines.
 type syncRender struct {
-	cfg    *syncer.Config
-	mode   syncer.RunMode
-	strict bool
+	cfg                *syncer.Config
+	mode               syncer.RunMode
+	strict             bool
+	dryRun             bool
+	sensitiveOverrides []syncer.SensitiveOverride
 }
 
 // renderSyncEvent turns engine progress into the lines the sync commands have
@@ -209,10 +211,15 @@ func renderSyncEvent(p *Printer, r syncRender) func(syncer.SyncEvent) {
 		case syncer.SyncEventPushSSHStart:
 			p.Line("Push %s → %s (%s, direct rsync — no plan preview for ssh targets)",
 				cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
+			if r.dryRun {
+				p.Line("  (dry-run — no changes)")
+			}
+			printSensitiveOverrides(p, r.sensitiveOverrides, false)
 		case syncer.SyncEventPushPlanStart:
 			p.Line("Push plan for %s → %s (%s, mode=%s)", cfg.LocalPath, cfg.MirrorPath, cfg.Propagation, r.mode)
 		case syncer.SyncEventPushPlanReady:
 			printPushPlan(p, e.PushPlan)
+			printSensitiveOverrides(p, r.sensitiveOverrides, false)
 		case syncer.SyncEventPullSSHStart:
 			p.Line("Pull %s → %s (direct rsync --update; workspace files win ties)",
 				cfg.Target.RsyncDest(), cfg.LocalPath)

@@ -2,6 +2,13 @@
 
 Show local↔mirror sync status
 
+### Synopsis
+
+Show local↔mirror sync status.
+
+Status identifies each allow.txt rule that re-includes a built-in secret
+exclusion. --json exposes the equivalent versioned structured records.
+
 ```
 dot sync status [flags]
 ```
