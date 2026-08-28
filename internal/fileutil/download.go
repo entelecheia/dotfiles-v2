@@ -263,7 +263,7 @@ func extractTarGzWithLimits(r io.Reader, destDir string, stripComponents int, li
 			if err := root.MkdirAll(name, 0755); err != nil {
 				return fmt.Errorf("creating tar directory %q: %w", hdr.Name, err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if hdr.Mode&07000 != 0 {
 				return fmt.Errorf("tar entry %q has privileged mode", hdr.Name)
 			}

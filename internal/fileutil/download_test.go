@@ -43,7 +43,7 @@ func makeTarGzEntries(t *testing.T, entries []archiveTestEntry) []byte {
 			mode = 0755
 		}
 		header := &tar.Header{Name: entry.name, Mode: mode, Typeflag: typeflag, Linkname: entry.linkname}
-		if typeflag == tar.TypeReg || typeflag == tar.TypeRegA {
+		if typeflag == tar.TypeReg {
 			header.Size = int64(len(entry.content))
 		}
 		if err := tw.WriteHeader(header); err != nil {
