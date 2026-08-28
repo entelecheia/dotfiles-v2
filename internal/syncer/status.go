@@ -26,6 +26,7 @@ type Status struct {
 	ExcludeFile          string
 	IgnoreFile           string
 	AllowCount           int // active allow.txt patterns (secrets opt-in) — warn when > 0
+	SensitiveOverrides   []SensitiveOverride
 	SubmoduleCount       int // submodules excluded from sync (they sync via Git)
 	Propagation          PropagationPolicy
 	LastPull             time.Time
@@ -67,33 +68,39 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 			allowCount++
 		}
 	}
+	// Collect the complete, already-sorted policy finding before constructing the
+	// status snapshot. Callers therefore receive either every typed override or
+	// no snapshot at all; terminal and JSON renderers never have to assemble a
+	// partial report while emitting output.
+	sensitiveOverrides := SensitiveOverrides(cfg.AllowPatterns)
 	s := &Status{
-		Profile:         cfg.Profile,
-		Owner:           cfg.Owner,
-		LocalPath:       strings.TrimRight(cfg.LocalPath, "/"),
-		MirrorPath:      strings.TrimRight(cfg.MirrorPath, "/"),
-		Target:          cfg.Target,
-		StoreDir:        storeDir,
-		LocalExists:     runner.IsDir(cfg.LocalPath),
-		MirrorExists:    cfg.Target.IsSSH() || runner.IsDir(cfg.MirrorPath),
-		Paused:          cfg.Paused,
-		FilterMode:      cfg.FilterMode,
-		IncludeFile:     cfg.IncludeFile,
-		ExcludeFile:     cfg.ExcludesFile,
-		IgnoreFile:      cfg.IgnoreFile,
-		AllowCount:      allowCount,
-		SubmoduleCount:  len(gitSubmodulePaths(strings.TrimRight(cfg.LocalPath, "/"))),
-		Propagation:     cfg.Propagation,
-		LastPull:        localState.LastPull,
-		LastPush:        localState.LastPush,
-		LastIntake:      localState.LastIntake,
-		LastIntakeTSDir: localState.LastIntakeTSDir,
-		LockHeld:        pathExists(cfg.LockDir) && !lockIsStale(cfg.LockDir),
-		MaxDelete:       cfg.MaxDelete,
-		Interval:        cfg.Interval,
-		PullInterval:    cfg.PullInterval,
-		PushMode:        cfg.PushMode,
-		PullMode:        cfg.PullMode,
+		Profile:            cfg.Profile,
+		Owner:              cfg.Owner,
+		LocalPath:          strings.TrimRight(cfg.LocalPath, "/"),
+		MirrorPath:         strings.TrimRight(cfg.MirrorPath, "/"),
+		Target:             cfg.Target,
+		StoreDir:           storeDir,
+		LocalExists:        runner.IsDir(cfg.LocalPath),
+		MirrorExists:       cfg.Target.IsSSH() || runner.IsDir(cfg.MirrorPath),
+		Paused:             cfg.Paused,
+		FilterMode:         cfg.FilterMode,
+		IncludeFile:        cfg.IncludeFile,
+		ExcludeFile:        cfg.ExcludesFile,
+		IgnoreFile:         cfg.IgnoreFile,
+		AllowCount:         allowCount,
+		SensitiveOverrides: sensitiveOverrides,
+		SubmoduleCount:     len(gitSubmodulePaths(strings.TrimRight(cfg.LocalPath, "/"))),
+		Propagation:        cfg.Propagation,
+		LastPull:           localState.LastPull,
+		LastPush:           localState.LastPush,
+		LastIntake:         localState.LastIntake,
+		LastIntakeTSDir:    localState.LastIntakeTSDir,
+		LockHeld:           pathExists(cfg.LockDir) && !lockIsStale(cfg.LockDir),
+		MaxDelete:          cfg.MaxDelete,
+		Interval:           cfg.Interval,
+		PullInterval:       cfg.PullInterval,
+		PushMode:           cfg.PushMode,
+		PullMode:           cfg.PullMode,
 	}
 	if sched != nil {
 		s.SchedulerState = sched.StateKind(ctx, SchedulerKindPush)
