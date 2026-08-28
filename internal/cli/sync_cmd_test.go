@@ -88,6 +88,54 @@ func TestSyncSensitiveOverridesLongControlEscaping(t *testing.T) {
 	}
 }
 
+func TestSyncPushSensitiveOverridesLocalDryRun(t *testing.T) {
+	var out bytes.Buffer
+	config := &syncer.Config{LocalPath: "/workspace/", MirrorPath: "/mirror/", Propagation: syncer.DefaultPropagationPolicy()}
+	render := renderSyncEvent(&Printer{Out: &out, Err: io.Discard}, syncRender{
+		cfg:                config,
+		mode:               syncer.ModeManual,
+		dryRun:             true,
+		sensitiveOverrides: []syncer.SensitiveOverride{{AllowPattern: "/.aws/credentials", DenyPattern: "/.aws/credentials"}},
+	})
+	render(syncer.SyncEvent{Kind: syncer.SyncEventPushPlanStart})
+	render(syncer.SyncEvent{Kind: syncer.SyncEventDryRunNotice})
+	render(syncer.SyncEvent{Kind: syncer.SyncEventPushPlanReady, PushPlan: &syncer.PushPlan{}})
+	got := out.String()
+	for _, want := range []string{"Push plan for", "(dry-run", "No push changes.", "Sensitive overrides: 1", "/.aws/credentials re-includes /.aws/credentials"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("local dry-run output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "No push changes.") > strings.Index(got, "Sensitive overrides: 1") {
+		t.Fatalf("sensitive section must follow the complete local plan:\n%s", got)
+	}
+}
+
+func TestSyncPushSensitiveOverridesSSHDirectDryRun(t *testing.T) {
+	var out bytes.Buffer
+	config := &syncer.Config{
+		LocalPath:   "/workspace/",
+		Target:      syncer.Target{Kind: syncer.TargetSSH, Host: "peer", Path: "/mirror"},
+		Propagation: syncer.DefaultPropagationPolicy(),
+	}
+	render := renderSyncEvent(&Printer{Out: &out, Err: io.Discard}, syncRender{
+		cfg:                config,
+		mode:               syncer.ModeManual,
+		dryRun:             true,
+		sensitiveOverrides: []syncer.SensitiveOverride{{AllowPattern: "/.secrets/app.env", DenyPattern: "/.secrets/**"}},
+	})
+	render(syncer.SyncEvent{Kind: syncer.SyncEventPushSSHStart})
+	got := out.String()
+	for _, want := range []string{"Push /workspace/", "(dry-run", "Sensitive overrides: 1", "/.secrets/app.env re-includes /.secrets/**"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("SSH dry-run output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "Push /workspace/") > strings.Index(got, "(dry-run") || strings.Index(got, "(dry-run") > strings.Index(got, "Sensitive overrides: 1") {
+		t.Fatalf("SSH dry-run ordering drifted:\n%s", got)
+	}
+}
+
 func TestParseIntervalFlag(t *testing.T) {
 	cases := []struct {
 		raw     string
