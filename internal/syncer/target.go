@@ -3,6 +3,8 @@ package syncer
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // TargetKind discriminates the two supported sync destinations.
@@ -31,28 +33,57 @@ type Target struct {
 //
 // An empty spec is an error; callers decide their own default.
 func ParseTarget(spec string) (Target, error) {
-	spec = strings.TrimSpace(spec)
-	if spec == "" {
-		return Target{}, fmt.Errorf("empty target spec")
+	if err := validateTargetField("spec", spec, false); err != nil {
+		return Target{}, err
 	}
 	switch {
 	case strings.HasPrefix(spec, "local:"):
-		path := strings.TrimSpace(strings.TrimPrefix(spec, "local:"))
-		if path == "" {
-			return Target{}, fmt.Errorf("local target needs a path (local:~/Dropbox/work)")
+		path := strings.TrimPrefix(spec, "local:")
+		if err := validateTargetField("local path", path, true); err != nil {
+			return Target{}, err
 		}
 		return Target{Kind: TargetLocal, Path: path}, nil
 	case strings.HasPrefix(spec, "ssh:"):
-		rest := strings.TrimSpace(strings.TrimPrefix(spec, "ssh:"))
+		rest := strings.TrimPrefix(spec, "ssh:")
 		host, path, ok := strings.Cut(rest, ":")
-		if !ok || strings.TrimSpace(host) == "" || strings.TrimSpace(path) == "" {
-			return Target{}, fmt.Errorf("ssh target must be ssh:user@host:path, got %q", spec)
+		if !ok {
+			return Target{}, fmt.Errorf("invalid target spec %q: expected ssh:user@host:path", spec)
 		}
-		return Target{Kind: TargetSSH, Host: strings.TrimSpace(host), Path: strings.TrimSpace(path)}, nil
+		if err := validateTargetField("ssh host", host, true); err != nil {
+			return Target{}, err
+		}
+		if err := validateTargetField("ssh path", path, false); err != nil {
+			return Target{}, err
+		}
+		return Target{Kind: TargetSSH, Host: host, Path: path}, nil
 	default:
 		// Bare paths keep legacy mirror_path values working.
+		if err := validateTargetField("local path", spec, true); err != nil {
+			return Target{}, err
+		}
 		return Target{Kind: TargetLocal, Path: spec}, nil
 	}
+}
+
+func validateTargetField(name, value string, rejectLeadingOption bool) error {
+	if value == "" {
+		return fmt.Errorf("invalid target %s %q: empty", name, value)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("invalid target %s %q: invalid UTF-8", name, value)
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("invalid target %s %q: contains control character", name, value)
+		}
+		if unicode.IsSpace(r) {
+			return fmt.Errorf("invalid target %s %q: contains Unicode whitespace", name, value)
+		}
+	}
+	if rejectLeadingOption && strings.HasPrefix(value, "-") {
+		return fmt.Errorf("invalid target %s %q: leading option marker", name, value)
+	}
+	return nil
 }
 
 // String renders the canonical spec form.
