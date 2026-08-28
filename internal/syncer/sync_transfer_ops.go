@@ -45,7 +45,7 @@ type PushCommandResult struct {
 func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, error) {
 	cfg, runner, state := opts.Config, opts.Runner, opts.State
 
-	release, lockErr := AcquireLock(cfg.LockDir)
+	release, lockErr := AcquireLockForRun(cfg.LockDir, opts.DryRun)
 	if lockErr != nil {
 		return &PushCommandResult{Outcome: PushLockBusy, LockErr: lockErr}, nil
 	}
@@ -171,7 +171,7 @@ type PullCommandResult struct {
 func PullCommand(ctx context.Context, opts PullCommandOptions) (*PullCommandResult, error) {
 	cfg, runner, state := opts.Config, opts.Runner, opts.State
 
-	release, lockErr := AcquireLock(cfg.LockDir)
+	release, lockErr := AcquireLockForRun(cfg.LockDir, opts.DryRun)
 	if lockErr != nil {
 		return &PullCommandResult{Outcome: PullLockBusy, LockErr: lockErr}, nil
 	}
@@ -255,7 +255,7 @@ type IntakeCommandResult struct {
 func IntakeCommand(ctx context.Context, opts IntakeCommandOptions) (*IntakeCommandResult, error) {
 	cfg := opts.Config
 
-	release, lockErr := AcquireLock(cfg.LockDir)
+	release, lockErr := AcquireLockForRun(cfg.LockDir, opts.DryRun)
 	if lockErr != nil {
 		return &IntakeCommandResult{Outcome: IntakeLockBusy, LockErr: lockErr}, nil
 	}
@@ -305,7 +305,7 @@ type FetchCommandResult struct {
 func FetchCommand(ctx context.Context, opts FetchOptions) (*FetchCommandResult, error) {
 	cfg := opts.Config
 
-	release, lockErr := AcquireLock(cfg.LockDir)
+	release, lockErr := AcquireLockForRun(cfg.LockDir, opts.DryRun)
 	if lockErr != nil {
 		return &FetchCommandResult{Outcome: FetchLockBusy, LockErr: lockErr}, nil
 	}

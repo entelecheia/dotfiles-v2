@@ -502,13 +502,28 @@ func propagationFlags(p PropagationPolicy, maxDelete int) []string {
 // operator's shared-folder excludes, the submodule exclude layer, and the
 // tracked ∪ baseline include layer. Every file is always written (even
 // empty) for predictable layering.
-func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
+//
+// During a preview they land in a temp directory instead of the workspace
+// store. rsync needs these files on disk to produce a faithful preview, so
+// they cannot simply be skipped, but writing them into the store is what made
+// `dot sync fetch --dry-run` materialize the store on a workspace that had
+// none - the defect BUG-13 records. The caller must call rf.Cleanup.
+func prepareRuntimeFilters(cfg *Config, dryRun bool) (runtimeFilters, error) {
 	var rf runtimeFilters
+	dynDir := cfg.ConfigDir
+	if dryRun {
+		tmp, err := os.MkdirTemp("", "dot-preview-filters-")
+		if err != nil {
+			return rf, fmt.Errorf("creating preview filter dir: %w", err)
+		}
+		dynDir = tmp
+		rf.cleanup = func() { _ = os.RemoveAll(tmp) }
+	}
 	entries, err := ScanShared(strings.TrimRight(cfg.MirrorPath, "/"), cfg.SharedExcludes)
 	if err != nil {
 		return rf, fmt.Errorf("scanning shared entries: %w", err)
 	}
-	rf.SharedDyn, err = MaterializeRuntimeExcludesFile(cfg.ConfigDir, entries)
+	rf.SharedDyn, err = MaterializeRuntimeExcludesFile(dynDir, entries)
 	if err != nil {
 		return rf, err
 	}
@@ -523,7 +538,7 @@ func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
 	if cfg.IncludeSubmodules {
 		submodules = nil
 	}
-	rf.SubmodulesDyn, err = MaterializeSubmodulesDynFile(cfg.LocalPaths, submodules)
+	rf.SubmodulesDyn, err = MaterializeSubmodulesDynFile(dynDir, submodules)
 	if err != nil {
 		return rf, err
 	}
@@ -543,7 +558,7 @@ func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
 		}
 	}
 	rels := unionTrackedWithBaseline(tracked, baseline)
-	rf.TrackedDyn, err = MaterializeTrackedIncludesFile(cfg.LocalPaths, rels)
+	rf.TrackedDyn, err = MaterializeTrackedIncludesFile(dynDir, rels)
 	if err != nil {
 		return rf, err
 	}
@@ -551,7 +566,7 @@ func prepareRuntimeFilters(cfg *Config) (runtimeFilters, error) {
 	// re-admitted every one of them to the include layer. The tombstone
 	// excludes sit ahead of it in commonArgs and take them back out.
 	if len(cfg.Tombstones) > 0 {
-		rf.TombstonesDyn, err = MaterializeTombstoneExcludesFile(cfg.ConfigDir, cfg.Tombstones)
+		rf.TombstonesDyn, err = MaterializeTombstoneExcludesFile(dynDir, cfg.Tombstones)
 		if err != nil {
 			return rf, err
 		}
@@ -602,13 +617,16 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 			return fmt.Errorf("normalizing workspace names: %w", err)
 		}
 	}
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return err
+	if !dryRun {
+		if err := ensureLogDir(cfg.LogFile); err != nil {
+			return err
+		}
 	}
 	if err := refuseSharedDriveMirror(cfg); err != nil {
 		return err
 	}
-	rf, err := prepareRuntimeFilters(cfg)
+	rf, err := prepareRuntimeFilters(cfg, dryRun)
+	defer rf.Cleanup()
 	if err != nil {
 		return err
 	}
@@ -696,10 +714,13 @@ type FetchResult struct {
 // rather than failing the run. SSH targets cannot be pre-checked; rsync
 // reports missing sources itself.
 func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string, dryRun bool) (*FetchResult, error) {
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return nil, err
+	if !dryRun {
+		if err := ensureLogDir(cfg.LogFile); err != nil {
+			return nil, err
+		}
 	}
-	rf, err := prepareRuntimeFilters(cfg)
+	rf, err := prepareRuntimeFilters(cfg, dryRun)
+	defer rf.Cleanup()
 	if err != nil {
 		return nil, err
 	}
@@ -804,10 +825,13 @@ func fetchScopeArgs(entries []fetchEntry) []string {
 // files are never deleted; remote-newer files overwrite local with a backup
 // under .sync-conflicts/.
 func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
-	if err := ensureLogDir(cfg.LogFile); err != nil {
-		return err
+	if !dryRun {
+		if err := ensureLogDir(cfg.LogFile); err != nil {
+			return err
+		}
 	}
-	rf, err := prepareRuntimeFilters(cfg)
+	rf, err := prepareRuntimeFilters(cfg, dryRun)
+	defer rf.Cleanup()
 	if err != nil {
 		return err
 	}
