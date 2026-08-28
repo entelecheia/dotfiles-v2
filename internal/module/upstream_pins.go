@@ -47,7 +47,8 @@ type fontAssetPin struct {
 }
 
 // componentPinMarker is intentionally deterministic so matching content can
-// be accepted while offline. Files maps relative regular-file paths to hashes.
+// be accepted while offline. Files maps relative managed-file or symlink paths
+// to type-separated hashes.
 type componentPinMarker struct {
 	Schema    int               `json:"schema"`
 	Component string            `json:"component"`
@@ -193,17 +194,34 @@ func hashManagedFiles(root string, owned []string) (map[string]string, error) {
 			if d.IsDir() {
 				return nil
 			}
-			if !d.Type().IsRegular() {
-				return fmt.Errorf("managed path %q is not a regular file", path)
-			}
-			f, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
 			h := sha256.New()
-			if _, err := io.Copy(h, f); err != nil {
-				return err
+			switch {
+			case d.Type().IsRegular():
+				f, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				if _, err := io.Copy(h, f); err != nil {
+					return err
+				}
+			case d.Type()&os.ModeSymlink != 0:
+				target, err := os.Readlink(path)
+				if err != nil {
+					return fmt.Errorf("reading managed symlink %q: %w", path, err)
+				}
+				resolved := filepath.Clean(filepath.Join(filepath.Dir(path), target))
+				relativeTarget, err := filepath.Rel(root, resolved)
+				if err != nil || !filepath.IsLocal(relativeTarget) {
+					return fmt.Errorf("managed symlink %q escapes component root", path)
+				}
+				if _, err := os.Lstat(resolved); err != nil {
+					return fmt.Errorf("managed symlink %q target unavailable: %w", path, err)
+				}
+				_, _ = h.Write([]byte("symlink\x00"))
+				_, _ = h.Write([]byte(filepath.ToSlash(target)))
+			default:
+				return fmt.Errorf("managed path %q has unsupported type", path)
 			}
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
