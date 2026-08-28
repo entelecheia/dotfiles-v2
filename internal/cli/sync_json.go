@@ -12,7 +12,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-const syncStatusSchemaVersion = 1
+const syncStatusSchemaVersion = 2
 
 type syncTargetJSON struct {
 	Kind string `json:"kind"`
@@ -27,6 +27,11 @@ type syncPropagationJSON struct {
 	Delete bool `json:"delete"`
 }
 
+type syncSensitiveOverrideJSON struct {
+	AllowPattern string `json:"allowPattern"`
+	DenyPattern  string `json:"denyPattern"`
+}
+
 type syncJobJSON struct {
 	ID              string  `json:"id"`
 	Action          string  `json:"action"`
@@ -38,36 +43,37 @@ type syncJobJSON struct {
 }
 
 type syncStatusJSON struct {
-	SchemaVersion  int                 `json:"schemaVersion"`
-	Kind           string              `json:"kind"`
-	Profile        string              `json:"profile"`
-	Configured     bool                `json:"configured"`
-	WorkspacePath  string              `json:"workspacePath"`
-	StoreDir       string              `json:"storeDir"`
-	Target         syncTargetJSON      `json:"target"`
-	LocalExists    bool                `json:"localExists"`
-	TargetExists   bool                `json:"targetExists"`
-	Paused         bool                `json:"paused"`
-	LockHeld       bool                `json:"lockHeld"`
-	Owner          string              `json:"owner,omitempty"`
-	CanPush        bool                `json:"canPush"`
-	MachineNames   []string            `json:"machineNames"`
-	FilterMode     string              `json:"filterMode"`
-	AllowCount     int                 `json:"allowCount"`
-	SubmoduleCount int                 `json:"submoduleCount"`
-	Propagation    syncPropagationJSON `json:"propagation"`
-	MaxDelete      int                 `json:"maxDelete"`
-	RsyncVersion   string              `json:"rsyncVersion,omitempty"`
-	LastPullAt     *string             `json:"lastPullAt"`
-	LastPushAt     *string             `json:"lastPushAt"`
-	LastIntakeAt   *string             `json:"lastIntakeAt"`
-	ConflictCount  int                 `json:"conflictCount"`
-	LogPath        string              `json:"logPath"`
-	IncludePath    string              `json:"includePath"`
-	ExcludePath    string              `json:"excludePath"`
-	IgnorePath     string              `json:"ignorePath"`
-	AllowPath      string              `json:"allowPath"`
-	Jobs           []syncJobJSON       `json:"jobs"`
+	SchemaVersion      int                         `json:"schemaVersion"`
+	Kind               string                      `json:"kind"`
+	Profile            string                      `json:"profile"`
+	Configured         bool                        `json:"configured"`
+	WorkspacePath      string                      `json:"workspacePath"`
+	StoreDir           string                      `json:"storeDir"`
+	Target             syncTargetJSON              `json:"target"`
+	LocalExists        bool                        `json:"localExists"`
+	TargetExists       bool                        `json:"targetExists"`
+	Paused             bool                        `json:"paused"`
+	LockHeld           bool                        `json:"lockHeld"`
+	Owner              string                      `json:"owner,omitempty"`
+	CanPush            bool                        `json:"canPush"`
+	MachineNames       []string                    `json:"machineNames"`
+	FilterMode         string                      `json:"filterMode"`
+	AllowCount         int                         `json:"allowCount"`
+	SensitiveOverrides []syncSensitiveOverrideJSON `json:"sensitiveOverrides"`
+	SubmoduleCount     int                         `json:"submoduleCount"`
+	Propagation        syncPropagationJSON         `json:"propagation"`
+	MaxDelete          int                         `json:"maxDelete"`
+	RsyncVersion       string                      `json:"rsyncVersion,omitempty"`
+	LastPullAt         *string                     `json:"lastPullAt"`
+	LastPushAt         *string                     `json:"lastPushAt"`
+	LastIntakeAt       *string                     `json:"lastIntakeAt"`
+	ConflictCount      int                         `json:"conflictCount"`
+	LogPath            string                      `json:"logPath"`
+	IncludePath        string                      `json:"includePath"`
+	ExcludePath        string                      `json:"excludePath"`
+	IgnorePath         string                      `json:"ignorePath"`
+	AllowPath          string                      `json:"allowPath"`
+	Jobs               []syncJobJSON               `json:"jobs"`
 }
 
 func timeJSON(value time.Time) *string {
@@ -116,24 +122,32 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 			LastRunAt:       timeJSON(st.LastPull),
 		},
 	}
+	overrides := make([]syncSensitiveOverrideJSON, len(st.SensitiveOverrides))
+	for i, override := range st.SensitiveOverrides {
+		overrides[i] = syncSensitiveOverrideJSON{
+			AllowPattern: override.AllowPattern,
+			DenyPattern:  override.DenyPattern,
+		}
+	}
 	return syncStatusJSON{
-		SchemaVersion:  syncStatusSchemaVersion,
-		Kind:           map[bool]string{true: "peer-profile", false: "mirror"}[cfg.Profile == syncer.PeerProfile],
-		Profile:        cfg.Profile,
-		Configured:     configured,
-		WorkspacePath:  st.LocalPath,
-		StoreDir:       st.StoreDir,
-		Target:         syncTargetJSON{Kind: string(st.Target.Kind), Spec: st.Target.String(), Host: st.Target.Host, Path: st.Target.Path},
-		LocalExists:    st.LocalExists,
-		TargetExists:   targetExists,
-		Paused:         st.Paused,
-		LockHeld:       st.LockHeld,
-		Owner:          st.Owner,
-		CanPush:        canPush,
-		MachineNames:   syncer.MachineNames(),
-		FilterMode:     st.FilterMode.String(),
-		AllowCount:     st.AllowCount,
-		SubmoduleCount: st.SubmoduleCount,
+		SchemaVersion:      syncStatusSchemaVersion,
+		Kind:               map[bool]string{true: "peer-profile", false: "mirror"}[cfg.Profile == syncer.PeerProfile],
+		Profile:            cfg.Profile,
+		Configured:         configured,
+		WorkspacePath:      st.LocalPath,
+		StoreDir:           st.StoreDir,
+		Target:             syncTargetJSON{Kind: string(st.Target.Kind), Spec: st.Target.String(), Host: st.Target.Host, Path: st.Target.Path},
+		LocalExists:        st.LocalExists,
+		TargetExists:       targetExists,
+		Paused:             st.Paused,
+		LockHeld:           st.LockHeld,
+		Owner:              st.Owner,
+		CanPush:            canPush,
+		MachineNames:       syncer.MachineNames(),
+		FilterMode:         st.FilterMode.String(),
+		AllowCount:         st.AllowCount,
+		SensitiveOverrides: overrides,
+		SubmoduleCount:     st.SubmoduleCount,
 		Propagation: syncPropagationJSON{
 			Create: st.Propagation.Create,
 			Update: st.Propagation.Update,

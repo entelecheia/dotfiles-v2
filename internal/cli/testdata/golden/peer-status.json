@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "peer",
   "profile": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "kind": "peer-profile",
     "profile": "peer",
     "configured": true,
@@ -22,6 +22,7 @@
     "machineNames": ["@MACHINE@"],
     "filterMode": "include",
     "allowCount": 0,
+    "sensitiveOverrides": [],
     "submoduleCount": 0,
     "propagation": {
       "create": true,
