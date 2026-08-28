@@ -19,7 +19,7 @@ func lifecycleFixturePin(commit string) gitComponentPin {
 	return gitComponentPin{
 		Name: "lifecycle-fixture", Repository: "https://example.invalid/lifecycle.git", Commit: commit,
 		RequiredPaths: []string{"oh-my-zsh.sh", "lib"},
-		Ownership:     componentOwnership{Current: []string{"oh-my-zsh.sh", "lib"}},
+		Ownership:     componentOwnership{Current: []string{"lib", "oh-my-zsh.sh"}},
 	}
 }
 

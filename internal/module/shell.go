@@ -21,6 +21,8 @@ var shellSourcePins = []gitComponentPin{
 	{Name: "zsh-completions", Repository: "https://github.com/zsh-users/zsh-completions.git", Commit: "8cd3bd78e8b1f17271cfdd8269074e5557d8d7b8"},
 }
 
+var zshCandidatePaths = []string{"/usr/local/bin/zsh", "/opt/homebrew/bin/zsh", "/bin/zsh", "/usr/bin/zsh"}
+
 // shellFile describes a file managed by ShellModule.
 type shellFile struct {
 	templatePath string // path relative to templates/
@@ -157,7 +159,7 @@ func (m *ShellModule) renderFile(rc *RunContext, f shellFile, data map[string]an
 func (m *ShellModule) ensureZshDefault(ctx context.Context, rc *RunContext) (bool, error) {
 	// Find zsh path
 	zshPath := ""
-	for _, candidate := range []string{"/usr/local/bin/zsh", "/opt/homebrew/bin/zsh", "/bin/zsh", "/usr/bin/zsh"} {
+	for _, candidate := range zshCandidatePaths {
 		if rc.Runner.FileExists(candidate) {
 			zshPath = candidate
 			break
