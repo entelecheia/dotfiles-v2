@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -177,19 +178,11 @@ func downloadVerifiedArchive(ctx context.Context, runner *exec.Runner, downloadU
 		return fmt.Errorf("downloading release: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumsURL, nil)
-	if err != nil {
-		return fmt.Errorf("creating checksums request: %w", err)
-	}
-	resp, err := httpDoWithRetry(req, 3)
-	if err != nil {
+	checksumsPath := filepath.Join(destDir, "checksums.txt")
+	if _, err := fileutil.DownloadMetadataFile(ctx, runner, checksumsURL, checksumsPath); err != nil {
 		return fmt.Errorf("fetching checksums.txt: %w — refusing to install unverified binary", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetching checksums.txt (HTTP %d): refusing to install unverified binary", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := os.ReadFile(checksumsPath)
 	if err != nil {
 		return fmt.Errorf("reading checksums.txt: %w", err)
 	}
@@ -250,54 +243,54 @@ func verifyBinary(ctx context.Context, path string) error {
 
 func fetchLatestRelease(ctx context.Context) (*githubRelease, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo)
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-
-	resp, err := httpDoWithRetry(req, 3)
+	resp, err := httpDoWithRetry(req, fileutil.MetadataHTTPClient(), 3)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
 	}
-
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading release metadata: %w", err)
+	}
 	var release githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.Unmarshal(body, &release); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 
 	return &release, nil
 }
 
-// httpDoWithRetry performs an HTTP request with exponential backoff on transient failures.
-// Retries on network errors and 5xx responses. 4xx responses are returned immediately (client error).
-func httpDoWithRetry(req *http.Request, attempts int) (*http.Response, error) {
+func httpDoWithRetry(req *http.Request, client *http.Client, attempts int) (*http.Response, error) {
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err == nil {
 			if resp.StatusCode < 500 {
 				return resp, nil
 			}
-			// 5xx: transient, retry
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			closeErr := resp.Body.Close()
+			lastErr = errors.Join(fmt.Errorf("HTTP %d", resp.StatusCode), closeErr)
 		} else {
 			lastErr = err
 		}
 		if i < attempts-1 {
-			time.Sleep(time.Duration(1<<i) * time.Second) // 1s, 2s, 4s
+			select {
+			case <-time.After(time.Duration(1<<i) * time.Second):
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
 		}
 	}
 	return nil, fmt.Errorf("after %d attempts: %w", attempts, lastErr)

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
@@ -232,5 +233,30 @@ func TestDownloadVerifiedArchive_ChecksumsMissing(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dest, "dot")); !os.IsNotExist(statErr) {
 		t.Error("binary must not be extracted without verification")
+	}
+}
+
+func TestDownloadVerifiedArchive_MetadataTimeout(t *testing.T) {
+	archive := makeReleaseTarGz(t)
+	asset := "dot_1.2.3_test.tar.gz"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/release.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	mux.HandleFunc("/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := downloadVerifiedArchive(ctx, upgradeTestRunner(), srv.URL+"/release.tar.gz", srv.URL+"/checksums.txt", asset, t.TempDir())
+	if err == nil {
+		t.Fatal("expected delayed checksums metadata to fail")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("metadata cancellation took %s", elapsed)
 	}
 }

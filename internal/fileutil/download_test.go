@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
@@ -181,7 +182,7 @@ func TestDownloadFile_RejectsChunkedBodyOverLimit(t *testing.T) {
 	limits.MaxCompressedBytes = 1
 	dest := filepath.Join(t.TempDir(), "asset.zip")
 	runner := exec.NewRunner(false, quietLogger())
-	if _, err := downloadFileWithLimits(context.Background(), runner, srv.URL, dest, limits); err == nil {
+	if _, err := downloadFileWithLimits(context.Background(), runner, newBulkHTTPClient(), srv.URL, dest, limits); err == nil {
 		t.Fatal("expected streamed body limit refusal")
 	}
 }
@@ -199,6 +200,127 @@ func TestDownloadFile_DryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		t.Error("dry-run must not create the destination file")
+	}
+}
+
+func TestMetadataTimeout(t *testing.T) {
+	client := newMetadataHTTPClient()
+	if client.Timeout != metadataHTTPTimeout {
+		t.Fatalf("metadata client timeout = %s, want %s", client.Timeout, metadataHTTPTimeout)
+	}
+
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial metadata"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-started; cancel() }()
+	dest := filepath.Join(t.TempDir(), "checksums.txt")
+	if _, err := DownloadMetadataFile(ctx, exec.NewRunner(false, quietLogger()), srv.URL, dest); err == nil {
+		t.Fatal("expected canceled metadata download to fail")
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("canceled metadata download must remove the partial destination")
+	}
+}
+
+func TestSlowBulkDownload(t *testing.T) {
+	const total = 24 << 20
+	chunk := bytes.Repeat([]byte("a"), 256<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for written := 0; written < total; written += len(chunk) {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(170 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "slow.tar.gz")
+	started := time.Now()
+	got, err := DownloadFile(context.Background(), exec.NewRunner(false, quietLogger()), srv.URL, dest)
+	if err != nil {
+		t.Fatalf("slow bulk download: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed <= metadataHTTPTimeout {
+		t.Fatalf("slow bulk body completed in %s, test must exceed metadata deadline %s", elapsed, metadataHTTPTimeout)
+	}
+	want := sha256.Sum256(bytes.Repeat(chunk, total/len(chunk)))
+	if got != hex.EncodeToString(want[:]) {
+		t.Fatalf("slow bulk sha256 = %s, want %s", got, hex.EncodeToString(want[:]))
+	}
+}
+
+func TestBulkTransportTimeouts(t *testing.T) {
+	client := newBulkHTTPClient()
+	if client.Timeout != 0 {
+		t.Fatalf("bulk client timeout = %s, want no total body deadline", client.Timeout)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("bulk transport = %T, want *http.Transport", client.Transport)
+	}
+	if transport.TLSHandshakeTimeout != bulkTLSHandshakeTimeout || transport.ResponseHeaderTimeout != bulkResponseHeaderTimeout {
+		t.Fatalf("bulk transport timeouts = TLS %s/header %s", transport.TLSHandshakeTimeout, transport.ResponseHeaderTimeout)
+	}
+}
+
+func TestDownloadCancellationCleanup(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 1024))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-started; cancel() }()
+	dest := filepath.Join(t.TempDir(), "cancelled.tar.gz")
+	if _, err := DownloadFile(ctx, exec.NewRunner(false, quietLogger()), srv.URL, dest); err == nil {
+		t.Fatal("expected cancellation to fail")
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("canceled bulk download must remove partial file")
+	}
+}
+
+func TestDownloadRetry(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("retry success"))
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "retry.tar.gz")
+	if _, err := DownloadFile(context.Background(), exec.NewRunner(false, quietLogger()), srv.URL, dest); err != nil {
+		t.Fatalf("retry download: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
 	}
 }
 
