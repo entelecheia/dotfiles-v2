@@ -3,7 +3,7 @@ package module
 import "testing"
 
 func TestShellBase_PreservesUnownedEntries(t *testing.T) {
-	if !containsShellSourcePin("oh-my-zsh") {
+	if !containsShellSourcePin("oh-my-zsh-base") {
 		t.Fatal("oh-my-zsh must have a compiled source pin")
 	}
 }
