@@ -201,9 +201,59 @@ jobs:
       - name: Ensure shellcheck (macOS)
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
+      # D-01/D-02: both lint steps take globs, not enumerations, so a script
+      # added under scripts/, tests/ or tests/scenarios/ is covered with no edit
+      # to this file (CI-03). tests/*.sh is included because run-module.sh,
+      # run-profile.sh and assert.sh are the harness every scenario depends on.
+      # D-04: bash passes an unmatched glob through as its own literal text, so
+      # each expansion is -f tested before it is counted, and a scanned set of
+      # size zero fails the step rather than reporting success having measured
+      # nothing.
+      # This step's `name:` key is an anchor that scripts/check-unit-ci-contract.sh
+      # parses: it must survive byte-for-byte, must remain the only occurrence of
+      # that string inside the unit job, and the step must stay after the glyph
+      # step. The gate counts a `#` comment the same as a YAML key, so its value
+      # is deliberately not restated anywhere in this file.
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-unit-ci-contract.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/install-security.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-unit-ci-contract.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/install-security.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+        run: |
+          set -o pipefail
+          files=()
+          for f in scripts/*.sh tests/*.sh tests/scenarios/*.sh; do
+            if [ -f "$f" ]; then files+=("$f"); fi
+          done
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=Shellcheck coverage::the lint globs matched no file, so this step would report success having measured nothing"
+            exit 1
+          fi
+          echo "shellcheck lint coverage: scanned ${#files[@]} shell script(s)"
+          # D-03: --severity=warning. The note-level findings below that line are
+          # deliberately left uncaught; the largest group is this suite's own
+          # `[ test ] && pass || fail` bracket-test-and-or idiom (SC2015), whose
+          # rewrite is a separate deferred change. Measured: the 16 files this
+          # step used to enumerate report zero findings at default severity
+          # today, so the severity line loses nothing currently detectable while
+          # bringing 16 more files into scope.
+          shellcheck --severity=warning "${files[@]}"
+      # D-01/D-02/D-04: same three globs, same -f filter and non-vacuity guard.
+      # `bash -n a.sh b.sh` exits 0 with a syntax error in b.sh, because bash
+      # treats every argument after the script name as a positional parameter;
+      # the single-invocation form this replaces therefore syntax-checked only
+      # its first argument. One invocation per file instead. This step carries
+      # no `name:` key and is not anchored by scripts/check-unit-ci-contract.sh.
+      - run: |
+          set -o pipefail
+          files=()
+          for f in scripts/*.sh tests/*.sh tests/scenarios/*.sh; do
+            if [ -f "$f" ]; then files+=("$f"); fi
+          done
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=Syntax-check coverage::the syntax-check globs matched no file, so this step would report success having measured nothing"
+            exit 1
+          fi
+          echo "bash -n syntax coverage: checked ${#files[@]} shell script(s)"
+          for f in "${files[@]}"; do
+            bash -n "$f"
+          done
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
