@@ -97,6 +97,14 @@ jobs:
       # lint finding.
       - name: Unit CI contract gate
         run: bash scripts/check-unit-ci-contract.sh
+      # Phase 09's five vacuity guards (CI-02, CI-03) were each proven once by a
+      # local fixture and then never re-run, which is the defect this phase
+      # exists to remove, one level up. This gate re-runs their own extracted
+      # text against fixtures on every build, with `docker run` stubbed so it
+      # needs no image. Placed last, after the real gates, same rule as the
+      # scenario gates above: a bug in this check must not mask a real finding.
+      - name: Vacuity guards still discriminate
+        run: bash scripts/check-vacuity-guards.sh
 
   unit:
     strategy:
