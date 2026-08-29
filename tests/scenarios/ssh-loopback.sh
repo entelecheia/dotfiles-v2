@@ -88,6 +88,21 @@ else
   ABORT "fixture: peeruser does not resolve in passwd"
 fi
 
+# UsePAM=no below has a consequence the first CI run found the hard way: sshd
+# then runs its own account check, `allowed_user()` in auth.c, which calls
+# platform_locked_account() and treats a shadow field equal to `*` or beginning
+# with `!` as a locked account. `useradd -m -s /bin/bash peeruser` grants no
+# password, so jammy leaves `!` there, and sshd refuses the login before pubkey
+# auth is ever attempted — "Permission denied (publickey)" on the client with
+# nothing on it to say why. `*NP*` is neither of those two forms, so the
+# account is not locked, and it is not a password either: crypt(3) output is
+# drawn from [./0-9A-Za-z$] and can never equal it, so no password
+# authenticates. Together with PasswordAuthentication=no that keeps D-07's
+# "no password, no password-based ssh" property intact. Done here at runtime
+# rather than in the image so the workaround sits beside the UsePAM=no that
+# forces it.
+sudo usermod -p '*NP*' peeruser
+
 # ── daemon ───────────────────────────────────────────────────────────────────
 sudo mkdir -p /run/sshd
 sudo ssh-keygen -A >/dev/null
@@ -153,55 +168,66 @@ SSH_OPTS=(
 )
 
 # ── assertions ───────────────────────────────────────────────────────────────
-remote_user=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'id -un' 2>/dev/null || true)
+# The client's stderr is kept rather than discarded. The first CI run of this
+# scenario reported four failures whose messages were all `got ''`, which named
+# no cause; the reason was on the stderr the assertions were throwing away.
+SSH_ERR="$tmpdir/ssh.err"
+ssh_stderr() { tr '\n' ' ' < "$SSH_ERR"; }
+
+remote_user=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'id -un' 2>"$SSH_ERR" || true)
 if [ "$remote_user" = "peeruser" ]; then
   pass "ssh login succeeded and the remote identity is peeruser"
 else
-  fail "ssh login: expected remote id -un to be peeruser, got '$remote_user'"
+  fail "ssh login: expected remote id -un to be peeruser, got '$remote_user' [ssh: $(ssh_stderr)]"
 fi
 
 # Both facts, not just presence. A single-account container would satisfy a
 # presence check on $HOME and defeat the whole point of the second account —
 # two distinct homes are what the peer inventory actually compares (D-07).
-remote_home=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'printf %s "$HOME"' 2>/dev/null || true)
+remote_home=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'printf %s "$HOME"' 2>"$SSH_ERR" || true)
 if [ "$remote_home" = "/home/peeruser" ] && [ "$remote_home" != "$HOME" ]; then
   pass "peer \$HOME is /home/peeruser and differs from the invoking user's $HOME"
 else
-  fail "peer \$HOME: expected /home/peeruser distinct from $HOME, got '$remote_home'"
+  fail "peer \$HOME: expected /home/peeruser distinct from $HOME, got '$remote_home' [ssh: $(ssh_stderr)]"
 fi
 
 # Verbatim the probe RemoteRsyncPath sends. A nologin or restricted peer shell
 # fails this pipeline before any transfer starts, which is why D-07 specifies a
 # bash login shell for peeruser rather than treating the shell as cosmetic.
-banner=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'rsync --version 2>&1 | head -2' 2>/dev/null || true)
+banner=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'rsync --version 2>&1 | head -2' 2>"$SSH_ERR" || true)
 if printf '%s' "$banner" | grep -q 'rsync.*version'; then
   pass "peer login shell executes a pipeline and rsync reports its version"
 else
-  fail "peer login shell pipeline: no rsync version banner, got '$banner'"
+  fail "peer login shell pipeline: no rsync version banner, got '$banner' [ssh: $(ssh_stderr)]"
 fi
 
 # Unmistakably synthetic, in the register secrets.sh uses: it is greppable and
 # can never read as a credential anyone could mistake for real.
 SENTINEL="DOTFILES-TEST-SENTINEL-NOT-A-CREDENTIAL-0000000000"
 printf '%s\n' "$SENTINEL" > "$tmpdir/payload.txt"
-if rsync -e "ssh ${SSH_OPTS[*]}" "$tmpdir/payload.txt" peeruser@127.0.0.1:payload.txt >/dev/null 2>&1; then
+if rsync -e "ssh ${SSH_OPTS[*]}" "$tmpdir/payload.txt" peeruser@127.0.0.1:payload.txt >/dev/null 2>"$SSH_ERR"; then
   # Bytes, not existence: an empty file at the right path would satisfy a
   # `test -f` and prove nothing about the transfer.
-  readback=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'cat ~/payload.txt' 2>/dev/null || true)
+  readback=$(ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'cat ~/payload.txt' 2>"$SSH_ERR" || true)
   if [ "$readback" = "$SENTINEL" ]; then
     pass "rsync transferred the payload and it read back byte-identical"
   else
-    fail "rsync payload read back as '$readback', expected the sentinel"
+    fail "rsync payload read back as '$readback', expected the sentinel [ssh: $(ssh_stderr)]"
   fi
 else
-  fail "rsync transfer to peeruser@127.0.0.1 exited non-zero"
+  fail "rsync transfer to peeruser@127.0.0.1 exited non-zero [rsync: $(ssh_stderr)]"
 fi
 
 # D-07: peeruser has no sudoers entry and no password, so a permission failure
 # on the peer path surfaces rather than being masked. Written as an explicit
 # if-not-then-pass because under `set -e` a bare failing command would abort
 # the script, and the failure is the expected outcome here.
-if ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'sudo -n true' >/dev/null 2>&1; then
+# Gated on the login having worked. The first CI run passed this assertion
+# while every other one failed, because a sudo that never ran reads exactly
+# like a sudo that was denied — the vacuous green this phase exists to remove.
+if [ "$remote_user" != "peeruser" ]; then
+  fail "sudo denial unproven: the ssh login itself failed, so a denied sudo says nothing"
+elif ssh "${SSH_OPTS[@]}" peeruser@127.0.0.1 'sudo -n true' >/dev/null 2>&1; then
   fail "peeruser escalated to root via sudo — the peer account is not unprivileged"
 else
   pass "peeruser cannot escalate: sudo over the ssh session failed"
