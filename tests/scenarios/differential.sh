@@ -262,12 +262,12 @@ NORMALIZE_OUTPUT() {
 #
 # `env -i` with a two-entry passthrough rather than a list of variables to
 # override, because the list is the thing that rots: XDG_CONFIG_HOME
-# (`internal/config/state.go:410`, `internal/syncer/helpers.go:125`) outranks
-# $HOME and defeats a HOME-only fix; XDG_CACHE_HOME, DOTFILES_HOME,
-# DOTFILES_NAME, DOTFILES_EMAIL, DOTFILES_WORKSPACE_PATH, USER, GITHUB_USER and
-# TZ all reach the resolution chain too, and the next one nobody has written yet
-# would reach it silently. Naming what survives closes the class; naming what to
-# clear closes today's members of it.
+# (`internal/config/state.go:476`) outranks $HOME and defeats a HOME-only fix;
+# XDG_CACHE_HOME, DOTFILES_HOME, DOTFILES_NAME, DOTFILES_EMAIL,
+# DOTFILES_WORKSPACE_PATH, USER, GITHUB_USER and TZ all reach the resolution
+# chain too, and the next one nobody has written yet would reach it silently.
+# Naming what survives closes the class; naming what to clear closes today's
+# members of it.
 #
 # Both binaries get the identical stripped environment, so this removes a
 # nondeterminism source rather than introducing a difference.
