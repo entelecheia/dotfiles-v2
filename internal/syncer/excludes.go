@@ -21,10 +21,6 @@ const excludesTemplatePath = "sync/excludes.txt"
 // includesTemplatePath is the path inside the embedded templates FS.
 const includesTemplatePath = "sync/includes.txt"
 
-// excludesDiskName is kept for legacy global path reporting; runtime gsync
-// uses the workspace-local exclude file under .dotfiles/sync/.
-const excludesDiskName = "gdrive-sync-excludes.conf"
-
 // LoadDefaultIncludePatterns returns the parsed default include patterns from
 // the embedded file.
 func LoadDefaultIncludePatterns() ([]string, error) {

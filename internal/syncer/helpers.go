@@ -14,8 +14,6 @@ import (
 // Paths holds well-known file locations for sync artifacts.
 type Paths struct {
 	Profile        string // normalized sync profile that owns every scheduler identity
-	ConfigDir      string // ~/.config/dotfiles (or $XDG_CONFIG_HOME/dotfiles)
-	ExcludesFile   string // <ConfigDir> legacy global excludes (superseded by the workspace store)
 	LogFile        string // ~/.local/log/dotfiles-sync.log
 	LockDir        string // ~/Library/Caches/dotfiles/sync.lock (macOS) or equivalent
 	LaunchdPlist   string // ~/Library/LaunchAgents/com.dotfiles.sync.plist (macOS, push)
@@ -78,9 +76,10 @@ func (p *Paths) schedulerProfile() string {
 	return p.Profile
 }
 
-// resolvePaths returns the standard gsync artifact paths for the
-// current user. ConfigDir respects XDG_CONFIG_HOME; LockDir uses
-// os.UserCacheDir so it stays out of the workspace tree.
+// resolvePaths returns the standard gsync artifact paths for the current user.
+// The cache directory is the only environment-sensitive input: it comes from
+// os.UserCacheDir here, or from cacheDirForHome for an explicit home, so
+// LockDir stays out of the workspace tree.
 func resolvePaths() (*Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -147,14 +146,8 @@ func withProfile(p *Paths, profile string) *Paths {
 
 // pathsFor builds the artifact layout for a given home + cache dir.
 func pathsFor(home, cacheDir string) *Paths {
-	configDir := filepath.Join(home, ".config", "dotfiles")
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		configDir = filepath.Join(xdg, "dotfiles")
-	}
 	return &Paths{
 		Profile:        DefaultProfile,
-		ConfigDir:      configDir,
-		ExcludesFile:   filepath.Join(configDir, excludesDiskName),
 		LogFile:        filepath.Join(home, ".local", "log", "dotfiles-sync.log"),
 		LockDir:        filepath.Join(cacheDir, "dotfiles", "sync.lock"),
 		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", launchdLabel+".plist"),
