@@ -153,7 +153,7 @@ func wsBootstrap(cmd *cobra.Command) (ws.Roots, *exec.Runner, bool, error) {
 		return p
 	}
 
-	gsyncCfg, err := syncer.ResolveConfigReadOnlyForHome(state, home)
+	gsyncCfg, err := syncer.ResolveConfigReadOnlyForHomeProfile(state, home, syncer.DefaultProfile)
 	if err != nil {
 		return ws.Roots{}, nil, false, fmt.Errorf("resolving gsync mirror: %w", err)
 	}
