@@ -18,7 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # job's ubuntu-24.04 and server images run tests/run-profile.sh alone and
 # execute no scenario, so packages they never use buy build time and nothing else.
 RUN apt-get update && apt-get install -y \
-    sudo curl git zsh ca-certificates findutils coreutils age rsync openssh-client openssh-server \
+    sudo curl git zsh ca-certificates findutils coreutils age openssh-client openssh-server \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -s /bin/bash testuser \
     && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
