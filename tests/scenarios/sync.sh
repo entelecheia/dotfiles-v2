@@ -35,7 +35,10 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 
-export HOME=$(mktemp -d)
+# D-03/SC2155: assign, then export, so mktemp's exit status is not masked by
+# export's own. Same two-step form as tests/scenarios/install-script.sh.
+TEST_HOME=$(mktemp -d)
+export HOME="$TEST_HOME"
 trap 'rm -rf "$HOME"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 

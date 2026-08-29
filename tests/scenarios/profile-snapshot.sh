@@ -60,7 +60,10 @@ fi
 
 # 5. prune down to 1
 dot --home "$tmphome" profile prune --from "$backup_root" --keep 1 --yes >/dev/null
-remaining=$(ls "$backup_root/profiles/$(hostname -s)" | grep -v latest.txt | wc -l | tr -d ' ')
+# D-03/SC2010: count with a find predicate rather than parsing ls through grep,
+# the register tests/scenarios/sync.sh already uses. -mindepth/-maxdepth 1 keeps
+# this to the immediate children; ! -name excludes the latest.txt pointer.
+remaining=$(find "$backup_root/profiles/$(hostname -s)" -mindepth 1 -maxdepth 1 ! -name latest.txt | wc -l | tr -d ' ')
 if [[ "$remaining" -eq 1 ]]; then
   PASS=$((PASS + 1)); echo "  ✓ prune kept 1 snapshot"
 else

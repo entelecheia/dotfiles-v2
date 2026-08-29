@@ -46,8 +46,14 @@ check_fail() {
 }
 
 # Use isolated HOME
-export HOME=$(mktemp -d)
-trap "rm -rf $HOME" EXIT
+# D-03/SC2155: assign, then export, so mktemp's exit status is not masked by
+# export's own. Same two-step form as tests/scenarios/install-script.sh.
+TEST_HOME=$(mktemp -d)
+export HOME="$TEST_HOME"
+# D-03/SC2064: single-quoted trap body, so $HOME expands when the signal
+# arrives rather than when the trap is installed; a later reassignment of HOME
+# would otherwise make this delete the wrong directory. Matches sync.sh.
+trap 'rm -rf "$HOME"' EXIT
 
 echo "=== Workspace integration tests ==="
 echo "Binary: $BIN"
