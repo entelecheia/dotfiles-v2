@@ -128,23 +128,37 @@ func TestSchedulerLabels_DistinctFromRsync(t *testing.T) {
 	}
 }
 
-// TestResolveScheduler_ProfilePathAndRenderedUnitAgree keeps the persisted unit
-// path, launchd label, and systemd command line coupled to the same profile.
-// A scheduler that only fixes one of those identities can still run the wrong
-// store unattended.
-func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
-	home := t.TempDir()
-	cfg := &Config{
-		Home:         home,
-		Profile:      "research-2.v1",
-		Interval:     600,
-		PullInterval: 600,
-		PushMode:     ModeClean,
-		LogFile:      filepath.Join(home, ".local", "log", "dotfiles-sync.log"),
-	}
-	scheduler, paths, err := ResolveScheduler(cfg, peerScheduleRunner(true))
+// resolvedSchedulerConfig resolves a Config for the given home and profile
+// through resolveConfig, the single writer of Config.SystemPaths, and then
+// restores the scheduler cadence fields the hand-built literals used to carry.
+// Every scheduler test that needs a real SystemPaths goes through here rather
+// than writing the layout it is about to assert on.
+func resolvedSchedulerConfig(t *testing.T, home, profile string) *Config {
+	t.Helper()
+	state := &config.UserState{}
+	state.Modules.Gsync.LocalPath = filepath.Join(home, "workspace", "work")
+	cfg, err := ResolveConfigForHomeProfile(state, home, profile)
 	if err != nil {
-		t.Fatalf("ResolveScheduler: %v", err)
+		t.Fatalf("ResolveConfigForHomeProfile(%q): %v", profile, err)
+	}
+	cfg.Interval = 600
+	cfg.PullInterval = 600
+	cfg.PushMode = ModeClean
+	return cfg
+}
+
+// TestResolveConfig_ProfilePathsDerivedFromProfile is the derivation half of
+// the old TestResolveScheduler_ProfilePathAndRenderedUnitAgree. It asserts the
+// per-profile scheduler identities on a layout resolveConfig produced, not on
+// one the test wrote into the Config first; after RES-01 ResolveScheduler
+// returns cfg.SystemPaths verbatim, so asserting there would assert the test
+// against itself.
+func TestResolveConfig_ProfilePathsDerivedFromProfile(t *testing.T) {
+	home := t.TempDir()
+	cfg := resolvedSchedulerConfig(t, home, "research-2.v1")
+	paths := cfg.SystemPaths
+	if paths == nil {
+		t.Fatal("the resolved config carries no SystemPaths")
 	}
 	if paths.Profile != "research-2.v1" {
 		t.Fatalf("Paths profile = %q, want normalized research-2.v1", paths.Profile)
@@ -167,6 +181,43 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 		if got != want {
 			t.Errorf("%s path = %q, want %q", path, got, want)
 		}
+	}
+}
+
+// TestResolveScheduler_NilSystemPathsErrors pins the RES-01 nil contract at
+// internal/syncer/sync_cmd_ops.go: ResolveScheduler reads cfg.SystemPaths and
+// refuses an unresolved config rather than re-resolving one from the home and
+// profile alone, which is the partial-resolution entry point this milestone
+// removes.
+func TestResolveScheduler_NilSystemPathsErrors(t *testing.T) {
+	cfg := &Config{
+		Home:     t.TempDir(),
+		Profile:  "research-2.v1",
+		Interval: 600,
+		PushMode: ModeClean,
+	}
+	scheduler, paths, err := ResolveScheduler(cfg, peerScheduleRunner(true))
+	if err == nil {
+		t.Fatal("ResolveScheduler on a nil SystemPaths = nil error, want an error")
+	}
+	if scheduler != nil {
+		t.Errorf("ResolveScheduler returned a scheduler alongside its error: %+v", scheduler)
+	}
+	if paths != nil {
+		t.Errorf("ResolveScheduler returned paths alongside its error: %+v", paths)
+	}
+}
+
+// TestResolveScheduler_ProfilePathAndRenderedUnitAgree keeps the persisted unit
+// path, launchd label, and systemd command line coupled to the same profile.
+// A scheduler that only fixes one of those identities can still run the wrong
+// store unattended.
+func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
+	home := t.TempDir()
+	cfg := resolvedSchedulerConfig(t, home, "research-2.v1")
+	scheduler, paths, err := ResolveScheduler(cfg, peerScheduleRunner(true))
+	if err != nil {
+		t.Fatalf("ResolveScheduler: %v", err)
 	}
 
 	// Template data must read the identity Paths already normalized and used for
@@ -199,9 +250,8 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 		}
 	}
 
-	defaultCfg := *cfg
-	defaultCfg.Profile = DefaultProfile
-	_, defaultPaths, err := ResolveScheduler(&defaultCfg, peerScheduleRunner(true))
+	defaultCfg := resolvedSchedulerConfig(t, home, DefaultProfile)
+	_, defaultPaths, err := ResolveScheduler(defaultCfg, peerScheduleRunner(true))
 	if err != nil {
 		t.Fatalf("ResolveScheduler(default): %v", err)
 	}
@@ -224,7 +274,7 @@ func TestResolveScheduler_ProfilePathAndRenderedUnitAgree(t *testing.T) {
 		}
 	}
 	for _, kind := range []SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
-		data := defaultPathsSchedulerData(t, &defaultCfg, defaultPaths, kind)
+		data := defaultPathsSchedulerData(t, defaultCfg, defaultPaths, kind)
 		if data.Profile != "" {
 			t.Errorf("default %s profile argument = %q, want omitted", kind.Action(), data.Profile)
 		}

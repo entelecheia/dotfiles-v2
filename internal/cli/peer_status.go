@@ -73,7 +73,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	snapshot := inspectPeerScheduler(cmd.Context(), runner, homeFor(cmd))
-	base := buildSyncStatusJSON(cfg, st, &syncer.Scheduler{Paths: cfgPathsForStatus(cfg)})
+	base := buildSyncStatusJSON(cfg, st, &syncer.Scheduler{Paths: cfg.SystemPaths})
 	base.Kind = "peer-profile"
 	base.Jobs = []syncJobJSON{}
 	job := syncJobJSON{
@@ -114,14 +114,6 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	p.KV("Last push", formatLastSync(st.LastPush))
 	p.KV("Conflicts", strconv.Itoa(len(st.Conflicts)))
 	return nil
-}
-
-func cfgPathsForStatus(cfg *syncer.Config) *syncer.Paths {
-	paths, err := syncer.ResolvePathsForProfile(cfg.Profile)
-	if err == nil {
-		return paths
-	}
-	return &syncer.Paths{}
 }
 
 func newestTimeJSON(values ...time.Time) *string {

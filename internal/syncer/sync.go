@@ -60,7 +60,7 @@ type Config struct {
 	ConfigDir         string   // workspace-local store dir (.dotfiles/sync/) — dynamic files land here
 	SharedExcludes    []string // operator-curated shared paths (relative to MirrorPath)
 	LogFile           string
-	LockDir           string
+	LockDir           string // copied once from SystemPaths.LockDir at the single resolution point
 	RsyncPath         string // resolved rsync binary; empty if not installed
 	// RemoteRsyncPath is passed as --rsync-path for ssh targets whose default
 	// rsync cannot serve a modern client (macOS 26 openrsync). Empty = default OK.
@@ -99,6 +99,14 @@ type Config struct {
 	// callers (status, init, manifest readers) that need granular
 	// access beyond what the convenience fields above expose.
 	LocalPaths *LocalPaths
+
+	// SystemPaths is the fully resolved system artifact layout (lock dir,
+	// launchd plist, systemd units, log file) this config was resolved for.
+	// resolveConfig is its only writer. A caller that needs a system path
+	// reads it from here rather than resolving one from a home or a profile
+	// alone: a partial resolution drops the other half and lands the
+	// artifact in the wrong home or under the wrong profile (RES-01).
+	SystemPaths *Paths
 }
 
 // HomeDir is the home this run operates on: the --home target when one was
@@ -338,6 +346,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Propagation:       policy,
 		Paused:            localCfg.Paused,
 		LocalPaths:        localPaths,
+		SystemPaths:       systemPaths,
 	}, nil
 }
 

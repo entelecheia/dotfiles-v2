@@ -36,13 +36,18 @@ func homeFlagSandbox(t *testing.T) (invoker, target string, cfg *Config) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(invoker, ".cache"))
 
 	localPath := filepath.Join(target, "workspace", "work")
+	systemPaths, err := ResolvePathsForHomeProfile(target, PeerProfile)
+	if err != nil {
+		t.Fatalf("ResolvePathsForHomeProfile: %v", err)
+	}
 	cfg = &Config{
-		Profile:    PeerProfile,
-		Home:       target,
-		LocalPath:  localPath,
-		Target:     Target{Kind: TargetSSH, Host: "coordinator.example", Path: "/remote/workspace/work"},
-		LogFile:    filepath.Join(localPath, ".dotfiles", "peer", "log", "peer.log"),
-		LocalPaths: ResolveLocalPathsForProfile(localPath, PeerProfile),
+		Profile:     PeerProfile,
+		Home:        target,
+		LocalPath:   localPath,
+		Target:      Target{Kind: TargetSSH, Host: "coordinator.example", Path: "/remote/workspace/work"},
+		LogFile:     filepath.Join(localPath, ".dotfiles", "peer", "log", "peer.log"),
+		LocalPaths:  ResolveLocalPathsForProfile(localPath, PeerProfile),
+		SystemPaths: systemPaths,
 	}
 	return invoker, target, cfg
 }
@@ -126,16 +131,29 @@ func TestPeerHomeSync_WithoutOverrideUsesProcessHome(t *testing.T) {
 	}
 }
 
-// TestResolveScheduler_PathsFollowTheTargetHome is F2's first half: the unit
+// TestResolveConfig_SystemPathsFollowTheTargetHome is F2's first half: the unit
 // file itself was written under the invoking user's LaunchAgents/systemd
 // directory even when the profile it schedules lives in another home.
-func TestResolveScheduler_PathsFollowTheTargetHome(t *testing.T) {
-	invoker, target, cfg := homeFlagSandbox(t)
+//
+// The subject is resolveConfig, the one point where a home and a profile are
+// both in hand. Config.SystemPaths is now what every scheduler artifact is
+// derived from, so this is where a resolver that stopped following the home
+// would be observable; asserting it through ResolveScheduler would only
+// re-read the pointer the caller handed in (RES-01, internal/syncer/sync.go
+// resolveConfig is the single writer of Config.SystemPaths).
+func TestResolveConfig_SystemPathsFollowTheTargetHome(t *testing.T) {
+	invoker, target, _ := homeFlagSandbox(t)
 
-	_, paths, err := ResolveScheduler(cfg, peerScheduleRunner(true))
+	state := &config.UserState{}
+	state.Modules.Gsync.LocalPath = filepath.Join(target, "workspace", "work")
+	resolved, err := ResolveConfigForHomeProfile(state, target, PeerProfile)
 	if err != nil {
-		t.Fatalf("ResolveScheduler: %v", err)
+		t.Fatalf("ResolveConfigForHomeProfile: %v", err)
 	}
+	if resolved.SystemPaths == nil {
+		t.Fatal("the resolved config carries no SystemPaths")
+	}
+	paths := resolved.SystemPaths
 	for _, unit := range []string{paths.LaunchdPlist, paths.SystemdService, paths.SystemdTimer, paths.LogFile} {
 		if !strings.HasPrefix(unit, target+string(os.PathSeparator)) {
 			t.Errorf("scheduler artifact outside the target home: %s", unit)
@@ -154,12 +172,6 @@ func TestResolveScheduler_PathsFollowTheTargetHome(t *testing.T) {
 	if paths.LockDir != wantLockDir {
 		t.Errorf("scheduler lock = %q, want target lock %q", paths.LockDir, wantLockDir)
 	}
-	state := &config.UserState{}
-	state.Modules.Gsync.LocalPath = filepath.Join(target, "workspace", "work")
-	resolved, err := ResolveConfigForHomeProfile(state, target, PeerProfile)
-	if err != nil {
-		t.Fatalf("ResolveConfigForHomeProfile: %v", err)
-	}
 	if resolved.LockDir != wantLockDir {
 		t.Errorf("Config.LockDir = %q, want target lock %q", resolved.LockDir, wantLockDir)
 	}
@@ -167,14 +179,14 @@ func TestResolveScheduler_PathsFollowTheTargetHome(t *testing.T) {
 		t.Errorf("Config.LockDir escaped into the invoking home: %s", resolved.LockDir)
 	}
 
-	// Non-vacuity: no override, and the same call resolves the process home.
-	cfg.Home = ""
-	_, paths, err = ResolveScheduler(cfg, peerScheduleRunner(true))
+	// Non-vacuity: no override, and the same resolver call resolves the
+	// process home. This arm fails if the fix is a hardcoded sandbox.
+	bare, err := ResolveConfigForHomeProfile(state, "", PeerProfile)
 	if err != nil {
-		t.Fatalf("ResolveScheduler: %v", err)
+		t.Fatalf("ResolveConfigForHomeProfile(no override): %v", err)
 	}
-	if !strings.HasPrefix(paths.LaunchdPlist, invoker+string(os.PathSeparator)) {
-		t.Errorf("without an override the scheduler artifact left the process home: %s", paths.LaunchdPlist)
+	if !strings.HasPrefix(bare.SystemPaths.LaunchdPlist, invoker+string(os.PathSeparator)) {
+		t.Errorf("without an override the scheduler artifact left the process home: %s", bare.SystemPaths.LaunchdPlist)
 	}
 }
 
