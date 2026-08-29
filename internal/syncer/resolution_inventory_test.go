@@ -5,9 +5,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -306,5 +308,72 @@ func TestResolutionInventory(t *testing.T) {
 	sort.Strings(findings)
 	if len(findings) > 0 {
 		t.Errorf("partial resolution site(s) found:\n  %s\nresolve through resolvePathsForHomeProfile, which takes home and profile together, or read the already-resolved Config.SystemPaths; do not add the enclosing function to resolutionAllowlist", strings.Join(findings, "\n  "))
+	}
+}
+
+// TestSingleXDGConfigHomeRead asserts that exactly one place in the repository
+// decides a path from the config-home variable. The count itself is the
+// assertion: a second reader is a second precedence decision, and the two
+// disagree the moment one of them is changed.
+//
+// The predicate matches a CALL to os.Getenv with the variable as its only
+// argument, so the bare string in internal/module/gpg.go's subprocess argument
+// list falls outside it by construction. Test files are skipped, which is the
+// production-only rule this file states at the top and also excludes this file,
+// whose own failure message contains the variable name.
+func TestSingleXDGConfigHomeRead(t *testing.T) {
+	root := filepath.Join("..", "..")
+	const configHomeVar = "XDG_CONFIG_HOME"
+
+	var sites []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if name := d.Name(); name == ".git" || name == "vendor" || name == "graphify-out" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		base := filepath.Base(path)
+		if !strings.HasSuffix(base, ".go") || strings.HasSuffix(base, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			return fmt.Errorf("parsing %s: %w", path, parseErr)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			if !isCallTo("os", "Getenv")(n) {
+				return true
+			}
+			call := n.(*ast.CallExpr)
+			if len(call.Args) != 1 {
+				return true
+			}
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			if value, unquoteErr := strconv.Unquote(lit.Value); unquoteErr == nil && value == configHomeVar {
+				rel, _ := filepath.Rel(root, path)
+				sites = append(sites, fmt.Sprintf("%s:%d", filepath.ToSlash(rel), fset.Position(call.Pos()).Line))
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the repository for os.Getenv reads: %v", err)
+	}
+	sort.Strings(sites)
+
+	switch {
+	case len(sites) == 0:
+		t.Fatalf("os.Getenv(%q) call count = 0, want 1: the walk rooted at %q matched nothing, so this check would report success having measured nothing", configHomeVar, root)
+	case len(sites) > 1:
+		t.Errorf("os.Getenv(%q) call count = %d, want 1 — a second place now decides a path from this variable:\n  %s", configHomeVar, len(sites), strings.Join(sites, "\n  "))
 	}
 }
