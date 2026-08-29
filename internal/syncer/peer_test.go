@@ -86,11 +86,11 @@ func TestValidateProfile(t *testing.T) {
 
 func TestProfilePathsKeepDefaultUnchanged(t *testing.T) {
 	home := t.TempDir()
-	base, err := ResolvePathsForHome(home)
+	base, err := resolvePathsForHome(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, err := ResolvePathsForHomeProfile(home, DefaultProfile)
+	def, err := resolvePathsForHomeProfile(home, DefaultProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestProfilePathsKeepDefaultUnchanged(t *testing.T) {
 		t.Errorf("default profile changed existing paths:\n lock %s vs %s\n plist %s vs %s",
 			def.LockDir, base.LockDir, def.LaunchdPlist, base.LaunchdPlist)
 	}
-	peer, err := ResolvePathsForHomeProfile(home, "peer")
+	peer, err := resolvePathsForHomeProfile(home, "peer")
 	if err != nil {
 		t.Fatal(err)
 	}

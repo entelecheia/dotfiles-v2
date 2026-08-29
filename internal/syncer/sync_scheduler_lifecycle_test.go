@@ -110,7 +110,7 @@ func schedulerLifecycleConfig(t *testing.T, push, intake bool, operation string,
 		t.Setenv("DOTFILES_TEST_FAIL_FIRST", "1")
 	}
 
-	paths, err := ResolvePathsForHomeProfile(root, DefaultProfile)
+	paths, err := resolvePathsForHomeProfile(root, DefaultProfile)
 	if err != nil {
 		t.Fatal(err)
 	}

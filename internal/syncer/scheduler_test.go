@@ -507,7 +507,7 @@ func TestSchedulerKind_LabelsAreDistinct(t *testing.T) {
 }
 
 func TestPathsFor_Kind(t *testing.T) {
-	paths, err := ResolvePathsForHomeProfile(t.TempDir(), DefaultProfile)
+	paths, err := resolvePathsForHomeProfile(t.TempDir(), DefaultProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -605,10 +605,10 @@ func seedRawLocalConfig(t *testing.T, state *config.UserState, extraYAML string)
 	}
 }
 
-func TestResolvePaths_IncludesSchedulerArtifacts(t *testing.T) {
-	paths, err := ResolvePaths()
+func TestResolvedPathsIncludeSchedulerArtifacts(t *testing.T) {
+	paths, err := resolvePaths()
 	if err != nil {
-		t.Fatalf("ResolvePaths: %v", err)
+		t.Fatalf("resolvePaths: %v", err)
 	}
 	if !strings.HasSuffix(paths.LaunchdPlist, "com.dotfiles.sync.plist") {
 		t.Errorf("LaunchdPlist tail wrong: %s", paths.LaunchdPlist)

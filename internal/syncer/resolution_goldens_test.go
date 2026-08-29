@@ -1,14 +1,15 @@
 package syncer
 
-// This file records the artifact layout every resolver shape produces at the
-// PRE-COLLAPSE tree, so the collapse that follows shows the two defective rows
-// changing as a reviewable diff. A row rewritten to match the corrected output
-// asserts nothing about the change, which is the whole reason the record has to
-// exist before the diff it protects rather than after it.
+// This file records the artifact layout every resolver shape produces. It
+// landed one commit BEFORE the collapse, recording the two defects as today's
+// behavior, so that the collapse commit shows those two rows changing as a
+// reviewable diff. A row rewritten to match the corrected output asserts
+// nothing about the change, which is the whole reason the record had to exist
+// before the diff it protects rather than after it.
 //
-// Two rows below deliberately record a DEFECT as today's behavior. They are
-// labeled inline with the site that produces it. When those rows change, read
-// the diff: that is the fix landing, not a regression.
+// The two defect rows have now been re-pointed at the single surviving entry
+// point, resolvePathsForHomeProfile. Read `git log -p` on this file for the
+// record: the diff where their expected values move is the fix landing.
 //
 // Scope note: the rows assert Profile, LockDir, LaunchdPlist, SystemdService,
 // SystemdTimer and LogFile. They deliberately cover only the fields the collapse
@@ -78,17 +79,17 @@ func TestResolutionGoldens(t *testing.T) {
 	}{
 		{
 			name:    "resolveConfig/ResolveScheduler shape, empty home, sync profile",
-			resolve: func() (*Paths, error) { return ResolvePathsForHomeProfile("", DefaultProfile) },
+			resolve: func() (*Paths, error) { return resolvePathsForHomeProfile("", DefaultProfile) },
 			want:    goldenDefault(invoker),
 		},
 		{
 			name:    "resolveConfig/ResolveScheduler shape, target home, sync profile",
-			resolve: func() (*Paths, error) { return ResolvePathsForHomeProfile(target, DefaultProfile) },
+			resolve: func() (*Paths, error) { return resolvePathsForHomeProfile(target, DefaultProfile) },
 			want:    goldenDefault(target),
 		},
 		{
 			name:    "resolveConfig/ResolveScheduler shape, target home, peer profile",
-			resolve: func() (*Paths, error) { return ResolvePathsForHomeProfile(target, PeerProfile) },
+			resolve: func() (*Paths, error) { return resolvePathsForHomeProfile(target, PeerProfile) },
 			want:    goldenPeer(target),
 		},
 		{
@@ -97,31 +98,45 @@ func TestResolutionGoldens(t *testing.T) {
 			// separable from "the profile came from the argument" once both defect
 			// rows collapse onto the same call.
 			name:    "resolveConfig/ResolveScheduler shape, empty home, peer profile",
-			resolve: func() (*Paths, error) { return ResolvePathsForHomeProfile("", PeerProfile) },
+			resolve: func() (*Paths, error) { return resolvePathsForHomeProfile("", PeerProfile) },
 			want:    goldenPeer(invoker),
 		},
+		// The two rows below and the "target home, peer profile" row above now
+		// call the same resolver with the same arguments and expect the same
+		// layout. That convergence IS the fix: three call shapes that used to
+		// disagree became one. It is not duplication to be cleaned up - deleting
+		// the duplicates would delete the record of the change, so the rows keep
+		// distinct names and `-v` still identifies which is which.
 		{
-			// DEFECT, recorded as-is: BUG-27 at internal/cli/peer_status.go:120
-			// resolves by profile alone, so the --home target is dropped and the
-			// layout lands under the INVOKING user's home. The expectation below
-			// names invoker, not target, on purpose. This is not the target state.
-			name:    "BUG-27 shape (internal/cli/peer_status.go:120), target home, peer profile",
-			resolve: func() (*Paths, error) { return ResolvePathsForProfile(PeerProfile) },
-			want:    goldenPeer(invoker),
+			// RE-POINTED. BUG-27 (internal/cli/peer_status.go:120) resolved by
+			// profile alone, so the --home target was dropped and the layout
+			// landed under the INVOKING user's home; this row expected invoker.
+			// The profile-only resolver is gone, the site now resolves through
+			// the single entry point with the target home as an argument, and the
+			// expectation moved from invoker to target.
+			name:    "BUG-27 re-pointed, target home, peer profile",
+			resolve: func() (*Paths, error) { return resolvePathsForHomeProfile(target, PeerProfile) },
+			want:    goldenPeer(target),
 		},
 		{
-			// DEFECT, recorded as-is: BUG-28 at internal/cli/status_cmd.go:249
-			// resolves by home alone, so the caller's peer profile is dropped and
-			// the layout carries the default profile and the default scheduler
-			// identities. This is not the target state.
-			name:    "BUG-28 shape (internal/cli/status_cmd.go:249), target home, peer profile",
-			resolve: func() (*Paths, error) { return ResolvePathsForHome(target) },
-			want:    goldenDefault(target),
+			// RE-POINTED. BUG-28 (internal/cli/status_cmd.go:249) resolved by home
+			// alone, so the caller's peer profile was dropped and the layout
+			// carried the default profile and the default scheduler identities;
+			// this row expected goldenDefault. The profile is now an argument
+			// rather than an assumption, so Profile moved from "sync" to "peer"
+			// and the launchd/systemd names from the default units to the
+			// per-profile ones.
+			name:    "BUG-28 re-pointed, target home, peer profile",
+			resolve: func() (*Paths, error) { return resolvePathsForHomeProfile(target, PeerProfile) },
+			want:    goldenPeer(target),
 		},
 		{
-			// The zero-literal fallback at internal/cli/peer_status.go:124. Every
-			// field is empty, yet the derived scheduler identity is still the
-			// default profile's name under an empty directory.
+			// The zero-literal fallback that used to live at
+			// internal/cli/peer_status.go:124. It no longer exists in production:
+			// every field is empty, yet the derived scheduler identity is still
+			// the default profile's name under an empty directory. This row
+			// stands as the standing reason ResolveScheduler returns a named
+			// error instead of degrading to a zero value.
 			name:          "zero-literal shape (internal/cli/peer_status.go:124)",
 			resolve:       func() (*Paths, error) { return &Paths{}, nil },
 			want:          Paths{},

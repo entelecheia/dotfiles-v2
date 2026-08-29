@@ -36,9 +36,9 @@ func homeFlagSandbox(t *testing.T) (invoker, target string, cfg *Config) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(invoker, ".cache"))
 
 	localPath := filepath.Join(target, "workspace", "work")
-	systemPaths, err := ResolvePathsForHomeProfile(target, PeerProfile)
+	systemPaths, err := resolvePathsForHomeProfile(target, PeerProfile)
 	if err != nil {
-		t.Fatalf("ResolvePathsForHomeProfile: %v", err)
+		t.Fatalf("resolvePathsForHomeProfile: %v", err)
 	}
 	cfg = &Config{
 		Profile:     PeerProfile,

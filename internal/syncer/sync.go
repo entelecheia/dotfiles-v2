@@ -182,16 +182,6 @@ func ResolveConfigReadOnlyForHomeProfile(state *config.UserState, home, profile 
 	return resolveConfig(state, false, home, profile)
 }
 
-// ResolveConfigReadOnlyForHome is like ResolveConfigReadOnly but resolves all
-// home-relative paths (local/mirror defaults, `~` expansion, artifact paths)
-// against an explicit home directory instead of os.UserHomeDir(). Commands
-// that honor --home must use this so they operate on the target user's mirror
-// rather than the invoking user's. An empty home falls back to the current
-// user's home.
-func ResolveConfigReadOnlyForHome(state *config.UserState, home string) (*Config, error) {
-	return resolveConfig(state, false, home, DefaultProfile)
-}
-
 func resolveConfig(state *config.UserState, migrate bool, home, profile string) (*Config, error) {
 	if err := ValidateProfile(profile); err != nil {
 		return nil, err
@@ -201,7 +191,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	systemPaths, err := ResolvePathsForHomeProfile(override, profile)
+	systemPaths, err := resolvePathsForHomeProfile(override, profile)
 	if err != nil {
 		return nil, err
 	}
