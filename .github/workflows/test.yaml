@@ -97,6 +97,14 @@ jobs:
       # lint finding.
       - name: Unit CI contract gate
         run: bash scripts/check-unit-ci-contract.sh
+      # Phase 09's five vacuity guards (CI-02, CI-03) were each proven once by a
+      # local fixture and then never re-run, which is the defect this phase
+      # exists to remove, one level up. This gate re-runs their own extracted
+      # text against fixtures on every build, with `docker run` stubbed so it
+      # needs no image. Placed last, after the real gates, same rule as the
+      # scenario gates above: a bug in this check must not mask a real finding.
+      - name: Vacuity guards still discriminate
+        run: bash scripts/check-vacuity-guards.sh
 
   unit:
     strategy:
@@ -201,9 +209,59 @@ jobs:
       - name: Ensure shellcheck (macOS)
         if: runner.os == 'macOS'
         run: command -v shellcheck >/dev/null || brew install shellcheck
+      # D-01/D-02: both lint steps take globs, not enumerations, so a script
+      # added under scripts/, tests/ or tests/scenarios/ is covered with no edit
+      # to this file (CI-03). tests/*.sh is included because run-module.sh,
+      # run-profile.sh and assert.sh are the harness every scenario depends on.
+      # D-04: bash passes an unmatched glob through as its own literal text, so
+      # each expansion is -f tested before it is counted, and a scanned set of
+      # size zero fails the step rather than reporting success having measured
+      # nothing.
+      # This step's `name:` key is an anchor that scripts/check-unit-ci-contract.sh
+      # parses: it must survive byte-for-byte, must remain the only occurrence of
+      # that string inside the unit job, and the step must stay after the glyph
+      # step. The gate counts a `#` comment the same as a YAML key, so its value
+      # is deliberately not restated anywhere in this file.
       - name: Shellcheck scripts
-        run: shellcheck scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-unit-ci-contract.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/install-security.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
-      - run: bash -n scripts/install.sh scripts/check-terminal-query.sh scripts/check-cli-line-band.sh scripts/check-glyph-alphabet.sh scripts/check-unit-ci-contract.sh scripts/check-coverage-floors.sh scripts/govulncheck-gate.sh tests/scenarios/dry-run-empty-home.sh tests/scenarios/differential.sh tests/scenarios/govulncheck-gate.sh tests/scenarios/coverage-policy-gate.sh tests/scenarios/lint-seams-gate.sh tests/scenarios/differential-registry-gate.sh tests/scenarios/install-security.sh tests/scenarios/secrets.sh tests/scenarios/noindex.sh
+        run: |
+          set -o pipefail
+          files=()
+          for f in scripts/*.sh tests/*.sh tests/scenarios/*.sh; do
+            if [ -f "$f" ]; then files+=("$f"); fi
+          done
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=Shellcheck coverage::the lint globs matched no file, so this step would report success having measured nothing"
+            exit 1
+          fi
+          echo "shellcheck lint coverage: scanned ${#files[@]} shell script(s)"
+          # D-03: --severity=warning. The note-level findings below that line are
+          # deliberately left uncaught; the largest group is this suite's own
+          # `[ test ] && pass || fail` bracket-test-and-or idiom (SC2015), whose
+          # rewrite is a separate deferred change. Measured: the 16 files this
+          # step used to enumerate report zero findings at default severity
+          # today, so the severity line loses nothing currently detectable while
+          # bringing 16 more files into scope.
+          shellcheck --severity=warning "${files[@]}"
+      # D-01/D-02/D-04: same three globs, same -f filter and non-vacuity guard.
+      # `bash -n a.sh b.sh` exits 0 with a syntax error in b.sh, because bash
+      # treats every argument after the script name as a positional parameter;
+      # the single-invocation form this replaces therefore syntax-checked only
+      # its first argument. One invocation per file instead. This step carries
+      # no `name:` key and is not anchored by scripts/check-unit-ci-contract.sh.
+      - run: |
+          set -o pipefail
+          files=()
+          for f in scripts/*.sh tests/*.sh tests/scenarios/*.sh; do
+            if [ -f "$f" ]; then files+=("$f"); fi
+          done
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=Syntax-check coverage::the syntax-check globs matched no file, so this step would report success having measured nothing"
+            exit 1
+          fi
+          echo "bash -n syntax coverage: checked ${#files[@]} shell script(s)"
+          for f in "${files[@]}"; do
+            bash -n "$f"
+          done
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
@@ -276,7 +334,7 @@ jobs:
     env:
       TAG: dotfiles-test:linux
       MODULES: "packages shell node git ssh terminal tmux ai conda"
-      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script install-security guard dry-run-empty-home differential secrets noindex"
+      SCENARIOS: "dry-run-all-profiles init-and-apply idempotency server-profile upgrade-check home-override workspace profile-snapshot sync install-script install-security guard dry-run-empty-home differential secrets noindex ssh-loopback"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -348,6 +406,9 @@ jobs:
       - name: Scenarios
         if: always()
         run: |
+          # Without pipefail the docker run below is piped into tee, and the
+          # pipeline would report tee's status instead of the container's.
+          set -o pipefail
           # An empty list makes the loop below run zero iterations and exit 0,
           # silently retiring every scenario while the job stays green.
           if [ "$(echo $SCENARIOS | wc -w)" -eq 0 ]; then
@@ -357,9 +418,25 @@ jobs:
           failed=()
           for s in $SCENARIOS; do
             echo "::group::scenario $s"
-            if ! docker run --rm "$TAG" "/tests/scenarios/$s.sh"; then
+            log="scenario-$s.log"
+            if ! docker run --rm "$TAG" "/tests/scenarios/$s.sh" 2>&1 | tee "$log"; then
               failed+=("$s")
               echo "::error::scenario $s failed"
+            fi
+            # A scenario that bails whole - `SKIP:` written at column one -
+            # runs none of its assertions, and before this guard that read as a
+            # pass (D-08). The empty-log arm comes first because a scenario that
+            # produced no output at all would otherwise satisfy the skip grep by
+            # having nothing to match rather than by having run. The anchor is
+            # line-leading on purpose: the indented `~ SKIPPED:` lines that
+            # differential.sh, noindex.sh and differential-registry-gate.sh print
+            # are deliberate partial skips and stay green.
+            if [ ! -s "$log" ]; then
+              failed+=("$s")
+              echo "::error title=Scenario produced no output::scenario $s wrote nothing, so the skip assertion would have passed by absence of evidence"
+            elif grep -q "^SKIP:" "$log"; then
+              failed+=("$s")
+              echo "::error title=Scenario skipped::scenario $s bailed with a column-one SKIP: line instead of running its assertions"
             fi
             echo "::endgroup::"
           done

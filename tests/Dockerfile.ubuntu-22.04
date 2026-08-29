@@ -6,11 +6,28 @@ ENV DEBIAN_FRONTEND=noninteractive
 # universe carries age 1.0.0-1ubuntu0.1, which ships both /usr/bin/age and
 # /usr/bin/age-keygen; it goes in this apt layer rather than a new RUN so the
 # image gains one package, not one more layer.
+#
+# CI-01 needs all three of rsync, openssh-client and openssh-server. Only rsync
+# is missing for tests/scenarios/sync.sh — git is already here — but the peer
+# path needs the other two, and openssh-client is NOT a transitive dependency of
+# openssh-server: `dot` invokes `ssh` directly, so omitting the client is the
+# easy mistake that leaves the daemon installed and the caller broken.
+# Per D-05 the image is proven by a real loopback round trip, not by a presence
+# check, because a presence assertion is the same vacuous-green shape this
+# milestone exists to remove. Per D-12 only this image changes: the integration
+# job's ubuntu-24.04 and server images run tests/run-profile.sh alone and
+# execute no scenario, so packages they never use buy build time and nothing else.
 RUN apt-get update && apt-get install -y \
-    sudo curl git zsh ca-certificates findutils coreutils age \
+    sudo curl git zsh ca-certificates findutils coreutils age rsync openssh-client openssh-server \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -s /bin/bash testuser \
     && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+# The unprivileged peer account (D-07). No sudoers continuation and no password:
+# a permission failure on the peer path must surface, not be masked. The bash
+# login shell is load-bearing, not cosmetic — RemoteRsyncPath sends
+# `<cand> --version 2>&1 | head -2` over ssh, and a nologin or restricted shell
+# fails that pipeline before any transfer starts.
+RUN useradd -m -s /bin/bash peeruser
 COPY dot /usr/local/bin/dot
 COPY dot-baseline /usr/local/bin/dot-baseline
 RUN chmod +x /usr/local/bin/dot /usr/local/bin/dot-baseline && ln -sf /usr/local/bin/dot /usr/local/bin/dotfiles

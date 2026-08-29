@@ -19,9 +19,15 @@ if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
   exit 1
 fi
 BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+# D-09: this bails with a non-zero status, not zero. The redundancy with the
+# `^SKIP:` guard in the workflow's `Scenarios` step is deliberate - that guard
+# covers CI, this covers a standalone `bash tests/scenarios/sync.sh` run where
+# no loop exists to read the output and an `exit 0` reads as a pass. The
+# message below sits at column one, and that position is a contract with the
+# `^SKIP:` anchor: rewording one requires changing the other.
 if ! command -v rsync >/dev/null || ! command -v git >/dev/null; then
   echo "SKIP: rsync and git are required"
-  exit 0
+  exit 1
 fi
 
 PASS=0
@@ -29,7 +35,10 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 
-export HOME=$(mktemp -d)
+# D-03/SC2155: assign, then export, so mktemp's exit status is not masked by
+# export's own. Same two-step form as tests/scenarios/install-script.sh.
+TEST_HOME=$(mktemp -d)
+export HOME="$TEST_HOME"
 trap 'rm -rf "$HOME"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
@@ -116,4 +125,9 @@ rm -f "$WS/report.pdf"
 
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ]
+# D-10: both counters, not just the failure one. `[ "$FAIL" -eq 0 ]` alone
+# reports success for a run whose assertions all vanished - zero passed, zero
+# failed, exit 0 - which is success having measured nothing. A fixed minimum
+# count was rejected instead: it is a number that must be hand-maintained on
+# every future edit to this scenario.
+[ "$FAIL" -eq 0 ] && [ "$PASS" -gt 0 ]
