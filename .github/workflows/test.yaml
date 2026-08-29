@@ -348,6 +348,9 @@ jobs:
       - name: Scenarios
         if: always()
         run: |
+          # Without pipefail the docker run below is piped into tee, and the
+          # pipeline would report tee's status instead of the container's.
+          set -o pipefail
           # An empty list makes the loop below run zero iterations and exit 0,
           # silently retiring every scenario while the job stays green.
           if [ "$(echo $SCENARIOS | wc -w)" -eq 0 ]; then
@@ -357,9 +360,25 @@ jobs:
           failed=()
           for s in $SCENARIOS; do
             echo "::group::scenario $s"
-            if ! docker run --rm "$TAG" "/tests/scenarios/$s.sh"; then
+            log="scenario-$s.log"
+            if ! docker run --rm "$TAG" "/tests/scenarios/$s.sh" 2>&1 | tee "$log"; then
               failed+=("$s")
               echo "::error::scenario $s failed"
+            fi
+            # A scenario that bails whole - `SKIP:` written at column one -
+            # runs none of its assertions, and before this guard that read as a
+            # pass (D-08). The empty-log arm comes first because a scenario that
+            # produced no output at all would otherwise satisfy the skip grep by
+            # having nothing to match rather than by having run. The anchor is
+            # line-leading on purpose: the indented `~ SKIPPED:` lines that
+            # differential.sh, noindex.sh and differential-registry-gate.sh print
+            # are deliberate partial skips and stay green.
+            if [ ! -s "$log" ]; then
+              failed+=("$s")
+              echo "::error title=Scenario produced no output::scenario $s wrote nothing, so the skip assertion would have passed by absence of evidence"
+            elif grep -q "^SKIP:" "$log"; then
+              failed+=("$s")
+              echo "::error title=Scenario skipped::scenario $s bailed with a column-one SKIP: line instead of running its assertions"
             fi
             echo "::endgroup::"
           done
