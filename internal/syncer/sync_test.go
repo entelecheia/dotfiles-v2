@@ -442,9 +442,9 @@ func TestResolveConfigReadOnlyForHome_UsesGivenHome(t *testing.T) {
 	state.Modules.Gsync.LocalPath = t.TempDir()
 	// MirrorPath empty → default is <home>/gdrive-workspace/work.
 
-	cfg, err := ResolveConfigReadOnlyForHome(state, overrideHome)
+	cfg, err := ResolveConfigReadOnlyForHomeProfile(state, overrideHome, DefaultProfile)
 	if err != nil {
-		t.Fatalf("ResolveConfigReadOnlyForHome: %v", err)
+		t.Fatalf("ResolveConfigReadOnlyForHomeProfile: %v", err)
 	}
 	want := filepath.Join(overrideHome, "gdrive-workspace", "work") + "/"
 	if cfg.MirrorPath != want {
@@ -464,9 +464,9 @@ func TestResolveConfigReadOnlyForHome_ExpandsTildeAgainstHome(t *testing.T) {
 	state.Modules.Gsync.LocalPath = t.TempDir()
 	state.Modules.Gsync.MirrorPath = "~/cloud/work"
 
-	cfg, err := ResolveConfigReadOnlyForHome(state, overrideHome)
+	cfg, err := ResolveConfigReadOnlyForHomeProfile(state, overrideHome, DefaultProfile)
 	if err != nil {
-		t.Fatalf("ResolveConfigReadOnlyForHome: %v", err)
+		t.Fatalf("ResolveConfigReadOnlyForHomeProfile: %v", err)
 	}
 	want := filepath.Join(overrideHome, "cloud", "work") + "/"
 	if cfg.MirrorPath != want {

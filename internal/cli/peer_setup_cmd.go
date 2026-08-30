@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -76,6 +77,10 @@ inbound port, which is what a laptop needs.`,
 }
 
 func newPeerSetupCmd() *cobra.Command {
+	return newPeerSetupCmdForOS(runtime.GOOS)
+}
+
+func newPeerSetupCmdForOS(goos string) *cobra.Command {
 	var interval time.Duration
 	var off bool
 	cmd := &cobra.Command{
@@ -90,6 +95,9 @@ no-op runs rather than failures. That is why this can be scheduled at all.
 Pick an interval in minutes, not seconds: the payload is large and each run
 walks the whole tree.`,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if goos != "darwin" {
+				return fmt.Errorf("peer scheduler requires macOS launchd (host OS %s); no scheduler artifact was changed", goos)
+			}
 			p := printerFrom(c)
 			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
@@ -109,14 +117,14 @@ walks the whole tree.`,
 			}
 			if res.Off {
 				if res.DryRun {
-					p.Line("dry-run: would remove %s", res.Plist)
+					printPeerScheduleDryRun(p, res)
 					return nil
 				}
 				p.Success("peer sync job removed")
 				return nil
 			}
 			if res.DryRun {
-				p.Line("dry-run: would write %s", res.Plist)
+				printPeerScheduleDryRun(p, res)
 				return nil
 			}
 			p.Success("peer sync scheduled every %s", res.Interval)
@@ -128,6 +136,17 @@ walks the whole tree.`,
 	cmd.Flags().DurationVar(&interval, "interval", 15*time.Minute, "how often to sync with the peer")
 	cmd.Flags().BoolVar(&off, "off", false, "remove the scheduled job")
 	return cmd
+}
+
+func printPeerScheduleDryRun(p *Printer, res *syncer.PeerScheduleResult) {
+	if res.Off {
+		p.Line("dry-run: would remove %s", res.Plist)
+	} else {
+		p.Line("dry-run: would write %s", res.Plist)
+	}
+	if res.TargetUserActionRequired {
+		p.Warn("target-user action required: %s", syncer.SchedulerTargetUserInstruction())
+	}
 }
 
 func newPeerDoctorCmd() *cobra.Command {

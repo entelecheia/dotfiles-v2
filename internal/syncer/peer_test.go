@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
 
 func TestProfileStoresAreIsolated(t *testing.T) {
@@ -84,11 +86,11 @@ func TestValidateProfile(t *testing.T) {
 
 func TestProfilePathsKeepDefaultUnchanged(t *testing.T) {
 	home := t.TempDir()
-	base, err := ResolvePathsForHome(home)
+	base, err := resolvePathsForHome(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, err := ResolvePathsForHomeProfile(home, DefaultProfile)
+	def, err := resolvePathsForHomeProfile(home, DefaultProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ func TestProfilePathsKeepDefaultUnchanged(t *testing.T) {
 		t.Errorf("default profile changed existing paths:\n lock %s vs %s\n plist %s vs %s",
 			def.LockDir, base.LockDir, def.LaunchdPlist, base.LaunchdPlist)
 	}
-	peer, err := ResolvePathsForHomeProfile(home, "peer")
+	peer, err := resolvePathsForHomeProfile(home, "peer")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,19 +113,24 @@ func TestProfilePathsKeepDefaultUnchanged(t *testing.T) {
 	}
 }
 
-func TestProfilePathsRejectUnsafeProfile(t *testing.T) {
+// TestResolveConfigRejectsUnsafeProfile pins profile validation at
+// resolveConfig (internal/syncer/sync.go, its first statement), which after
+// RES-01 is the only place a Config carrying a profile can be built. The
+// assertion used to be pointed at ResolveScheduler, which inherited
+// ValidateProfile through the resolver chain; it no longer validates, so an
+// assertion left there would pass on any profile string.
+//
+// The unsafe strings drive a space, a format specifier, a shell
+// metacharacter and a newline, each of which would otherwise become a unit
+// filename or a launchd label.
+func TestResolveConfigRejectsUnsafeProfile(t *testing.T) {
 	home := t.TempDir()
 	for _, profile := range []string{"research notes", "%i", "research&ops", "research\nops"} {
 		t.Run(fmt.Sprintf("%q", profile), func(t *testing.T) {
-			if _, err := ResolvePathsForProfile(profile); err == nil {
-				t.Fatalf("ResolvePathsForProfile(%q) = nil, want error", profile)
-			}
-			if _, err := ResolvePathsForHomeProfile(home, profile); err == nil {
-				t.Fatalf("ResolvePathsForHomeProfile(%q) = nil, want error", profile)
-			}
-			cfg := &Config{Home: home, Profile: profile, Interval: 60, PushMode: ModeClean}
-			if _, _, err := ResolveScheduler(cfg, peerScheduleRunner(true)); err == nil {
-				t.Fatalf("ResolveScheduler(%q) = nil, want error", profile)
+			state := &config.UserState{}
+			state.Modules.Gsync.LocalPath = filepath.Join(home, "workspace", "work")
+			if _, err := ResolveConfigForHomeProfile(state, home, profile); err == nil {
+				t.Fatalf("ResolveConfigForHomeProfile(%q) = nil, want error", profile)
 			}
 			entries, err := os.ReadDir(home)
 			if err != nil {

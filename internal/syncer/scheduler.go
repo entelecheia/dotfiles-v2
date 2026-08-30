@@ -318,7 +318,15 @@ func (s *Scheduler) Resume(ctx context.Context) error {
 }
 
 func (s *Scheduler) requiresTargetUserServiceDomain() bool {
-	return s != nil && s.Config != nil && s.Config.Home != ""
+	return s != nil && schedulerRequiresTargetUserServiceDomain(s.Config)
+}
+
+// schedulerRequiresTargetUserServiceDomain reports whether scheduler artifacts
+// target a home supplied explicitly by the operator. A home path is not enough
+// evidence to address that user's launchd or systemd domain, so callers may
+// stage or retire files but must not invoke the current user's service manager.
+func schedulerRequiresTargetUserServiceDomain(cfg *Config) bool {
+	return cfg != nil && cfg.Home != ""
 }
 
 func (s *Scheduler) runArtifactOperations(operations ...func() error) error {
@@ -355,23 +363,21 @@ func (s *Scheduler) templateDataFor(kind SchedulerKind) SchedulerTemplateData {
 	if mode == "" {
 		mode = ModeClean
 	}
-	paths := s.Paths
-	if paths == nil {
-		paths = &Paths{}
-	}
-	profile := paths.schedulerProfile()
+	// schedulerProfile, LaunchdLabelFor and SystemdServiceNameFor are all
+	// nil-receiver safe, so a nil s.Paths yields the default-profile names.
+	profile := s.Paths.schedulerProfile()
 	return SchedulerTemplateData{
 		DotfilesPath:   dotfilesPath,
 		Home:           s.Config.Home,
 		SystemdHomeArg: systemdHomeArgument(s.Config.Home),
 		LogFile:        s.Config.LogFile,
 		Interval:       interval,
-		Label:          paths.LaunchdLabelFor(kind),
+		Label:          s.Paths.LaunchdLabelFor(kind),
 		Profile:        profileArg(profile),
 		Action:         kind.Action(),
 		Mode:           mode.String(),
 		Description:    kind.Description(),
-		ServiceName:    paths.SystemdServiceNameFor(kind),
+		ServiceName:    s.Paths.SystemdServiceNameFor(kind),
 	}
 }
 

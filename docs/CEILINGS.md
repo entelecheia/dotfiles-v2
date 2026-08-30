@@ -75,8 +75,10 @@ a versioned migration that this binary can prove is lossless.
 
 ## Stale per-profile scheduler units
 
-`internal/syncer/sync_cmd_ops.go` resolves scheduler artifacts per profile, so
-a unit installed for a non-default profile now lands at a per-profile path. A
+Scheduler artifacts are resolved once, per profile, at the config resolution
+point, and `internal/syncer/sync_cmd_ops.go` reads that resolved layout off the
+Config, so a unit installed for a non-default profile now lands at a
+per-profile path. A
 unit written by a binary from before that change sits at the default path
 instead, and `dot` does not remove it: it can keep firing beside the corrected
 unit, against the same tree.

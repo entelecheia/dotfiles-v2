@@ -60,7 +60,7 @@ type Config struct {
 	ConfigDir         string   // workspace-local store dir (.dotfiles/sync/) — dynamic files land here
 	SharedExcludes    []string // operator-curated shared paths (relative to MirrorPath)
 	LogFile           string
-	LockDir           string
+	LockDir           string // copied once from SystemPaths.LockDir at the single resolution point
 	RsyncPath         string // resolved rsync binary; empty if not installed
 	// RemoteRsyncPath is passed as --rsync-path for ssh targets whose default
 	// rsync cannot serve a modern client (macOS 26 openrsync). Empty = default OK.
@@ -99,6 +99,14 @@ type Config struct {
 	// callers (status, init, manifest readers) that need granular
 	// access beyond what the convenience fields above expose.
 	LocalPaths *LocalPaths
+
+	// SystemPaths is the fully resolved system artifact layout (lock dir,
+	// launchd plist, systemd units, log file) this config was resolved for.
+	// resolveConfig is its only writer. A caller that needs a system path
+	// reads it from here rather than resolving one from a home or a profile
+	// alone: a partial resolution drops the other half and lands the
+	// artifact in the wrong home or under the wrong profile (RES-01).
+	SystemPaths *Paths
 }
 
 // HomeDir is the home this run operates on: the --home target when one was
@@ -144,13 +152,6 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 	return resolveConfig(state, true, "", DefaultProfile)
 }
 
-// ResolveConfigForProfile resolves one named sync profile. Each profile has its
-// own store under <workspace>/.dotfiles/<profile>/, so its target, filters,
-// baseline, lock and scheduler unit are independent of every other profile.
-func ResolveConfigForProfile(state *config.UserState, profile string) (*Config, error) {
-	return resolveConfig(state, true, "", profile)
-}
-
 // ResolveConfigReadOnly resolves the same runtime values without creating
 // the local store, migrating global config, or healing .gitignore. Use it for
 // status/list commands that must not mutate the workspace.
@@ -158,7 +159,7 @@ func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
 	return resolveConfig(state, false, "", DefaultProfile)
 }
 
-// ResolveConfigForHomeProfile is ResolveConfigForProfile with an explicit home
+// ResolveConfigForHomeProfile resolves one named sync profile against an explicit home
 // directory instead of os.UserHomeDir(). Commands that honor --home must use it
 // so they operate on the target user's workspace rather than the invoking
 // user's. An empty home falls back to the current user's.
@@ -174,16 +175,6 @@ func ResolveConfigReadOnlyForHomeProfile(state *config.UserState, home, profile 
 	return resolveConfig(state, false, home, profile)
 }
 
-// ResolveConfigReadOnlyForHome is like ResolveConfigReadOnly but resolves all
-// home-relative paths (local/mirror defaults, `~` expansion, artifact paths)
-// against an explicit home directory instead of os.UserHomeDir(). Commands
-// that honor --home must use this so they operate on the target user's mirror
-// rather than the invoking user's. An empty home falls back to the current
-// user's home.
-func ResolveConfigReadOnlyForHome(state *config.UserState, home string) (*Config, error) {
-	return resolveConfig(state, false, home, DefaultProfile)
-}
-
 func resolveConfig(state *config.UserState, migrate bool, home, profile string) (*Config, error) {
 	if err := ValidateProfile(profile); err != nil {
 		return nil, err
@@ -193,7 +184,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	systemPaths, err := ResolvePathsForHomeProfile(override, profile)
+	systemPaths, err := resolvePathsForHomeProfile(override, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -338,6 +329,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Propagation:       policy,
 		Paused:            localCfg.Paused,
 		LocalPaths:        localPaths,
+		SystemPaths:       systemPaths,
 	}, nil
 }
 

@@ -241,20 +241,26 @@ func statusPrintSecrets(p *Printer, state *config.UserState, home string) {
 func statusPrintSync(p *Printer, state *config.UserState, home string) {
 	p.Section("Sync")
 
-	cfg, err := syncer.ResolveConfigReadOnlyForHome(state, home)
+	// The default profile is passed explicitly: which profile a status read
+	// reports on is a decision this call site makes, not one a resolver makes
+	// for it.
+	cfg, err := syncer.ResolveConfigReadOnlyForHomeProfile(state, home, syncer.DefaultProfile)
 	if err != nil {
 		p.Line("  %s", ui.StyleHint.Render("(config error: "+err.Error()+")"))
 		return
 	}
-	paths, err := syncer.ResolvePathsForHome(home)
-	if err != nil {
-		p.Line("  %s", ui.StyleHint.Render("(cannot resolve paths)"))
-		return
-	}
+	// BUG-28 (pre-change site: internal/cli/status_cmd.go:249): the scheduler
+	// was built from an artifact layout re-resolved from the home alone, which
+	// dropped the profile the config had just been resolved for; it now reads
+	// the layout that same resolve produced. The substituted value is
+	// byte-identical at HEAD -- the read-only home entry point hard-coded the
+	// default profile and withProfile is the identity for it -- so nothing in
+	// this section's output moves, and the guard against a partial resolution
+	// returning is the structural inventory, not an output assertion.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	runner := exec.NewRunner(true, logger)
 	engine := template.NewEngine()
-	sched := syncer.NewScheduler(runner, paths, cfg, engine)
+	sched := syncer.NewScheduler(runner, cfg.SystemPaths, cfg, engine)
 	st, err := syncer.GetStatus(context.Background(), runner, cfg, state, sched)
 	if err != nil {
 		p.Line("  %s", ui.StyleHint.Render("(status unavailable: "+err.Error()+")"))

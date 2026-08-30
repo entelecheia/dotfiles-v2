@@ -35,9 +35,9 @@ func TestExplicitHomeLockIgnoresInvokerXDGCache(t *testing.T) {
 	if cfg.LockDir != want {
 		t.Fatalf("Config.LockDir = %q, want target cache lock %q", cfg.LockDir, want)
 	}
-	paths, err := ResolvePathsForHomeProfile(target, DefaultProfile)
+	paths, err := resolvePathsForHomeProfile(target, DefaultProfile)
 	if err != nil {
-		t.Fatalf("ResolvePathsForHomeProfile: %v", err)
+		t.Fatalf("resolvePathsForHomeProfile: %v", err)
 	}
 	if paths.LockDir != want {
 		t.Fatalf("Paths.LockDir = %q, want target cache lock %q", paths.LockDir, want)
@@ -77,9 +77,9 @@ func TestNoOverridePreservesXDGCache(t *testing.T) {
 	if cfg.LockDir != want {
 		t.Fatalf("Config.LockDir = %q, want XDG cache lock %q", cfg.LockDir, want)
 	}
-	paths, err := ResolvePathsForHomeProfile("", DefaultProfile)
+	paths, err := resolvePathsForHomeProfile("", DefaultProfile)
 	if err != nil {
-		t.Fatalf("ResolvePathsForHomeProfile: %v", err)
+		t.Fatalf("resolvePathsForHomeProfile: %v", err)
 	}
 	if paths.LockDir != cfg.LockDir {
 		t.Fatalf("resolver LockDir = %q, want Config.LockDir %q", paths.LockDir, cfg.LockDir)

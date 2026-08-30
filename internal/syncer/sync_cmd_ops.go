@@ -148,12 +148,15 @@ func RecordResult(state *config.UserState, cfg *Config, op string, syncErr error
 // elsewhere in the gsync subcommands. Returns the Paths used so callers can
 // introspect plist/timer locations. The unit lands under the home the config
 // was resolved for: a unit written into the invoking user's LaunchAgents for
-// another user's workspace fires forever against the wrong tree.
+// another user's workspace fires forever against the wrong tree. It reads
+// cfg.SystemPaths rather than resolving its own, so the home and the profile
+// are both the ones resolveConfig saw; an unresolved config is an error here,
+// not a silent re-resolution from half the inputs.
 func ResolveScheduler(cfg *Config, runner *exec.Runner) (*Scheduler, *Paths, error) {
-	paths, err := ResolvePathsForHomeProfile(cfg.Home, cfg.Profile)
-	if err != nil {
-		return nil, nil, err
+	if cfg.SystemPaths == nil {
+		return nil, nil, fmt.Errorf("system paths unresolved")
 	}
+	paths := cfg.SystemPaths
 	// ponytail: known ceiling. A scheduler installed by an older binary for a
 	// non-default profile remains at the old default path and can keep firing
 	// beside the corrected unit. Cleanup must enumerate unknown historical

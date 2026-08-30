@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
@@ -170,11 +171,19 @@ func TestSyncConflictsPruneCLI_LockHeldDeletesNothing(t *testing.T) {
 	f := newSyncCLIFixture(t)
 	conflict := f.seedOldConflict(t, f.local, "2026-01-01T00-00-00Z")
 
-	paths, err := syncer.ResolvePaths()
+	// Resolve the lock directory the way the command under test does, rather
+	// than joining one by hand: cfg.LockDir is systemPaths.LockDir, and
+	// os.UserCacheDir returns Library/Caches on darwin, so a literal ".cache"
+	// join would pass the linux job and fail the macOS one.
+	state, err := config.LoadState()
 	if err != nil {
 		t.Fatal(err)
 	}
-	release, err := syncer.AcquireLock(paths.LockDir)
+	cfg, err := syncer.ResolveConfigReadOnly(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := syncer.AcquireLock(cfg.LockDir)
 	if err != nil {
 		t.Fatalf("acquiring lock: %v", err)
 	}

@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
 // BUG-07: `dot status` resolved its state, config path, secrets store, sync
@@ -281,8 +284,31 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	if got := schedulerIntervalSeconds(t, out); got != 0 {
 		t.Errorf("peer status --home reported the invoking user's scheduler interval %d:\n%s", got, out)
 	}
-	if !strings.Contains(out, "not installed") {
-		t.Errorf("peer status --home did not report the target home's (absent) scheduler:\n%s", out)
+	wantAbsentState := syncer.SchedulerNotInstalled.String()
+	if runtime.GOOS != "darwin" {
+		wantAbsentState = peerSchedulerUnsupportedState
+	}
+	if got := schedulerState(t, out); got != wantAbsentState {
+		t.Errorf("peer status --home state = %q, want %q for the target home's absent scheduler:\n%s", got, wantAbsentState, out)
+	}
+
+	writeCLITestFile(t, filepath.Join(target, "Library", "LaunchAgents", "com.dotfiles.peer.plist"),
+		"<plist><dict><key>StartInterval</key><integer>600</integer></dict></plist>\n")
+	out, errOut, err = runDotForTest("--home", target, "peer", "status", "--json")
+	if err != nil {
+		t.Fatalf("peer status --json --home with plist: %v\nstderr=%s", err, errOut)
+	}
+	wantTargetInterval := 600
+	wantTargetState := syncer.SchedulerTargetUserActionRequired.String()
+	if runtime.GOOS != "darwin" {
+		wantTargetInterval = 0
+		wantTargetState = peerSchedulerUnsupportedState
+	}
+	if got := schedulerIntervalSeconds(t, out); got != wantTargetInterval {
+		t.Errorf("peer status --home interval = %d, want %d for this platform:\n%s", got, wantTargetInterval, out)
+	}
+	if got := schedulerState(t, out); got != wantTargetState {
+		t.Errorf("peer status --home state = %q, want %q:\n%s", got, wantTargetState, out)
 	}
 
 	// Non-vacuity: the same document does report the process home's plist.
@@ -290,8 +316,26 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer status --json: %v\nstderr=%s", err, errOut)
 	}
-	if got := schedulerIntervalSeconds(t, out); got != 900 {
-		t.Errorf("peer status without the flag read intervalSeconds=%d, want 900 from the process home's plist:\n%s", got, out)
+	wantInvokerInterval := 900
+	if runtime.GOOS != "darwin" {
+		wantInvokerInterval = 0
+	}
+	if got := schedulerIntervalSeconds(t, out); got != wantInvokerInterval {
+		t.Errorf("peer status without the flag read intervalSeconds=%d, want %d for this platform:\n%s", got, wantInvokerInterval, out)
+	}
+}
+
+func TestInspectPeerSchedulerNonDarwinDoesNotReadLaunchdState(t *testing.T) {
+	home := t.TempDir()
+	writeCLITestFile(t, filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.peer.plist"),
+		"<plist><dict><key>StartInterval</key><integer>600</integer></dict></plist>\n")
+
+	snapshot := inspectPeerScheduler(context.Background(), nil, home, false, "linux")
+	if snapshot.State != peerSchedulerUnsupportedState {
+		t.Fatalf("non-darwin peer scheduler state = %q, want %q", snapshot.State, peerSchedulerUnsupportedState)
+	}
+	if snapshot.IntervalSeconds != 0 || snapshot.LastExitCode != nil || snapshot.RunCount != nil {
+		t.Fatalf("non-darwin peer scheduler read launchd details: %+v", snapshot)
 	}
 }
 
@@ -319,4 +363,17 @@ func schedulerIntervalSeconds(t *testing.T, jsonDoc string) int {
 	// peerStatusJSON.Job); with no scheduler installed its intervalSeconds is
 	// the zero value, which is the "not installed" case the --home side asserts.
 	return doc.Job.IntervalSeconds
+}
+
+func schedulerState(t *testing.T, jsonDoc string) string {
+	t.Helper()
+	var doc struct {
+		Job struct {
+			State string `json:"state"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal([]byte(jsonDoc), &doc); err != nil {
+		t.Fatalf("peer status --json emitted invalid JSON: %v\n%s", err, jsonDoc)
+	}
+	return doc.Job.State
 }

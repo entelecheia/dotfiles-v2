@@ -14,8 +14,6 @@ import (
 // Paths holds well-known file locations for sync artifacts.
 type Paths struct {
 	Profile        string // normalized sync profile that owns every scheduler identity
-	ConfigDir      string // ~/.config/dotfiles (or $XDG_CONFIG_HOME/dotfiles)
-	ExcludesFile   string // <ConfigDir> legacy global excludes (superseded by the workspace store)
 	LogFile        string // ~/.local/log/dotfiles-sync.log
 	LockDir        string // ~/Library/Caches/dotfiles/sync.lock (macOS) or equivalent
 	LaunchdPlist   string // ~/Library/LaunchAgents/com.dotfiles.sync.plist (macOS, push)
@@ -78,10 +76,11 @@ func (p *Paths) schedulerProfile() string {
 	return p.Profile
 }
 
-// ResolvePaths returns the standard gsync artifact paths for the
-// current user. ConfigDir respects XDG_CONFIG_HOME; LockDir uses
-// os.UserCacheDir so it stays out of the workspace tree.
-func ResolvePaths() (*Paths, error) {
+// resolvePaths returns the standard gsync artifact paths for the current user.
+// The cache directory is the only environment-sensitive input: it comes from
+// os.UserCacheDir here, or from cacheDirForHome for an explicit home, so
+// LockDir stays out of the workspace tree.
+func resolvePaths() (*Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolving home: %w", err)
@@ -94,18 +93,22 @@ func ResolvePaths() (*Paths, error) {
 	return pathsFor(home, cacheDir), nil
 }
 
-// ResolvePathsForHome resolves gsync artifact paths against an explicit home
-// directory. Commands that honor --home use it so per-user artifact and lock
-// paths follow the target home rather than the invoking user's. An empty home
-// falls back to ResolvePaths (current user).
-func ResolvePathsForHome(home string) (*Paths, error) {
+// resolvePathsForHome resolves gsync artifact paths against an explicit home
+// directory. Commands that honor --home reach it through
+// resolvePathsForHomeProfile, so per-user artifact and lock paths follow the
+// target home rather than the invoking user's. An empty home falls back to
+// resolvePaths (current user).
+func resolvePathsForHome(home string) (*Paths, error) {
 	if home == "" {
-		return ResolvePaths()
+		return resolvePaths()
 	}
 	return pathsFor(home, cacheDirForHome(home)), nil
 }
 
-// ResolvePathsForProfile builds the artifact layout for one sync profile.
+// resolvePathsForHomeProfile builds the artifact layout for one sync profile
+// under an explicit home. It is the single resolution entry point: home and
+// profile are both arguments, so neither can be silently assumed by a caller.
+//
 // Scheduler units are per-profile, but the peer profile deliberately shares
 // the default lock: peer and cloud runs can both mutate the same workspace
 // tree, so they must never overlap. Other custom profiles keep independent
@@ -114,23 +117,11 @@ func ResolvePathsForHome(home string) (*Paths, error) {
 // The default profile is unchanged by construction - "sync.lock" and
 // "com.dotfiles.sync.plist" are exactly what the templated names produce when
 // the profile is "sync".
-func ResolvePathsForProfile(profile string) (*Paths, error) {
+func resolvePathsForHomeProfile(home, profile string) (*Paths, error) {
 	if err := ValidateProfile(profile); err != nil {
 		return nil, err
 	}
-	p, err := ResolvePaths()
-	if err != nil {
-		return nil, err
-	}
-	return withProfile(p, profile), nil
-}
-
-// ResolvePathsForHomeProfile is ResolvePathsForProfile with an explicit home.
-func ResolvePathsForHomeProfile(home, profile string) (*Paths, error) {
-	if err := ValidateProfile(profile); err != nil {
-		return nil, err
-	}
-	p, err := ResolvePathsForHome(home)
+	p, err := resolvePathsForHome(home)
 	if err != nil {
 		return nil, err
 	}
@@ -155,14 +146,8 @@ func withProfile(p *Paths, profile string) *Paths {
 
 // pathsFor builds the artifact layout for a given home + cache dir.
 func pathsFor(home, cacheDir string) *Paths {
-	configDir := filepath.Join(home, ".config", "dotfiles")
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		configDir = filepath.Join(xdg, "dotfiles")
-	}
 	return &Paths{
 		Profile:        DefaultProfile,
-		ConfigDir:      configDir,
-		ExcludesFile:   filepath.Join(configDir, excludesDiskName),
 		LogFile:        filepath.Join(home, ".local", "log", "dotfiles-sync.log"),
 		LockDir:        filepath.Join(cacheDir, "dotfiles", "sync.lock"),
 		LaunchdPlist:   filepath.Join(home, "Library", "LaunchAgents", launchdLabel+".plist"),

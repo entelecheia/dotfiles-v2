@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -229,8 +230,17 @@ func TestJSONGoldens(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading golden: %v (run with -update to capture)", err)
 			}
-			if got != string(want) {
-				t.Errorf("%s --json drifted from its golden %s\ngot:\n%s\nwant:\n%s", tc.surface, path, got, want)
+			wantText := string(want)
+			if tc.surface == "peer status" && runtime.GOOS != "darwin" {
+				wantText = strings.Replace(
+					wantText,
+					`"state": "not installed"`,
+					`"state": "`+peerSchedulerUnsupportedState+`"`,
+					1,
+				)
+			}
+			if got != wantText {
+				t.Errorf("%s --json drifted from its golden %s\ngot:\n%s\nwant:\n%s", tc.surface, path, got, wantText)
 			}
 		})
 	}
