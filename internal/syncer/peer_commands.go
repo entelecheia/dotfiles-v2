@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,8 @@ import (
 // Peer deletions are normally tens of inbox paths. Keep the new-profile cap
 // well below the mirror's broader 1000-path default.
 const peerDefaultMaxDelete = 100
+
+var peerScheduleGOOS = runtime.GOOS
 
 // peerAllowHeader seeds the peer profile's allow.txt. The cloud mirror keeps
 // secrets out; a peer is a second machine the operator already trusts with the
@@ -538,25 +541,34 @@ type PeerScheduleOptions struct {
 
 // PeerScheduleResult describes the job that was installed or removed.
 type PeerScheduleResult struct {
-	Off      bool
-	DryRun   bool
-	Plist    string
-	LogFile  string
-	Interval time.Duration
+	Off                      bool
+	DryRun                   bool
+	TargetUserActionRequired bool
+	Plist                    string
+	LogFile                  string
+	Interval                 time.Duration
 }
 
 // PeerSchedule installs or removes the periodic `dot peer sync` job.
 func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleResult, error) {
 	cfg, runner := opts.Config, opts.Runner
+	if peerScheduleGOOS != "darwin" {
+		return nil, fmt.Errorf("peer scheduler requires macOS launchd (host OS %s); no scheduler artifact was changed", peerScheduleGOOS)
+	}
 	plist := filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist")
 	if err := validateSchedulerMutationHome(cfg.Home); err != nil {
 		return nil, fmt.Errorf("peer scheduler home %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", cfg.Home, plist, err)
 	}
 
 	if opts.Off {
-		if opts.DryRun {
+		if opts.DryRun || (runner != nil && runner.DryRun) {
 			// A preview removes neither the plist nor any loaded job.
-			return &PeerScheduleResult{Off: true, DryRun: true, Plist: plist}, nil
+			return &PeerScheduleResult{
+				Off:                      true,
+				DryRun:                   true,
+				TargetUserActionRequired: schedulerRequiresTargetUserServiceDomain(cfg),
+				Plist:                    plist,
+			}, nil
 		}
 		if !schedulerRequiresTargetUserServiceDomain(cfg) {
 			_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
@@ -564,7 +576,11 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 		if err := os.Remove(plist); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		result := &PeerScheduleResult{Off: true, Plist: plist}
+		result := &PeerScheduleResult{
+			Off:                      true,
+			TargetUserActionRequired: schedulerRequiresTargetUserServiceDomain(cfg),
+			Plist:                    plist,
+		}
 		if schedulerRequiresTargetUserServiceDomain(cfg) {
 			return result, &SchedulerTargetUserActionRequiredError{}
 		}
@@ -616,7 +632,13 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	// untouched; only this arm reconciles the option with the runner's own flag,
 	// the way the three aisettings managers do.
 	if opts.DryRun || (runner != nil && runner.DryRun) {
-		return &PeerScheduleResult{DryRun: true, Plist: plist, LogFile: cfg.LogFile, Interval: opts.Interval}, nil
+		return &PeerScheduleResult{
+			DryRun:                   true,
+			TargetUserActionRequired: schedulerRequiresTargetUserServiceDomain(cfg),
+			Plist:                    plist,
+			LogFile:                  cfg.LogFile,
+			Interval:                 opts.Interval,
+		}, nil
 	}
 	logFile := cfg.LogFile
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
@@ -626,7 +648,12 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if err := runner.WriteFileAtomic(plist, []byte(body), 0o644); err != nil {
 		return nil, fmt.Errorf("writing peer plist %s for home %q: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", plist, cfg.Home, err)
 	}
-	result := &PeerScheduleResult{Plist: plist, LogFile: logFile, Interval: opts.Interval}
+	result := &PeerScheduleResult{
+		TargetUserActionRequired: schedulerRequiresTargetUserServiceDomain(cfg),
+		Plist:                    plist,
+		LogFile:                  logFile,
+		Interval:                 opts.Interval,
+	}
 	if schedulerRequiresTargetUserServiceDomain(cfg) {
 		return result, &SchedulerTargetUserActionRequiredError{}
 	}

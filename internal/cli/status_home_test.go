@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -306,6 +307,20 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	}
 	if got := schedulerIntervalSeconds(t, out); got != 900 {
 		t.Errorf("peer status without the flag read intervalSeconds=%d, want 900 from the process home's plist:\n%s", got, out)
+	}
+}
+
+func TestInspectPeerSchedulerNonDarwinDoesNotReadLaunchdState(t *testing.T) {
+	home := t.TempDir()
+	writeCLITestFile(t, filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.peer.plist"),
+		"<plist><dict><key>StartInterval</key><integer>600</integer></dict></plist>\n")
+
+	snapshot := inspectPeerScheduler(context.Background(), nil, home, false, "linux")
+	if snapshot.State != peerSchedulerUnsupportedState {
+		t.Fatalf("non-darwin peer scheduler state = %q, want %q", snapshot.State, peerSchedulerUnsupportedState)
+	}
+	if snapshot.IntervalSeconds != 0 || snapshot.LastExitCode != nil || snapshot.RunCount != nil {
+		t.Fatalf("non-darwin peer scheduler read launchd details: %+v", snapshot)
 	}
 }
 

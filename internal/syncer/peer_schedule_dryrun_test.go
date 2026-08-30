@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -122,6 +123,132 @@ func TestPeerSchedule_DryRunWritesNoPlist(t *testing.T) {
 				t.Errorf("result names plist %q, want %q — cli renders the path from the result", res.Plist, plist)
 			}
 		})
+	}
+}
+
+func TestPeerSchedule_DryRunExplicitHomeReportsTargetUserAction(t *testing.T) {
+	for _, mode := range []struct {
+		name      string
+		optDryRun bool
+		runnerDry bool
+	}{
+		{name: "option-only", optDryRun: true},
+		{name: "runner-only", runnerDry: true},
+	} {
+		for _, off := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/off=%t", mode.name, off), func(t *testing.T) {
+				cfg, _ := peerScheduleSandbox(t)
+				cfg.Home = t.TempDir()
+				plist := filepath.Join(cfg.Home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+				parent := filepath.Dir(plist)
+				const seeded = "seeded explicit-home peer plist"
+				if off {
+					if err := os.MkdirAll(parent, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(plist, []byte(seeded), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				record := filepath.Join(t.TempDir(), "launchctl-args")
+				t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", record)
+				var runnerLog bytes.Buffer
+				runner := exec.NewRunner(mode.runnerDry, slog.New(slog.NewTextHandler(&runnerLog, nil)))
+
+				res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+					Config: cfg, Runner: runner, Probe: peerScheduleRunner(false),
+					Interval: 15 * time.Minute, Off: off, DryRun: mode.optDryRun,
+				})
+				if err != nil {
+					t.Fatalf("PeerSchedule dry-run: %v", err)
+				}
+				if res == nil || !res.DryRun || !res.TargetUserActionRequired {
+					t.Fatalf("PeerSchedule dry-run result = %+v, want target-user action", res)
+				}
+				if off {
+					body, readErr := os.ReadFile(plist)
+					if readErr != nil || string(body) != seeded {
+						t.Fatalf("explicit-home off dry-run changed plist: body=%q err=%v", body, readErr)
+					}
+					entries, readErr := os.ReadDir(parent)
+					if readErr != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(plist) {
+						t.Fatalf("explicit-home off dry-run changed parent entries: entries=%v err=%v", entries, readErr)
+					}
+				} else if _, statErr := os.Stat(parent); !os.IsNotExist(statErr) {
+					t.Fatalf("explicit-home install dry-run created parent %s: %v", parent, statErr)
+				}
+				if got, readErr := os.ReadFile(record); readErr == nil || !os.IsNotExist(readErr) {
+					t.Fatalf("explicit-home dry-run invoked caller launchctl: %q (read error %v)", got, readErr)
+				}
+				if strings.Contains(runnerLog.String(), "launchctl") {
+					t.Fatalf("explicit-home runner dry-run attempted launchctl: %s", runnerLog.String())
+				}
+			})
+		}
+	}
+}
+
+func TestPeerSchedule_RejectsNonDarwinBeforeMutation(t *testing.T) {
+	previous := peerScheduleGOOS
+	peerScheduleGOOS = "linux"
+	t.Cleanup(func() { peerScheduleGOOS = previous })
+
+	for _, off := range []bool{false, true} {
+		t.Run(fmt.Sprintf("off=%t", off), func(t *testing.T) {
+			cfg, plist := peerScheduleSandbox(t)
+			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			const seeded = "seeded before non-darwin rejection"
+			if err := os.WriteFile(plist, []byte(seeded), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			record := filepath.Join(t.TempDir(), "launchctl-args")
+			t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", record)
+
+			res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+				Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false),
+				Interval: 15 * time.Minute, Off: off,
+			})
+			if err == nil || !strings.Contains(err.Error(), "requires macOS launchd") {
+				t.Fatalf("non-darwin error = %v, want macOS launchd guidance", err)
+			}
+			if res != nil {
+				t.Fatalf("non-darwin rejection returned result: %+v", res)
+			}
+			body, readErr := os.ReadFile(plist)
+			if readErr != nil || string(body) != seeded {
+				t.Fatalf("non-darwin rejection changed plist: body=%q err=%v", body, readErr)
+			}
+			if got, readErr := os.ReadFile(record); readErr == nil || !os.IsNotExist(readErr) {
+				t.Fatalf("non-darwin rejection invoked launchctl: %q (read error %v)", got, readErr)
+			}
+		})
+	}
+}
+
+func TestPeerSchedule_OffRunnerDryRunKeepsPlist(t *testing.T) {
+	cfg, plist := peerScheduleSandbox(t)
+	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const seeded = "seeded peer plist"
+	if err := os.WriteFile(plist, []byte(seeded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+		Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false),
+		Off: true, DryRun: false,
+	})
+	if err != nil {
+		t.Fatalf("PeerSchedule runner-only dry-run off: %v", err)
+	}
+	if res == nil || !res.Off || !res.DryRun || res.Plist != plist {
+		t.Fatalf("PeerSchedule runner-only dry-run off result = %+v", res)
+	}
+	if body, readErr := os.ReadFile(plist); readErr != nil || string(body) != seeded {
+		t.Fatalf("runner-only dry-run off changed plist: body=%q err=%v", body, readErr)
 	}
 }
 

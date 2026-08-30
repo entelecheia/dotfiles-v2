@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 )
 
 const peerStatusSchemaVersion = syncer.PeerStatusSchemaVersion
+const peerSchedulerUnsupportedState = "unsupported: peer scheduler requires macOS launchd"
 
 type peerSchedulerSnapshot struct {
 	Label           string
@@ -72,7 +74,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	snapshot := inspectPeerScheduler(cmd.Context(), runner, homeFor(cmd), homeOverrideFrom(cmd) != "")
+	snapshot := inspectPeerScheduler(cmd.Context(), runner, homeFor(cmd), homeOverrideFrom(cmd) != "", runtime.GOOS)
 	base := buildSyncStatusJSON(cfg, st, &syncer.Scheduler{Paths: cfg.SystemPaths})
 	base.Kind = "peer-profile"
 	base.Jobs = []syncJobJSON{}
@@ -130,9 +132,13 @@ func newestTimeJSON(values ...time.Time) *string {
 // pointed at. It takes the home rather than resolving one: a --home run that
 // reported the invoking user's agent state would be the same disclosure the
 // workspace fields above carry (BUG-07).
-func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string, targetUserDomain bool) peerSchedulerSnapshot {
+func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string, targetUserDomain bool, goos string) peerSchedulerSnapshot {
 	const label = "com.dotfiles.peer"
 	snapshot := peerSchedulerSnapshot{Label: label, State: syncer.SchedulerNotInstalled.String()}
+	if goos != "darwin" {
+		snapshot.State = peerSchedulerUnsupportedState
+		return snapshot
+	}
 	if home == "" {
 		return snapshot
 	}

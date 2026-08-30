@@ -109,14 +109,14 @@ walks the whole tree.`,
 			}
 			if res.Off {
 				if res.DryRun {
-					p.Line("dry-run: would remove %s", res.Plist)
+					printPeerScheduleDryRun(p, res)
 					return nil
 				}
 				p.Success("peer sync job removed")
 				return nil
 			}
 			if res.DryRun {
-				p.Line("dry-run: would write %s", res.Plist)
+				printPeerScheduleDryRun(p, res)
 				return nil
 			}
 			p.Success("peer sync scheduled every %s", res.Interval)
@@ -128,6 +128,17 @@ walks the whole tree.`,
 	cmd.Flags().DurationVar(&interval, "interval", 15*time.Minute, "how often to sync with the peer")
 	cmd.Flags().BoolVar(&off, "off", false, "remove the scheduled job")
 	return cmd
+}
+
+func printPeerScheduleDryRun(p *Printer, res *syncer.PeerScheduleResult) {
+	if res.Off {
+		p.Line("dry-run: would remove %s", res.Plist)
+	} else {
+		p.Line("dry-run: would write %s", res.Plist)
+	}
+	if res.TargetUserActionRequired {
+		p.Warn("target-user action required: %s", syncer.SchedulerTargetUserInstruction())
+	}
 }
 
 func newPeerDoctorCmd() *cobra.Command {
