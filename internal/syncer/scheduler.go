@@ -318,7 +318,15 @@ func (s *Scheduler) Resume(ctx context.Context) error {
 }
 
 func (s *Scheduler) requiresTargetUserServiceDomain() bool {
-	return s != nil && s.Config != nil && s.Config.Home != ""
+	return s != nil && schedulerRequiresTargetUserServiceDomain(s.Config)
+}
+
+// schedulerRequiresTargetUserServiceDomain reports whether scheduler artifacts
+// target a home supplied explicitly by the operator. A home path is not enough
+// evidence to address that user's launchd or systemd domain, so callers may
+// stage or retire files but must not invoke the current user's service manager.
+func schedulerRequiresTargetUserServiceDomain(cfg *Config) bool {
+	return cfg != nil && cfg.Home != ""
 }
 
 func (s *Scheduler) runArtifactOperations(operations ...func() error) error {

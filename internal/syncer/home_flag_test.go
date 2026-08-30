@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -266,6 +267,8 @@ func TestPeerSchedule_WritesUnderTheTargetHome(t *testing.T) {
 	}
 	target := t.TempDir()
 	cfg.Home = target
+	launchctlRecord := filepath.Join(t.TempDir(), "launchctl-args")
+	t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", launchctlRecord)
 
 	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
 		Config:   cfg,
@@ -273,8 +276,15 @@ func TestPeerSchedule_WritesUnderTheTargetHome(t *testing.T) {
 		Probe:    peerScheduleRunner(false),
 		Interval: time.Hour,
 	})
-	if err != nil {
-		t.Fatalf("PeerSchedule: %v", err)
+	var targetUserErr *SchedulerTargetUserActionRequiredError
+	if !errors.As(err, &targetUserErr) {
+		t.Fatalf("PeerSchedule error = %v, want target-user action", err)
+	}
+	if res == nil {
+		t.Fatal("PeerSchedule returned no staged result")
+	}
+	if got, readErr := os.ReadFile(launchctlRecord); readErr == nil || !os.IsNotExist(readErr) {
+		t.Fatalf("explicit-home schedule invoked caller launchctl: %q (read error %v)", got, readErr)
 	}
 	if !strings.HasPrefix(res.Plist, target+string(os.PathSeparator)) {
 		t.Errorf("peer plist written outside the target home: %s", res.Plist)
@@ -292,6 +302,37 @@ func TestPeerSchedule_WritesUnderTheTargetHome(t *testing.T) {
 	}
 	if got := matchingHomeArguments(plist.ProgramArguments); !reflect.DeepEqual(got, []string{"--home=" + target}) {
 		t.Errorf("peer plist home arguments = %#v, want %#v", got, []string{"--home=" + target})
+	}
+}
+
+func TestPeerSchedule_ExplicitHomeOffRemovesFileWithoutCallerLaunchctl(t *testing.T) {
+	cfg, _ := peerScheduleSandbox(t)
+	cfg.Home = t.TempDir()
+	plist := filepath.Join(cfg.Home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plist, []byte("seeded"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(t.TempDir(), "launchctl-args")
+	t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", record)
+
+	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), Off: true,
+	})
+	var targetUserErr *SchedulerTargetUserActionRequiredError
+	if !errors.As(err, &targetUserErr) {
+		t.Fatalf("PeerSchedule off error = %v, want target-user action", err)
+	}
+	if res == nil || !res.Off || res.Plist != plist {
+		t.Fatalf("PeerSchedule off result = %+v, want removed %s", res, plist)
+	}
+	if _, statErr := os.Stat(plist); !os.IsNotExist(statErr) {
+		t.Fatalf("explicit-home off left plist behind: %v", statErr)
+	}
+	if got, readErr := os.ReadFile(record); readErr == nil || !os.IsNotExist(readErr) {
+		t.Fatalf("explicit-home off invoked caller launchctl: %q (read error %v)", got, readErr)
 	}
 }
 
@@ -332,8 +373,12 @@ func TestPeerSchedule_PlistPathFieldsRoundTrip(t *testing.T) {
 	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
 		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), Interval: time.Hour,
 	})
-	if err != nil {
-		t.Fatalf("PeerSchedule: %v", err)
+	var targetUserErr *SchedulerTargetUserActionRequiredError
+	if !errors.As(err, &targetUserErr) {
+		t.Fatalf("PeerSchedule error = %v, want target-user action", err)
+	}
+	if res == nil {
+		t.Fatal("PeerSchedule returned no staged result")
 	}
 	body, err := os.ReadFile(res.Plist)
 	if err != nil {

@@ -554,17 +554,21 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	}
 
 	if opts.Off {
-		_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
 		if opts.DryRun {
-			// runner already skipped the bootout; removing the plist here
-			// anyway would leave a loaded job with no on-disk definition,
-			// which is the opposite of a preview.
+			// A preview removes neither the plist nor any loaded job.
 			return &PeerScheduleResult{Off: true, DryRun: true, Plist: plist}, nil
+		}
+		if !schedulerRequiresTargetUserServiceDomain(cfg) {
+			_, _ = runner.Run(ctx, "launchctl", "bootout", "gui/"+strconv.Itoa(os.Getuid())+"/com.dotfiles.peer")
 		}
 		if err := os.Remove(plist); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
-		return &PeerScheduleResult{Off: true, Plist: plist}, nil
+		result := &PeerScheduleResult{Off: true, Plist: plist}
+		if schedulerRequiresTargetUserServiceDomain(cfg) {
+			return result, &SchedulerTargetUserActionRequiredError{}
+		}
+		return result, nil
 	}
 	if err := CheckOwner(cfg); err != nil {
 		return nil, fmt.Errorf("refusing peer scheduler on a non-coordinator: %w", err)
@@ -622,12 +626,16 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if err := runner.WriteFileAtomic(plist, []byte(body), 0o644); err != nil {
 		return nil, fmt.Errorf("writing peer plist %s for home %q: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", plist, cfg.Home, err)
 	}
+	result := &PeerScheduleResult{Plist: plist, LogFile: logFile, Interval: opts.Interval}
+	if schedulerRequiresTargetUserServiceDomain(cfg) {
+		return result, &SchedulerTargetUserActionRequiredError{}
+	}
 	label := "gui/" + strconv.Itoa(os.Getuid()) + "/com.dotfiles.peer"
 	_, _ = runner.Run(ctx, "launchctl", "bootout", label)
 	if _, err := runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(os.Getuid()), plist); err != nil {
 		return nil, fmt.Errorf("loading %s: %w", plist, err)
 	}
-	return &PeerScheduleResult{Plist: plist, LogFile: logFile, Interval: opts.Interval}, nil
+	return result, nil
 }
 
 func peerPlistPathError(field, value, plist string, err error) error {

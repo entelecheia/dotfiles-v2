@@ -72,7 +72,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	snapshot := inspectPeerScheduler(cmd.Context(), runner, homeFor(cmd))
+	snapshot := inspectPeerScheduler(cmd.Context(), runner, homeFor(cmd), homeOverrideFrom(cmd) != "")
 	base := buildSyncStatusJSON(cfg, st, &syncer.Scheduler{Paths: cfg.SystemPaths})
 	base.Kind = "peer-profile"
 	base.Jobs = []syncJobJSON{}
@@ -130,7 +130,7 @@ func newestTimeJSON(values ...time.Time) *string {
 // pointed at. It takes the home rather than resolving one: a --home run that
 // reported the invoking user's agent state would be the same disclosure the
 // workspace fields above carry (BUG-07).
-func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string) peerSchedulerSnapshot {
+func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string, targetUserDomain bool) peerSchedulerSnapshot {
 	const label = "com.dotfiles.peer"
 	snapshot := peerSchedulerSnapshot{Label: label, State: syncer.SchedulerNotInstalled.String()}
 	if home == "" {
@@ -143,6 +143,10 @@ func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string)
 	}
 	snapshot.State = syncer.SchedulerStopped.String()
 	snapshot.IntervalSeconds = plistInteger(string(body), "StartInterval")
+	if targetUserDomain {
+		snapshot.State = syncer.SchedulerTargetUserActionRequired.String()
+		return snapshot
+	}
 	result, err := runner.RunQuery(ctx, "launchctl", "print", fmt.Sprintf("gui/%d/%s", os.Getuid(), label))
 	if err != nil || result == nil || result.ExitCode != 0 {
 		return snapshot

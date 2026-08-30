@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
 // BUG-07: `dot status` resolved its state, config path, secrets store, sync
@@ -285,6 +286,19 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 		t.Errorf("peer status --home did not report the target home's (absent) scheduler:\n%s", out)
 	}
 
+	writeCLITestFile(t, filepath.Join(target, "Library", "LaunchAgents", "com.dotfiles.peer.plist"),
+		"<plist><dict><key>StartInterval</key><integer>600</integer></dict></plist>\n")
+	out, errOut, err = runDotForTest("--home", target, "peer", "status", "--json")
+	if err != nil {
+		t.Fatalf("peer status --json --home with plist: %v\nstderr=%s", err, errOut)
+	}
+	if got := schedulerIntervalSeconds(t, out); got != 600 {
+		t.Errorf("peer status --home interval = %d, want target plist interval 600:\n%s", got, out)
+	}
+	if got := schedulerState(t, out); got != syncer.SchedulerTargetUserActionRequired.String() {
+		t.Errorf("peer status --home state = %q, want target-user action state:\n%s", got, out)
+	}
+
 	// Non-vacuity: the same document does report the process home's plist.
 	out, errOut, err = runDotForTest("peer", "status", "--json")
 	if err != nil {
@@ -319,4 +333,17 @@ func schedulerIntervalSeconds(t *testing.T, jsonDoc string) int {
 	// peerStatusJSON.Job); with no scheduler installed its intervalSeconds is
 	// the zero value, which is the "not installed" case the --home side asserts.
 	return doc.Job.IntervalSeconds
+}
+
+func schedulerState(t *testing.T, jsonDoc string) string {
+	t.Helper()
+	var doc struct {
+		Job struct {
+			State string `json:"state"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal([]byte(jsonDoc), &doc); err != nil {
+		t.Fatalf("peer status --json emitted invalid JSON: %v\n%s", err, jsonDoc)
+	}
+	return doc.Job.State
 }
