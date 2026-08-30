@@ -2,12 +2,45 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
+
+func TestPeerSetupRejectsNonDarwinBeforeMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	plist := filepath.Join(home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const seeded = "seeded before non-darwin rejection"
+	if err := os.WriteFile(plist, []byte(seeded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newPeerSetupCmdForOS("linux")
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "requires macOS launchd") {
+		t.Fatalf("non-darwin error = %v, want macOS launchd guidance", err)
+	}
+	body, readErr := os.ReadFile(plist)
+	if readErr != nil || string(body) != seeded {
+		t.Fatalf("non-darwin setup changed plist: body=%q err=%v", body, readErr)
+	}
+	for _, bootstrapArtifact := range []string{
+		filepath.Join(home, "workspace", "work", ".dotfiles", PeerProfile),
+		filepath.Join(home, ".config", "dotfiles"),
+	} {
+		if _, statErr := os.Stat(bootstrapArtifact); !os.IsNotExist(statErr) {
+			t.Fatalf("non-darwin setup reached Bootstrap and created %s: %v", bootstrapArtifact, statErr)
+		}
+	}
+}
 
 func TestPrintPeerScheduleDryRunTargetUserGuidance(t *testing.T) {
 	for _, off := range []bool{false, true} {

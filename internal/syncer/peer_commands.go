@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,8 +15,6 @@ import (
 // Peer deletions are normally tens of inbox paths. Keep the new-profile cap
 // well below the mirror's broader 1000-path default.
 const peerDefaultMaxDelete = 100
-
-var peerScheduleGOOS = runtime.GOOS
 
 // peerAllowHeader seeds the peer profile's allow.txt. The cloud mirror keeps
 // secrets out; a peer is a second machine the operator already trusts with the
@@ -552,9 +549,6 @@ type PeerScheduleResult struct {
 // PeerSchedule installs or removes the periodic `dot peer sync` job.
 func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleResult, error) {
 	cfg, runner := opts.Config, opts.Runner
-	if peerScheduleGOOS != "darwin" {
-		return nil, fmt.Errorf("peer scheduler requires macOS launchd (host OS %s); no scheduler artifact was changed", peerScheduleGOOS)
-	}
 	plist := filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist")
 	if err := validateSchedulerMutationHome(cfg.Home); err != nil {
 		return nil, fmt.Errorf("peer scheduler home %q rejected for plist %s: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", cfg.Home, plist, err)

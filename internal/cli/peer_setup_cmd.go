@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -76,6 +77,10 @@ inbound port, which is what a laptop needs.`,
 }
 
 func newPeerSetupCmd() *cobra.Command {
+	return newPeerSetupCmdForOS(runtime.GOOS)
+}
+
+func newPeerSetupCmdForOS(goos string) *cobra.Command {
 	var interval time.Duration
 	var off bool
 	cmd := &cobra.Command{
@@ -90,6 +95,9 @@ no-op runs rather than failures. That is why this can be scheduled at all.
 Pick an interval in minutes, not seconds: the payload is large and each run
 walks the whole tree.`,
 		RunE: func(c *cobra.Command, _ []string) error {
+			if goos != "darwin" {
+				return fmt.Errorf("peer scheduler requires macOS launchd (host OS %s); no scheduler artifact was changed", goos)
+			}
 			p := printerFrom(c)
 			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {

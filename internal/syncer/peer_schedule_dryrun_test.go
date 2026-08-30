@@ -188,45 +188,6 @@ func TestPeerSchedule_DryRunExplicitHomeReportsTargetUserAction(t *testing.T) {
 	}
 }
 
-func TestPeerSchedule_RejectsNonDarwinBeforeMutation(t *testing.T) {
-	previous := peerScheduleGOOS
-	peerScheduleGOOS = "linux"
-	t.Cleanup(func() { peerScheduleGOOS = previous })
-
-	for _, off := range []bool{false, true} {
-		t.Run(fmt.Sprintf("off=%t", off), func(t *testing.T) {
-			cfg, plist := peerScheduleSandbox(t)
-			if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			const seeded = "seeded before non-darwin rejection"
-			if err := os.WriteFile(plist, []byte(seeded), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			record := filepath.Join(t.TempDir(), "launchctl-args")
-			t.Setenv("DOTFILES_TEST_LAUNCHCTL_ARGS", record)
-
-			res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
-				Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false),
-				Interval: 15 * time.Minute, Off: off,
-			})
-			if err == nil || !strings.Contains(err.Error(), "requires macOS launchd") {
-				t.Fatalf("non-darwin error = %v, want macOS launchd guidance", err)
-			}
-			if res != nil {
-				t.Fatalf("non-darwin rejection returned result: %+v", res)
-			}
-			body, readErr := os.ReadFile(plist)
-			if readErr != nil || string(body) != seeded {
-				t.Fatalf("non-darwin rejection changed plist: body=%q err=%v", body, readErr)
-			}
-			if got, readErr := os.ReadFile(record); readErr == nil || !os.IsNotExist(readErr) {
-				t.Fatalf("non-darwin rejection invoked launchctl: %q (read error %v)", got, readErr)
-			}
-		})
-	}
-}
-
 func TestPeerSchedule_OffRunnerDryRunKeepsPlist(t *testing.T) {
 	cfg, plist := peerScheduleSandbox(t)
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {

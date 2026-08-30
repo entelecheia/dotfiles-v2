@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -283,8 +284,12 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	if got := schedulerIntervalSeconds(t, out); got != 0 {
 		t.Errorf("peer status --home reported the invoking user's scheduler interval %d:\n%s", got, out)
 	}
-	if !strings.Contains(out, "not installed") {
-		t.Errorf("peer status --home did not report the target home's (absent) scheduler:\n%s", out)
+	wantAbsentState := syncer.SchedulerNotInstalled.String()
+	if runtime.GOOS != "darwin" {
+		wantAbsentState = peerSchedulerUnsupportedState
+	}
+	if got := schedulerState(t, out); got != wantAbsentState {
+		t.Errorf("peer status --home state = %q, want %q for the target home's absent scheduler:\n%s", got, wantAbsentState, out)
 	}
 
 	writeCLITestFile(t, filepath.Join(target, "Library", "LaunchAgents", "com.dotfiles.peer.plist"),
@@ -293,11 +298,17 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer status --json --home with plist: %v\nstderr=%s", err, errOut)
 	}
-	if got := schedulerIntervalSeconds(t, out); got != 600 {
-		t.Errorf("peer status --home interval = %d, want target plist interval 600:\n%s", got, out)
+	wantTargetInterval := 600
+	wantTargetState := syncer.SchedulerTargetUserActionRequired.String()
+	if runtime.GOOS != "darwin" {
+		wantTargetInterval = 0
+		wantTargetState = peerSchedulerUnsupportedState
 	}
-	if got := schedulerState(t, out); got != syncer.SchedulerTargetUserActionRequired.String() {
-		t.Errorf("peer status --home state = %q, want target-user action state:\n%s", got, out)
+	if got := schedulerIntervalSeconds(t, out); got != wantTargetInterval {
+		t.Errorf("peer status --home interval = %d, want %d for this platform:\n%s", got, wantTargetInterval, out)
+	}
+	if got := schedulerState(t, out); got != wantTargetState {
+		t.Errorf("peer status --home state = %q, want %q:\n%s", got, wantTargetState, out)
 	}
 
 	// Non-vacuity: the same document does report the process home's plist.
@@ -305,8 +316,12 @@ func TestPeerStatusSchedulerHonorsHomeFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer status --json: %v\nstderr=%s", err, errOut)
 	}
-	if got := schedulerIntervalSeconds(t, out); got != 900 {
-		t.Errorf("peer status without the flag read intervalSeconds=%d, want 900 from the process home's plist:\n%s", got, out)
+	wantInvokerInterval := 900
+	if runtime.GOOS != "darwin" {
+		wantInvokerInterval = 0
+	}
+	if got := schedulerIntervalSeconds(t, out); got != wantInvokerInterval {
+		t.Errorf("peer status without the flag read intervalSeconds=%d, want %d for this platform:\n%s", got, wantInvokerInterval, out)
 	}
 }
 
