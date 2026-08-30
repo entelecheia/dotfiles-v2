@@ -377,3 +377,112 @@ func TestSingleXDGConfigHomeRead(t *testing.T) {
 		t.Errorf("os.Getenv(%q) call count = %d, want 1 — a second place now decides a path from this variable:\n  %s", configHomeVar, len(sites), strings.Join(sites, "\n  "))
 	}
 }
+
+type configResolver struct {
+	file       string
+	name       string
+	line       int
+	hasHome    bool
+	hasProfile bool
+}
+
+func collectConfigResolvers(dir string) ([]configResolver, int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	fset := token.NewFileSet()
+	var resolvers []configResolver
+	parsed := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return nil, 0, err
+		}
+		parsed++
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Type.Results == nil {
+				continue
+			}
+			returnsConfig := false
+			for _, result := range fn.Type.Results.List {
+				star, ok := result.Type.(*ast.StarExpr)
+				if !ok {
+					continue
+				}
+				ident, ok := star.X.(*ast.Ident)
+				if ok && ident.Name == "Config" {
+					returnsConfig = true
+					break
+				}
+			}
+			if !returnsConfig {
+				continue
+			}
+			resolver := configResolver{
+				file: name,
+				name: qualifiedDeclName(fn),
+				line: fset.Position(fn.Pos()).Line,
+			}
+			for _, field := range fn.Type.Params.List {
+				for _, param := range field.Names {
+					switch param.Name {
+					case "home":
+						resolver.hasHome = true
+					case "profile":
+						resolver.hasProfile = true
+					}
+				}
+			}
+			resolvers = append(resolvers, resolver)
+		}
+	}
+	return resolvers, parsed, nil
+}
+
+// TestNoPartialConfigResolver closes the Config-family partial resolver class
+// structurally: the compiler cannot refuse a new resolver that silently defaults
+// one of home or profile. This deliberately bypasses resolutionAllowlist because
+// that list permits call-site-bearing definition sites; a seventh entry would turn
+// RES-03 into the enumerated table it rules out.
+//
+// ponytail: known ceiling. This predicate keys parameter checks on names, so aliases
+// or options structs read as neither, and wrapper return types are not selected. The
+// package naming convention and review mitigate those residuals without a type-aware
+// analyzer dependency. Methods are deliberately included: a receiver does not excuse
+// deriving a Config from just one of home or profile.
+func TestNoPartialConfigResolver(t *testing.T) {
+	dir := "."
+	resolvers, parsed, err := collectConfigResolvers(dir)
+	if err != nil {
+		t.Fatalf("parsing %s production sources: %v", dir, err)
+	}
+	if parsed == 0 {
+		t.Fatalf("parsed zero production files in %s: the check would report success without measuring anything", dir)
+	}
+	if len(resolvers) == 0 {
+		t.Fatalf("examined zero Config-family declarations in %s: the check would report success without measuring anything", dir)
+	}
+
+	var findings []string
+	for _, resolver := range resolvers {
+		if resolver.hasHome == resolver.hasProfile {
+			continue
+		}
+		named := "home"
+		if resolver.hasProfile {
+			named = "profile"
+		}
+		findings = append(findings, fmt.Sprintf("internal/syncer/%s:%d: %s names %s", resolver.file, resolver.line, resolver.name, named))
+	}
+	sort.Strings(findings)
+	if len(findings) > 0 {
+		t.Errorf("Config resolver declaration(s) name exactly one of home and profile, silently defaulting the other to the invoking user's home:\n  %s\ndelete the partial resolver rather than naming it anywhere; ResolveConfigForHomeProfile already exists for the case where only one is known", strings.Join(findings, "\n  "))
+	}
+}

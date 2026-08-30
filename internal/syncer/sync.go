@@ -152,13 +152,6 @@ func ResolveConfig(state *config.UserState) (*Config, error) {
 	return resolveConfig(state, true, "", DefaultProfile)
 }
 
-// ResolveConfigForProfile resolves one named sync profile. Each profile has its
-// own store under <workspace>/.dotfiles/<profile>/, so its target, filters,
-// baseline, lock and scheduler unit are independent of every other profile.
-func ResolveConfigForProfile(state *config.UserState, profile string) (*Config, error) {
-	return resolveConfig(state, true, "", profile)
-}
-
 // ResolveConfigReadOnly resolves the same runtime values without creating
 // the local store, migrating global config, or healing .gitignore. Use it for
 // status/list commands that must not mutate the workspace.
@@ -166,7 +159,7 @@ func ResolveConfigReadOnly(state *config.UserState) (*Config, error) {
 	return resolveConfig(state, false, "", DefaultProfile)
 }
 
-// ResolveConfigForHomeProfile is ResolveConfigForProfile with an explicit home
+// ResolveConfigForHomeProfile resolves one named sync profile against an explicit home
 // directory instead of os.UserHomeDir(). Commands that honor --home must use it
 // so they operate on the target user's workspace rather than the invoking
 // user's. An empty home falls back to the current user's.
