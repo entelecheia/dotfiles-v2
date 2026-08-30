@@ -378,22 +378,215 @@ func TestSingleXDGConfigHomeRead(t *testing.T) {
 	}
 }
 
-type configResolver struct {
-	file       string
-	name       string
-	line       int
-	hasHome    bool
-	hasProfile bool
+// configInputSet records which formal parameter positions can influence an
+// expression. Parameter spelling is deliberately absent from this type: a
+// selector such as opts.Target derives from opts exactly as a local alias does.
+type configInputSet map[int]struct{}
+
+// configObject preserves parser-resolved lexical identity without requiring a
+// type checker for a production-only source inventory.
+//
+//nolint:staticcheck // ast.Object is the parser's lexical-object contract here.
+type configObject ast.Object
+
+func configObjectFor(ident *ast.Ident) *configObject {
+	if ident == nil || ident.Obj == nil {
+		return nil
+	}
+	return (*configObject)(ident.Obj)
 }
 
-func collectConfigResolvers(dir string) ([]configResolver, int, error) {
+func cloneConfigInputSet(in configInputSet) configInputSet {
+	out := make(configInputSet, len(in))
+	for index := range in {
+		out[index] = struct{}{}
+	}
+	return out
+}
+
+func unionConfigInputSets(sets ...configInputSet) configInputSet {
+	out := configInputSet{}
+	for _, set := range sets {
+		for index := range set {
+			out[index] = struct{}{}
+		}
+	}
+	return out
+}
+
+type configFlowSummary struct {
+	home    configInputSet
+	profile configInputSet
+}
+
+type configFlowFinding struct {
+	file      string
+	line      int
+	enclosing string
+	callee    string
+	derived   string
+}
+
+func (f configFlowFinding) String() string {
+	return fmt.Sprintf("%s:%d: %s -> %s: %s derives from caller input while %s is defaulted", f.file, f.line, f.enclosing, f.callee, f.derived, map[string]string{"home": "profile", "profile": "home"}[f.derived])
+}
+
+type configResolverDecl struct {
+	file   string
+	fset   *token.FileSet
+	decl   *ast.FuncDecl
+	key    string
+	name   string
+	params []*configObject
+}
+
+type configFlowState struct {
+	inputs  map[*configObject]configInputSet
+	aliases map[*configObject]configFunctionAlias
+}
+
+type configFunctionAlias struct {
+	targets    map[string]struct{}
+	unresolved bool
+}
+
+type configCall struct {
+	line       int
+	targets    []string
+	unresolved bool
+	args       []ast.Expr
+	inputs     map[*configObject]configInputSet
+}
+
+func cloneConfigFlowState(in configFlowState) configFlowState {
+	out := configFlowState{inputs: make(map[*configObject]configInputSet, len(in.inputs)), aliases: make(map[*configObject]configFunctionAlias, len(in.aliases))}
+	for object, set := range in.inputs {
+		out.inputs[object] = cloneConfigInputSet(set)
+	}
+	for object, alias := range in.aliases {
+		out.aliases[object] = cloneConfigFunctionAlias(alias)
+	}
+	return out
+}
+
+func cloneConfigFunctionAlias(in configFunctionAlias) configFunctionAlias {
+	out := configFunctionAlias{targets: make(map[string]struct{}, len(in.targets)), unresolved: in.unresolved}
+	for target := range in.targets {
+		out.targets[target] = struct{}{}
+	}
+	return out
+}
+
+func mergeConfigFlowStates(left, right configFlowState) configFlowState {
+	out := cloneConfigFlowState(left)
+	for object, set := range right.inputs {
+		out.inputs[object] = unionConfigInputSets(out.inputs[object], set)
+	}
+	for object, alias := range right.aliases {
+		merged := out.aliases[object]
+		if merged.targets == nil {
+			merged.targets = map[string]struct{}{}
+		}
+		for target := range alias.targets {
+			merged.targets[target] = struct{}{}
+		}
+		merged.unresolved = merged.unresolved || alias.unresolved
+		out.aliases[object] = merged
+	}
+	return out
+}
+
+// configExprInputs evaluates lexical provenance. It recursively reads selector
+// bases and unions children, so callers cannot hide a parameter behind an alias,
+// options struct, composite value, or ordinary expression shape.
+func configExprInputs(expr ast.Expr, inputs map[*configObject]configInputSet) configInputSet {
+	if expr == nil {
+		return configInputSet{}
+	}
+	switch value := expr.(type) {
+	case *ast.Ident:
+		return cloneConfigInputSet(inputs[configObjectFor(value)])
+	case *ast.SelectorExpr:
+		return configExprInputs(value.X, inputs)
+	case *ast.ParenExpr:
+		return configExprInputs(value.X, inputs)
+	case *ast.UnaryExpr:
+		return configExprInputs(value.X, inputs)
+	case *ast.StarExpr:
+		return configExprInputs(value.X, inputs)
+	case *ast.IndexExpr:
+		return unionConfigInputSets(configExprInputs(value.X, inputs), configExprInputs(value.Index, inputs))
+	case *ast.IndexListExpr:
+		sets := []configInputSet{configExprInputs(value.X, inputs)}
+		for _, index := range value.Indices {
+			sets = append(sets, configExprInputs(index, inputs))
+		}
+		return unionConfigInputSets(sets...)
+	case *ast.SliceExpr:
+		return unionConfigInputSets(configExprInputs(value.X, inputs), configExprInputs(value.Low, inputs), configExprInputs(value.High, inputs), configExprInputs(value.Max, inputs))
+	case *ast.CallExpr:
+		sets := make([]configInputSet, 0, len(value.Args)+1)
+		sets = append(sets, configExprInputs(value.Fun, inputs))
+		for _, arg := range value.Args {
+			sets = append(sets, configExprInputs(arg, inputs))
+		}
+		return unionConfigInputSets(sets...)
+	case *ast.CompositeLit:
+		sets := make([]configInputSet, 0, len(value.Elts))
+		for _, element := range value.Elts {
+			sets = append(sets, configNodeInputs(element, inputs))
+		}
+		return unionConfigInputSets(sets...)
+	case *ast.BinaryExpr:
+		return unionConfigInputSets(configExprInputs(value.X, inputs), configExprInputs(value.Y, inputs))
+	case *ast.KeyValueExpr:
+		return unionConfigInputSets(configExprInputs(value.Key, inputs), configExprInputs(value.Value, inputs))
+	}
+	return configInputSet{}
+}
+
+func configNodeInputs(node ast.Node, inputs map[*configObject]configInputSet) configInputSet {
+	expr, ok := node.(ast.Expr)
+	if !ok {
+		return configInputSet{}
+	}
+	return configExprInputs(expr, inputs)
+}
+
+func isStructuralConfigConstructor(lit *ast.CompositeLit) (home, profile ast.Expr, ok bool) {
+	ident, ok := lit.Type.(*ast.Ident)
+	if !ok || ident.Name != "Config" {
+		return nil, nil, false
+	}
+	var hasHome, hasProfile, hasSystemPaths bool
+	for _, element := range lit.Elts {
+		field, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			return nil, nil, false
+		}
+		key, ok := field.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		switch key.Name {
+		case "Home":
+			home, hasHome = field.Value, true
+		case "Profile":
+			profile, hasProfile = field.Value, true
+		case "SystemPaths":
+			hasSystemPaths = true
+		}
+	}
+	return home, profile, hasHome && hasProfile && hasSystemPaths
+}
+
+func collectConfigResolverDecls(dir string) (map[string]configResolverDecl, int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, 0, err
 	}
-
 	fset := token.NewFileSet()
-	var resolvers []configResolver
+	decls := map[string]configResolverDecl{}
 	parsed := 0
 	for _, entry := range entries {
 		name := entry.Name()
@@ -405,84 +598,431 @@ func collectConfigResolvers(dir string) ([]configResolver, int, error) {
 			return nil, 0, err
 		}
 		parsed++
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Type.Results == nil {
+		for _, declaration := range file.Decls {
+			fn, ok := declaration.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
 				continue
 			}
-			returnsConfig := false
-			for _, result := range fn.Type.Results.List {
-				star, ok := result.Type.(*ast.StarExpr)
-				if !ok {
-					continue
-				}
-				ident, ok := star.X.(*ast.Ident)
-				if ok && ident.Name == "Config" {
-					returnsConfig = true
-					break
-				}
-			}
-			if !returnsConfig {
-				continue
-			}
-			resolver := configResolver{
-				file: name,
-				name: qualifiedDeclName(fn),
-				line: fset.Position(fn.Pos()).Line,
-			}
-			for _, field := range fn.Type.Params.List {
-				for _, param := range field.Names {
-					switch param.Name {
-					case "home":
-						resolver.hasHome = true
-					case "profile":
-						resolver.hasProfile = true
+			params := []*configObject{}
+			if fn.Type.Params != nil {
+				for _, field := range fn.Type.Params.List {
+					for _, parameter := range field.Names {
+						params = append(params, configObjectFor(parameter))
 					}
 				}
 			}
-			resolvers = append(resolvers, resolver)
+			name := qualifiedDeclName(fn)
+			key := entry.Name() + ":" + name
+			decls[key] = configResolverDecl{file: entry.Name(), fset: fset, decl: fn, key: key, name: name, params: params}
 		}
 	}
-	return resolvers, parsed, nil
+	return decls, parsed, nil
 }
 
-// TestNoPartialConfigResolver closes the Config-family partial resolver class
-// structurally: the compiler cannot refuse a new resolver that silently defaults
-// one of home or profile. This deliberately bypasses resolutionAllowlist because
-// that list permits call-site-bearing definition sites; a seventh entry would turn
-// RES-03 into the enumerated table it rules out.
-//
-// ponytail: known ceiling. This predicate keys parameter checks on names, so aliases
-// or options structs read as neither, and wrapper return types are not selected. The
-// package naming convention and review mitigate those residuals without a type-aware
-// analyzer dependency. Methods are deliberately included: a receiver does not excuse
-// deriving a Config from just one of home or profile.
-func TestNoPartialConfigResolver(t *testing.T) {
-	dir := "."
-	resolvers, parsed, err := collectConfigResolvers(dir)
-	if err != nil {
-		t.Fatalf("parsing %s production sources: %v", dir, err)
-	}
-	if parsed == 0 {
-		t.Fatalf("parsed zero production files in %s: the check would report success without measuring anything", dir)
-	}
-	if len(resolvers) == 0 {
-		t.Fatalf("examined zero Config-family declarations in %s: the check would report success without measuring anything", dir)
-	}
-
-	var findings []string
-	for _, resolver := range resolvers {
-		if resolver.hasHome == resolver.hasProfile {
+func configDirectTarget(decls map[string]configResolverDecl, name string) (string, bool) {
+	var target string
+	for key, decl := range decls {
+		if decl.name != name {
 			continue
 		}
-		named := "home"
-		if resolver.hasProfile {
-			named = "profile"
+		if target != "" {
+			return "", false
 		}
-		findings = append(findings, fmt.Sprintf("internal/syncer/%s:%d: %s names %s", resolver.file, resolver.line, resolver.name, named))
+		target = key
 	}
-	sort.Strings(findings)
-	if len(findings) > 0 {
-		t.Errorf("Config resolver declaration(s) name exactly one of home and profile, silently defaulting the other to the invoking user's home:\n  %s\ndelete the partial resolver rather than naming it anywhere; ResolveConfigForHomeProfile already exists for the case where only one is known", strings.Join(findings, "\n  "))
+	return target, target != ""
+}
+
+func configInitialState(decl configResolverDecl) configFlowState {
+	state := configFlowState{inputs: map[*configObject]configInputSet{}, aliases: map[*configObject]configFunctionAlias{}}
+	for index, object := range decl.params {
+		if object != nil {
+			state.inputs[object] = configInputSet{index: {}}
+		}
 	}
+	return state
+}
+
+func configFunctionAliasFor(expr ast.Expr, state configFlowState, decls map[string]configResolverDecl) (configFunctionAlias, bool) {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return configFunctionAlias{}, false
+	}
+	if alias, ok := state.aliases[configObjectFor(ident)]; ok {
+		return cloneConfigFunctionAlias(alias), true
+	}
+	if target, ok := configDirectTarget(decls, ident.Name); ok {
+		return configFunctionAlias{targets: map[string]struct{}{target: {}}}, true
+	}
+	return configFunctionAlias{}, false
+}
+
+func bindConfigIdentifier(left *ast.Ident, right ast.Expr, state *configFlowState, decls map[string]configResolverDecl) {
+	object := configObjectFor(left)
+	if object == nil {
+		return
+	}
+	state.inputs[object] = configExprInputs(right, state.inputs)
+	if alias, ok := configFunctionAliasFor(right, *state, decls); ok {
+		state.aliases[object] = alias
+	} else if _, wasAlias := state.aliases[object]; wasAlias {
+		state.aliases[object] = configFunctionAlias{targets: map[string]struct{}{}, unresolved: true}
+	} else {
+		delete(state.aliases, object)
+	}
+}
+
+func configCallFor(call *ast.CallExpr, state configFlowState, decls map[string]configResolverDecl) configCall {
+	out := configCall{args: call.Args, inputs: cloneConfigFlowState(state).inputs}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		if alias, ok := state.aliases[configObjectFor(ident)]; ok {
+			out.unresolved = alias.unresolved
+			for target := range alias.targets {
+				out.targets = append(out.targets, target)
+			}
+		} else if target, ok := configDirectTarget(decls, ident.Name); ok {
+			out.targets = []string{target}
+		}
+	}
+	sort.Strings(out.targets)
+	return out
+}
+
+func configSubstitute(summary configFlowSummary, callee configResolverDecl, call configCall) (configFlowSummary, error) {
+	substitute := func(set configInputSet) (configInputSet, error) {
+		out := configInputSet{}
+		for position := range set {
+			if position >= len(call.args) {
+				return nil, fmt.Errorf("callee %s summary references parameter %d but call has %d arguments", callee.name, position, len(call.args))
+			}
+			out = unionConfigInputSets(out, configExprInputs(call.args[position], call.inputs))
+		}
+		return out, nil
+	}
+	home, err := substitute(summary.home)
+	if err != nil {
+		return configFlowSummary{}, err
+	}
+	profile, err := substitute(summary.profile)
+	if err != nil {
+		return configFlowSummary{}, err
+	}
+	return configFlowSummary{home: home, profile: profile}, nil
+}
+
+type configDeclAnalysis struct {
+	constructors []configFlowSummary
+	calls        []configCall
+}
+
+func analyzeConfigDecl(decl configResolverDecl, decls map[string]configResolverDecl) configDeclAnalysis {
+	analysis := configDeclAnalysis{}
+	state := configInitialState(decl)
+	var walkExpr func(ast.Expr, configFlowState)
+	var walkStatements func([]ast.Stmt, *configFlowState)
+	walkExpr = func(expr ast.Expr, current configFlowState) {
+		if expr == nil {
+			return
+		}
+		ast.Inspect(expr, func(node ast.Node) bool {
+			if node == nil {
+				return false
+			}
+			if _, ok := node.(*ast.FuncLit); ok {
+				return false
+			}
+			switch value := node.(type) {
+			case *ast.CompositeLit:
+				if home, profile, ok := isStructuralConfigConstructor(value); ok {
+					analysis.constructors = append(analysis.constructors, configFlowSummary{home: configExprInputs(home, current.inputs), profile: configExprInputs(profile, current.inputs)})
+				}
+			case *ast.CallExpr:
+				call := configCallFor(value, current, decls)
+				call.line = decl.fset.Position(value.Pos()).Line
+				if len(call.targets) > 0 || call.unresolved {
+					analysis.calls = append(analysis.calls, call)
+				}
+			}
+			return true
+		})
+	}
+	walkStatements = func(statements []ast.Stmt, current *configFlowState) {
+		for _, statement := range statements {
+			switch value := statement.(type) {
+			case *ast.DeclStmt:
+				declaration, ok := value.Decl.(*ast.GenDecl)
+				if !ok {
+					continue
+				}
+				for _, spec := range declaration.Specs {
+					variable, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for index, name := range variable.Names {
+						if index < len(variable.Values) {
+							walkExpr(variable.Values[index], *current)
+							bindConfigIdentifier(name, variable.Values[index], current, decls)
+						}
+					}
+				}
+			case *ast.AssignStmt:
+				for _, right := range value.Rhs {
+					walkExpr(right, *current)
+				}
+				for index, left := range value.Lhs {
+					if index >= len(value.Rhs) {
+						break
+					}
+					if ident, ok := left.(*ast.Ident); ok {
+						bindConfigIdentifier(ident, value.Rhs[index], current, decls)
+					}
+				}
+			case *ast.ExprStmt:
+				walkExpr(value.X, *current)
+			case *ast.ReturnStmt:
+				for _, result := range value.Results {
+					walkExpr(result, *current)
+				}
+			case *ast.BlockStmt:
+				walkStatements(value.List, current)
+			case *ast.IfStmt:
+				if value.Init != nil {
+					walkStatements([]ast.Stmt{value.Init}, current)
+				}
+				walkExpr(value.Cond, *current)
+				thenState := cloneConfigFlowState(*current)
+				walkStatements(value.Body.List, &thenState)
+				elseState := cloneConfigFlowState(*current)
+				if block, ok := value.Else.(*ast.BlockStmt); ok {
+					walkStatements(block.List, &elseState)
+				} else if nested, ok := value.Else.(*ast.IfStmt); ok {
+					walkStatements([]ast.Stmt{nested}, &elseState)
+				}
+				*current = mergeConfigFlowStates(thenState, elseState)
+			case *ast.ForStmt:
+				loopState := cloneConfigFlowState(*current)
+				walkStatements(value.Body.List, &loopState)
+				*current = mergeConfigFlowStates(*current, loopState)
+			case *ast.RangeStmt:
+				walkExpr(value.X, *current)
+				loopState := cloneConfigFlowState(*current)
+				walkStatements(value.Body.List, &loopState)
+				*current = mergeConfigFlowStates(*current, loopState)
+			}
+		}
+	}
+	walkStatements(decl.decl.Body.List, &state)
+	return analysis
+}
+
+func equalConfigInputSets(left, right configInputSet) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if _, ok := right[index]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func equalConfigFlowSummaries(left, right configFlowSummary) bool {
+	return equalConfigInputSets(left.home, right.home) && equalConfigInputSets(left.profile, right.profile)
+}
+
+// collectConfigResolverFlows finds the single structural Config constructor,
+// seeds its home/profile roles from actual expressions, then propagates those
+// roles through every production declaration and simple function-value alias.
+func collectConfigResolverFlows(dir string) ([]configFlowFinding, int, error) {
+	decls, parsed, err := collectConfigResolverDecls(dir)
+	if err != nil {
+		return nil, 0, err
+	}
+	if parsed == 0 {
+		return nil, parsed, fmt.Errorf("parsed zero production files in %s: the check would report success without measuring anything", dir)
+	}
+
+	type constructor struct {
+		decl    configResolverDecl
+		summary configFlowSummary
+	}
+	constructors := []constructor{}
+	for _, decl := range decls {
+		for _, summary := range analyzeConfigDecl(decl, decls).constructors {
+			constructors = append(constructors, constructor{decl: decl, summary: summary})
+		}
+	}
+	if len(constructors) != 1 {
+		return nil, parsed, fmt.Errorf("structural Config constructor count = %d, want 1: the check cannot derive a unique home/profile boundary", len(constructors))
+	}
+
+	summaries := map[string]configFlowSummary{constructors[0].decl.key: constructors[0].summary}
+	for iteration := 0; iteration <= len(decls); iteration++ {
+		changed := false
+		for name, decl := range decls {
+			if name == constructors[0].decl.key {
+				continue
+			}
+			analysis := analyzeConfigDecl(decl, decls)
+			var summary configFlowSummary
+			known := false
+			for _, call := range analysis.calls {
+				for _, target := range call.targets {
+					targetSummary, ok := summaries[target]
+					if !ok {
+						continue
+					}
+					flow, err := configSubstitute(targetSummary, decls[target], call)
+					if err != nil {
+						return nil, parsed, fmt.Errorf("unresolved Config resolver summary in %s:%d: %w", decl.file, token.NoPos, err)
+					}
+					summary.home = unionConfigInputSets(summary.home, flow.home)
+					summary.profile = unionConfigInputSets(summary.profile, flow.profile)
+					known = true
+				}
+			}
+			_, exists := summaries[name]
+			if known && (!exists || !equalConfigFlowSummaries(summaries[name], summary)) {
+				summaries[name] = summary
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	var findings []configFlowFinding
+	for _, decl := range decls {
+		analysis := analyzeConfigDecl(decl, decls)
+		for _, call := range analysis.calls {
+			if call.unresolved {
+				return nil, parsed, fmt.Errorf("unresolved Config resolver summary in %s:%d: function-value alias has an unknown target", decl.file, call.line)
+			}
+			for _, target := range call.targets {
+				summary, ok := summaries[target]
+				if !ok {
+					continue
+				}
+				flow, err := configSubstitute(summary, decls[target], call)
+				if err != nil {
+					return nil, parsed, fmt.Errorf("unresolved Config resolver summary in %s:%d: %w", decl.file, call.line, err)
+				}
+				if (len(flow.home) == 0) == (len(flow.profile) == 0) {
+					continue
+				}
+				derived := "home"
+				if len(flow.home) == 0 {
+					derived = "profile"
+				}
+				findings = append(findings, configFlowFinding{file: decl.file, line: call.line, enclosing: decl.name, callee: decls[target].name, derived: derived})
+			}
+		}
+	}
+	sort.Slice(findings, func(i, j int) bool { return findings[i].String() < findings[j].String() })
+	return findings, parsed, nil
+}
+
+// TestNoPartialConfigResolver rejects a caller flow that supplies exactly one
+// role to the unique Config construction boundary. It deliberately bypasses
+// resolutionAllowlist: that list safeguards Paths definition sites, whereas
+// this guard discovers Config provenance without naming callers or wrappers.
+//
+// ponytail: known ceiling. Function-value aliases are followed when they are
+// simple local bindings; an alias with an unknown target fails closed rather
+// than being accepted as a default/default flow. Methods are included, and a
+// wrapper's result type is irrelevant because every production declaration is
+// scanned for calls into the discovered resolver graph.
+func TestNoPartialConfigResolver(t *testing.T) {
+	findings, _, err := collectConfigResolverFlows(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) == 0 {
+		return
+	}
+	formatted := make([]string, len(findings))
+	for index, finding := range findings {
+		formatted[index] = "internal/syncer/" + finding.String()
+	}
+	t.Errorf("partial Config resolver data flow found:\n  %s\npass both roles, default both roles at the single boundary, or read the already-resolved Config; do not add the enclosing function to resolutionAllowlist", strings.Join(formatted, "\n  "))
+}
+
+func TestConfigResolverInputFlow(t *testing.T) {
+	base := `package syncer
+type Config struct { Home, Profile string; SystemPaths any }
+const DefaultProfile = "sync"
+func resolveConfig(state any, migrate bool, home, profile string) (*Config, error) {
+	override := home
+	profile = normalize(profile)
+	return &Config{Home: override, Profile: profile, SystemPaths: nil}, nil
+}
+func normalize(value string) string { return value }
+`
+	tests := []struct {
+		name       string
+		source     string
+		want       string
+		wantErr    string
+		wantDerive string
+	}{
+		{"default_wrapper", `func defaults(state any) (*Config, error) { return resolveConfig(state, false, "", DefaultProfile) }`, "", "", ""},
+		{"direct_full_pair", `func paired(state any, target, selected string) (*Config, error) { return resolveConfig(state, false, target, selected) }`, "", "", ""},
+		{"full_options_pair", `type options struct { Home, Profile string }
+func optionsPair(state any, opts options) (*Config, error) { return resolveConfig(state, false, opts.Home, opts.Profile) }`, "", "", ""},
+		{"direct_partial", `func direct(state any, target string) (*Config, error) { return resolveConfig(state, false, target, DefaultProfile) }`, "direct", "", "home"},
+		{"aliased_parameter_partial", `func aliased(state any, target string) (*Config, error) { alias := target; return resolveConfig(state, false, alias, DefaultProfile) }`, "aliased", "", "home"},
+		{"options_struct_partial", `type options struct { Target string }
+func optionsPartial(state any, opts options) (*Config, error) { return resolveConfig(state, false, opts.Target, DefaultProfile) }`, "optionsPartial", "", "home"},
+		{"transitive_partial", `func paired(state any, target, selected string) (*Config, error) { return resolveConfig(state, false, target, selected) }
+func transitive(state any, target string) (*Config, error) { return paired(state, target, DefaultProfile) }`, "transitive", "", "home"},
+		{"wrapper_result_partial", `func wrapped(state any, target string) error { _, err := resolveConfig(state, false, target, DefaultProfile); return err }`, "wrapped", "", "home"},
+		{"zero_constructor", `func nothing() {}`, "", "structural Config constructor count = 0", ""},
+		{"multiple_constructors", `func another(state any, home, profile string) *Config { return &Config{Home: home, Profile: profile, SystemPaths: nil} }`, "", "structural Config constructor count = 2", ""},
+		{"unresolved_summary", `func unresolved(state any, target string) (*Config, error) { resolver := resolveConfig; resolver = nil; return resolver(state, false, target, DefaultProfile) }`, "", "unresolved Config resolver summary", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			source := base + tt.source
+			if tt.name == "zero_constructor" {
+				source = "package syncer\nfunc nothing() {}\n"
+			}
+			if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(source), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			findings, parsed, err := collectConfigResolverFlows(dir)
+			if parsed != 1 {
+				t.Fatalf("parsed production files = %d, want 1", parsed)
+			}
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == "" {
+				if len(findings) != 0 {
+					t.Fatalf("findings = %v, want none", findings)
+				}
+				return
+			}
+			if len(findings) != 1 || findings[0].enclosing != tt.want || findings[0].derived != tt.wantDerive {
+				t.Fatalf("findings = %v, want one for %s with %s derived", findings, tt.want, tt.wantDerive)
+			}
+		})
+	}
+
+	t.Run("zero_parsed_files", func(t *testing.T) {
+		_, _, err := collectConfigResolverFlows(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "parsed zero production files") {
+			t.Fatalf("error = %v, want parsed-file non-vacuity failure", err)
+		}
+	})
 }
