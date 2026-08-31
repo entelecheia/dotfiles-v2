@@ -24,6 +24,16 @@ const literalNonASCIIInstruction = "Emit non-ASCII text as the literal character
 
 func TestAgentsInitDefaultIncludesLiteralNonASCIIInstruction(t *testing.T) {
 	mgr, _ := testAgentsManager(t)
+	foundAuthoringSection := false
+	for _, section := range defaultAgentSections {
+		if section == "Text Encoding" {
+			foundAuthoringSection = true
+			break
+		}
+	}
+	if !foundAuthoringSection {
+		t.Fatal("Text Encoding missing from interactive authoring sections")
+	}
 
 	if _, err := mgr.Init(InitOptions{}); err != nil {
 		t.Fatalf("Init: %v", err)
