@@ -32,6 +32,7 @@ var defaultAgentSections = []string{
 	"Identity",
 	"How I Work",
 	"Writing Style",
+	"Text Encoding",
 	"Operating Principles",
 	"Project Conventions",
 	"Tool-Specific Notes",
