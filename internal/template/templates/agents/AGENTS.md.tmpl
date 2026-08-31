@@ -29,6 +29,13 @@ Describe preferred collaboration style, pacing, autonomy, and communication.
 - 공개 영문 카피(LinkedIn 등): 이모지 최소, 과장 수치 지양, 정제된 동사 사용.
 - 한국어 공식 문서(보고서·기안·계획서)는 개조식(명사형 종결) 작성.
 
+## Text Encoding
+
+Emit non-ASCII text as the literal characters themselves, in every tool-call parameter,
+file write, and shell command. Never hand-encode a codepoint (`\uXXXX`, `\xNN`, octal,
+HTML entity, percent-encoding), and never repair a non-ASCII typo by codepoint
+arithmetic; edit the literal characters instead.
+
 ## Operating Principles
 
 List durable rules the assistant should follow across tools and machines.

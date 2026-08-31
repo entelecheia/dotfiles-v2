@@ -17,6 +17,58 @@ func testAgentsManager(t *testing.T) (*AgentsManager, string) {
 	return NewAgentsManager(exec.NewRunner(false, slog.Default()), home), home
 }
 
+const literalNonASCIIInstruction = "Emit non-ASCII text as the literal characters themselves, in every tool-call parameter,\n" +
+	"file write, and shell command. Never hand-encode a codepoint (`\\uXXXX`, `\\xNN`, octal,\n" +
+	"HTML entity, percent-encoding), and never repair a non-ASCII typo by codepoint\n" +
+	"arithmetic; edit the literal characters instead."
+
+func TestAgentsInitDefaultIncludesLiteralNonASCIIInstruction(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+
+	if _, err := mgr.Init(InitOptions{}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	ssot, err := os.ReadFile(mgr.SSOTPath())
+	if err != nil {
+		t.Fatalf("read initialized SSOT: %v", err)
+	}
+	textEncoding := sectionBody(t, string(ssot), "Text Encoding", "Operating Principles")
+	if textEncoding != literalNonASCIIInstruction {
+		t.Fatalf("Text Encoding body = %q, want exact instruction %q", textEncoding, literalNonASCIIInstruction)
+	}
+	if strings.Contains(textEncoding, "Exception:") || strings.Contains(textEncoding, "Why:") || strings.Contains(textEncoding, "Keep in sync") {
+		t.Fatalf("Text Encoding contains removed qualification: %q", textEncoding)
+	}
+
+	for _, toolID := range []string{"claude", "codex"} {
+		rendered, err := mgr.Render(toolID)
+		if err != nil {
+			t.Fatalf("Render(%s): %v", toolID, err)
+		}
+		got := sectionBody(t, rendered, "Text Encoding", "Operating Principles")
+		if got != literalNonASCIIInstruction {
+			t.Fatalf("%s rendered Text Encoding = %q, want exact instruction %q", toolID, got, literalNonASCIIInstruction)
+		}
+	}
+}
+
+func sectionBody(t *testing.T, text, heading, nextHeading string) string {
+	t.Helper()
+	start := "## " + heading + "\n\n"
+	end := "\n\n## " + nextHeading
+	startIndex := strings.Index(text, start)
+	if startIndex < 0 {
+		t.Fatalf("missing %q heading", heading)
+	}
+	afterStart := text[startIndex+len(start):]
+	body, _, found := strings.Cut(afterStart, end)
+	if !found {
+		t.Fatalf("missing next %q heading", nextHeading)
+	}
+	return body
+}
+
 func TestAgentsApplyCopiesSSOTToTargets(t *testing.T) {
 	mgr, _ := testAgentsManager(t)
 	mustWrite(t, mgr.SSOTPath(), []byte("shared instructions\n"))
