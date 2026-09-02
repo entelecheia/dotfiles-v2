@@ -116,16 +116,27 @@ func assertOwnerOnlyMode(t *testing.T, path string, want os.FileMode) {
 	}
 }
 
+func multiplyLinked(t *testing.T, path string) bool {
+	t.Helper()
+	var st unix.Stat_t
+	if err := unix.Lstat(path, &st); err != nil {
+		t.Fatalf("lstat %s: %v", path, err)
+	}
+	return st.Nlink > 1
+}
+
 func assertBackupTreeOwnerOnly(t *testing.T, home string) {
 	t.Helper()
 	root := backupRoot(home)
 	assertOwnerOnlyMode(t, root, 0o700)
-	assertBackupEntriesOwnerOnly(t, root)
+	assertBackupEntriesOwnerOnly(t, root, true)
 }
 
-// assertBackupEntriesOwnerOnly walks a backup subtree: directories must be
-// 0700 and regular files 0600, and nothing else may appear.
-func assertBackupEntriesOwnerOnly(t *testing.T, dir string) {
+// assertBackupEntriesOwnerOnly walks a backup subtree. Directories must be
+// 0700 everywhere. A file directly in the root is one of backup()'s own
+// reservations and must be exactly 0600; below the root the snapshot keeps its
+// owner bits, so only group/world access must be gone.
+func assertBackupEntriesOwnerOnly(t *testing.T, dir string, root bool) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -140,9 +151,18 @@ func assertBackupEntriesOwnerOnly(t *testing.T, dir string) {
 		switch {
 		case info.IsDir():
 			assertOwnerOnlyMode(t, path, 0o700)
-			assertBackupEntriesOwnerOnly(t, path)
-		case info.Mode().IsRegular():
+			assertBackupEntriesOwnerOnly(t, path, false)
+		case info.Mode().IsRegular() && root:
 			assertOwnerOnlyMode(t, path, 0o600)
+		case info.Mode().IsRegular():
+			if multiplyLinked(t, path) {
+				// Skipped by design: the inode may be reachable outside the
+				// tree, and the 0700 ancestors already gate the subtree.
+				continue
+			}
+			if got := info.Mode().Perm() & 0o077; got != 0 {
+				t.Errorf("%s exposes group/world bits %04o", path, got)
+			}
 		case info.Mode()&os.ModeSymlink != 0:
 			// A snapshot payload symlink, skipped by design. The root refuses
 			// them outright; TestWriteHelpers_RejectsUnsafeBackupEntry covers that.
@@ -393,13 +413,27 @@ func TestWriteHelpers_HardensNestedBackupSubtree(t *testing.T) {
 			if err := os.WriteFile(snapshot, []byte("agent snapshot"), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			// A preserved hook: restore has to put it back runnable, so the
+			// owner's execute bit must survive hardening.
+			hook := filepath.Join(nested, "hooks", "session-start.sh")
+			if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(hook, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			// App snapshots (Raycast, for one) carry symlinks; they must be
-			// skipped, never followed, and never refused.
-			outside := filepath.Join(t.TempDir(), "outside-secret")
+			// skipped, never followed, and never refused. A hard link reaching
+			// an inode outside the tree must not be chmod'd either.
+			outsideDir := t.TempDir()
+			outside := filepath.Join(outsideDir, "outside-secret")
 			if err := os.WriteFile(outside, []byte("outside bytes"), 0o640); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Symlink(outside, filepath.Join(nested, "linked")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(outside, filepath.Join(nested, "hard-linked")); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join(home, ".config", "settings.toml")
@@ -419,7 +453,16 @@ func TestWriteHelpers_HardensNestedBackupSubtree(t *testing.T) {
 				t.Errorf("nested snapshot = %q, want preserved", got)
 			}
 			if info, err := os.Lstat(outside); err != nil || info.Mode().Perm() != 0o640 {
-				t.Errorf("symlink target mode = %v (err %v), want unchanged 0640", info, err)
+				t.Errorf("outside inode mode = %v (err %v), want unchanged 0640", info, err)
+			}
+			if info, err := os.Lstat(filepath.Join(nested, "hard-linked")); err != nil || info.Mode().Perm() != 0o640 {
+				t.Errorf("hard link mode = %v (err %v), want left alone at 0640", info, err)
+			}
+			if info, err := os.Lstat(hook); err != nil || info.Mode().Perm() != 0o700 {
+				t.Errorf("preserved hook mode = %v (err %v), want 0700", info, err)
+			}
+			if info, err := os.Lstat(snapshot); err != nil || info.Mode().Perm() != 0o600 {
+				t.Errorf("preserved snapshot mode = %v (err %v), want 0600", info, err)
 			}
 			assertBackupTreeOwnerOnly(t, home)
 		})

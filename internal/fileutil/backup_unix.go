@@ -161,12 +161,18 @@ func hardenBackupDirectory(dir *backupDirectory, dryRun bool) error {
 // already-held directory descriptor.
 //
 // strict is true only for the backup root, where backup() reserves its own
-// flat copies and anything else is a tamper signal. Below it the tree holds
-// opaque snapshot payloads written by the agents, app-settings and profile
-// features -- real application state that legitimately nests directories and
-// symlinks. There a directory is hardened to 0700 and descended into, and any
-// other non-regular entry is left alone: O_NOFOLLOW means it is never
-// followed, and the 0700 ancestors already keep the subtree owner-only.
+// flat copies at a known 0600 and anything else is a tamper signal. Below it
+// the tree holds opaque snapshot payloads written by the agents, app-settings
+// and profile features -- real application state that legitimately nests
+// directories and symlinks, and that restore has to put back verbatim. So the
+// lenient pass only removes group/world access and keeps each file's owner
+// bits: agent restores rename whole managed trees (.claude/hooks and plugin
+// dirs) in with their modes intact, and a flat 0600 would strip the execute
+// bit off every hook it preserved. Entries it cannot tighten safely are left
+// alone -- non-regular ones (O_NOFOLLOW means a symlink is never followed) and
+// multiply-linked regular files, whose inode may also be reachable outside the
+// tree. Nothing is exposed by skipping them: the 0700 ancestors already keep
+// the whole subtree owner-only.
 func hardenBackupEntries(dirFD int, dirPath string, dryRun, strict bool) error {
 	readFD, err := unix.Dup(dirFD)
 	if err != nil {
@@ -202,11 +208,16 @@ func hardenBackupEntries(dirFD int, dirPath string, dryRun, strict bool) error {
 			statErr = fmt.Errorf("must be a regular file or directory")
 		}
 		if statErr == nil && !dryRun {
-			mode := os.FileMode(0o600)
-			if isDir {
-				mode = 0o700
+			switch {
+			case isDir:
+				// Always traversable by the owner; a directory's bits are not
+				// application state worth preserving.
+				statErr = chmodBackupFD(entryFD, entryPath, 0o700)
+			case strict:
+				statErr = chmodBackupFD(entryFD, entryPath, 0o600)
+			case info.Nlink == 1:
+				statErr = chmodBackupFD(entryFD, entryPath, os.FileMode(info.Mode&0o700))
 			}
-			statErr = chmodBackupFD(entryFD, entryPath, mode)
 		}
 		var recurseErr error
 		if statErr == nil && isDir {
