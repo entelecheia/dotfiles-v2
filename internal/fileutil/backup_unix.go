@@ -154,38 +154,73 @@ func hardenBackupDirectory(dir *backupDirectory, dryRun bool) error {
 		}
 	}
 
-	readFD, err := unix.Dup(dir.fd)
+	return hardenBackupEntries(dir.fd, dir.path, dryRun, true)
+}
+
+// hardenBackupEntries applies the owner-only boundary to every entry below an
+// already-held directory descriptor.
+//
+// strict is true only for the backup root, where backup() reserves its own
+// flat copies and anything else is a tamper signal. Below it the tree holds
+// opaque snapshot payloads written by the agents, app-settings and profile
+// features -- real application state that legitimately nests directories and
+// symlinks. There a directory is hardened to 0700 and descended into, and any
+// other non-regular entry is left alone: O_NOFOLLOW means it is never
+// followed, and the 0700 ancestors already keep the subtree owner-only.
+func hardenBackupEntries(dirFD int, dirPath string, dryRun, strict bool) error {
+	readFD, err := unix.Dup(dirFD)
 	if err != nil {
-		return fmt.Errorf("duplicating backup directory %q for reading: %w", dir.path, err)
+		return fmt.Errorf("duplicating backup directory %q for reading: %w", dirPath, err)
 	}
-	readDir := os.NewFile(uintptr(readFD), dir.path)
+	readDir := os.NewFile(uintptr(readFD), dirPath)
 	entries, readErr := readDir.ReadDir(-1)
 	closeReadErr := readDir.Close()
 	if readErr != nil {
-		return fmt.Errorf("reading backup directory %q: %w", dir.path, readErr)
+		return fmt.Errorf("reading backup directory %q: %w", dirPath, readErr)
 	}
 	if closeReadErr != nil {
-		return fmt.Errorf("closing backup directory %q after reading: %w", dir.path, closeReadErr)
+		return fmt.Errorf("closing backup directory %q after reading: %w", dirPath, closeReadErr)
 	}
 	for _, entry := range entries {
-		entryFD, err := unix.Openat(dir.fd, entry.Name(), unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		entryPath := filepath.Join(dirPath, entry.Name())
+		entryFD, err := unix.Openat(dirFD, entry.Name(), unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
-			return fmt.Errorf("opening backup entry %q without following links: %w", filepath.Join(dir.path, entry.Name()), err)
+			if !strict && errors.Is(err, unix.ELOOP) {
+				continue // a symlink in a snapshot payload; never followed
+			}
+			return fmt.Errorf("opening backup entry %q without following links: %w", entryPath, err)
 		}
 		var info unix.Stat_t
 		statErr := unix.Fstat(entryFD, &info)
-		if statErr == nil && info.Mode&unix.S_IFMT != unix.S_IFREG {
-			statErr = fmt.Errorf("must be a regular file")
+		isDir := statErr == nil && info.Mode&unix.S_IFMT == unix.S_IFDIR
+		isRegular := statErr == nil && info.Mode&unix.S_IFMT == unix.S_IFREG
+		if statErr == nil && !isDir && !isRegular {
+			if !strict {
+				_ = unix.Close(entryFD)
+				continue
+			}
+			statErr = fmt.Errorf("must be a regular file or directory")
 		}
 		if statErr == nil && !dryRun {
-			statErr = chmodBackupFD(entryFD, filepath.Join(dir.path, entry.Name()), 0o600)
+			mode := os.FileMode(0o600)
+			if isDir {
+				mode = 0o700
+			}
+			statErr = chmodBackupFD(entryFD, entryPath, mode)
+		}
+		var recurseErr error
+		if statErr == nil && isDir {
+			recurseErr = hardenBackupEntries(entryFD, entryPath, dryRun, false)
 		}
 		closeErr := unix.Close(entryFD)
 		if statErr != nil {
-			return fmt.Errorf("hardening backup entry %q: %w", filepath.Join(dir.path, entry.Name()), statErr)
+			return fmt.Errorf("hardening backup entry %q: %w", entryPath, statErr)
+		}
+		if recurseErr != nil {
+			return recurseErr
 		}
 		if closeErr != nil {
-			return fmt.Errorf("closing backup entry %q: %w", filepath.Join(dir.path, entry.Name()), closeErr)
+			return fmt.Errorf("closing backup entry %q: %w", entryPath, closeErr)
 		}
 	}
 	return nil

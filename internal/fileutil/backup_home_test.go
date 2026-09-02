@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"golang.org/x/sys/unix"
 )
 
 func pinBackupClock(t *testing.T, instant time.Time) {
@@ -119,21 +120,35 @@ func assertBackupTreeOwnerOnly(t *testing.T, home string) {
 	t.Helper()
 	root := backupRoot(home)
 	assertOwnerOnlyMode(t, root, 0o700)
-	entries, err := os.ReadDir(root)
+	assertBackupEntriesOwnerOnly(t, root)
+}
+
+// assertBackupEntriesOwnerOnly walks a backup subtree: directories must be
+// 0700 and regular files 0600, and nothing else may appear.
+func assertBackupEntriesOwnerOnly(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("read backup root %s: %v", root, err)
+		t.Fatalf("read backup dir %s: %v", dir, err)
 	}
 	for _, entry := range entries {
-		path := filepath.Join(root, entry.Name())
+		path := filepath.Join(dir, entry.Name())
 		info, err := os.Lstat(path)
 		if err != nil {
 			t.Fatalf("lstat %s: %v", path, err)
 		}
-		if !info.Mode().IsRegular() {
-			t.Errorf("backup entry %s mode = %s, want regular file", path, info.Mode())
-			continue
+		switch {
+		case info.IsDir():
+			assertOwnerOnlyMode(t, path, 0o700)
+			assertBackupEntriesOwnerOnly(t, path)
+		case info.Mode().IsRegular():
+			assertOwnerOnlyMode(t, path, 0o600)
+		case info.Mode()&os.ModeSymlink != 0:
+			// A snapshot payload symlink, skipped by design. The root refuses
+			// them outright; TestWriteHelpers_RejectsUnsafeBackupEntry covers that.
+		default:
+			t.Errorf("backup entry %s mode = %s, want regular file or directory", path, info.Mode())
 		}
-		assertOwnerOnlyMode(t, path, 0o600)
 	}
 }
 
@@ -362,9 +377,58 @@ func TestWriteHelpers_HardensExistingBackupPermissions(t *testing.T) {
 	}
 }
 
+// dot's own features (agents, app-settings, profile restores) nest their
+// snapshots under the same backup root, so a subdirectory there must be
+// hardened and descended into rather than refused.
+func TestWriteHelpers_HardensNestedBackupSubtree(t *testing.T) {
+	for _, h := range writeHelpers {
+		t.Run(h.name, func(t *testing.T) {
+			_, home := twoHomes(t)
+			root := backupRoot(home)
+			nested := filepath.Join(root, "agents", "20260831T054202Z")
+			if err := os.MkdirAll(nested, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := filepath.Join(nested, "claude")
+			if err := os.WriteFile(snapshot, []byte("agent snapshot"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// App snapshots (Raycast, for one) carry symlinks; they must be
+			// skipped, never followed, and never refused.
+			outside := filepath.Join(t.TempDir(), "outside-secret")
+			if err := os.WriteFile(outside, []byte("outside bytes"), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(nested, "linked")); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(home, ".config", "settings.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("live before"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			runner, _ := runnerWithLog()
+			written, err := h.fn(runner, home, path, []byte("live after"), 0o644)
+			if err != nil || !written {
+				t.Fatalf("written=%t err=%v, want the backup to succeed beside a nested subtree", written, err)
+			}
+			if got, _ := os.ReadFile(snapshot); string(got) != "agent snapshot" {
+				t.Errorf("nested snapshot = %q, want preserved", got)
+			}
+			if info, err := os.Lstat(outside); err != nil || info.Mode().Perm() != 0o640 {
+				t.Errorf("symlink target mode = %v (err %v), want unchanged 0640", info, err)
+			}
+			assertBackupTreeOwnerOnly(t, home)
+		})
+	}
+}
+
 func TestWriteHelpers_RejectsUnsafeBackupEntry(t *testing.T) {
 	for _, h := range writeHelpers {
-		for _, kind := range []string{"symlink", "directory"} {
+		for _, kind := range []string{"symlink", "fifo"} {
 			t.Run(h.name+"/"+kind, func(t *testing.T) {
 				_, home := twoHomes(t)
 				root := backupRoot(home)
@@ -380,7 +444,7 @@ func TestWriteHelpers_RejectsUnsafeBackupEntry(t *testing.T) {
 					if err := os.Symlink(outside, unsafe); err != nil {
 						t.Fatal(err)
 					}
-				} else if err := os.Mkdir(unsafe, 0o700); err != nil {
+				} else if err := unix.Mkfifo(unsafe, 0o600); err != nil {
 					t.Fatal(err)
 				}
 				path := filepath.Join(home, ".config", "settings.toml")
