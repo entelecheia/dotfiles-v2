@@ -22,9 +22,11 @@ copilot-yolo() {
   command copilot --allow-all "$@"
 }
 
-# Kimi Code full-access mode (auto-approve tool calls)
+# Kimi Code full-access mode (Never Ask). Since kimi-code 0.40, --yolo only means
+# "Ask When Needed" (risky actions, questions, and plans still prompt); --auto is the
+# never-interrupt mode that matches the other *-yolo helpers.
 kimi-yolo() {
-  command kimi --yolo "$@"
+  command kimi --auto "$@"
 }
 
 # ── GitHub Models ──
