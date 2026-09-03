@@ -194,7 +194,7 @@ func TestRender_AIYoloHelpers(t *testing.T) {
 		"copilot-yolo() {",
 		`command copilot --allow-all "$@"`,
 		"kimi-yolo() {",
-		`command kimi --yolo "$@"`,
+		`command kimi --auto "$@"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Render shell/30-ai.sh.tmpl: expected %q in output, got:\n%s", want, content)
