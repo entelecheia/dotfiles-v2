@@ -24,6 +24,10 @@ type PushPlan struct {
 	SkippedPolicy []string
 	Conflicts     []PushConflict
 	Propagation   PropagationPolicy
+	// Placeholders counts mirror files whose content lives only in the
+	// provider's cloud. They are reported because a mirror that is mostly
+	// placeholders explains conflicts an operator cannot otherwise see.
+	Placeholders int
 }
 
 func (p *PushPlan) HasChanges() bool {
@@ -40,6 +44,9 @@ func (p *PushPlan) HasConflicts() bool {
 type planInventory struct {
 	files   map[string]Fingerprint
 	nonFile map[string]string
+	// dehydrated marks the files above that are cloud placeholders, probed
+	// once during the walk so the plan never pays for a second stat.
+	dehydrated map[string]bool
 }
 
 func PlanPush(cfg *Config) (*PushPlan, error) {
@@ -75,7 +82,7 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 		return nil, fmt.Errorf("scanning mirror: %w", err)
 	}
 
-	plan := &PushPlan{Propagation: cfg.Propagation}
+	plan := &PushPlan{Propagation: cfg.Propagation, Placeholders: len(mirrorInv.dehydrated)}
 	rels := unionKeys(localInv.files, mirrorInv.files)
 	for _, rel := range rels {
 		localFP, localOK := localInv.files[rel]
@@ -116,21 +123,50 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			}
 			base, ok := baseline[rel]
 			if !ok {
+				// Deleting here is destructive and the baseline cannot prove
+				// the path came from local, so this stays a conflict whether
+				// or not the mirror copy is a placeholder. A placeholder is
+				// only named so the operator can tell an evicted file from a
+				// mirror that genuinely diverged.
+				reason := "mirror-only file is not in baseline"
+				if mirrorInv.dehydrated[rel] {
+					reason = "mirror-only cloud placeholder is not in baseline"
+				}
 				plan.Conflicts = append(plan.Conflicts, PushConflict{
 					RelPath: rel, LocalPath: localAbs, MirrorPath: mirrorAbs,
-					Reason: "mirror-only file is not in baseline",
+					Reason: reason,
 				})
 				continue
 			}
 			if !FingerprintsCompatible(base, mirrorFP, mirrorAbs) {
+				// A placeholder never matches its baseline entry, but the
+				// verdict here is a deletion, so it keeps the conservative
+				// answer and only says which of the two it is.
+				reason := "mirror changed after baseline while local deleted"
+				if mirrorInv.dehydrated[rel] {
+					reason = "mirror is a cloud placeholder and local deleted the file"
+				}
 				plan.Conflicts = append(plan.Conflicts, PushConflict{
 					RelPath: rel, LocalPath: localAbs, MirrorPath: mirrorAbs,
-					Reason: "mirror changed after baseline while local deleted",
+					Reason: reason,
 				})
 				continue
 			}
 			plan.Deletes = append(plan.Deletes, rel)
 		case localOK && mirrorOK:
+			// An evicted twin carries no usable fingerprint, so it is
+			// classified before any comparison below - including the
+			// equal-fast-fingerprint shortcut, which an empty local file can
+			// otherwise take against a stub and skip the transfer entirely.
+			// The mirror is a derived copy, so local content rehydrates it.
+			if mirrorInv.dehydrated[rel] {
+				if !cfg.Propagation.Update {
+					plan.SkippedPolicy = append(plan.SkippedPolicy, rel)
+					continue
+				}
+				plan.Updates = append(plan.Updates, rel)
+				continue
+			}
 			if fingerprintsSame(localFP, mirrorFP) {
 				base, ok := baseline[rel]
 				if !ok || fingerprintsSameFast(base, localFP) {
@@ -183,8 +219,9 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 
 func collectPlanInventory(root string, filter *syncFilter, mode FingerprintMode) (*planInventory, error) {
 	inv := &planInventory{
-		files:   map[string]Fingerprint{},
-		nonFile: map[string]string{},
+		files:      map[string]Fingerprint{},
+		nonFile:    map[string]string{},
+		dehydrated: map[string]bool{},
 	}
 	err := filepath.WalkDir(root, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -243,6 +280,9 @@ func collectPlanInventory(root string, filter *syncFilter, mode FingerprintMode)
 			return err
 		}
 		inv.files[rel] = fp
+		if dehydratedFile(absPath, info) {
+			inv.dehydrated[rel] = true
+		}
 		return nil
 	})
 	if err != nil {
