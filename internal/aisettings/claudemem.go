@@ -324,9 +324,11 @@ func (m *ClaudeMemManager) kimiWatches() []transcriptWatch {
 		if !readJSONFile(statePath, &state) {
 			continue
 		}
-		workspace := state.WorkDir
+		// 0.40 records the live directory in `cwd`; `workDir` is the legacy
+		// field and can be stale, so it is only a fallback.
+		workspace := state.CWD
 		if workspace == "" {
-			workspace = state.CWD
+			workspace = state.WorkDir
 		}
 		if !isAbsoluteDirectory(workspace) {
 			continue

@@ -66,7 +66,7 @@ func TestClaudeMemBuildTranscriptConfigUsesKimiCWD(t *testing.T) {
 	mustMkdirAll(t, workspace)
 
 	session := filepath.Join(home, ".kimi-code", "sessions", "wd_test", "session_33333333-3333-3333-3333-333333333333")
-	mustWriteJSON(t, filepath.Join(session, "state.json"), map[string]any{"cwd": workspace})
+	mustWriteJSON(t, filepath.Join(session, "state.json"), map[string]any{"cwd": workspace, "workDir": filepath.Join(home, "work", "stale")})
 	mustWriteFile(t, filepath.Join(session, "agents", "main", "wire.jsonl"), "{}\n")
 
 	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
