@@ -154,6 +154,19 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			}
 			plan.Deletes = append(plan.Deletes, rel)
 		case localOK && mirrorOK:
+			// An evicted twin carries no usable fingerprint, so it is
+			// classified before any comparison below - including the
+			// equal-fast-fingerprint shortcut, which an empty local file can
+			// otherwise take against a stub and skip the transfer entirely.
+			// The mirror is a derived copy, so local content rehydrates it.
+			if mirrorInv.dehydrated[rel] {
+				if !cfg.Propagation.Update {
+					plan.SkippedPolicy = append(plan.SkippedPolicy, rel)
+					continue
+				}
+				plan.Updates = append(plan.Updates, rel)
+				continue
+			}
 			if fingerprintsSame(localFP, mirrorFP) {
 				base, ok := baseline[rel]
 				if !ok || fingerprintsSameFast(base, localFP) {
@@ -173,14 +186,6 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			}
 			if !cfg.Propagation.Update {
 				plan.SkippedPolicy = append(plan.SkippedPolicy, rel)
-				continue
-			}
-			// An evicted mirror twin is not evidence of a mirror-side edit:
-			// its size and hash describe the stub, so neither the baseline
-			// comparison below nor a conflict verdict can be drawn from it.
-			// The mirror is a derived copy, so local content rehydrates it.
-			if mirrorInv.dehydrated[rel] {
-				plan.Updates = append(plan.Updates, rel)
 				continue
 			}
 			base, ok := baseline[rel]

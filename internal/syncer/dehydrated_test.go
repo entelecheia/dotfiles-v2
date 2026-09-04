@@ -78,6 +78,32 @@ func TestPlanPushUpdatesAnEvictedMirrorTwin(t *testing.T) {
 	}
 }
 
+// A local file that is genuinely empty has the same fast fingerprint as a
+// stub, so the equal-fingerprint shortcut would skip the transfer and leave
+// the mirror representing whatever the cloud still holds for that path.
+func TestPlanPushUpdatesAnEvictedTwinOfAnEmptyLocalFile(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.writeLocal("docs/empty.md", "")
+	stub := filepath.Join(f.mirror, "docs/empty.md")
+	makePlaceholder(t, stub)
+	local := filepath.Join(f.local, "docs/empty.md")
+	info, err := os.Lstat(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(stub, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatalf("PlanPush: %v", err)
+	}
+	if len(plan.Updates) != 1 || plan.Updates[0] != "docs/empty.md" {
+		t.Fatalf("Updates = %v, want [docs/empty.md]", plan.Updates)
+	}
+}
+
 // Provenance is a separate question from hydration: the mirror-only path
 // still has nothing proving it came from local, so it must keep refusing.
 func TestPlanPushStillRefusesToDeleteAMirrorOnlyPlaceholder(t *testing.T) {
