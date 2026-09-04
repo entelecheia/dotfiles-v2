@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -80,28 +81,67 @@ func TestPlanPushUpdatesAnEvictedMirrorTwin(t *testing.T) {
 
 // A local file that is genuinely empty has the same fast fingerprint as a
 // stub, so the equal-fingerprint shortcut would skip the transfer and leave
-// the mirror representing whatever the cloud still holds for that path.
-func TestPlanPushUpdatesAnEvictedTwinOfAnEmptyLocalFile(t *testing.T) {
-	f := newIntakeFixture(t)
-	f.writeLocal("docs/empty.md", "")
-	stub := filepath.Join(f.mirror, "docs/empty.md")
-	makePlaceholder(t, stub)
-	local := filepath.Join(f.local, "docs/empty.md")
-	info, err := os.Lstat(local)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(stub, info.ModTime(), info.ModTime()); err != nil {
-		t.Fatal(err)
+// the mirror representing whatever the cloud still holds for that path. Only
+// a baseline that proves the last push shipped it empty settles that; without
+// one the transfer has to run.
+func TestPlanPushEvictedTwinOfAnEmptyLocalFile(t *testing.T) {
+	setup := func(t *testing.T) (*intakeFixture, time.Time) {
+		t.Helper()
+		f := newIntakeFixture(t)
+		f.writeLocal("docs/empty.md", "")
+		stub := filepath.Join(f.mirror, "docs/empty.md")
+		makePlaceholder(t, stub)
+		info, err := os.Lstat(filepath.Join(f.local, "docs/empty.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The stub keeps the mtime the mirror copy had, so the fast
+		// fingerprints match and only the baseline can break the tie.
+		if err := os.Chtimes(stub, info.ModTime(), info.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		return f, info.ModTime()
 	}
 
-	plan, err := PlanPush(f.cfg)
-	if err != nil {
-		t.Fatalf("PlanPush: %v", err)
-	}
-	if len(plan.Updates) != 1 || plan.Updates[0] != "docs/empty.md" {
-		t.Fatalf("Updates = %v, want [docs/empty.md]", plan.Updates)
-	}
+	t.Run("no baseline entry keeps the transfer", func(t *testing.T) {
+		f, _ := setup(t)
+		plan, err := PlanPush(f.cfg)
+		if err != nil {
+			t.Fatalf("PlanPush: %v", err)
+		}
+		if len(plan.Updates) != 1 || plan.Updates[0] != "docs/empty.md" {
+			t.Fatalf("Updates = %v, want [docs/empty.md]", plan.Updates)
+		}
+	})
+
+	t.Run("baseline recording content keeps the transfer", func(t *testing.T) {
+		f, mtime := setup(t)
+		f.seedBaseline("docs/empty.md", "content the cloud may still hold", mtime)
+		plan, err := PlanPush(f.cfg)
+		if err != nil {
+			t.Fatalf("PlanPush: %v", err)
+		}
+		if len(plan.Updates) != 1 || plan.Updates[0] != "docs/empty.md" {
+			t.Fatalf("Updates = %v, want [docs/empty.md]", plan.Updates)
+		}
+	})
+
+	// Otherwise the plan repeats this path forever: rsync's quick check
+	// matches the stub, so the mirror copy is never rewritten.
+	t.Run("baseline proving it was pushed empty plans nothing", func(t *testing.T) {
+		f, mtime := setup(t)
+		f.seedBaseline("docs/empty.md", "", mtime)
+		plan, err := PlanPush(f.cfg)
+		if err != nil {
+			t.Fatalf("PlanPush: %v", err)
+		}
+		if len(plan.Updates) != 0 || len(plan.SkippedPolicy) != 0 {
+			t.Fatalf("Updates = %v, SkippedPolicy = %v, want the proven-empty twin left alone", plan.Updates, plan.SkippedPolicy)
+		}
+		if len(plan.Conflicts) != 0 {
+			t.Fatalf("Conflicts = %+v, want none", plan.Conflicts)
+		}
+	})
 }
 
 // Provenance is a separate question from hydration: the mirror-only path

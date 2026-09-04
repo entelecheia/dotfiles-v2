@@ -160,6 +160,18 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			// otherwise take against a stub and skip the transfer entirely.
 			// The mirror is a derived copy, so local content rehydrates it.
 			if mirrorInv.dehydrated[rel] {
+				// An empty local file is the one case with nothing to
+				// rehydrate - but only when the baseline proves the last push
+				// shipped it empty, so the cloud object behind the stub is
+				// empty too. Without that proof the transfer still has to
+				// settle what the provider holds. Skipping on the local
+				// fingerprint alone would replan these forever: rsync's quick
+				// check matches the stub, so the mirror copy stays evicted.
+				if localFP.Size == 0 {
+					if base, ok := baseline[rel]; ok && FingerprintsCompatible(base, localFP, localAbs) {
+						continue
+					}
+				}
 				if !cfg.Propagation.Update {
 					plan.SkippedPolicy = append(plan.SkippedPolicy, rel)
 					continue
