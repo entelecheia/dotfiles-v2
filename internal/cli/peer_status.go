@@ -35,6 +35,7 @@ type peerStatusJSON struct {
 	Job           syncJobJSON    `json:"job"`
 	LastExitCode  *int           `json:"lastExitCode"`
 	RunCount      *int           `json:"runCount"`
+	LastHeldAt    *string        `json:"lastHeldAt"`
 	HomePathsPath string         `json:"homePathsPath"`
 }
 
@@ -98,6 +99,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 			Job:           job,
 			LastExitCode:  snapshot.LastExitCode,
 			RunCount:      snapshot.RunCount,
+			LastHeldAt:    timeJSON(st.LastHeld),
 			HomePathsPath: syncer.PeerHomePathsFile(cfg.LocalPaths),
 		})
 	}
@@ -114,6 +116,11 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	}
 	p.KV("Last pull", formatLastSync(st.LastPull))
 	p.KV("Last push", formatLastSync(st.LastPush))
+	if !st.LastHeld.IsZero() {
+		// A held run transferred files but left deletions pending, so the
+		// timestamps above must not be read as a clean exchange.
+		p.KV("Held transitions", formatLastSync(st.LastHeld))
+	}
 	p.KV("Conflicts", strconv.Itoa(len(st.Conflicts)))
 	return nil
 }

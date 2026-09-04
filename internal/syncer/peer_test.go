@@ -534,3 +534,59 @@ func TestPeerPlistCarriesTheScheduledRunMarker(t *testing.T) {
 		t.Fatal("the marker belongs in the plist's existing EnvironmentVariables dict")
 	}
 }
+
+func TestRecordPeerRunStampsOnlyTheLegsThatRan(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		pushOnly, pullOnly           bool
+		complete                     bool
+		wantPull, wantPush, wantHeld bool
+	}{
+		{name: "full clean run", complete: true, wantPull: true, wantPush: true},
+		{name: "push only", pushOnly: true, complete: true, wantPush: true},
+		{name: "pull only", pullOnly: true, complete: true, wantPull: true},
+		{name: "held transitions", wantPull: true, wantPush: true, wantHeld: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+			if err := recordPeerRun(paths, tc.pushOnly, tc.pullOnly, tc.complete); err != nil {
+				t.Fatal(err)
+			}
+			st, err := LoadLocalState(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := !st.LastPull.IsZero(); got != tc.wantPull {
+				t.Errorf("last_pull written = %v, want %v", got, tc.wantPull)
+			}
+			if got := !st.LastPush.IsZero(); got != tc.wantPush {
+				t.Errorf("last_push written = %v, want %v", got, tc.wantPush)
+			}
+			if got := !st.LastHeld.IsZero(); got != tc.wantHeld {
+				t.Errorf("last_held written = %v, want %v", got, tc.wantHeld)
+			}
+		})
+	}
+}
+
+// A clean run must retire the previous run's hold marker, or `peer status`
+// keeps reporting a held exchange that has since been completed.
+func TestRecordPeerRunClearsAnEarlierHold(t *testing.T) {
+	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+	if err := recordPeerRun(paths, false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordPeerRun(paths, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	st, err := LoadLocalState(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.LastHeld.IsZero() {
+		t.Fatalf("last_held = %s, want cleared by the clean run", st.LastHeld)
+	}
+	if st.LastPush.IsZero() || st.LastPull.IsZero() {
+		t.Fatalf("clean run did not stamp both legs: %+v", st)
+	}
+}

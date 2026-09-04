@@ -522,7 +522,39 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			return nil, err
 		}
 	}
+	if !dryRun {
+		// `peer sync` is its own engine path, so the timestamps `dot peer
+		// status` reads are stamped here. Every earlier exit - unreachable,
+		// a safety refusal, a partial transfer - returns before this point,
+		// which is what keeps status showing the last genuine exchange.
+		if err := recordPeerRun(cfg.LocalPaths, opts.PushOnly, opts.PullOnly, complete); err != nil {
+			return nil, err
+		}
+	}
 	return &PeerSyncResult{Complete: complete}, nil
+}
+
+// recordPeerRun stamps a finished peer run onto state.yaml. A held run still
+// moved bytes, so its legs are recorded, but LastHeld marks it as the
+// incomplete exchange it was; a clean run clears that mark.
+func recordPeerRun(paths *LocalPaths, pushOnly, pullOnly, complete bool) error {
+	now := time.Now().UTC()
+	if err := UpdateLocalState(paths, func(s *LocalState) {
+		if !pushOnly {
+			s.LastPull = now
+		}
+		if !pullOnly {
+			s.LastPush = now
+		}
+		if complete {
+			s.LastHeld = time.Time{}
+		} else {
+			s.LastHeld = now
+		}
+	}); err != nil {
+		return fmt.Errorf("peer state update: %w", err)
+	}
+	return nil
 }
 
 // PeerScheduleOptions controls PeerSchedule. Off removes the job; everything

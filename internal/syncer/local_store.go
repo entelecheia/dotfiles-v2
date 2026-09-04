@@ -166,6 +166,11 @@ type LocalState struct {
 	LastPush        time.Time `yaml:"last_push,omitempty"`
 	LastIntake      time.Time `yaml:"last_intake,omitempty"`
 	LastIntakeTSDir string    `yaml:"last_intake_ts_dir,omitempty"`
+	// LastHeld marks the most recent peer run that finished with destructive
+	// transitions held back. It is cleared by the next clean exchange, so
+	// `dot peer status` can tell a held run from a complete one instead of
+	// reading both as a successful sync.
+	LastHeld time.Time `yaml:"last_held,omitempty"`
 }
 
 // LocalPaths resolves every well-known path under
