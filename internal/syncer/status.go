@@ -33,8 +33,9 @@ type Status struct {
 	LastPush             time.Time
 	LastIntake           time.Time
 	LastIntakeTSDir      string
-	RsyncVersion         string // empty if not installed
-	LockHeld             bool   // someone has gsync.lock right now
+	LastHeld             time.Time // last peer run that held destructive transitions
+	RsyncVersion         string    // empty if not installed
+	LockHeld             bool      // someone has gsync.lock right now
 	MaxDelete            int
 	Interval             int
 	PullInterval         int            // 0 → no pull scheduler
@@ -95,6 +96,7 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		LastPush:           localState.LastPush,
 		LastIntake:         localState.LastIntake,
 		LastIntakeTSDir:    localState.LastIntakeTSDir,
+		LastHeld:           localState.LastHeld,
 		LockHeld:           pathExists(cfg.LockDir) && !lockIsStale(cfg.LockDir),
 		MaxDelete:          cfg.MaxDelete,
 		Interval:           cfg.Interval,
