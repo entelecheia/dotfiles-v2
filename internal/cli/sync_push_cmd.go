@@ -149,6 +149,11 @@ func printPushPlan(p *Printer, plan *syncer.PushPlan) {
 		p.Section(fmt.Sprintf("Skipped by propagation policy: %d", len(plan.SkippedPolicy)))
 		printPathList(p, plan.SkippedPolicy)
 	}
+	if plan.Placeholders > 0 {
+		// Without this an operator reading a conflict list has no way to see
+		// that most of the mirror is evicted rather than genuinely different.
+		p.Line("  %d mirror file(s) in the sync set are cloud placeholders — their content lives only in the provider's cloud.", plan.Placeholders)
+	}
 	if len(plan.Conflicts) > 0 {
 		p.Section(fmt.Sprintf("Drive conflicts: %d", len(plan.Conflicts)))
 		for _, c := range plan.Conflicts {

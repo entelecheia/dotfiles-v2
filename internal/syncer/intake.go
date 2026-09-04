@@ -359,6 +359,17 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 		walkRoot = local
 		requireLocalTwin = false
 	}
+	// A local baseline is rebuilt from the mirror, so an evicted file would
+	// otherwise be recorded as a 0-byte stub and every later local edit would
+	// read as divergence from it. Carrying the previous entry forward keeps
+	// the path proven without inventing a fingerprint no file ever had.
+	previous := map[string]Fingerprint{}
+	if !remoteBaseline {
+		previous, err = LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
+		if err != nil {
+			return fmt.Errorf("loading baseline: %w", err)
+		}
+	}
 	entries := map[string]Fingerprint{}
 	err = filepath.WalkDir(walkRoot, func(absPath string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -404,6 +415,19 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 			if err != nil || localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {
 				return nil
 			}
+		}
+		info, err := d.Info()
+		if err != nil {
+			if remoteBaseline {
+				return fmt.Errorf("stat %s: %w", rel, err)
+			}
+			return nil
+		}
+		if dehydratedFile(absPath, info) {
+			if prev, ok := previous[rel]; ok {
+				entries[rel] = prev
+			}
+			return nil
 		}
 		fp, err := FingerprintFile(absPath, mode)
 		if err != nil {
