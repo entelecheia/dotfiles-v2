@@ -272,8 +272,15 @@ func (p excludePattern) matches(rel string, isDir bool) bool {
 	return false
 }
 
+// normalizeRel canonicalizes a relative path's SHAPE - separators, a leading
+// "./", surrounding slashes - and nothing else. It must not trim whitespace:
+// a trailing space, and the CR that macOS Finder puts on the `Icon\r` file it
+// creates for every custom-icon folder, are legal name bytes. Trimming them
+// produced a path no stage could stat, so rsync exited 23 and took the whole
+// peer transaction with it. Callers that parse lines or config strip their own
+// framing before calling this.
 func normalizeRel(rel string) string {
-	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	rel = filepath.ToSlash(rel)
 	rel = strings.TrimPrefix(rel, "./")
 	rel = strings.Trim(rel, "/")
 	if rel == "." {
