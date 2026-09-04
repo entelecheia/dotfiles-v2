@@ -126,6 +126,26 @@ func TestPlanPushEvictedTwinOfAnEmptyLocalFile(t *testing.T) {
 		}
 	})
 
+	// A baseline a pre-2.70.8 refresh took from the stub itself would claim
+	// size 0 for a path whose cloud object still holds bytes. Local having
+	// changed since the mirror copy was written is what disqualifies it.
+	t.Run("local modified after the mirror copy keeps the transfer", func(t *testing.T) {
+		f, mtime := setup(t)
+		f.seedBaseline("docs/empty.md", "", mtime)
+		local := filepath.Join(f.local, "docs/empty.md")
+		newer := mtime.Add(2 * time.Minute)
+		if err := os.Chtimes(local, newer, newer); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := PlanPush(f.cfg)
+		if err != nil {
+			t.Fatalf("PlanPush: %v", err)
+		}
+		if len(plan.Updates) != 1 || plan.Updates[0] != "docs/empty.md" {
+			t.Fatalf("Updates = %v, want [docs/empty.md]", plan.Updates)
+		}
+	})
+
 	// Otherwise the plan repeats this path forever: rsync's quick check
 	// matches the stub, so the mirror copy is never rewritten.
 	t.Run("baseline proving it was pushed empty plans nothing", func(t *testing.T) {
