@@ -590,3 +590,33 @@ func TestRecordPeerRunClearsAnEarlierHold(t *testing.T) {
 		t.Fatalf("clean run did not stamp both legs: %+v", st)
 	}
 }
+
+// A one-way run never evaluates the deletions of the leg it skipped, so it
+// cannot retire a hold: clearing it there would report a resolved exchange
+// while the held transition is still pending.
+func TestRecordPeerRunKeepsHoldAcrossOneWayRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		pushOnly, pullOnly bool
+	}{
+		{name: "push only", pushOnly: true},
+		{name: "pull only", pullOnly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+			if err := recordPeerRun(paths, false, false, false); err != nil {
+				t.Fatal(err)
+			}
+			if err := recordPeerRun(paths, tc.pushOnly, tc.pullOnly, true); err != nil {
+				t.Fatal(err)
+			}
+			st, err := LoadLocalState(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.LastHeld.IsZero() {
+				t.Fatal("one-way run cleared a hold it never re-evaluated")
+			}
+		})
+	}
+}

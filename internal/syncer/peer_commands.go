@@ -536,7 +536,12 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 
 // recordPeerRun stamps a finished peer run onto state.yaml. A held run still
 // moved bytes, so its legs are recorded, but LastHeld marks it as the
-// incomplete exchange it was; a clean run clears that mark.
+// incomplete exchange it was.
+//
+// Only a two-way run clears that mark, for the same reason only a two-way run
+// commits the baseline: a --push-only run never evaluates plan.DeleteLocal and
+// a --pull-only run never evaluates plan.DeleteRemote, so neither can prove the
+// held transition it skipped has been resolved.
 func recordPeerRun(paths *LocalPaths, pushOnly, pullOnly, complete bool) error {
 	now := time.Now().UTC()
 	if err := UpdateLocalState(paths, func(s *LocalState) {
@@ -546,10 +551,11 @@ func recordPeerRun(paths *LocalPaths, pushOnly, pullOnly, complete bool) error {
 		if !pullOnly {
 			s.LastPush = now
 		}
-		if complete {
-			s.LastHeld = time.Time{}
-		} else {
+		switch {
+		case !complete:
 			s.LastHeld = now
+		case !pushOnly && !pullOnly:
+			s.LastHeld = time.Time{}
 		}
 	}); err != nil {
 		return fmt.Errorf("peer state update: %w", err)
