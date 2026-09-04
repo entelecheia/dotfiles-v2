@@ -160,6 +160,24 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			// otherwise take against a stub and skip the transfer entirely.
 			// The mirror is a derived copy, so local content rehydrates it.
 			if mirrorInv.dehydrated[rel] {
+				// An empty local file is the one case with nothing to
+				// rehydrate, and skipping it is what stops the plan from
+				// listing these forever: rsync's quick check matches the
+				// stub, so an update would never rewrite the mirror copy.
+				//
+				// Three things must hold before it may skip. Local is empty,
+				// so there is no content to send. The baseline knows the path
+				// as empty, so a push shipped it that way. And local has not
+				// changed since the mirror copy was written - that last one
+				// is what stops a baseline entry a pre-2.70.8 refresh may
+				// have taken from a stub from standing in as proof: a file
+				// truncated after that push carries the newer mtime and
+				// still transfers, which also rewrites the stub as a real
+				// empty file and ends the question for that path.
+				if base, ok := baseline[rel]; localFP.Size == 0 && ok &&
+					base.Size == 0 && !localFP.Mtime.After(mirrorFP.Mtime) {
+					continue
+				}
 				if !cfg.Propagation.Update {
 					plan.SkippedPolicy = append(plan.SkippedPolicy, rel)
 					continue
