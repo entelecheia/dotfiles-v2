@@ -319,8 +319,16 @@ func (m *ClaudeMemManager) kimiWatches() []transcriptWatch {
 	for _, statePath := range stateFiles {
 		var state struct {
 			WorkDir string `json:"workDir"`
+			CWD     string `json:"cwd"`
 		}
-		if !readJSONFile(statePath, &state) || !isAbsoluteDirectory(state.WorkDir) {
+		if !readJSONFile(statePath, &state) {
+			continue
+		}
+		workspace := state.WorkDir
+		if workspace == "" {
+			workspace = state.CWD
+		}
+		if !isAbsoluteDirectory(workspace) {
 			continue
 		}
 		wirePath := filepath.Join(filepath.Dir(statePath), "agents", "main", "wire.jsonl")
@@ -328,7 +336,7 @@ func (m *ClaudeMemManager) kimiWatches() []transcriptWatch {
 			continue
 		}
 		watches = append(watches, transcriptWatch{
-			Name: "kimi", Path: wirePath, Schema: "kimi", Workspace: state.WorkDir, StartAtEnd: false,
+			Name: "kimi", Path: wirePath, Schema: "kimi", Workspace: workspace, StartAtEnd: false,
 		})
 	}
 	return watches
@@ -423,12 +431,13 @@ func isAbsoluteDirectory(path string) bool {
 
 func kimiTranscriptSchema() transcriptSchema {
 	return transcriptSchema{
-		Name: "kimi", Version: "0.27", Description: "Kimi Code wire.jsonl session events.",
+		Name: "kimi", Version: "0.40", Description: "Kimi Code wire.jsonl session events.",
 		Events: []transcriptEvent{
 			{Name: "user-prompt", Match: equals("type", "turn.prompt"), Action: "session_init", Fields: map[string]any{"prompt": "input[0].text"}},
 			{Name: "assistant-text", Match: equals("event.part.type", "text"), Action: "assistant_message", Fields: map[string]any{"message": "event.part.text"}},
 			{Name: "tool-call", Match: equals("event.type", "tool.call"), Action: "tool_use", Fields: map[string]any{"toolId": "event.toolCallId", "toolName": "event.name", "toolInput": "event.args"}},
 			{Name: "tool-result", Match: equals("event.type", "tool.result"), Action: "tool_result", Fields: map[string]any{"toolId": "event.toolCallId", "toolResponse": map[string]any{"coalesce": []any{"event.result.output", "event.result"}}}},
+			{Name: "turn-ended", Match: equals("type", "turn.ended"), Action: "session_end"},
 			{Name: "canceled-turn", Match: equals("type", "turn.cancel"), Action: "session_end"},
 		},
 	}

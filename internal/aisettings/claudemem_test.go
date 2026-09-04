@@ -53,10 +53,32 @@ func TestClaudeMemBuildTranscriptConfigUsesSessionWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"turn.prompt", "event.toolCallId", "payload.toolCallId", "turn_end"} {
+	for _, want := range []string{"turn.prompt", "turn.ended", "turn.cancel", "event.toolCallId", "payload.toolCallId", "turn_end"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("schemas missing %q: %s", want, raw)
 		}
+	}
+}
+
+func TestClaudeMemBuildTranscriptConfigUsesKimiCWD(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(home, "work", "kimi-current")
+	mustMkdirAll(t, workspace)
+
+	session := filepath.Join(home, ".kimi-code", "sessions", "wd_test", "session_33333333-3333-3333-3333-333333333333")
+	mustWriteJSON(t, filepath.Join(session, "state.json"), map[string]any{"cwd": workspace})
+	mustWriteFile(t, filepath.Join(session, "agents", "main", "wire.jsonl"), "{}\n")
+
+	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
+	config, err := mgr.BuildTranscriptConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Watches) != 1 {
+		t.Fatalf("watches = %d, want 1: %+v", len(config.Watches), config.Watches)
+	}
+	if config.Watches[0].Name != "kimi" || config.Watches[0].Workspace != workspace {
+		t.Fatalf("Kimi cwd workspace mapping wrong: %+v", config.Watches[0])
 	}
 }
 
