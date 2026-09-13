@@ -83,8 +83,33 @@ const peerHomePathsHeader = `# dot peer home-paths.txt — host-local paths carr
 .maru/telegram
 `
 
-// peerPlistTmpl runs `dot peer sync` on an interval.
-//
+// peerHomeTrackedHeader documents the tracked subset of the host paths. The
+// payload entry is appended by peerHomeTrackedSeed because Claude keys its
+// project memory directory by the workspace path, which differs per machine.
+const peerHomeTrackedHeader = `# dot peer home-paths-tracked.txt — host paths with delete propagation.
+#
+# One path per line, relative to $HOME, no trailing slash. Comments start
+# with '#'. An entry listed here is synced by the tracked pass instead of the
+# additive one: a delete on one machine removes the peer's copy (quarantined
+# under ~/.dot-peer-conflicts on the receiving side), and a simultaneous edit
+# on both machines quarantines the losing payload there too. Entries need not
+# appear in home-paths.txt; when they do, this list owns them.
+#
+# Everything left in home-paths.txt alone keeps newest-mtime-wins additive
+# behavior — deliberate for host runtime state, wrong for user-authored
+# content like the Claude auto-memory below.
+`
+
+// peerHomeTrackedSeed renders the tracked list seeded by PeerInit. Claude
+// Code names its project directory after the workspace path with '/', '.'
+// and '_' flattened to '-', so the auto-memory entry is derived rather than
+// part of the static header.
+func peerHomeTrackedSeed(cfg *Config) string {
+	project := strings.NewReplacer("/", "-", ".", "-", "_", "-").
+		Replace(strings.TrimRight(cfg.LocalPath, "/"))
+	return peerHomeTrackedHeader + ".claude/projects/" + project + "/memory\n"
+}
+
 // The PATH is explicit for the same reason the mirror unit's is: launchd hands a
 // job a minimal PATH that finds Apple's /usr/bin/rsync (openrsync) before
 // Homebrew's 3.x. A peer transfer with the wrong rsync fails at data time, not
@@ -143,8 +168,9 @@ const (
 	PeerEventPropagateDeletesStart                      // the delete-propagation pass begins
 	PeerEventLocalDeletesHeld                           // local deletes withheld for want of provenance
 	PeerEventPushStart                                  // the push-to-peer pass begins
-	PeerEventHostPathsStart                             // the host-path pass begins
+	PeerEventHostPathsStart                             // the additive host-path pass begins
 	PeerEventHostPathsMissing                           // no host-path list exists; Path names where one would live
+	PeerEventHomeTrackedStart                           // the tracked host-path pass begins
 	PeerEventPartialTransfer                            // rsync moved some but not all of a pass; Err carries it
 )
 
@@ -164,6 +190,13 @@ func emitPeer(progress func(PeerEvent), e PeerEvent) {
 // PeerHomePathsFile is the host-path allowlist inside a peer store.
 func PeerHomePathsFile(paths *LocalPaths) string {
 	return filepath.Join(paths.StoreDir, "home-paths.txt")
+}
+
+// PeerHomeTrackedFile is the tracked subset of the host-path list inside a
+// peer store. Its entries get delete propagation and conflict quarantine;
+// everything else stays additive.
+func PeerHomeTrackedFile(paths *LocalPaths) string {
+	return filepath.Join(paths.StoreDir, "home-paths-tracked.txt")
 }
 
 // peerHomeArg renders the ProgramArguments entry that re-supplies --home on
@@ -211,19 +244,21 @@ type PeerInitOptions struct {
 // PeerInitResult is what the operator is told about the profile just written,
 // or — when DryRun is set — about the one that would have been.
 type PeerInitResult struct {
-	// DryRun reports that none of the three files below were written. The
+	// DryRun reports that none of the files below were written. The
 	// engine returns the flag and the paths; cli owns every string.
-	DryRun        bool
-	Target        string
-	StoreDir      string
-	ConfigFile    string
-	AllowFile     string
-	HomePathsFile string
-	Propagation   PropagationPolicy
-	MaxDelete     int
+	DryRun          bool
+	Target          string
+	StoreDir        string
+	ConfigFile      string
+	AllowFile       string
+	HomePathsFile   string
+	HomeTrackedFile string
+	Propagation     PropagationPolicy
+	MaxDelete       int
 }
 
-// PeerInit writes the peer store: target, secrets opt-in and host-path list.
+// PeerInit writes the peer store: target, secrets opt-in, and the two
+// host-path lists (additive and tracked).
 func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 	cfg := opts.Config
 	paths := cfg.LocalPaths
@@ -273,16 +308,17 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 	}
 
 	result := &PeerInitResult{
-		DryRun:        opts.DryRun || (opts.Runner != nil && opts.Runner.DryRun),
-		Target:        local.Target,
-		StoreDir:      paths.StoreDir,
-		ConfigFile:    paths.ConfigFile,
-		AllowFile:     paths.AllowFile,
-		HomePathsFile: PeerHomePathsFile(paths),
-		Propagation:   local.Propagation,
-		MaxDelete:     local.MaxDelete,
+		DryRun:          opts.DryRun || (opts.Runner != nil && opts.Runner.DryRun),
+		Target:          local.Target,
+		StoreDir:        paths.StoreDir,
+		ConfigFile:      paths.ConfigFile,
+		AllowFile:       paths.AllowFile,
+		HomePathsFile:   PeerHomePathsFile(paths),
+		HomeTrackedFile: PeerHomeTrackedFile(paths),
+		Propagation:     local.Propagation,
+		MaxDelete:       local.MaxDelete,
 	}
-	// The three writes below bypass the runner entirely, so the flag has to be
+	// The writes below bypass the runner entirely, so the flag has to be
 	// honored here or a preview writes twelve files (BUG-13, D-03). Everything
 	// the operator is shown was computed above and is identical either way.
 	if result.DryRun {
@@ -296,6 +332,9 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 		return nil, err
 	}
 	if err := seedFileIfAbsent(PeerHomePathsFile(paths), peerHomePathsHeader); err != nil {
+		return nil, err
+	}
+	if err := seedFileIfAbsent(PeerHomeTrackedFile(paths), peerHomeTrackedSeed(cfg)); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -502,11 +541,20 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		}
 	}
 
-	// Host paths are a separate pass because they live outside the
-	// workspace and are addressed by an explicit list rather than the
+	// Host paths are separate passes because they live outside the
+	// workspace and are addressed by explicit lists rather than the
 	// workspace filter chain. Without them the workspace does not run on
-	// the peer: 16 of its 19 submodule remotes are SSH.
+	// the peer: 16 of its 19 submodule remotes are SSH. The tracked pass
+	// runs first so its three-way plan observes the tracked trees before
+	// the additive pass touches anything.
 	if !opts.SkipHome {
+		trackedComplete, trackedErr := peerHomeTrackedSync(ctx, runner, probe, cfg, opts.Progress, dryRun, opts.PushOnly, opts.PullOnly)
+		if err := failOnPartial(opts.Progress, trackedErr); err != nil {
+			return nil, err
+		}
+		if !trackedComplete {
+			complete = false
+		}
 		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostPathsStart})
 		homeErr := peerHomeSync(ctx, runner, cfg, opts.Progress, dryRun, opts.PushOnly, opts.PullOnly)
 		if err := failOnPartial(opts.Progress, homeErr); err != nil {
@@ -813,18 +861,30 @@ func peerPlanForRun(ctx context.Context, runner *exec.Runner, cfg *Config, dryRu
 // --ignore-missing-args matters: the list is shared between machines and a few
 // entries legitimately do not exist on every one. A missing path must not abort
 // a transfer that has already moved gigabytes.
+//
+// This is the additive pass. Entries also listed in home-paths-tracked.txt are
+// stripped first (peerHomeUntrackedList): the tracked pass owns them with
+// baseline-aware delete propagation and conflict quarantine, and letting this
+// pass touch them too would resurrect tracked deletes via --update.
 func peerHomeSync(ctx context.Context, runner *exec.Runner, cfg *Config, progress func(PeerEvent), dryRun, pushOnly, pullOnly bool) error {
 	list := PeerHomePathsFile(cfg.LocalPaths)
 	if _, err := os.Stat(list); err != nil {
 		emitPeer(progress, PeerEvent{Kind: PeerEventHostPathsMissing, Path: list})
 		return nil
 	}
+	list, cleanup, err := peerHomeUntrackedList(cfg, list, dryRun)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	home := cfg.HomeDir()
 	// --update keeps a peer's newer host config from being overwritten by a
-	// stale coordinator copy. Ordinary host-path updates are deliberately not
-	// backed up: they are not workspace conflicts, and an unconditional backup
-	// on every run made `.dot-peer-conflicts` grow with routine state churn. A
-	// future verified host-baseline conflict can opt into a scoped backup.
+	// stale coordinator copy. Ordinary (untracked) host-path updates are
+	// deliberately not backed up: they are not workspace conflicts, and an
+	// unconditional backup on every run made `.dot-peer-conflicts` grow with
+	// routine state churn. Tracked host paths are different - user-authored
+	// content such as the Claude auto-memory directory - so those are handled
+	// by peerHomeTrackedSync with delete propagation and quarantine instead.
 	// Without --update this pass overwrites host config unconditionally, and the
 	// first real run did exactly that: it replaced this machine's
 	// ~/.ssh/known_hosts with the peer's copy, deleting the host key entry for

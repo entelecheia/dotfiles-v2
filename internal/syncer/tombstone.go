@@ -135,31 +135,45 @@ func ComputeTombstones(cfg *Config) ([]string, error) {
 }
 
 func peerBaselineTargetFile(cfg *Config) string {
-	return filepath.Join(filepath.Dir(cfg.LocalPaths.BaselineFile), peerBaselineTargetName)
+	return baselineTargetFileFor(cfg.LocalPaths.BaselineFile, peerBaselineTargetName)
 }
 
-func peerBaselineMatchesTarget(cfg *Config) (bool, error) {
-	if cfg.LocalPaths == nil {
-		return false, fmt.Errorf("local paths unresolved")
-	}
-	raw, err := os.ReadFile(peerBaselineTargetFile(cfg))
+// baselineTargetFileFor locates the provenance marker next to the baseline it
+// authorizes, so the workspace and tracked-home baselines each carry their own.
+func baselineTargetFileFor(baselineFile, markerName string) string {
+	return filepath.Join(filepath.Dir(baselineFile), markerName)
+}
+
+func baselineMatchesTarget(baselineFile, markerName, rsyncDest string) (bool, error) {
+	raw, err := os.ReadFile(baselineTargetFileFor(baselineFile, markerName))
 	if os.IsNotExist(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return string(raw) == cfg.Target.RsyncDest()+"\n", nil
+	return string(raw) == rsyncDest+"\n", nil
+}
+
+func markBaselineTarget(baselineFile, markerName, rsyncDest string) error {
+	if err := atomicWrite(baselineTargetFileFor(baselineFile, markerName), []byte(rsyncDest+"\n")); err != nil {
+		return fmt.Errorf("mark peer baseline target: %w", err)
+	}
+	return nil
+}
+
+func peerBaselineMatchesTarget(cfg *Config) (bool, error) {
+	if cfg.LocalPaths == nil {
+		return false, fmt.Errorf("local paths unresolved")
+	}
+	return baselineMatchesTarget(cfg.LocalPaths.BaselineFile, peerBaselineTargetName, cfg.Target.RsyncDest())
 }
 
 func markPeerBaselineTarget(cfg *Config) error {
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("mark peer baseline: local paths unresolved")
 	}
-	if err := atomicWrite(peerBaselineTargetFile(cfg), []byte(cfg.Target.RsyncDest()+"\n")); err != nil {
-		return fmt.Errorf("mark peer baseline target: %w", err)
-	}
-	return nil
+	return markBaselineTarget(cfg.LocalPaths.BaselineFile, peerBaselineTargetName, cfg.Target.RsyncDest())
 }
 
 // checkTombstoneCap refuses a delete pass whose set exceeds MaxDelete. A
@@ -391,12 +405,19 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
+func validateConflictStamp(stamp string) error {
+	if stamp == "" || strings.ContainsAny(stamp, "/\\\r\n\x00") || stamp == "." || stamp == ".." {
+		return fmt.Errorf("unsafe conflict timestamp %q", stamp)
+	}
+	return nil
+}
+
 func remoteQuarantineCommand(root, stamp string, create bool) (string, error) {
 	if err := validateRemoteWorkspaceRoot(root); err != nil {
 		return "", err
 	}
-	if stamp == "" || strings.ContainsAny(stamp, "/\\\r\n\x00") || stamp == "." || stamp == ".." {
-		return "", fmt.Errorf("unsafe conflict timestamp %q", stamp)
+	if err := validateConflictStamp(stamp); err != nil {
+		return "", err
 	}
 	createArg := "0"
 	if create {

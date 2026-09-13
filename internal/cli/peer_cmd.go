@@ -46,6 +46,11 @@ capped by max_delete, so a failed mount cannot present the whole tree as
 deleted. With propagation.delete off, a file removed here simply stops being
 sent and the peer keeps its copy.
 
+Host paths listed in home-paths-tracked.txt get the same baseline-aware
+treatment: their deletes propagate and simultaneous edits quarantine the
+losing payload under ~/.dot-peer-conflicts. Host paths left in home-paths.txt
+alone stay additive, newest-mtime wins.
+
 A peer that is offline is not an error: the scheduled run probes reachability
 first and exits cleanly when the other machine is away.`,
 		RunE: func(c *cobra.Command, _ []string) error { return c.Help() },
@@ -139,6 +144,8 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 			p.Section("push to peer")
 		case syncer.PeerEventHostPathsStart:
 			p.Section("host paths")
+		case syncer.PeerEventHomeTrackedStart:
+			p.Section("tracked host paths")
 		case syncer.PeerEventHostPathsMissing:
 			p.Warn("no host-path list at %s; skipping", e.Path)
 		case syncer.PeerEventPartialTransfer:
@@ -229,6 +236,11 @@ When propagation.delete is on, baseline-proven deletes can flow in either
 direction. Unknown peer-created paths are pulled and never classified as local
 deletions. The common baseline advances only after the complete workspace and
 host-path transaction succeeds.
+
+Tracked host paths (home-paths-tracked.txt) run their own baseline-aware
+transaction before the additive host-path pass: deletes propagate into the
+receiving side's ~/.dot-peer-conflicts quarantine and dual edits keep both
+versions. Untracked host paths keep additive newest-mtime-wins behavior.
 
 Exits 0 when the peer is unreachable. That is what makes this safe to schedule
 on a laptop.`,

@@ -28,6 +28,11 @@ capped by max_delete, so a failed mount cannot present the whole tree as
 deleted. With propagation.delete off, a file removed here simply stops being
 sent and the peer keeps its copy.
 
+Host paths listed in home-paths-tracked.txt get the same baseline-aware
+treatment: their deletes propagate and simultaneous edits quarantine the
+losing payload under ~/.dot-peer-conflicts. Host paths left in home-paths.txt
+alone stay additive, newest-mtime wins.
+
 A peer that is offline is not an error: the scheduled run probes reachability
 first and exits cleanly when the other machine is away.
 

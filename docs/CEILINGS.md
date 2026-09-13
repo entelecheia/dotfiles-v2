@@ -94,3 +94,19 @@ Replace this limit when scheduler cleanup gains that contract, or when the
 scheduler records the profile it was installed for so historical units can be
 identified without enumeration. Until then, operators upgrading across the
 per-profile change remove the stale default-path unit by hand.
+
+## Local home quarantine is not listed by `dot sync conflicts`
+
+The tracked host-path pass (`internal/syncer/peer_home_tracked.go`)
+quarantines on both sides: the receiving machine's
+`~/.dot-peer-conflicts/<ts>/from-peer/`. `dot sync conflicts` and its prune
+cover the remote home root over ssh (the "remote home" tree in
+`internal/syncer/sync_conflict_ops.go`), but the LOCAL home root is not a
+conflict tree: `ConflictTrees` walks only the workspace and the mirror, and
+`ListConflicts` only understands a `.sync-conflicts` directory name.
+
+Accepting this is deliberate for now: the local copies are the coordinator's
+own pre-delete payloads, small and few at current operating scale, and making
+the conflicts walker understand a second root name is a wider change than the
+feature needs. Replace this limit when the conflicts listing learns
+named-root trees; until then, prune `~/.dot-peer-conflicts` by hand.

@@ -1,15 +1,16 @@
-## dot peer home-paths
+## dot peer home-paths tracked set
 
-Read or replace the peer host-path allowlist
+Replace the tracked peer host-path list from stdin
 
 ```
-dot peer home-paths [flags]
+dot peer home-paths tracked set [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for home-paths
+  -h, --help   help for set
+      --json   print the updated document
 ```
 
 ### Options inherited from parent commands
@@ -25,8 +26,5 @@ dot peer home-paths [flags]
 
 ### SEE ALSO
 
-* [dot peer](dot_peer.md)	 - Sync the workspace directly to another machine over SSH
-* [dot peer home-paths get](dot_peer_home-paths_get.md)	 - Read the peer host-path list
-* [dot peer home-paths set](dot_peer_home-paths_set.md)	 - Replace the peer host-path list from stdin
 * [dot peer home-paths tracked](dot_peer_home-paths_tracked.md)	 - Read or replace the tracked host-path list (deletes propagate, conflicts quarantine)
 

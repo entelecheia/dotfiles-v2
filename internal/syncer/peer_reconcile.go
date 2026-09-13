@@ -721,11 +721,17 @@ func DeletePeerLocal(cfg *Config, conflict *ConflictDir, rels []string, dryRun b
 // pre-existing .sync-conflicts symlink must never turn a recoverable delete
 // into a write outside the workspace.
 func ensurePeerLocalQuarantineDir(root, timestamp, rel string) (string, error) {
-	dir := filepath.Join(root, conflictsDirName, timestamp, "from-peer")
+	return ensurePeerQuarantineDir(root, conflictsDirName, timestamp, rel)
+}
+
+// ensurePeerQuarantineDir is the root-name-parameterized form, shared with the
+// tracked-home pass whose quarantine root is .dot-peer-conflicts under $HOME.
+func ensurePeerQuarantineDir(root, dirName, timestamp, rel string) (string, error) {
+	dir := filepath.Join(root, dirName, timestamp, "from-peer")
 	for _, path := range []string{
-		filepath.Join(root, conflictsDirName),
-		filepath.Join(root, conflictsDirName, timestamp),
-		filepath.Join(root, conflictsDirName, timestamp, "from-peer"),
+		filepath.Join(root, dirName),
+		filepath.Join(root, dirName, timestamp),
+		filepath.Join(root, dirName, timestamp, "from-peer"),
 	} {
 		if err := ensurePeerLocalDirectory(path); err != nil {
 			return "", err
