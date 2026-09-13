@@ -49,6 +49,7 @@ inbound port, which is what a laptop needs.`,
 				p.Line("dry-run: would write %s", res.ConfigFile)
 				p.Line("dry-run: would create %s", res.AllowFile)
 				p.Line("dry-run: would create %s", res.HomePathsFile)
+				p.Line("dry-run: would create %s", res.HomeTrackedFile)
 				p.KV("target", res.Target)
 				return nil
 			}
@@ -58,6 +59,7 @@ inbound port, which is what a laptop needs.`,
 			p.KV("store", res.StoreDir)
 			p.KV("secrets", "opted in via "+res.AllowFile)
 			p.KV("host paths", res.HomePathsFile)
+			p.KV("tracked host paths", res.HomeTrackedFile)
 			deletes := "disabled; peer copy retained"
 			if res.Propagation.Delete {
 				deletes = "baseline-recorded paths quarantine on peer"
@@ -130,6 +132,9 @@ walks the whole tree.`,
 			p.Success("peer sync scheduled every %s", res.Interval)
 			p.KV("plist", res.Plist)
 			p.KV("log", res.LogFile)
+			if res.SeededHomeTrackedFile != "" {
+				p.KV("tracked host paths", res.SeededHomeTrackedFile+" (seeded)")
+			}
 			return nil
 		},
 	}

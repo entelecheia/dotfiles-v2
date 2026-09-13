@@ -19,8 +19,12 @@ package cli
 // defect, and the fix is the engine, not an entry.
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
 // TestSyncDryRunLeavesTreeByteIdentical drives every sync subcommand that
@@ -32,28 +36,35 @@ import (
 // path missing" without reaching the lock, so a bare-HOME version of this test
 // would pass while the defect it guards was fully present.
 //
-// `peer diff` and `peer sync` take the lock the same way (peer_commands.go:332
-// and :386) but stop in SSH validation before reaching it without a live peer,
-// so they cannot be asserted here. They are covered by the shared fix, not by a
-// row that cannot fail.
+// The peer rows run against a stub `ssh` that serves canned version/status
+// probes and executes the remote command locally (setupPeerPreview below), so
+// they reach the same engine path a real preview takes without sshd or a
+// network peer.
 func TestSyncDryRunLeavesTreeByteIdentical(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
+		peer bool
 	}{
-		{"push", []string{"sync", "push", "--dry-run"}},
-		{"pull", []string{"sync", "pull", "--dry-run"}},
-		{"intake", []string{"sync", "intake", "--dry-run"}},
-		{"fetch", []string{"sync", "fetch", "seed.txt", "--dry-run"}},
-		{"conflicts-prune", []string{"sync", "conflicts", "prune", "--dry-run"}},
+		{"push", []string{"sync", "push", "--dry-run"}, false},
+		{"pull", []string{"sync", "pull", "--dry-run"}, false},
+		{"intake", []string{"sync", "intake", "--dry-run"}, false},
+		{"fetch", []string{"sync", "fetch", "seed.txt", "--dry-run"}, false},
+		{"conflicts-prune", []string{"sync", "conflicts", "prune", "--dry-run"}, false},
 		// The control: sync names already takes its lock below the dry-run early
 		// return (sync_names_cmd.go:76), so it must stay clean through the fix.
-		{"names", []string{"sync", "names", "--dry-run"}},
+		{"names", []string{"sync", "names", "--dry-run"}, false},
+		// peer diff is always a preview; peer sync previews via --dry-run.
+		{"peer-diff", []string{"peer", "diff", "--dry-run"}, true},
+		{"peer-sync", []string{"peer", "sync", "--dry-run"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSyncCLIFixture(t)
 			writeCLITestFile(t, filepath.Join(f.local, "seed.txt"), "payload\n")
 			writeCLITestFile(t, filepath.Join(f.mirror, "seed.txt"), "payload\n")
+			if tc.peer {
+				f.setupPeerPreview(t)
+			}
 
 			args := append(append([]string{}, tc.args...), "--home", f.home)
 
@@ -78,4 +89,61 @@ func TestSyncDryRunLeavesTreeByteIdentical(t *testing.T) {
 			}
 		})
 	}
+}
+
+// setupPeerPreview turns the fixture into a configured coordinator whose SSH
+// "peer" is a local tree outside HOME, so the peer dry-run rows reach the same
+// engine path a real preview takes. Everything it writes is fixture setup: the
+// snapshot starts after it returns. The store layout is materialized up front
+// because that is the state a configured workspace is already in; the guard is
+// that the preview adds nothing to it.
+func (f *syncCLIFixture) setupPeerPreview(t *testing.T) {
+	t.Helper()
+	owner := syncer.PreferredMachineName()
+	if owner == "" {
+		t.Skip("this host reports no machine name, so the peer owner guard cannot be satisfied")
+	}
+	peer := t.TempDir()
+	writeCLITestFile(t, filepath.Join(peer, "peer-only.txt"), "peer\n")
+
+	peerPaths := syncer.ResolveLocalPathsForProfile(f.local, syncer.PeerProfile)
+	if err := syncer.EnsureLocalLayout(peerPaths); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncer.SaveLocalConfig(peerPaths, &syncer.LocalConfig{
+		Target:      "ssh:fake-peer:" + peer,
+		Owner:       owner,
+		FilterMode:  syncer.FilterModeExclude,
+		Propagation: syncer.DefaultPropagationPolicy(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The stub answers the two canned probes a peer run makes - the rsync
+	// version, which must carry "version 3." or the openrsync guard
+	// (internal/syncer/rsyncbin.go) refuses the peer, and `dot peer status
+	// --json` pointing back at this workspace - and executes every other
+	// remote command locally. Everything after the host token is rejoined
+	// with spaces the way sshd delivers it.
+	status := fmt.Sprintf(
+		`{"schemaVersion":%d,"kind":"peer","profile":{"configured":true,"owner":%q,"workspacePath":%q,"target":{"path":%q}}}`,
+		syncer.PeerStatusSchemaVersion, owner, peer, f.local)
+	script := "#!/bin/sh\n" +
+		"while [ $# -gt 0 ]; do\n" +
+		"  case \"$1\" in\n" +
+		"    -o) shift 2 ;;\n" +
+		"    fake-peer) shift; break ;;\n" +
+		"    *) shift ;;\n" +
+		"  esac\n" +
+		"done\n" +
+		"case \"$*\" in\n" +
+		"  *--version*) echo 'rsync  version 3.4.1  protocol version 32' ;;\n" +
+		"  *\"peer status --json\"*) printf '%s\\n' '" + status + "' ;;\n" +
+		"  *) exec /bin/sh -c \"$*\" ;;\n" +
+		"esac\n"
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }

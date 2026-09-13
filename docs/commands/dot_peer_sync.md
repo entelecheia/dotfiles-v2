@@ -13,6 +13,11 @@ direction. Unknown peer-created paths are pulled and never classified as local
 deletions. The common baseline advances only after the complete workspace and
 host-path transaction succeeds.
 
+Tracked host paths (home-paths-tracked.txt) run their own baseline-aware
+transaction before the additive host-path pass: deletes propagate into the
+receiving side's ~/.dot-peer-conflicts quarantine and dual edits keep both
+versions. Untracked host paths keep additive newest-mtime-wins behavior.
+
 Exits 0 when the peer is unreachable. That is what makes this safe to schedule
 on a laptop.
 

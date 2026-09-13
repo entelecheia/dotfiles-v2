@@ -36,11 +36,12 @@ func peerScheduleSandbox(t *testing.T) (*Config, string) {
 	t.Setenv("HOME", home)
 	localPath := filepath.Join(home, "workspace", "work")
 	cfg := &Config{
-		Profile:   PeerProfile,
-		Owner:     owner,
-		LocalPath: localPath,
-		Target:    Target{Kind: TargetSSH, Host: "coordinator.example", Path: "/remote/workspace/work"},
-		LogFile:   filepath.Join(localPath, ".dotfiles", "peer", "log", "peer.log"),
+		Profile:    PeerProfile,
+		Owner:      owner,
+		LocalPath:  localPath,
+		Target:     Target{Kind: TargetSSH, Host: "coordinator.example", Path: "/remote/workspace/work"},
+		LogFile:    filepath.Join(localPath, ".dotfiles", "peer", "log", "peer.log"),
+		LocalPaths: ResolveLocalPathsForProfile(localPath, PeerProfile),
 	}
 
 	binDir := t.TempDir()

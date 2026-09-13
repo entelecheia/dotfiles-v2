@@ -96,6 +96,8 @@ func goldenCases() []goldenCase {
 		{surface: "ai update", args: []string{"ai", "update", "--json", "--dry-run"}, fixture: goldenAIFixture},
 		{surface: "peer home-paths get", args: []string{"peer", "home-paths", "get", "--json"}, fixture: goldenSyncFixture},
 		{surface: "peer home-paths set", args: []string{"peer", "home-paths", "set", "--json"}, stdin: "peer-host-a\npeer-host-b\n", fixture: goldenSyncFixture},
+		{surface: "peer home-paths tracked get", args: []string{"peer", "home-paths", "tracked", "get", "--json"}, fixture: goldenSyncFixture},
+		{surface: "peer home-paths tracked set", args: []string{"peer", "home-paths", "tracked", "set", "--json"}, stdin: ".claude/projects/-x-y/memory\n", fixture: goldenSyncFixture},
 		{surface: "peer status", args: []string{"peer", "status", "--json"}, fixture: goldenSyncFixture},
 		{surface: "sync configure", args: []string{"sync", "configure", "--json", "--yes"}, fixture: goldenSyncFixture},
 		{surface: "sync filters get", args: []string{"sync", "filters", "get", "include", "--json"}, fixture: goldenSyncFixture},
