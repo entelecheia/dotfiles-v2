@@ -65,10 +65,11 @@ func TestPeerPlanListWritesTheNameVerbatim(t *testing.T) {
 	f := newIntakeFixture(t)
 	rel := "bundle.library/" + iconCR
 
-	path, err := peerPlanList(f.cfg, []string{rel})
+	path, cleanup, err := peerPlanList(f.cfg, []string{rel}, false)
 	if err != nil {
 		t.Fatalf("peerPlanList: %v", err)
 	}
+	defer cleanup()
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

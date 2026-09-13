@@ -333,10 +333,11 @@ func TestPeerScopedArgs_UseNulPlanListWithoutBackup(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Profile = PeerProfile
 	cfg.Target = Target{Kind: TargetSSH, Host: "peer", Path: "/work"}
-	args, err := peerScopedArgs(cfg, runtimeFilters{}, []string{"a file.txt"}, false)
+	args, cleanup, err := peerScopedArgs(cfg, runtimeFilters{}, []string{"a file.txt"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cleanup()
 	if !slices.Contains(args, "--from0") {
 		t.Errorf("scoped peer args missing --from0: %v", args)
 	}
@@ -357,15 +358,120 @@ func TestPeerScopedArgs_UseNulPlanListWithoutBackup(t *testing.T) {
 	}
 }
 
+// A preview's plan list is consumed by the same run's rsync, so it belongs in
+// a temp directory: writing it into the store is what kept `peer sync
+// --dry-run` materializing the store on a workspace that had none.
+func TestPeerScopedArgs_DryRunPlanListOutsideStore(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Profile = PeerProfile
+	cfg.Target = Target{Kind: TargetSSH, Host: "peer", Path: "/work"}
+	args, cleanup, err := peerScopedArgs(cfg, runtimeFilters{}, []string{"a file.txt"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(args, "--dry-run") {
+		t.Errorf("scoped peer dry-run args missing --dry-run: %v", args)
+	}
+	list := ""
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--files-from=") {
+			list = strings.TrimPrefix(arg, "--files-from=")
+		}
+	}
+	if list == "" {
+		t.Fatalf("scoped peer args missing plan list: %v", args)
+	}
+	if strings.HasPrefix(list, cfg.ConfigDir) {
+		t.Errorf("dry-run plan list %q points into the store", list)
+	}
+	if _, statErr := os.Stat(list); statErr != nil {
+		t.Fatalf("dry-run plan list missing before rsync runs: %v", statErr)
+	}
+	cleanup()
+	if _, statErr := os.Stat(list); !os.IsNotExist(statErr) {
+		t.Errorf("dry-run plan list survived cleanup: %s (stat err: %v)", list, statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(cfg.ConfigDir, "peer-plan-files.dyn")); !os.IsNotExist(statErr) {
+		t.Errorf("dry-run wrote the plan list into the store (stat err: %v)", statErr)
+	}
+}
+
 func TestPreparePeerPlanFilters_MaterializesIncludeRuntimeFile(t *testing.T) {
 	cfg := newTestConfig(t)
 	cfg.Profile = PeerProfile
 	cfg.FilterMode = FilterModeInclude
-	if err := PreparePeerPlanFilters(cfg); err != nil {
+	rf, err := PreparePeerPlanFilters(cfg, false)
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer rf.Cleanup()
 	if _, err := os.Stat(cfg.LocalPaths.TrackedDynFile); err != nil {
 		t.Fatalf("tracked include runtime file was not materialized: %v", err)
+	}
+	if rf.TrackedDyn != cfg.LocalPaths.TrackedDynFile {
+		t.Errorf("real run tracked include = %q, want the store path %q", rf.TrackedDyn, cfg.LocalPaths.TrackedDynFile)
+	}
+}
+
+// A preview must leave a workspace without a peer store without one: the
+// filter files the inventory rsync reads land in a temp directory and are
+// removed by Cleanup. This pins the peer half of the BUG-13 class.
+func TestPreparePeerPlanFilters_DryRunLeavesStoreUnmaterialized(t *testing.T) {
+	root := t.TempDir()
+	local := filepath.Join(root, "workspace")
+	mirror := filepath.Join(root, "mirror")
+	for _, dir := range []string{local, mirror} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := ResolveLocalPathsForProfile(local, PeerProfile)
+	cfg := &Config{
+		Profile:    PeerProfile,
+		LocalPath:  local + "/",
+		MirrorPath: mirror + "/",
+		ConfigDir:  paths.StoreDir,
+		FilterMode: FilterModeInclude,
+		LocalPaths: paths,
+	}
+	rf, err := PreparePeerPlanFilters(cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(paths.StoreDir); !os.IsNotExist(statErr) {
+		t.Errorf("dry-run materialized the peer store at %s (stat err: %v)", paths.StoreDir, statErr)
+	}
+	if rf.TrackedDyn == "" {
+		t.Fatal("dry-run returned no tracked include path")
+	}
+	if strings.HasPrefix(rf.TrackedDyn, paths.StoreDir) {
+		t.Errorf("dry-run tracked include %q points into the store", rf.TrackedDyn)
+	}
+	if _, statErr := os.Stat(rf.TrackedDyn); statErr != nil {
+		t.Fatalf("dry-run tracked include file missing: %v", statErr)
+	}
+	rf.Cleanup()
+	if _, statErr := os.Stat(rf.TrackedDyn); !os.IsNotExist(statErr) {
+		t.Errorf("Cleanup left the preview filter file behind: %s (stat err: %v)", rf.TrackedDyn, statErr)
+	}
+}
+
+// PeerFilterArgs must name the materialized runtime file, not the canonical
+// store path: under a preview the store path may not exist, and pointing
+// rsync at it would break include-mode peer profiles.
+func TestPeerFilterArgs_UsesMaterializedTrackedIncludes(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.Profile = PeerProfile
+	cfg.FilterMode = FilterModeInclude
+	rf := runtimeFilters{TrackedDyn: filepath.Join(t.TempDir(), "tracked-includes.dyn")}
+	args := PeerFilterArgs(cfg, rf)
+	if !slices.Contains(args, "--include-from="+rf.TrackedDyn) {
+		t.Errorf("peer filter args missing the materialized include file: %v", args)
+	}
+	for _, arg := range args {
+		if strings.Contains(arg, cfg.LocalPaths.TrackedDynFile) {
+			t.Errorf("peer filter args still reference the canonical store path: %v", args)
+		}
 	}
 }
 

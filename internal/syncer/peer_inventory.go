@@ -24,7 +24,7 @@ const PeerStatusSchemaVersion = 1
 // dry-run against an empty destination emits every remote file through the
 // same rsync implementation used by the real transfer. No remote state is
 // changed and paths omitted from the listing are unambiguously absent.
-func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, baseline map[string]Fingerprint) (PeerSnapshot, error) {
+func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, rf runtimeFilters, baseline map[string]Fingerprint) (PeerSnapshot, error) {
 	if cfg == nil || !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer inventory: target is not SSH")
 	}
@@ -35,7 +35,7 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 	defer os.RemoveAll(root)
 
 	args := []string{"-r", "--dry-run", "--no-links", "--out-format=@@%l\t%M\t%n"}
-	args = append(args, PeerFilterArgs(cfg)...)
+	args = append(args, PeerFilterArgs(cfg, rf)...)
 	remoteRsync := cfg.RemoteRsyncPath
 	if remoteRsync == "" {
 		remoteRsync = "rsync"

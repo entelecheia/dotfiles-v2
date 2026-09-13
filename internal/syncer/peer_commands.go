@@ -335,7 +335,8 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 	}
 	defer release()
 
-	plan, err := peerPlanForRun(ctx, opts.Probe, cfg)
+	// peer diff is always a preview: the filters materialize outside the store.
+	plan, err := peerPlanForRun(ctx, opts.Probe, cfg, true)
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +423,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		return nil, err
 	}
 	cfg.Tombstones = tombstones
-	plan, err := peerPlanForRun(ctx, probe, cfg)
+	plan, err := peerPlanForRun(ctx, probe, cfg, dryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +482,12 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 					baseline[rel] = Fingerprint{}
 				}
 			}
-			remoteNow, err := peerRemoteInventory(ctx, probe, cfg, baseline)
+			rf, err := PreparePeerPlanFilters(cfg, dryRun)
+			if err != nil {
+				return nil, fmt.Errorf("peer push revalidation: preparing filters: %w", err)
+			}
+			remoteNow, err := peerRemoteInventory(ctx, probe, cfg, rf, baseline)
+			rf.Cleanup()
 			if err != nil {
 				return nil, err
 			}
@@ -772,8 +778,10 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 // peerPlanForRun builds the coordinator plan from one local inventory, one
 // read-only remote inventory, and the last committed common baseline. The
 // same helper is used by `peer sync` and `peer diff`; a displayed divergence
-// therefore cannot disagree with the transaction that follows it.
-func peerPlanForRun(ctx context.Context, runner *exec.Runner, cfg *Config) (*PeerPlan, error) {
+// therefore cannot disagree with the transaction that follows it. Under
+// dryRun the filter files the inventory reads live in a temp directory and
+// are removed before return.
+func peerPlanForRun(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) (*PeerPlan, error) {
 	if cfg == nil || cfg.LocalPaths == nil {
 		return nil, fmt.Errorf("peer plan: local paths unresolved")
 	}
@@ -784,14 +792,16 @@ func peerPlanForRun(ctx context.Context, runner *exec.Runner, cfg *Config) (*Pee
 	if err := ValidatePeerBaselineLocalTypes(cfg, baseline); err != nil {
 		return nil, err
 	}
-	if err := PreparePeerPlanFilters(cfg); err != nil {
+	rf, err := PreparePeerPlanFilters(cfg, dryRun)
+	if err != nil {
 		return nil, fmt.Errorf("peer plan: preparing filters: %w", err)
 	}
+	defer rf.Cleanup()
 	local, err := InventoryPeer(cfg)
 	if err != nil {
 		return nil, err
 	}
-	remote, err := peerRemoteInventory(ctx, runner, cfg, baseline)
+	remote, err := peerRemoteInventory(ctx, runner, cfg, rf, baseline)
 	if err != nil {
 		return nil, err
 	}

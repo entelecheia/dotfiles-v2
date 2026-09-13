@@ -387,7 +387,11 @@ func ValidatePeerBaselineLocalTypes(cfg *Config, baseline map[string]Fingerprint
 // PeerFilterArgs returns the read-only filter layer used by remote inventory
 // probes. It intentionally does not include direction-specific flags or a
 // destination, making it safe to reuse for the plan and diff commands.
-func PeerFilterArgs(cfg *Config) []string {
+//
+// The include layer names the materialized runtime file, never the canonical
+// store path: under a preview that file lives in a temp directory and the
+// store path may not exist at all.
+func PeerFilterArgs(cfg *Config, rf runtimeFilters) []string {
 	if cfg == nil {
 		return nil
 	}
@@ -401,8 +405,8 @@ func PeerFilterArgs(cfg *Config) []string {
 	}
 	if normalizeFilterMode(cfg.FilterMode) == FilterModeInclude {
 		args = append(args, "--include=*/")
-		if cfg.LocalPaths != nil && cfg.LocalPaths.TrackedDynFile != "" {
-			args = append(args, "--include-from="+cfg.LocalPaths.TrackedDynFile)
+		if rf.TrackedDyn != "" {
+			args = append(args, "--include-from="+rf.TrackedDyn)
 		}
 		for _, p := range cfg.IncludePatterns {
 			p = strings.TrimSpace(p)
@@ -420,18 +424,11 @@ func PeerFilterArgs(cfg *Config) []string {
 // runs before the scoped transfer, so include-mode profiles need this hook or
 // a fresh profile would point rsync at a nonexistent tracked-includes file.
 //
-// This one materializes into the store even for a preview, so it still creates
-// the store on a workspace that has none. That is deliberate and not yet
-// fixable here: it writes for side effect, and its consumer PeerFilterArgs
-// reads the canonical cfg.LocalPaths.TrackedDynFile rather than the returned
-// paths, so redirecting a preview to a temp directory would point rsync at a
-// file that does not exist and break include-mode peer profiles. Closing it
-// means teaching PeerFilterArgs to take the materialized path, which needs a
-// live-peer fixture to verify. Tracked as the peer half of this class.
-func PreparePeerPlanFilters(cfg *Config) error {
-	rf, err := prepareRuntimeFilters(cfg, false)
-	defer rf.Cleanup()
-	return err
+// A preview (dryRun) lands the files in a temp directory instead of the
+// store. The caller must hold the returned value until the inventory has run
+// and then call Cleanup.
+func PreparePeerPlanFilters(cfg *Config, dryRun bool) (runtimeFilters, error) {
+	return prepareRuntimeFilters(cfg, dryRun)
 }
 
 // IsPeerVolatile reports whether a relative path belongs to the immutable
@@ -538,29 +535,47 @@ func AppendPeerConflictAudit(cfg *Config, plan *PeerPlan) error {
 	return nil
 }
 
-func peerPlanList(cfg *Config, rels []string) (string, error) {
-	if cfg == nil || cfg.ConfigDir == "" {
-		return "", fmt.Errorf("peer plan list: config dir unresolved")
+func peerPlanList(cfg *Config, rels []string, dryRun bool) (string, func(), error) {
+	if cfg == nil {
+		return "", nil, fmt.Errorf("peer plan list: config dir unresolved")
 	}
-	path := filepath.Join(cfg.ConfigDir, "peer-plan-files.dyn")
+	dir := cfg.ConfigDir
+	cleanup := func() {}
+	if dryRun {
+		// A preview's plan list is consumed by the same run's rsync, so it
+		// goes to a temp directory rather than the store - the same pattern
+		// prepareRuntimeFilters uses for the dyn filter files.
+		tmp, err := os.MkdirTemp("", "dot-peer-plan-")
+		if err != nil {
+			return "", nil, fmt.Errorf("creating preview plan list dir: %w", err)
+		}
+		dir = tmp
+		cleanup = func() { _ = os.RemoveAll(tmp) }
+	}
+	if dir == "" {
+		return "", nil, fmt.Errorf("peer plan list: config dir unresolved")
+	}
+	path := filepath.Join(dir, "peer-plan-files.dyn")
 	var b strings.Builder
 	for _, rel := range rels {
 		if err := validateTombstoneRel(rel); err != nil {
-			return "", err
+			cleanup()
+			return "", nil, err
 		}
 		b.WriteString(rel)
 		b.WriteByte(0)
 	}
 	if err := atomicWrite(path, []byte(b.String())); err != nil {
-		return "", err
+		cleanup()
+		return "", nil, err
 	}
-	return path, nil
+	return path, cleanup, nil
 }
 
-func peerScopedArgs(cfg *Config, rf runtimeFilters, rels []string, dryRun bool) ([]string, error) {
-	list, err := peerPlanList(cfg, rels)
+func peerScopedArgs(cfg *Config, rf runtimeFilters, rels []string, dryRun bool) ([]string, func(), error) {
+	list, cleanup, err := peerPlanList(cfg, rels, dryRun)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Keep the code-owned deny layer ahead of editable include rules for the
 	// same first-match-wins reason as the regular peer arg builders.
@@ -571,7 +586,7 @@ func peerScopedArgs(cfg *Config, rf runtimeFilters, rels []string, dryRun bool) 
 		args = append(args, "--dry-run")
 	}
 	args = append(args, rsyncTransportArgs(cfg)...)
-	return args, nil
+	return args, cleanup, nil
 }
 
 // PullPeerPlan applies only the remote-present paths selected by the plan.
@@ -586,10 +601,11 @@ func PullPeerPlan(ctx context.Context, runner *exec.Runner, cfg *Config, plan *P
 	if err != nil {
 		return err
 	}
-	args, err := peerScopedArgs(cfg, rf, plan.Pull, dryRun)
+	args, cleanup, err := peerScopedArgs(cfg, rf, plan.Pull, dryRun)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	args = append(args, cfg.Target.RsyncDest(), cfg.LocalPath)
 	return runRsync(ctx, runner, cfg, args)
 }
@@ -603,10 +619,11 @@ func peerPushPass(ctx context.Context, runner *exec.Runner, cfg *Config, rels []
 	if err != nil {
 		return err
 	}
-	args, err := peerScopedArgs(cfg, rf, rels, dryRun)
+	args, cleanup, err := peerScopedArgs(cfg, rf, rels, dryRun)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	if backup {
 		args = append(args, "--backup", "--backup-dir="+conflict.PushBackupRel())
 	}
