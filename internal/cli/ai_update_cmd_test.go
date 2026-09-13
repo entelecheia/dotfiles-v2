@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -276,10 +275,7 @@ func TestCodexClaudeMemCacheStep(t *testing.T) {
 			writeCLITestFile(t, filepath.Join(root, "scripts", name), "")
 		}
 		if runnable {
-			writeCLITestFile(t, filepath.Join(root, ".install-version"), `{"version":"13.14.0"}`)
-			if err := os.MkdirAll(filepath.Join(root, "node_modules"), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			writeCLITestFile(t, filepath.Join(root, "node_modules", "zod", "package.json"), "{}")
 		}
 		return root
 	}

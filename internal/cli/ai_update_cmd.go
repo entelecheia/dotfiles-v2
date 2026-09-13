@@ -421,7 +421,7 @@ func codexClaudeMemCacheStep(home string) updateStep {
 	case runnable:
 		step.Status, step.Detail = stepCurrent, "runtime ok: "+path
 	default:
-		step.Status, step.Detail = stepFailed, path+" missing .install-version/node_modules; run: "+aisettings.ClaudeMemRepairCommand
+		step.Status, step.Detail = stepFailed, path+" missing node_modules; run: "+aisettings.ClaudeMemRepairCommand
 	}
 	return step
 }
