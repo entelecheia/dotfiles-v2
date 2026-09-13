@@ -220,6 +220,83 @@ func TestClaudeMemLocatePluginRequiresRunnableInstall(t *testing.T) {
 	}
 }
 
+func claudeCacheDir(home, version string) string {
+	return filepath.Join(home, ".claude", "plugins", "cache", "thedotmack", "claude-mem", version)
+}
+
+// writeInstalledRuntime writes a plugin dir the way current claude-mem releases
+// install it: scripts and node_modules, but no .install-version marker.
+func writeInstalledRuntime(t *testing.T, root string) {
+	t.Helper()
+	writeClaudeMemTree(t, root, false)
+	mustMkdirAll(t, filepath.Join(root, "node_modules"))
+}
+
+func TestClaudeMemLocatePluginFollowsClaudeInstallRecord(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T, home string)
+		want    func(home string) string
+		wantErr string
+	}{
+		{
+			name: "recorded install path outranks a runnable cache",
+			setup: func(t *testing.T, home string) {
+				writeClaudeMemTree(t, marketplaceCheckoutDir(home), false)
+				writeClaudeMemTree(t, claudeCacheDir(home, "13.24.30"), true)
+				recorded := filepath.Join(home, "installs", "claude-mem")
+				writeInstalledRuntime(t, recorded)
+				mustWriteJSON(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), map[string]any{
+					"version": 2,
+					"plugins": map[string]any{
+						"claude-mem@thedotmack": []map[string]any{
+							{"scope": "user", "installPath": recorded},
+						},
+					},
+				})
+			},
+			want: func(home string) string { return filepath.Join(home, "installs", "claude-mem") },
+		},
+		{
+			name: "orphaned cache is never returned",
+			setup: func(t *testing.T, home string) {
+				dir := claudeCacheDir(home, "13.24.0")
+				writeClaudeMemTree(t, dir, true)
+				mustWriteFile(t, filepath.Join(dir, ".orphaned_at"), "1788595203387")
+			},
+			wantErr: "not found",
+		},
+		{
+			name: "cache without install marker is runnable",
+			setup: func(t *testing.T, home string) {
+				writeInstalledRuntime(t, claudeCacheDir(home, "13.24.23"))
+			},
+			want: func(home string) string { return claudeCacheDir(home, "13.24.23") },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_PLUGIN_ROOT", "")
+			t.Setenv("PLUGIN_ROOT", "")
+			home := t.TempDir()
+			tc.setup(t, home)
+			got, err := NewClaudeMemManager(home, "/bin/dot", "/bin/node").LocatePlugin()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := tc.want(home); got != want {
+				t.Fatalf("plugin = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestCodexClaudeMemCache(t *testing.T) {
 	t.Run("no cache", func(t *testing.T) {
 		path, runnable := CodexClaudeMemCache(t.TempDir())

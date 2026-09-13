@@ -159,12 +159,17 @@ func (m *ClaudeMemManager) LocatePlugin() (string, error) {
 	candidates = append(candidates,
 		filepath.Join(m.HomeDir, ".claude", "plugins", "marketplaces", "thedotmack", "plugin"),
 	)
+	// Claude Code records the active install in installed_plugins.json and
+	// deletes superseded cache versions 14 days after marking them orphaned, so
+	// the recorded path outranks any mtime guess over the cache dirs.
+	candidates = append(candidates, m.installedClaudeMemPaths()...)
 	for _, pattern := range []string{
 		filepath.Join(m.HomeDir, ".codex", "plugins", "cache", "claude-mem-local", "claude-mem", "*"),
 		filepath.Join(m.HomeDir, ".codex", "plugins", "cache", "thedotmack", "claude-mem", "*"),
 		filepath.Join(m.HomeDir, ".claude", "plugins", "cache", "thedotmack", "claude-mem", "*"),
 	} {
 		matches, _ := filepath.Glob(pattern)
+		matches = withoutOrphaned(matches)
 		sort.Slice(matches, func(i, j int) bool {
 			left, _ := os.Stat(matches[i])
 			right, _ := os.Stat(matches[j])
@@ -188,7 +193,7 @@ func (m *ClaudeMemManager) LocatePlugin() (string, error) {
 		}
 	}
 	if broken != "" {
-		return "", fmt.Errorf("claude-mem plugin at %s is missing its runtime (.install-version/node_modules); %s", broken, claudeMemRepairHint)
+		return "", fmt.Errorf("claude-mem plugin at %s is missing its runtime (node_modules); %s", broken, claudeMemRepairHint)
 	}
 	return "", errors.New("claude-mem plugin not found; install it in Claude Code or Codex first")
 }
@@ -209,16 +214,63 @@ func hasClaudeMemScripts(root string) bool {
 	return true
 }
 
-// hasClaudeMemRuntime reports whether claude-mem's installer has set up the
-// runtime here: its own .install-version marker plus installed dependencies.
-// Source trees without them (e.g. a marketplace git checkout) cannot run the
-// MCP server or transcript watcher.
+// hasClaudeMemRuntime reports whether installed dependencies are present.
+// Current claude-mem releases no longer write the .install-version marker, so
+// node_modules is the signal. A marketplace git checkout without it is still
+// rejected because it cannot run the MCP server or transcript watcher.
 func hasClaudeMemRuntime(root string) bool {
-	if !fileExists(filepath.Join(root, ".install-version")) {
-		return false
-	}
 	info, err := os.Stat(filepath.Join(root, "node_modules"))
 	return err == nil && info.IsDir()
+}
+
+// installedClaudeMemPaths returns claude-mem install paths recorded in Claude
+// Code's installed_plugins.json, user scope first, in a stable order.
+func (m *ClaudeMemManager) installedClaudeMemPaths() []string {
+	raw, err := os.ReadFile(filepath.Join(m.HomeDir, ".claude", "plugins", "installed_plugins.json"))
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Plugins map[string][]struct {
+			Scope       string `json:"scope"`
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(doc.Plugins))
+	for key := range doc.Plugins {
+		if strings.HasPrefix(key, "claude-mem@") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	var user, other []string
+	for _, key := range keys {
+		for _, install := range doc.Plugins[key] {
+			switch {
+			case install.InstallPath == "":
+			case install.Scope == "user":
+				user = append(user, install.InstallPath)
+			default:
+				other = append(other, install.InstallPath)
+			}
+		}
+	}
+	return append(user, other...)
+}
+
+// withoutOrphaned drops plugin cache dirs that Claude Code has marked for
+// deletion with an .orphaned_at file.
+func withoutOrphaned(dirs []string) []string {
+	kept := dirs[:0]
+	for _, dir := range dirs {
+		if !fileExists(filepath.Join(dir, ".orphaned_at")) {
+			kept = append(kept, dir)
+		}
+	}
+	return kept
 }
 
 // CodexClaudeMemCache returns the newest codex claude-mem plugin cache dir and
@@ -668,6 +720,11 @@ func (m *ClaudeMemManager) installLaunchAgent(ctx context.Context) error {
 	for attempt := 0; attempt < 20 && printTarget() == nil; attempt++ {
 		time.Sleep(100 * time.Millisecond)
 	}
+	// The old bridge has exited, so nothing holds its log open. Reset the log
+	// once it has grown large; KeepAlive restarts otherwise append forever.
+	if info, err := os.Stat(m.BridgeLogPath()); err == nil && info.Size() > 10<<20 {
+		_ = os.Truncate(m.BridgeLogPath(), 0)
+	}
 	var bootstrapErr error
 	var bootstrapOut []byte
 	for attempt := 0; attempt < 5; attempt++ {
@@ -727,6 +784,7 @@ func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 	var child *exec.Cmd
 	var done chan error
 	var signature string
+	var lastRescanErr string
 	start := func() error {
 		pluginRoot, err := m.LocatePlugin()
 		if err != nil {
@@ -781,8 +839,17 @@ func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 				fmt.Fprintf(os.Stderr, "claude-mem transcript watcher exited: %v\n", err)
 			}
 		case <-ticker.C:
+			// Log a failure once per distinct message. The 2 s ticker otherwise
+			// repeats the same line until the cause changes (278k identical lines
+			// in one launchd log).
 			if err := start(); err != nil {
-				fmt.Fprintf(os.Stderr, "claude-mem bridge rescan failed: %v\n", err)
+				if msg := err.Error(); msg != lastRescanErr {
+					fmt.Fprintf(os.Stderr, "claude-mem bridge rescan failed: %v\n", err)
+					lastRescanErr = msg
+				}
+			} else if lastRescanErr != "" {
+				fmt.Fprintln(os.Stderr, "claude-mem bridge rescan recovered")
+				lastRescanErr = ""
 			}
 		}
 	}
