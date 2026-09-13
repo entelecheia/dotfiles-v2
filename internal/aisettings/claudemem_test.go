@@ -140,15 +140,14 @@ func TestClaudeMemInstructionsAreIdempotent(t *testing.T) {
 }
 
 // writeClaudeMemTree writes a claude-mem plugin dir: always the three scripts,
-// plus the .install-version marker and node_modules when runnable.
+// plus a populated node_modules when runnable.
 func writeClaudeMemTree(t *testing.T, root string, runnable bool) {
 	t.Helper()
 	for _, name := range []string{"mcp-server.cjs", "transcript-watcher.cjs", "bun-runner.js"} {
 		mustWriteFile(t, filepath.Join(root, "scripts", name), "")
 	}
 	if runnable {
-		mustWriteFile(t, filepath.Join(root, ".install-version"), `{"version":"13.14.0"}`)
-		mustMkdirAll(t, filepath.Join(root, "node_modules"))
+		mustWriteFile(t, filepath.Join(root, "node_modules", "zod", "package.json"), "{}")
 	}
 }
 
@@ -191,6 +190,14 @@ func TestClaudeMemLocatePluginRequiresRunnableInstall(t *testing.T) {
 			wantErr: "codex plugin remove claude-mem",
 		},
 		{
+			name: "empty node_modules is not runnable",
+			setup: func(t *testing.T, home string) {
+				writeClaudeMemTree(t, marketplaceCheckoutDir(home), false)
+				mustMkdirAll(t, filepath.Join(marketplaceCheckoutDir(home), "node_modules"))
+			},
+			wantErr: "codex plugin remove claude-mem",
+		},
+		{
 			name:    "no candidates",
 			setup:   func(t *testing.T, home string) {},
 			wantErr: "not found",
@@ -225,11 +232,10 @@ func claudeCacheDir(home, version string) string {
 }
 
 // writeInstalledRuntime writes a plugin dir the way current claude-mem releases
-// install it: scripts and node_modules, but no .install-version marker.
+// install it: scripts and a populated node_modules, no .install-version marker.
 func writeInstalledRuntime(t *testing.T, root string) {
 	t.Helper()
-	writeClaudeMemTree(t, root, false)
-	mustMkdirAll(t, filepath.Join(root, "node_modules"))
+	writeClaudeMemTree(t, root, true)
 }
 
 func TestClaudeMemLocatePluginFollowsClaudeInstallRecord(t *testing.T) {
@@ -263,6 +269,23 @@ func TestClaudeMemLocatePluginFollowsClaudeInstallRecord(t *testing.T) {
 				dir := claudeCacheDir(home, "13.24.0")
 				writeClaudeMemTree(t, dir, true)
 				mustWriteFile(t, filepath.Join(dir, ".orphaned_at"), "1788595203387")
+			},
+			wantErr: "not found",
+		},
+		{
+			name: "recorded install path that is orphaned is never returned",
+			setup: func(t *testing.T, home string) {
+				recorded := claudeCacheDir(home, "13.24.23")
+				writeInstalledRuntime(t, recorded)
+				mustWriteFile(t, filepath.Join(recorded, ".orphaned_at"), "1788595203387")
+				mustWriteJSON(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), map[string]any{
+					"version": 2,
+					"plugins": map[string]any{
+						"claude-mem@thedotmack": []map[string]any{
+							{"scope": "user", "installPath": recorded},
+						},
+					},
+				})
 			},
 			wantErr: "not found",
 		},
@@ -325,6 +348,22 @@ func TestCodexClaudeMemCache(t *testing.T) {
 		path, runnable := CodexClaudeMemCache(home)
 		if path != codexCacheDir(home, "13.14.0") || !runnable {
 			t.Fatalf("got (%q, %v), want runnable cache", path, runnable)
+		}
+	})
+	t.Run("orphaned newest is skipped", func(t *testing.T) {
+		home := t.TempDir()
+		older := codexCacheDir(home, "13.13.1")
+		newer := codexCacheDir(home, "13.14.0")
+		writeClaudeMemTree(t, older, true)
+		writeClaudeMemTree(t, newer, true)
+		mustWriteFile(t, filepath.Join(newer, ".orphaned_at"), "1788595203387")
+		past := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(older, past, past); err != nil {
+			t.Fatal(err)
+		}
+		path, runnable := CodexClaudeMemCache(home)
+		if path != older || !runnable {
+			t.Fatalf("got (%q, %v), want (%q, true)", path, runnable, older)
 		}
 	})
 }

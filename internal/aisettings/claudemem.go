@@ -216,11 +216,13 @@ func hasClaudeMemScripts(root string) bool {
 
 // hasClaudeMemRuntime reports whether installed dependencies are present.
 // Current claude-mem releases no longer write the .install-version marker, so
-// node_modules is the signal. A marketplace git checkout without it is still
-// rejected because it cannot run the MCP server or transcript watcher.
+// node_modules is the signal. An interrupted install can leave an empty
+// node_modules, which cannot run the MCP server or transcript watcher, so the
+// directory must hold at least one entry. A marketplace git checkout without
+// it is rejected the same way.
 func hasClaudeMemRuntime(root string) bool {
-	info, err := os.Stat(filepath.Join(root, "node_modules"))
-	return err == nil && info.IsDir()
+	entries, err := os.ReadDir(filepath.Join(root, "node_modules"))
+	return err == nil && len(entries) > 0
 }
 
 // installedClaudeMemPaths returns claude-mem install paths recorded in Claude
@@ -258,7 +260,9 @@ func (m *ClaudeMemManager) installedClaudeMemPaths() []string {
 			}
 		}
 	}
-	return append(user, other...)
+	// A recorded installPath can point at a cache version Claude Code has
+	// since orphaned, so it goes through the same filter as the glob fallback.
+	return withoutOrphaned(append(user, other...))
 }
 
 // withoutOrphaned drops plugin cache dirs that Claude Code has marked for
@@ -273,8 +277,9 @@ func withoutOrphaned(dirs []string) []string {
 	return kept
 }
 
-// CodexClaudeMemCache returns the newest codex claude-mem plugin cache dir and
-// whether its runtime is installed. path == "" means no cache exists.
+// CodexClaudeMemCache returns the newest non-orphaned codex claude-mem plugin
+// cache dir and whether its runtime is installed. path == "" means no cache
+// exists. Orphaned dirs are marked for deletion, so they never win.
 // ponytail: newest-modtime dir approximates codex's active cache version;
 // parse config.toml plugin pins if this ever misfires.
 func CodexClaudeMemCache(homeDir string) (string, bool) {
@@ -285,6 +290,7 @@ func CodexClaudeMemCache(homeDir string) (string, bool) {
 		filepath.Join(homeDir, ".codex", "plugins", "cache", "thedotmack", "claude-mem", "*"),
 	} {
 		matches, _ := filepath.Glob(pattern)
+		matches = withoutOrphaned(matches)
 		for _, match := range matches {
 			info, err := os.Stat(match)
 			if err != nil || !info.IsDir() {
@@ -839,9 +845,10 @@ func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 				fmt.Fprintf(os.Stderr, "claude-mem transcript watcher exited: %v\n", err)
 			}
 		case <-ticker.C:
-			// Log a failure once per distinct message. The 2 s ticker otherwise
-			// repeats the same line until the cause changes (278k identical lines
-			// in one launchd log).
+			// Suppress a failure that repeats the immediately preceding
+			// message: consecutive suppression bounds the 2 s ticker spam
+			// (278k identical lines in one launchd log) without hiding a
+			// cause that alternates between messages.
 			if err := start(); err != nil {
 				if msg := err.Error(); msg != lastRescanErr {
 					fmt.Fprintf(os.Stderr, "claude-mem bridge rescan failed: %v\n", err)
