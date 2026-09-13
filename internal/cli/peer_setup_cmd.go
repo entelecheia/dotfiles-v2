@@ -132,6 +132,9 @@ walks the whole tree.`,
 			p.Success("peer sync scheduled every %s", res.Interval)
 			p.KV("plist", res.Plist)
 			p.KV("log", res.LogFile)
+			if res.SeededHomeTrackedFile != "" {
+				p.KV("tracked host paths", res.SeededHomeTrackedFile+" (seeded)")
+			}
 			return nil
 		},
 	}

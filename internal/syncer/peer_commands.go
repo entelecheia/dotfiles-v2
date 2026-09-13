@@ -98,16 +98,48 @@ const peerHomeTrackedHeader = `# dot peer home-paths-tracked.txt — host paths 
 # Everything left in home-paths.txt alone keeps newest-mtime-wins additive
 # behavior — deliberate for host runtime state, wrong for user-authored
 # content like the Claude auto-memory below.
+#
+# The seeded Claude auto-memory entry appears only when the peer shares this
+# machine's workspace path: Claude derives its project directory from that
+# path, so with different workspace layouts the entry would name the wrong
+# directory on one side. In that case add entries by hand with
+# dot peer home-paths tracked set.
 `
 
-// peerHomeTrackedSeed renders the tracked list seeded by PeerInit. Claude
-// Code names its project directory after the workspace path with '/', '.'
-// and '_' flattened to '-', so the auto-memory entry is derived rather than
-// part of the static header.
-func peerHomeTrackedSeed(cfg *Config) string {
+// peerHomeTrackedSeed renders the tracked list seeded by PeerInit and
+// PeerSchedule. Claude Code names its project directory after the workspace
+// path with '/', '.' and '_' flattened to '-', so the auto-memory entry is
+// derived rather than part of the static header — and is included only when
+// the peer's workspace path matches, since the flattened name is otherwise
+// wrong on one machine.
+func peerHomeTrackedSeed(cfg *Config, remotePath string) string {
+	if remotePath != strings.TrimRight(cfg.LocalPath, "/") {
+		return peerHomeTrackedHeader
+	}
 	project := strings.NewReplacer("/", "-", ".", "-", "_", "-").
 		Replace(strings.TrimRight(cfg.LocalPath, "/"))
 	return peerHomeTrackedHeader + ".claude/projects/" + project + "/memory\n"
+}
+
+// seedPeerHomeTracked writes the tracked host-path list when absent and
+// reports whether it created the file. PeerInit and PeerSchedule (the
+// documented refresh path after an upgrade) share it; PeerSync deliberately
+// never calls it — an operator who deletes the file disables the feature and
+// must not find it silently recreated by the next run.
+func seedPeerHomeTracked(cfg *Config, remotePath string) (bool, error) {
+	if cfg.LocalPaths == nil {
+		// No resolved peer store means no peer profile to seed into; the
+		// scheduler install (the caller's primary action) still proceeds.
+		return false, nil
+	}
+	path := PeerHomeTrackedFile(cfg.LocalPaths)
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	}
+	if err := seedFileIfAbsent(path, peerHomeTrackedSeed(cfg, remotePath)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // The PATH is explicit for the same reason the mirror unit's is: launchd hands a
@@ -334,7 +366,7 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 	if err := seedFileIfAbsent(PeerHomePathsFile(paths), peerHomePathsHeader); err != nil {
 		return nil, err
 	}
-	if err := seedFileIfAbsent(PeerHomeTrackedFile(paths), peerHomeTrackedSeed(cfg)); err != nil {
+	if _, err := seedPeerHomeTracked(cfg, remotePath); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -636,6 +668,9 @@ type PeerScheduleResult struct {
 	Plist                    string
 	LogFile                  string
 	Interval                 time.Duration
+	// SeededHomeTrackedFile names the tracked host-path list when the install
+	// created it (upgrade refresh); empty when the file already existed.
+	SeededHomeTrackedFile string
 }
 
 // PeerSchedule installs or removes the periodic `dot peer sync` job.
@@ -734,11 +769,22 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if err := runner.WriteFileAtomic(plist, []byte(body), 0o644); err != nil {
 		return nil, fmt.Errorf("writing peer plist %s for home %q: %w; existing artifact was left untouched; run dot peer setup after fixing the home path", plist, cfg.Home, err)
 	}
+	// `dot peer setup` is the documented refresh path after an upgrade, so the
+	// tracked host-path list is seeded here as well as by init. The dry-run arm
+	// above returns before this point, and PeerSync never seeds: an operator
+	// who deletes the file disables the feature.
+	seeded, err := seedPeerHomeTracked(cfg, strings.TrimRight(cfg.Target.Path, "/"))
+	if err != nil {
+		return nil, err
+	}
 	result := &PeerScheduleResult{
 		TargetUserActionRequired: schedulerRequiresTargetUserServiceDomain(cfg),
 		Plist:                    plist,
 		LogFile:                  logFile,
 		Interval:                 opts.Interval,
+	}
+	if seeded {
+		result.SeededHomeTrackedFile = PeerHomeTrackedFile(cfg.LocalPaths)
 	}
 	if schedulerRequiresTargetUserServiceDomain(cfg) {
 		return result, &SchedulerTargetUserActionRequiredError{}

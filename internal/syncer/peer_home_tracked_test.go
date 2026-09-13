@@ -3,6 +3,7 @@ package syncer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -443,9 +444,10 @@ func TestPeerHomeTransferArgs_NoUpdateScopedNulList(t *testing.T) {
 	}
 }
 
-// TestPeerHomeSync_StripsTrackedEntries pins the split: an entry present in
-// both lists is removed from the additive pass's --files-from, and with no
-// overlap the original list is used byte-identically.
+// TestPeerHomeSync_StripsTrackedEntries pins the split: an entry the tracked
+// pass owns — by exact match or by nesting in either direction — is removed
+// from the additive pass's --files-from, and with no overlap the original
+// list is used byte-identically.
 func TestPeerHomeSync_StripsTrackedEntries(t *testing.T) {
 	_, target, cfg := homeFlagSandbox(t)
 	if err := os.MkdirAll(cfg.LocalPaths.StoreDir, 0o755); err != nil {
@@ -453,10 +455,12 @@ func TestPeerHomeSync_StripsTrackedEntries(t *testing.T) {
 	}
 	cfg.ConfigDir = cfg.LocalPaths.StoreDir
 	original := PeerHomePathsFile(cfg.LocalPaths)
-	if err := os.WriteFile(original, []byte(".ssh\nmem\n"), 0o644); err != nil {
+	// .claude is an untracked ANCESTOR of the tracked memory entry: left in
+	// place, the recursive additive pass would re-sync the tracked subtree.
+	if err := os.WriteFile(original, []byte(".ssh\nmem\n.claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(PeerHomeTrackedFile(cfg.LocalPaths), []byte("mem\n"), 0o644); err != nil {
+	if err := os.WriteFile(PeerHomeTrackedFile(cfg.LocalPaths), []byte("mem\n.claude/projects/-x-y/memory\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -486,8 +490,9 @@ func TestPeerHomeSync_StripsTrackedEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the filtered list: %v", err)
 	}
-	if !strings.Contains(string(dynBody), ".ssh") || strings.Contains(string(dynBody), "mem") {
-		t.Errorf("filtered list = %q, want .ssh kept and the tracked mem entry removed", dynBody)
+	if !strings.Contains(string(dynBody), ".ssh") || strings.Contains(string(dynBody), "mem") ||
+		strings.Contains(string(dynBody), ".claude") {
+		t.Errorf("filtered list = %q, want only .ssh kept; tracked mem and ancestor .claude removed", dynBody)
 	}
 
 	// Non-vacuity: with no tracked list, the pass reads the original file.
@@ -554,15 +559,136 @@ func TestComputeHomeTombstones_RetiresEntriesRemovedFromList(t *testing.T) {
 	}
 }
 
+func TestFilterUntrackedHomeEntries_DropsOverlapsBothDirections(t *testing.T) {
+	tests := []struct {
+		name     string
+		additive []string
+		tracked  []string
+		want     []string
+		changed  bool
+	}{
+		{"exact match dropped", []string{".ssh", "mem"}, []string{"mem"}, []string{".ssh"}, true},
+		{"untracked ancestor of a tracked entry dropped", []string{".claude", ".ssh"}, []string{".claude/projects/-x-y/memory"}, []string{".ssh"}, true},
+		{"untracked descendant of a tracked directory dropped", []string{".claude/settings.json", ".ssh"}, []string{".claude"}, []string{".ssh"}, true},
+		{"shared prefix without a slash boundary kept", []string{".claude.json", ".ssh"}, []string{".claude"}, []string{".claude.json", ".ssh"}, false},
+		{"no overlap keeps the list byte-identical", []string{".ssh", ".gitconfig"}, []string{"mem"}, []string{".ssh", ".gitconfig"}, false},
+		{"trailing slash on the additive entry still matches", []string{"mem/"}, []string{"mem"}, nil, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			kept, changed := filterUntrackedHomeEntries(tc.additive, tc.tracked)
+			if changed != tc.changed {
+				t.Errorf("changed = %v, want %v", changed, tc.changed)
+			}
+			if !slices.Equal(kept, tc.want) {
+				t.Errorf("kept = %v, want %v", kept, tc.want)
+			}
+		})
+	}
+}
+
+func TestPeerSchedule_SeedsTrackedHomePathsOnce(t *testing.T) {
+	cfg, _ := peerScheduleSandbox(t)
+	cfg.LocalPaths = ResolveLocalPathsForProfile(cfg.LocalPath, PeerProfile)
+	tracked := PeerHomeTrackedFile(cfg.LocalPaths)
+
+	// A preview seeds nothing.
+	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
+		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false),
+		Interval: time.Hour, DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("PeerSchedule dry-run: %v", err)
+	}
+	if !res.DryRun {
+		t.Fatal("expected a preview result")
+	}
+	if _, statErr := os.Lstat(tracked); !os.IsNotExist(statErr) {
+		t.Fatalf("dry-run seeded the tracked list: %v", statErr)
+	}
+
+	// The sandbox target path differs from the local workspace, so the seed
+	// must be the header without the derived Claude memory entry.
+	res, err = PeerSchedule(context.Background(), PeerScheduleOptions{
+		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), Interval: time.Hour,
+	})
+	var targetUserErr *SchedulerTargetUserActionRequiredError
+	if err != nil && !errors.As(err, &targetUserErr) {
+		t.Fatalf("PeerSchedule: %v", err)
+	}
+	if res == nil {
+		t.Fatal("PeerSchedule returned no staged result")
+	}
+	if res.SeededHomeTrackedFile != tracked {
+		t.Errorf("SeededHomeTrackedFile = %q, want %q", res.SeededHomeTrackedFile, tracked)
+	}
+	body, err := os.ReadFile(tracked)
+	if err != nil {
+		t.Fatalf("setup did not seed the tracked list: %v", err)
+	}
+	if !strings.Contains(string(body), "# dot peer home-paths-tracked.txt") {
+		t.Errorf("seeded tracked list lost its header:\n%s", body)
+	}
+	if strings.Contains(string(body), "/memory") {
+		t.Errorf("asymmetric workspace paths seeded a memory entry that would be wrong on one machine:\n%s", body)
+	}
+
+	// Seed-once: an operator's edit survives a refresh.
+	if err := os.WriteFile(tracked, []byte("custom\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = PeerSchedule(context.Background(), PeerScheduleOptions{
+		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), Interval: time.Hour,
+	})
+	if err != nil && !errors.As(err, &targetUserErr) {
+		t.Fatalf("PeerSchedule re-run: %v", err)
+	}
+	if res.SeededHomeTrackedFile != "" {
+		t.Errorf("re-run reported a seed over an existing file: %q", res.SeededHomeTrackedFile)
+	}
+	body, err = os.ReadFile(tracked)
+	if err != nil || string(body) != "custom\n" {
+		t.Errorf("re-run rewrote the tracked list: %q, %v", body, err)
+	}
+}
+
 func TestPeerHomeTrackedSeed_DerivesClaudeMemoryDir(t *testing.T) {
 	cfg := &Config{LocalPath: "/Users/yj.lee/workspace/work/"}
-	seed := peerHomeTrackedSeed(cfg)
+	seed := peerHomeTrackedSeed(cfg, "/Users/yj.lee/workspace/work")
 	want := ".claude/projects/-Users-yj-lee-workspace-work/memory\n"
 	if !strings.HasSuffix(seed, want) {
 		t.Errorf("seed does not end with the derived memory entry %q:\n%s", want, seed)
 	}
 	if !strings.Contains(seed, "#") {
 		t.Error("seed lost its documentation header")
+	}
+
+	// A peer with a different workspace path flattens to a different Claude
+	// project directory, so the entry would name the wrong directory on one
+	// machine: seed the header only.
+	asymmetric := peerHomeTrackedSeed(cfg, "/Users/other/workspace/work")
+	if strings.Contains(asymmetric, "/memory") {
+		t.Errorf("asymmetric workspace paths still seeded the derived entry:\n%s", asymmetric)
+	}
+	if !strings.Contains(asymmetric, "add entries by hand") {
+		t.Errorf("asymmetric seed does not explain how to add entries:\n%s", asymmetric)
+	}
+}
+
+func TestPeerInit_AsymmetricRemotePathSeedsHeaderOnly(t *testing.T) {
+	cfg := newTestConfig(t)
+	cfg.LocalPath = "/tmp/test-local/"
+
+	res, err := PeerInit(PeerInitOptions{Config: cfg, Host: "user@peer", RemotePath: "/different/workspace"})
+	if err != nil {
+		t.Fatalf("PeerInit: %v", err)
+	}
+	body, err := os.ReadFile(res.HomeTrackedFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), ".claude/projects/") {
+		t.Errorf("asymmetric remote path seeded a memory entry that would be wrong on one machine:\n%s", body)
 	}
 }
 

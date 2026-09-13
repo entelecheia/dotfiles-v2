@@ -256,10 +256,10 @@ func writePeerHomeList(cfg *Config, name string, rels []string, dryRun bool) (st
 	return path, cleanup, nil
 }
 
-// peerHomeUntrackedList returns the host-path list with tracked entries
-// stripped, so the additive --update pass never touches a path the tracked
-// pass owns. With no tracked list, or no overlap, the original file is used
-// unchanged and untracked behavior stays byte-identical.
+// peerHomeUntrackedList returns the host-path list with entries the tracked
+// pass owns stripped, so the additive --update pass never touches them. With
+// no tracked list, or no overlap, the original file is used unchanged and
+// untracked behavior stays byte-identical.
 func peerHomeUntrackedList(cfg *Config, list string, dryRun bool) (string, func(), error) {
 	noop := func() {}
 	tracked, err := readPeerHomeTrackedEntries(PeerHomeTrackedFile(cfg.LocalPaths))
@@ -269,27 +269,19 @@ func peerHomeUntrackedList(cfg *Config, list string, dryRun bool) (string, func(
 	if err != nil {
 		return "", nil, err
 	}
-	trackedSet := make(map[string]bool, len(tracked))
-	for _, entry := range tracked {
-		trackedSet[entry] = true
-	}
 	body, err := os.ReadFile(list)
 	if err != nil {
 		return "", nil, err
 	}
-	var kept []string
-	changed := false
+	var active []string
 	for _, line := range strings.Split(string(body), "\n") {
 		entry := strings.TrimSpace(line)
 		if entry == "" || strings.HasPrefix(entry, "#") {
 			continue
 		}
-		if trackedSet[strings.TrimSuffix(filepath.ToSlash(entry), "/")] {
-			changed = true
-			continue
-		}
-		kept = append(kept, entry)
+		active = append(active, entry)
 	}
+	kept, changed := filterUntrackedHomeEntries(active, tracked)
 	if !changed {
 		return list, noop, nil
 	}
@@ -311,21 +303,57 @@ func peerHomeUntrackedList(cfg *Config, list string, dryRun bool) (string, func(
 	return path, cleanup, nil
 }
 
+// filterUntrackedHomeEntries drops additive-list entries the tracked pass
+// owns. Ownership covers exact matches and nesting in BOTH directions: the
+// additive pass transfers directories recursively, so an untracked ancestor
+// of a tracked entry (e.g. `.claude` over `.claude/projects/x/memory`) would
+// re-sync the tracked subtree with --update semantics, and an untracked
+// descendant of a tracked directory is already walked by the tracked pass.
+func filterUntrackedHomeEntries(additive, tracked []string) (kept []string, changed bool) {
+	for _, entry := range additive {
+		normalized := strings.TrimSuffix(filepath.ToSlash(entry), "/")
+		owned := false
+		for _, t := range tracked {
+			if normalized == t || strings.HasPrefix(normalized, t+"/") || strings.HasPrefix(t, normalized+"/") {
+				owned = true
+				break
+			}
+		}
+		if owned {
+			changed = true
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept, changed
+}
+
 // peerHomeRemoteInventory lists the peer's tracked home paths by the same
 // empty-destination dry-run trick as the workspace inventory. The tracked
-// list file itself is the whole filter — the workspace runtime filters do not
+// list itself is the whole filter — the workspace runtime filters do not
 // apply outside the workspace.
-func peerHomeRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, listFile string, baseline map[string]Fingerprint) (PeerSnapshot, error) {
+//
+// The canonical list file is never handed to rsync: it carries comments,
+// which --files-from reads as literal paths, so a file whose name matches a
+// comment line would be inventoried and synced. A sanitized NUL-delimited
+// copy of the parsed entries is materialized per run instead, temp-dir'd
+// under a preview like every other per-run list (#103).
+func peerHomeRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, entries []string, baseline map[string]Fingerprint, dryRun bool) (PeerSnapshot, error) {
 	if cfg == nil || !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer home inventory: target is not SSH")
 	}
+	listFile, cleanup, err := writePeerHomeList(cfg, "home-tracked-inventory.dyn", entries, dryRun)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
 	root, err := os.MkdirTemp("", "dot-peer-home-inventory-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(root)
 
-	args := []string{"-r", "--dry-run", "--no-links", "--ignore-missing-args",
+	args := []string{"-r", "--dry-run", "--no-links", "--ignore-missing-args", "--from0",
 		"--out-format=@@%l\t%M\t%n", "--files-from=" + listFile}
 	remoteRsync := cfg.RemoteRsyncPath
 	if remoteRsync == "" {
@@ -637,7 +665,7 @@ func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *C
 	if err != nil {
 		return false, err
 	}
-	remote, err := peerHomeRemoteInventory(ctx, probe, cfg, list, baseline)
+	remote, err := peerHomeRemoteInventory(ctx, probe, cfg, entries, baseline, dryRun)
 	if err != nil {
 		return false, err
 	}
@@ -700,7 +728,7 @@ func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *C
 					checkBase[rel] = Fingerprint{}
 				}
 			}
-			remoteNow, err := peerHomeRemoteInventory(ctx, probe, cfg, list, checkBase)
+			remoteNow, err := peerHomeRemoteInventory(ctx, probe, cfg, entries, checkBase, dryRun)
 			if err != nil {
 				return false, err
 			}
