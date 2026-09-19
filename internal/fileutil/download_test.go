@@ -613,3 +613,51 @@ func TestExtractRealOhMyZsh(t *testing.T) {
 		}
 	}
 }
+
+// Tar directory entries carry a trailing slash. os.Root.MkdirAll rejects that
+// on Go 1.26 (mkdirat "a/": no such file or directory), so the stripped target
+// must be cleaned before extraction (#129).
+func TestExtractTarGz_DirectoryEntriesWithTrailingSlash(t *testing.T) {
+	archive := makeTarGzEntries(t, []archiveTestEntry{
+		{name: "top/", typeflag: tar.TypeDir, mode: 0755},
+		{name: "top/dir/", typeflag: tar.TypeDir, mode: 0755},
+		{name: "top/dir/sub/", typeflag: tar.TypeDir, mode: 0755},
+		{name: "top/dir/sub/file", content: "x", mode: 0644},
+	})
+	for strip, want := range map[int][]string{
+		0: {"top", "top/dir", "top/dir/sub", "top/dir/sub/file"},
+		1: {"dir", "dir/sub", "dir/sub/file"},
+	} {
+		dest := t.TempDir()
+		if err := ExtractTarGz(bytes.NewReader(archive), dest, strip); err != nil {
+			t.Fatalf("strip=%d: %v", strip, err)
+		}
+		for _, rel := range want {
+			if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+				t.Fatalf("strip=%d: missing %s: %v", strip, rel, err)
+			}
+		}
+	}
+}
+
+func TestStrippedArchiveNameCleansTrailingSlash(t *testing.T) {
+	cases := []struct {
+		name  string
+		strip int
+		want  string
+		ok    bool
+	}{
+		{"a/b/", 1, "b", true},
+		{"a/b/c/", 1, filepath.Join("b", "c"), true},
+		{"a/", 1, "", false},
+		{"a/./", 1, "", false},
+		{"a", 0, "a", true},
+		{"a/", 0, "a", true},
+	}
+	for _, tc := range cases {
+		got, ok := strippedArchiveName(tc.name, tc.strip)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("strippedArchiveName(%q, %d) = (%q, %v), want (%q, %v)", tc.name, tc.strip, got, ok, tc.want, tc.ok)
+		}
+	}
+}

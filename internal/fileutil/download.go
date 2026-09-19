@@ -545,7 +545,18 @@ func strippedArchiveName(name string, stripComponents int) (string, bool) {
 		return "", false
 	}
 	name = filepath.FromSlash(parts[stripComponents])
-	return name, name != ""
+	if name == "" {
+		return "", false
+	}
+	// Tar directory entries end in "/"; os.Root.MkdirAll rejects a trailing
+	// separator on Go 1.26 (mkdirat "a/": no such file or directory), so the
+	// target is normalised here. A name that cleans to "." is the strip root
+	// itself and has nothing to create.
+	name = filepath.Clean(name)
+	if name == "." {
+		return "", false
+	}
+	return name, true
 }
 
 func validateArchiveTarget(name string) error {
