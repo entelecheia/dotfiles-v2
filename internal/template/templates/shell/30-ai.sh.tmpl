@@ -29,6 +29,11 @@ kimi-yolo() {
   command kimi --auto "$@"
 }
 
+# ── agent-hub ──
+# switchyard-server is installed via cargo and lives outside PATH; the hub
+# falls back to a PATH lookup when this is unset.
+[ -x "$HOME/.cargo/bin/switchyard-server" ] && export AGENTHUB_SWITCHYARD_BIN="$HOME/.cargo/bin/switchyard-server"
+
 # ── GitHub Models ──
 command -v gh &>/dev/null && {
   alias g4="gh models run gpt-4o"
