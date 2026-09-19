@@ -316,6 +316,11 @@ func extractTarGzWithLimits(r io.Reader, destDir string, stripComponents int, li
 		if err := validateArchiveTarget(name); err != nil {
 			return fmt.Errorf("tar entry %q: %w", hdr.Name, err)
 		}
+		// Only directory entries may carry the trailing "/" that normalisation
+		// strips; a file or link named "x/" is malformed and must not become "x".
+		if hdr.Typeflag != tar.TypeDir && strings.HasSuffix(hdr.Name, "/") {
+			return fmt.Errorf("tar entry %q: directory name on a non-directory entry", hdr.Name)
+		}
 		if err := budget.reserve(hdr.Name, hdr.Size); err != nil {
 			return err
 		}
@@ -439,8 +444,8 @@ func extractZipWithLimits(r *zip.Reader, destDir string, limits ArchiveLimits) e
 	budget := archiveBudget{limits: limits}
 	var compressed int64
 	for _, f := range r.File {
-		name := filepath.FromSlash(f.Name)
-		if name == "" {
+		name, ok := normalizeArchiveTarget(f.Name)
+		if !ok {
 			continue
 		}
 		if err := validateArchiveTarget(name); err != nil {
@@ -544,15 +549,19 @@ func strippedArchiveName(name string, stripComponents int) (string, bool) {
 	if len(parts) <= stripComponents {
 		return "", false
 	}
-	name = filepath.FromSlash(parts[stripComponents])
+	return normalizeArchiveTarget(parts[stripComponents])
+}
+
+// normalizeArchiveTarget converts an archive member name into the extraction
+// target. Directory entries end in "/" in both tar and zip, and os.Root.MkdirAll
+// rejects a trailing separator on Go 1.26 (mkdirat "a/": no such file or
+// directory), so the name is cleaned here for both extractors. An empty name or
+// one that cleans to "." is the extraction root itself: nothing to create.
+func normalizeArchiveTarget(name string) (string, bool) {
 	if name == "" {
 		return "", false
 	}
-	// Tar directory entries end in "/"; os.Root.MkdirAll rejects a trailing
-	// separator on Go 1.26 (mkdirat "a/": no such file or directory), so the
-	// target is normalised here. A name that cleans to "." is the strip root
-	// itself and has nothing to create.
-	name = filepath.Clean(name)
+	name = filepath.Clean(filepath.FromSlash(name))
 	if name == "." {
 		return "", false
 	}
