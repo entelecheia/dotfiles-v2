@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	osexec "os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -403,25 +404,42 @@ func (u *aiUpdater) updateCodex(ctx context.Context) []updateStep {
 	return []updateStep{
 		self,
 		u.run(ctx, "codex", "marketplace-upgrade", "codex", "plugin", "marketplace", "upgrade"),
-		codexClaudeMemCacheStep(u.home),
+		u.codexClaudeMemCacheStep(ctx),
 	}
 }
 
-// codexClaudeMemCacheStep verifies the codex claude-mem plugin cache is still
-// runnable after a marketplace upgrade: a snapshot refresh pulls new plugin
-// code without installing its dependencies, which silently breaks the native
-// hooks. Read-only, so it also runs under --dry-run. Detect-and-instruct only;
-// dot never auto-runs codex plugin remove/add.
-func codexClaudeMemCacheStep(home string) updateStep {
+// codexClaudeMemCacheStep keeps the codex claude-mem plugin cache runnable
+// after a marketplace upgrade: a snapshot refresh pulls new plugin code without
+// installing its dependencies, which silently breaks the native hooks. The
+// repair is an idempotent `bun install --frozen-lockfile` in the cache (never a
+// codex plugin remove/add), so it runs here directly; --dry-run only reports.
+func (u *aiUpdater) codexClaudeMemCacheStep(ctx context.Context) updateStep {
+	mgr := aisettings.NewClaudeMemManager(u.home, "", "")
+	if bunPath, err := osexec.LookPath("bun"); err == nil {
+		if bunPath, err := filepath.Abs(bunPath); err == nil {
+			mgr.BunPath = bunPath
+		}
+	}
+	return codexClaudeMemCacheStep(ctx, mgr, u.runner.DryRun)
+}
+
+func codexClaudeMemCacheStep(ctx context.Context, mgr *aisettings.ClaudeMemManager, dryRun bool) updateStep {
 	step := updateStep{Tool: "codex", Step: "claude-mem-cache"}
-	path, runnable := aisettings.CodexClaudeMemCache(home)
+	path, runnable := aisettings.CodexClaudeMemCache(mgr.HomeDir)
 	switch {
 	case path == "":
 		step.Status, step.Detail = stepSkipped, "no codex claude-mem cache (plugin not installed)"
 	case runnable:
 		step.Status, step.Detail = stepCurrent, "runtime ok: "+path
+	case dryRun:
+		step.Status, step.Detail = stepSkipped, "dry-run: would run bun install --frozen-lockfile in "+path
 	default:
-		step.Status, step.Detail = stepFailed, path+" missing node_modules; run: "+aisettings.ClaudeMemRepairCommand
+		repaired, err := mgr.EnsureCodexCacheRuntime(ctx)
+		if err != nil {
+			step.Status, step.Detail = stepFailed, path+" missing node_modules; repair failed: "+err.Error()+"; run: "+aisettings.ClaudeMemRepairCommand
+			break
+		}
+		step.Status, step.Detail = stepUpdated, "installed runtime: "+repaired
 	}
 	return step
 }
