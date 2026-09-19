@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -611,5 +612,112 @@ func TestExtractRealOhMyZsh(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dest, required)); err != nil {
 			t.Fatalf("fixture is missing %s: %v", required, err)
 		}
+	}
+}
+
+// Tar directory entries carry a trailing slash. os.Root.MkdirAll rejects that
+// on Go 1.26 (mkdirat "a/": no such file or directory), so the stripped target
+// must be cleaned before extraction (#129).
+func TestExtractTarGz_DirectoryEntriesWithTrailingSlash(t *testing.T) {
+	archive := makeTarGzEntries(t, []archiveTestEntry{
+		{name: "top/", typeflag: tar.TypeDir, mode: 0755},
+		{name: "top/dir/", typeflag: tar.TypeDir, mode: 0755},
+		{name: "top/dir/sub/", typeflag: tar.TypeDir, mode: 0755},
+		{name: "top/dir/sub/file", content: "x", mode: 0644},
+	})
+	for strip, want := range map[int][]string{
+		0: {"top", "top/dir", "top/dir/sub", "top/dir/sub/file"},
+		1: {"dir", "dir/sub", "dir/sub/file"},
+	} {
+		dest := t.TempDir()
+		if err := ExtractTarGz(bytes.NewReader(archive), dest, strip); err != nil {
+			t.Fatalf("strip=%d: %v", strip, err)
+		}
+		for _, rel := range want {
+			if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+				t.Fatalf("strip=%d: missing %s: %v", strip, rel, err)
+			}
+		}
+	}
+}
+
+func TestStrippedArchiveNameCleansTrailingSlash(t *testing.T) {
+	cases := []struct {
+		name  string
+		strip int
+		want  string
+		ok    bool
+	}{
+		{"a/b/", 1, "b", true},
+		{"a/b/c/", 1, filepath.Join("b", "c"), true},
+		{"a/", 1, "", false},
+		{"a/./", 1, "", false},
+		{"a", 0, "a", true},
+		{"a/", 0, "a", true},
+	}
+	for _, tc := range cases {
+		got, ok := strippedArchiveName(tc.name, tc.strip)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("strippedArchiveName(%q, %d) = (%q, %v), want (%q, %v)", tc.name, tc.strip, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestExtractZip_DirectoryEntriesWithTrailingSlash(t *testing.T) {
+	archive := makeZip(t, []archiveTestEntry{
+		{name: "top/", typeflag: tar.TypeDir},
+		{name: "top/dir/", typeflag: tar.TypeDir},
+		{name: "top/dir/file", content: "x", mode: 0644},
+	})
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if err := ExtractZip(reader, dest); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"top", "top/dir", "top/dir/file"} {
+		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("missing %s: %v", rel, err)
+		}
+	}
+}
+
+// rawTarGz builds a one-entry ustar archive by hand: archive/tar refuses to
+// write a regular file whose name ends in "/", but a reader still parses one.
+func rawTarGz(t *testing.T, name string, typeflag byte, content string) []byte {
+	t.Helper()
+	block := make([]byte, 512)
+	copy(block[0:], name)
+	copy(block[100:], fmt.Sprintf("%07o\x00", 0o644))
+	copy(block[108:], "0000000\x00")
+	copy(block[116:], "0000000\x00")
+	copy(block[124:], fmt.Sprintf("%011o\x00", len(content)))
+	copy(block[136:], "00000000000\x00")
+	copy(block[148:], "        ")
+	block[156] = typeflag
+	copy(block[257:], "ustar\x0000")
+	sum := 0
+	for _, b := range block {
+		sum += int(b)
+	}
+	copy(block[148:], fmt.Sprintf("%06o\x00 ", sum))
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	gz.Write(block)
+	data := make([]byte, 512)
+	copy(data, content)
+	gz.Write(data)
+	gz.Write(make([]byte, 1024))
+	gz.Close()
+	return buf.Bytes()
+}
+
+func TestExtractTarGz_RejectsTrailingSlashOnFileEntry(t *testing.T) {
+	archive := rawTarGz(t, "x/", tar.TypeReg, "1")
+	err := ExtractTarGz(bytes.NewReader(archive), t.TempDir(), 0)
+	if err == nil || !strings.Contains(err.Error(), "directory name on a non-directory entry") {
+		t.Fatalf("err = %v, want rejection of file entry named like a directory", err)
 	}
 }
