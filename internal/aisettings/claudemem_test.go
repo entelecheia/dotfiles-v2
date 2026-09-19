@@ -645,3 +645,78 @@ func TestTranscriptConfigWatchesIsArrayWhenEmpty(t *testing.T) {
 		t.Errorf("watches is not an empty array:\n%s", raw)
 	}
 }
+
+func TestEnsureCodexCacheRuntimeInstallsMissingNodeModules(t *testing.T) {
+	home := t.TempDir()
+	cache := codexCacheDir(home, "13.25.1")
+	writeClaudeMemTree(t, cache, false)
+	mustMkdirAll(t, filepath.Join(cache, "node_modules")) // interrupted install: empty dir
+
+	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+	mgr.BunPath = "/bin/bun"
+	var gotBun, gotDir string
+	mgr.RunBunInstall = func(_ context.Context, bunPath, dir string) ([]byte, error) {
+		gotBun, gotDir = bunPath, dir
+		mustWriteFile(t, filepath.Join(dir, "node_modules", "zod", "package.json"), "{}")
+		return []byte("37 packages installed"), nil
+	}
+
+	path, repaired, err := mgr.EnsureCodexCacheRuntime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != cache || !repaired {
+		t.Fatalf("got (%q, %v), want (%q, true)", path, repaired, cache)
+	}
+	if gotBun != "/bin/bun" || gotDir != cache {
+		t.Fatalf("bun install ran as (%q in %q)", gotBun, gotDir)
+	}
+	if _, runnable := CodexClaudeMemCache(home); !runnable {
+		t.Fatal("cache still reported broken after repair")
+	}
+
+	// Idempotent: a runnable cache never triggers another install.
+	mgr.RunBunInstall = func(context.Context, string, string) ([]byte, error) {
+		t.Fatal("bun install ran on a runnable cache")
+		return nil, nil
+	}
+	if _, repaired, err := mgr.EnsureCodexCacheRuntime(context.Background()); err != nil || repaired {
+		t.Fatalf("second run: repaired=%v err=%v", repaired, err)
+	}
+}
+
+func TestEnsureCodexCacheRuntimeReportsInstallThatLeavesCacheBroken(t *testing.T) {
+	home := t.TempDir()
+	cache := codexCacheDir(home, "13.25.1")
+	writeClaudeMemTree(t, cache, false)
+	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+	mgr.BunPath = "/bin/bun"
+	mgr.RunBunInstall = func(context.Context, string, string) ([]byte, error) { return []byte("ok"), nil }
+
+	_, repaired, err := mgr.EnsureCodexCacheRuntime(context.Background())
+	if !repaired || err == nil || !strings.Contains(err.Error(), "left node_modules empty") {
+		t.Fatalf("repaired=%v err=%v", repaired, err)
+	}
+
+	// No cache at all is not an error: codex creates it on `plugin add`.
+	if _, repaired, err := NewClaudeMemManager(t.TempDir(), "/bin/dot", "/bin/node").EnsureCodexCacheRuntime(context.Background()); err != nil || repaired {
+		t.Fatalf("no cache: repaired=%v err=%v", repaired, err)
+	}
+}
+
+func TestClaudeMemStatusReportsForeignCodexHome(t *testing.T) {
+	home := t.TempDir()
+	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	if got := mgr.CodexHomeOverride(); got != "" {
+		t.Fatalf("default home reported as override: %q", got)
+	}
+	t.Setenv("CODEX_HOME", "/tmp/orca/codex-home")
+	if got := mgr.CodexHomeOverride(); got != "/tmp/orca/codex-home" {
+		t.Fatalf("override = %q", got)
+	}
+	if status := mgr.Status(context.Background(), filepath.Join(home, "AGENTS.md")); status.CodexHome != "/tmp/orca/codex-home" {
+		t.Fatalf("status.CodexHome = %q", status.CodexHome)
+	}
+}

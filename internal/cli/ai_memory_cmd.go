@@ -91,6 +91,9 @@ func newAIMemoryInstallCmd() *cobra.Command {
 			p.KV("Kimi sessions", fmt.Sprintf("%d", result.WatchCount["kimi"]))
 			p.KV("Kiro sessions", fmt.Sprintf("%d", result.WatchCount["kiro"]))
 			p.KV("Copilot sessions", fmt.Sprintf("%d", result.WatchCount["copilot"]))
+			if result.CodexCachePath != "" {
+				p.Line("Installed the codex plugin cache runtime at %s", result.CodexCachePath)
+			}
 			if instructionsChanged {
 				p.Line("Persistent-memory policy added to the agents SSOT.")
 			}
@@ -130,6 +133,9 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			codexDetail := "native hooks + plugin MCP"
 			if status.CodexCachePath != "" && !status.CodexCacheRunnable {
 				codexDetail = "codex plugin cache runtime missing; run: " + aisettings.ClaudeMemRepairCommand
+			}
+			if status.CodexHome != "" {
+				codexDetail += fmt.Sprintf(" (inspected ~/.codex; this shell has CODEX_HOME=%s)", status.CodexHome)
 			}
 			p.Section("Tools")
 			printMemoryState(p, "codex", status.CodexNativeHooks, codexDetail)

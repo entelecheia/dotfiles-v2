@@ -44,6 +44,8 @@ type ClaudeMemManager struct {
 	NodePath   string
 	BunPath    string
 	PluginRoot string
+	// RunBunInstall runs `bun install` in dir; nil uses the real bun. Test seam.
+	RunBunInstall func(ctx context.Context, bunPath, dir string) ([]byte, error)
 }
 
 type ClaudeMemInstallResult struct {
@@ -51,15 +53,20 @@ type ClaudeMemInstallResult struct {
 	ConfigPaths []string
 	BridgePath  string
 	WatchCount  map[string]int
+	// CodexCachePath is the codex plugin cache whose runtime was installed
+	// during this run; empty when nothing needed repair.
+	CodexCachePath string
 }
 
 type ClaudeMemStatus struct {
-	PluginRoot          string
-	PluginVersion       string
-	PluginError         string
-	CodexNativeHooks    bool
-	CodexCachePath      string
-	CodexCacheRunnable  bool
+	PluginRoot         string
+	PluginVersion      string
+	PluginError        string
+	CodexNativeHooks   bool
+	CodexCachePath     string
+	CodexCacheRunnable bool
+	// CodexHome is CODEX_HOME when it differs from ~/.codex (see CodexHomeOverride).
+	CodexHome           string
 	KimiMCP             bool
 	KiroMCP             bool
 	CopilotMCP          bool
@@ -134,11 +141,63 @@ func (m *ClaudeMemManager) CopilotMCPPath() string {
 	return filepath.Join(m.HomeDir, ".copilot", "mcp-config.json")
 }
 
-// ClaudeMemRepairCommand reinstalls the codex claude-mem plugin cache; shared
-// with the CLI so every surface prints the same repair procedure.
-const ClaudeMemRepairCommand = "codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local"
+// ClaudeMemRepairCommand repairs the codex claude-mem plugin cache; shared
+// with the CLI so every surface prints the same repair procedure. Install
+// materializes the cache runtime itself (EnsureCodexCacheRuntime), because
+// `codex plugin add` only snapshots the marketplace checkout, which has no
+// node_modules.
+const ClaudeMemRepairCommand = "dot ai memory install"
 
-const claudeMemRepairHint = "repair: " + ClaudeMemRepairCommand + " (or: npx claude-mem@latest install)"
+// claudeMemReinstallCommand recreates the codex plugin cache from scratch. codex
+// 0.154 rejects the bare `plugin remove <name>` form, so the marketplace is
+// always spelled out.
+const claudeMemReinstallCommand = "codex plugin remove claude-mem --marketplace claude-mem-local && codex plugin add claude-mem@claude-mem-local"
+
+const claudeMemRepairHint = "repair: " + ClaudeMemRepairCommand + " (or: " + claudeMemReinstallCommand + ", then " + ClaudeMemRepairCommand + ")"
+
+// EnsureCodexCacheRuntime installs the codex plugin cache's dependencies when
+// node_modules is missing or empty, so codex's native hooks can run. Returns
+// the cache path, whether an install ran, and an error only when an install ran
+// and the cache is still not runnable. No cache dir is not an error: Install
+// already requires the plugin to be enabled, and codex creates the cache itself.
+func (m *ClaudeMemManager) EnsureCodexCacheRuntime(ctx context.Context) (string, bool, error) {
+	path, runnable := CodexClaudeMemCache(m.HomeDir)
+	if path == "" || runnable {
+		return path, false, nil
+	}
+	if !hasClaudeMemScripts(path) {
+		return path, false, fmt.Errorf("codex plugin cache at %s is not a claude-mem plugin; %s", path, claudeMemReinstallCommand)
+	}
+	run := m.RunBunInstall
+	if run == nil {
+		run = runBunInstall
+	}
+	out, err := run(ctx, m.BunPath, path)
+	if err != nil {
+		return path, true, fmt.Errorf("bun install in %s: %w: %s", path, err, strings.TrimSpace(string(out)))
+	}
+	if !hasClaudeMemRuntime(path) {
+		return path, true, fmt.Errorf("bun install in %s left node_modules empty; %s", path, claudeMemReinstallCommand)
+	}
+	return path, true, nil
+}
+
+func runBunInstall(ctx context.Context, bunPath, dir string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, bunPath, "install", "--frozen-lockfile")
+	cmd.Dir = dir
+	return cmd.CombinedOutput()
+}
+
+// CodexHomeOverride returns CODEX_HOME when it points somewhere other than
+// ~/.codex, the only home dot inspects. Orca terminals set it to a per-account
+// home, so `codex plugin add` there never fixes what status reports.
+func (m *ClaudeMemManager) CodexHomeOverride() string {
+	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if home == "" || filepath.Clean(home) == filepath.Join(m.HomeDir, ".codex") {
+		return ""
+	}
+	return home
+}
 
 // LocatePlugin resolves an installed claude-mem plugin without pinning a
 // cache version. The Claude marketplace checkout is preferred because Codex,
@@ -590,6 +649,13 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 	if m.BunPath == "" || !filepath.IsAbs(m.BunPath) {
 		return ClaudeMemInstallResult{}, errors.New("bun executable path must be absolute")
 	}
+	codexCache, codexRepaired, err := m.EnsureCodexCacheRuntime(ctx)
+	if err != nil {
+		return ClaudeMemInstallResult{}, err
+	}
+	if !codexRepaired {
+		codexCache = ""
+	}
 
 	var changedPaths []string
 	for _, target := range []struct {
@@ -625,6 +691,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 
 	return ClaudeMemInstallResult{
 		PluginRoot: pluginRoot, ConfigPaths: changedPaths, BridgePath: m.LaunchdPlistPath(), WatchCount: countWatches(config.Watches),
+		CodexCachePath: codexCache,
 	}, nil
 }
 
@@ -878,6 +945,7 @@ func stopChild(child *exec.Cmd, done <-chan error) {
 func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMemStatus {
 	status := ClaudeMemStatus{WatchCount: map[string]int{}}
 	status.CodexCachePath, status.CodexCacheRunnable = CodexClaudeMemCache(m.HomeDir)
+	status.CodexHome = m.CodexHomeOverride()
 	if pluginRoot, err := m.LocatePlugin(); err == nil {
 		status.PluginRoot = pluginRoot
 		// Codex's native hooks execute from codex's own plugin cache, not from

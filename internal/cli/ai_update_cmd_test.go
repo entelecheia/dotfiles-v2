@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -300,7 +301,7 @@ func TestCodexClaudeMemCacheStep(t *testing.T) {
 		if step.Status != stepFailed {
 			t.Fatalf("status = %q, want %q (%s)", step.Status, stepFailed, step.Detail)
 		}
-		for _, want := range []string{root, "codex plugin remove claude-mem", "codex plugin add claude-mem@claude-mem-local"} {
+		for _, want := range []string{root, aisettings.ClaudeMemRepairCommand} {
 			if !strings.Contains(step.Detail, want) {
 				t.Fatalf("detail %q missing %q", step.Detail, want)
 			}
