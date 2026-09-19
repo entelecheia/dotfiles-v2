@@ -44,6 +44,8 @@ type ClaudeMemManager struct {
 	NodePath   string
 	BunPath    string
 	PluginRoot string
+	// RunBunInstall runs `bun install` in dir; nil uses the real bun. Test seam.
+	RunBunInstall func(ctx context.Context, bunPath, dir string) ([]byte, error)
 }
 
 type ClaudeMemInstallResult struct {
@@ -51,15 +53,23 @@ type ClaudeMemInstallResult struct {
 	ConfigPaths []string
 	BridgePath  string
 	WatchCount  map[string]int
+	// CodexCachePath is the codex plugin cache whose runtime was installed
+	// during this run; empty when nothing needed repair.
+	CodexCachePath string
+	// CodexCacheError is a non-fatal repair failure: the rest of the install
+	// (MCP wiring, transcript bridge) still completed.
+	CodexCacheError string
 }
 
 type ClaudeMemStatus struct {
-	PluginRoot          string
-	PluginVersion       string
-	PluginError         string
-	CodexNativeHooks    bool
-	CodexCachePath      string
-	CodexCacheRunnable  bool
+	PluginRoot         string
+	PluginVersion      string
+	PluginError        string
+	CodexNativeHooks   bool
+	CodexCachePath     string
+	CodexCacheRunnable bool
+	// CodexHome is CODEX_HOME when it differs from ~/.codex (see CodexHomeOverride).
+	CodexHome           string
 	KimiMCP             bool
 	KiroMCP             bool
 	CopilotMCP          bool
@@ -134,11 +144,108 @@ func (m *ClaudeMemManager) CopilotMCPPath() string {
 	return filepath.Join(m.HomeDir, ".copilot", "mcp-config.json")
 }
 
-// ClaudeMemRepairCommand reinstalls the codex claude-mem plugin cache; shared
-// with the CLI so every surface prints the same repair procedure.
-const ClaudeMemRepairCommand = "codex plugin remove claude-mem && codex plugin add claude-mem@claude-mem-local"
+// ClaudeMemRepairCommand repairs the codex claude-mem plugin cache; shared
+// with the CLI so every surface prints the same repair procedure. Install
+// materializes the cache runtime itself (EnsureCodexCacheRuntime), because
+// `codex plugin add` only snapshots the marketplace checkout, which has no
+// node_modules.
+const ClaudeMemRepairCommand = "dot ai memory install"
 
-const claudeMemRepairHint = "repair: " + ClaudeMemRepairCommand + " (or: npx claude-mem@latest install)"
+// claudeMemReinstallCommand recreates the codex plugin cache from scratch. codex
+// 0.154 rejects the bare `plugin remove <name>` form, so the marketplace is
+// always spelled out.
+const claudeMemReinstallCommand = "codex plugin remove claude-mem --marketplace claude-mem-local && codex plugin add claude-mem@claude-mem-local"
+
+const claudeMemRepairHint = "repair: " + ClaudeMemRepairCommand + " (or: " + claudeMemReinstallCommand + ", then " + ClaudeMemRepairCommand + ")"
+
+// codexCacheInstallTimeout bounds the dependency install so a stalled registry
+// fetch surfaces as an error instead of a silent hang.
+const codexCacheInstallTimeout = 5 * time.Minute
+
+// CodexHomeDir is the codex home dot inspects and repairs: CODEX_HOME when the
+// shell sets it (Orca points it at a per-account home), with a leading ~
+// expanded and symlinks resolved; otherwise ~/.codex.
+func CodexHomeDir(homeDir string) string {
+	raw := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if raw == "" {
+		return filepath.Join(homeDir, ".codex")
+	}
+	if raw == "~" || strings.HasPrefix(raw, "~/") {
+		raw = filepath.Join(homeDir, strings.TrimPrefix(raw, "~"))
+	}
+	return canonicalPath(raw)
+}
+
+func canonicalPath(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
+}
+
+// CodexHomeOverride returns the codex home dot inspected when CODEX_HOME moved
+// it away from ~/.codex, so status can say which home the codex row describes.
+// Empty when CODEX_HOME is unset or names ~/.codex (also via ~ or a symlink).
+func (m *ClaudeMemManager) CodexHomeOverride() string {
+	home := CodexHomeDir(m.HomeDir)
+	if home == canonicalPath(filepath.Join(m.HomeDir, ".codex")) {
+		return ""
+	}
+	return home
+}
+
+func (m *ClaudeMemManager) codexConfigPath() string {
+	return filepath.Join(CodexHomeDir(m.HomeDir), "config.toml")
+}
+
+// EnsureCodexCacheRuntime installs the codex plugin cache's dependencies when
+// node_modules is missing or empty, so codex's native hooks can run. Returns
+// the cache path when an install ran and left it runnable, "" when nothing
+// needed doing (no cache, or already runnable), and an error when a repair was
+// needed but could not be completed. It does not depend on LocatePlugin, so it
+// works when the codex cache is the only claude-mem copy on the machine.
+func (m *ClaudeMemManager) EnsureCodexCacheRuntime(ctx context.Context) (string, error) {
+	path, runnable := CodexClaudeMemCache(m.HomeDir)
+	if path == "" || runnable {
+		return "", nil
+	}
+	if !hasClaudeMemScripts(path) {
+		return "", fmt.Errorf("codex plugin cache at %s is not a claude-mem plugin; %s", path, claudeMemReinstallCommand)
+	}
+	if m.BunPath == "" || !filepath.IsAbs(m.BunPath) {
+		return "", errors.New("bun executable path must be absolute to install the codex plugin cache runtime")
+	}
+	run := m.RunBunInstall
+	if run == nil {
+		run = runBunInstall
+	}
+	ctx, cancel := context.WithTimeout(ctx, codexCacheInstallTimeout)
+	defer cancel()
+	out, err := run(ctx, m.BunPath, path)
+	if err != nil {
+		return "", fmt.Errorf("bun install in %s: %w: %s", path, err, strings.TrimSpace(string(out)))
+	}
+	if !hasClaudeMemRuntime(path) {
+		return "", fmt.Errorf("bun install in %s left node_modules empty; %s", path, claudeMemReinstallCommand)
+	}
+	return path, nil
+}
+
+// runBunInstall runs the pinned dependency install. bunPath comes from
+// exec.LookPath + filepath.Abs in the CLI and is re-checked here; dir is a
+// glob match under the codex plugin cache, never user input.
+func runBunInstall(ctx context.Context, bunPath, dir string) ([]byte, error) {
+	if !filepath.IsAbs(bunPath) {
+		return nil, fmt.Errorf("bun path %q is not absolute", bunPath)
+	}
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command -- bunPath is
+	// exec.LookPath+filepath.Abs output re-checked as absolute above; the
+	// arguments are static and dir is a codex plugin cache glob match.
+	cmd := exec.CommandContext(ctx, bunPath, "install", "--frozen-lockfile")
+	cmd.Dir = dir
+	return cmd.CombinedOutput()
+}
 
 // LocatePlugin resolves an installed claude-mem plugin without pinning a
 // cache version. The Claude marketplace checkout is preferred because Codex,
@@ -164,8 +271,8 @@ func (m *ClaudeMemManager) LocatePlugin() (string, error) {
 	// the recorded path outranks any mtime guess over the cache dirs.
 	candidates = append(candidates, m.installedClaudeMemPaths()...)
 	for _, pattern := range []string{
-		filepath.Join(m.HomeDir, ".codex", "plugins", "cache", "claude-mem-local", "claude-mem", "*"),
-		filepath.Join(m.HomeDir, ".codex", "plugins", "cache", "thedotmack", "claude-mem", "*"),
+		filepath.Join(CodexHomeDir(m.HomeDir), "plugins", "cache", "claude-mem-local", "claude-mem", "*"),
+		filepath.Join(CodexHomeDir(m.HomeDir), "plugins", "cache", "thedotmack", "claude-mem", "*"),
 		filepath.Join(m.HomeDir, ".claude", "plugins", "cache", "thedotmack", "claude-mem", "*"),
 	} {
 		matches, _ := filepath.Glob(pattern)
@@ -279,15 +386,18 @@ func withoutOrphaned(dirs []string) []string {
 
 // CodexClaudeMemCache returns the newest non-orphaned codex claude-mem plugin
 // cache dir and whether its runtime is installed. path == "" means no cache
-// exists. Orphaned dirs are marked for deletion, so they never win.
+// exists. Orphaned dirs are marked for deletion, so they never win. The cache
+// is looked up under CodexHomeDir, so a shell with CODEX_HOME set inspects the
+// same home its codex uses.
 // ponytail: newest-modtime dir approximates codex's active cache version;
 // parse config.toml plugin pins if this ever misfires.
 func CodexClaudeMemCache(homeDir string) (string, bool) {
 	var newest string
 	var newestMod time.Time
+	codexHome := CodexHomeDir(homeDir)
 	for _, pattern := range []string{
-		filepath.Join(homeDir, ".codex", "plugins", "cache", "claude-mem-local", "claude-mem", "*"),
-		filepath.Join(homeDir, ".codex", "plugins", "cache", "thedotmack", "claude-mem", "*"),
+		filepath.Join(codexHome, "plugins", "cache", "claude-mem-local", "claude-mem", "*"),
+		filepath.Join(codexHome, "plugins", "cache", "thedotmack", "claude-mem", "*"),
 	} {
 		matches, _ := filepath.Glob(pattern)
 		matches = withoutOrphaned(matches)
@@ -574,13 +684,6 @@ const (
 // Install wires recall into Kimi/Kiro/Copilot, prepares transcript capture,
 // and loads the macOS user LaunchAgent that keeps new sessions discovered.
 func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult, error) {
-	pluginRoot, err := m.LocatePlugin()
-	if err != nil {
-		return ClaudeMemInstallResult{}, err
-	}
-	if !codexClaudeMemEnabled(filepath.Join(m.HomeDir, ".codex", "config.toml")) {
-		return ClaudeMemInstallResult{}, errors.New("codex claude-mem plugin is not enabled; run `codex plugin add claude-mem@claude-mem-local` first")
-	}
 	if m.DotPath == "" || !filepath.IsAbs(m.DotPath) {
 		return ClaudeMemInstallResult{}, errors.New("dot executable path must be absolute")
 	}
@@ -589,6 +692,22 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 	}
 	if m.BunPath == "" || !filepath.IsAbs(m.BunPath) {
 		return ClaudeMemInstallResult{}, errors.New("bun executable path must be absolute")
+	}
+	// Repair the codex cache before locating the plugin: on a machine where the
+	// codex cache is the only claude-mem copy, LocatePlugin can only succeed
+	// after node_modules exists. A failed repair is reported, not fatal, so the
+	// Kimi/Kiro/Copilot wiring and the bridge still install.
+	codexCache, codexErr := m.EnsureCodexCacheRuntime(ctx)
+	codexCacheError := ""
+	if codexErr != nil {
+		codexCacheError = codexErr.Error()
+	}
+	pluginRoot, err := m.LocatePlugin()
+	if err != nil {
+		return ClaudeMemInstallResult{}, err
+	}
+	if !codexClaudeMemEnabled(m.codexConfigPath()) {
+		return ClaudeMemInstallResult{}, errors.New("codex claude-mem plugin is not enabled; run `codex plugin add claude-mem@claude-mem-local` first")
 	}
 
 	var changedPaths []string
@@ -625,6 +744,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 
 	return ClaudeMemInstallResult{
 		PluginRoot: pluginRoot, ConfigPaths: changedPaths, BridgePath: m.LaunchdPlistPath(), WatchCount: countWatches(config.Watches),
+		CodexCachePath: codexCache, CodexCacheError: codexCacheError,
 	}, nil
 }
 
@@ -878,13 +998,14 @@ func stopChild(child *exec.Cmd, done <-chan error) {
 func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMemStatus {
 	status := ClaudeMemStatus{WatchCount: map[string]int{}}
 	status.CodexCachePath, status.CodexCacheRunnable = CodexClaudeMemCache(m.HomeDir)
+	status.CodexHome = m.CodexHomeOverride()
 	if pluginRoot, err := m.LocatePlugin(); err == nil {
 		status.PluginRoot = pluginRoot
 		// Codex's native hooks execute from codex's own plugin cache, not from
 		// dot's resolved root, so an absent or broken cache turns the codex
 		// row red even when a healthy claude-side copy resolves.
 		status.CodexNativeHooks = fileExists(filepath.Join(pluginRoot, "hooks", "codex-hooks.json")) &&
-			codexClaudeMemEnabled(filepath.Join(m.HomeDir, ".codex", "config.toml")) &&
+			codexClaudeMemEnabled(m.codexConfigPath()) &&
 			status.CodexCacheRunnable
 		var manifest struct {
 			Version string `json:"version"`

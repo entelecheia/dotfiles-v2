@@ -54,7 +54,16 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				p.KV("Kimi sessions", fmt.Sprintf("%d", config["kimi"]))
 				p.KV("Kiro sessions", fmt.Sprintf("%d", config["kiro"]))
 				p.KV("Copilot sessions", fmt.Sprintf("%d", config["copilot"]))
+				if cache, runnable := aisettings.CodexClaudeMemCache(mgr.HomeDir); cache != "" && !runnable {
+					p.Line("would run bun install --frozen-lockfile in %s (network access)", cache)
+				}
 				return nil
+			}
+			// Repair before the plugin gate: when the codex cache is the only
+			// claude-mem copy, LocatePlugin only succeeds once its runtime exists.
+			repairedCache, repairErr := mgr.EnsureCodexCacheRuntime(cmd.Context())
+			if repairErr != nil {
+				p.Warn("codex plugin cache repair failed: %v", repairErr)
 			}
 			if _, err := mgr.LocatePlugin(); err != nil {
 				return err
@@ -91,6 +100,12 @@ func newAIMemoryInstallCmd() *cobra.Command {
 			p.KV("Kimi sessions", fmt.Sprintf("%d", result.WatchCount["kimi"]))
 			p.KV("Kiro sessions", fmt.Sprintf("%d", result.WatchCount["kiro"]))
 			p.KV("Copilot sessions", fmt.Sprintf("%d", result.WatchCount["copilot"]))
+			if cache := firstNonEmpty(repairedCache, result.CodexCachePath); cache != "" {
+				p.Line("Installed the codex plugin cache runtime at %s", cache)
+			}
+			if result.CodexCacheError != "" && repairErr == nil {
+				p.Warn("codex plugin cache repair failed: %s", result.CodexCacheError)
+			}
 			if instructionsChanged {
 				p.Line("Persistent-memory policy added to the agents SSOT.")
 			}
@@ -131,6 +146,9 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			if status.CodexCachePath != "" && !status.CodexCacheRunnable {
 				codexDetail = "codex plugin cache runtime missing; run: " + aisettings.ClaudeMemRepairCommand
 			}
+			if status.CodexHome != "" {
+				codexDetail += " (CODEX_HOME=" + status.CodexHome + ", not ~/.codex)"
+			}
 			p.Section("Tools")
 			printMemoryState(p, "codex", status.CodexNativeHooks, codexDetail)
 			printMemoryState(p, "kimi", status.KimiMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["kimi"]))
@@ -142,6 +160,15 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func printMemoryState(p *Printer, label string, ok bool, detail string) {

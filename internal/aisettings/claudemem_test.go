@@ -645,3 +645,118 @@ func TestTranscriptConfigWatchesIsArrayWhenEmpty(t *testing.T) {
 		t.Errorf("watches is not an empty array:\n%s", raw)
 	}
 }
+
+// CODEX_HOME from the launching shell (Orca sets one) must not leak into the
+// temp homes these tests build.
+func TestMain(m *testing.M) {
+	os.Unsetenv("CODEX_HOME")
+	os.Exit(m.Run())
+}
+
+func TestEnsureCodexCacheRuntimeInstallsMissingNodeModules(t *testing.T) {
+	home := t.TempDir()
+	cache := codexCacheDir(home, "13.25.1")
+	writeClaudeMemTree(t, cache, false)
+	mustMkdirAll(t, filepath.Join(cache, "node_modules")) // interrupted install: empty dir
+
+	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+	mgr.BunPath = "/bin/bun"
+	var gotBun, gotDir string
+	mgr.RunBunInstall = func(ctx context.Context, bunPath, dir string) ([]byte, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("bun install ran without a deadline")
+		}
+		gotBun, gotDir = bunPath, dir
+		mustWriteFile(t, filepath.Join(dir, "node_modules", "zod", "package.json"), "{}")
+		return []byte("37 packages installed"), nil
+	}
+
+	repaired, err := mgr.EnsureCodexCacheRuntime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != cache {
+		t.Fatalf("repaired = %q, want %q", repaired, cache)
+	}
+	if gotBun != "/bin/bun" || gotDir != cache {
+		t.Fatalf("bun install ran as (%q in %q)", gotBun, gotDir)
+	}
+	if _, runnable := CodexClaudeMemCache(home); !runnable {
+		t.Fatal("cache still reported broken after repair")
+	}
+
+	// Idempotent: a runnable cache never triggers another install.
+	mgr.RunBunInstall = func(context.Context, string, string) ([]byte, error) {
+		t.Fatal("bun install ran on a runnable cache")
+		return nil, nil
+	}
+	if repaired, err := mgr.EnsureCodexCacheRuntime(context.Background()); err != nil || repaired != "" {
+		t.Fatalf("second run: repaired=%q err=%v", repaired, err)
+	}
+}
+
+func TestEnsureCodexCacheRuntimeReportsInstallThatLeavesCacheBroken(t *testing.T) {
+	home := t.TempDir()
+	cache := codexCacheDir(home, "13.25.1")
+	writeClaudeMemTree(t, cache, false)
+	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+	mgr.BunPath = "/bin/bun"
+	mgr.RunBunInstall = func(context.Context, string, string) ([]byte, error) { return []byte("ok"), nil }
+
+	repaired, err := mgr.EnsureCodexCacheRuntime(context.Background())
+	if repaired != "" || err == nil || !strings.Contains(err.Error(), "left node_modules empty") {
+		t.Fatalf("repaired=%q err=%v", repaired, err)
+	}
+
+	// A repair needs an absolute bun; without one the caller gets an error, not a silent skip.
+	mgr.BunPath = ""
+	if _, err := mgr.EnsureCodexCacheRuntime(context.Background()); err == nil || !strings.Contains(err.Error(), "bun executable path") {
+		t.Fatalf("missing bun path: err=%v", err)
+	}
+
+	// No cache at all is not an error: codex creates it on `plugin add`.
+	if repaired, err := NewClaudeMemManager(t.TempDir(), "/bin/dot", "/bin/node").EnsureCodexCacheRuntime(context.Background()); err != nil || repaired != "" {
+		t.Fatalf("no cache: repaired=%q err=%v", repaired, err)
+	}
+}
+
+func TestCodexHomeFollowsCodexHomeEnv(t *testing.T) {
+	home := t.TempDir()
+	mgr := NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+
+	// Unset, ~/.codex spelled out, and ~ shorthand all mean the default home.
+	for _, value := range []string{"", filepath.Join(home, ".codex"), "~/.codex"} {
+		t.Setenv("CODEX_HOME", value)
+		if got := mgr.CodexHomeOverride(); got != "" {
+			t.Fatalf("CODEX_HOME=%q reported as override: %q", value, got)
+		}
+	}
+	// A symlink to ~/.codex is still the default home.
+	mustMkdirAll(t, filepath.Join(home, ".codex"))
+	link := filepath.Join(home, "codex-link")
+	if err := os.Symlink(filepath.Join(home, ".codex"), link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", link)
+	if got := mgr.CodexHomeOverride(); got != "" {
+		t.Fatalf("symlinked default home reported as override: %q", got)
+	}
+
+	// A foreign home is inspected AND reported: the cache lookup, the config
+	// check and the status row all follow it.
+	foreign := filepath.Join(home, "orca", "codex-home")
+	cache := filepath.Join(foreign, "plugins", "cache", "claude-mem-local", "claude-mem", "13.25.1")
+	writeClaudeMemTree(t, cache, false)
+	t.Setenv("CODEX_HOME", foreign)
+	want := canonicalPath(foreign)
+	if got := mgr.CodexHomeOverride(); got != want {
+		t.Fatalf("override = %q, want %q", got, want)
+	}
+	status := mgr.Status(context.Background(), filepath.Join(home, "AGENTS.md"))
+	if status.CodexHome != want || status.CodexCachePath != canonicalPath(cache) || status.CodexCacheRunnable {
+		t.Fatalf("status = home %q cache %q runnable %v", status.CodexHome, status.CodexCachePath, status.CodexCacheRunnable)
+	}
+	if _, runnable := CodexClaudeMemCache(home); runnable {
+		t.Fatal("foreign broken cache reported runnable")
+	}
+}

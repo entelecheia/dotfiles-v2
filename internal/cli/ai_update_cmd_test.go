@@ -1,11 +1,22 @@
 package cli
 
 import (
+	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 )
+
+// CODEX_HOME from the launching shell (Orca sets one) must not leak into the
+// temp homes these tests build.
+func TestMain(m *testing.M) {
+	os.Unsetenv("CODEX_HOME")
+	os.Exit(m.Run())
+}
 
 // Fixtures mirror the real v2 installed_plugins.json, including a plugin whose
 // version is the literal "unknown" — claude resolves update availability from
@@ -279,8 +290,20 @@ func TestCodexClaudeMemCacheStep(t *testing.T) {
 		}
 		return root
 	}
+	manager := func(home string, install func(dir string) error) *aisettings.ClaudeMemManager {
+		mgr := aisettings.NewClaudeMemManager(home, "/bin/dot", "/bin/node")
+		mgr.BunPath = "/bin/bun"
+		mgr.RunBunInstall = func(_ context.Context, _, dir string) ([]byte, error) {
+			if install == nil {
+				t.Fatal("bun install ran unexpectedly")
+			}
+			return nil, install(dir)
+		}
+		return mgr
+	}
+	ctx := context.Background()
 	t.Run("no cache is skipped", func(t *testing.T) {
-		step := codexClaudeMemCacheStep(t.TempDir())
+		step := codexClaudeMemCacheStep(ctx, manager(t.TempDir(), nil), false)
 		if step.Status != stepSkipped {
 			t.Fatalf("status = %q, want %q (%s)", step.Status, stepSkipped, step.Detail)
 		}
@@ -288,19 +311,42 @@ func TestCodexClaudeMemCacheStep(t *testing.T) {
 	t.Run("runnable cache is up-to-date", func(t *testing.T) {
 		home := t.TempDir()
 		root := writeCache(t, home, true)
-		step := codexClaudeMemCacheStep(home)
+		step := codexClaudeMemCacheStep(ctx, manager(home, nil), false)
 		if step.Status != stepCurrent || !strings.Contains(step.Detail, root) {
 			t.Fatalf("step = %+v, want %q with path %s", step, stepCurrent, root)
 		}
 	})
-	t.Run("broken cache fails with repair commands", func(t *testing.T) {
+	t.Run("broken cache is only reported under dry-run", func(t *testing.T) {
 		home := t.TempDir()
 		root := writeCache(t, home, false)
-		step := codexClaudeMemCacheStep(home)
+		step := codexClaudeMemCacheStep(ctx, manager(home, nil), true)
+		if step.Status != stepSkipped || !strings.Contains(step.Detail, "bun install") || !strings.Contains(step.Detail, root) {
+			t.Fatalf("step = %+v, want dry-run skip naming %s", step, root)
+		}
+	})
+	t.Run("broken cache is repaired", func(t *testing.T) {
+		home := t.TempDir()
+		root := writeCache(t, home, false)
+		mgr := manager(home, func(dir string) error {
+			writeCLITestFile(t, filepath.Join(dir, "node_modules", "zod", "package.json"), "{}")
+			return nil
+		})
+		step := codexClaudeMemCacheStep(ctx, mgr, false)
+		if step.Status != stepUpdated || !strings.Contains(step.Detail, root) {
+			t.Fatalf("step = %+v, want %q with path %s", step, stepUpdated, root)
+		}
+		if _, runnable := aisettings.CodexClaudeMemCache(home); !runnable {
+			t.Fatal("cache still broken after the update step")
+		}
+	})
+	t.Run("failed repair reports the repair command", func(t *testing.T) {
+		home := t.TempDir()
+		root := writeCache(t, home, false)
+		step := codexClaudeMemCacheStep(ctx, manager(home, func(string) error { return nil }), false)
 		if step.Status != stepFailed {
 			t.Fatalf("status = %q, want %q (%s)", step.Status, stepFailed, step.Detail)
 		}
-		for _, want := range []string{root, "codex plugin remove claude-mem", "codex plugin add claude-mem@claude-mem-local"} {
+		for _, want := range []string{root, aisettings.ClaudeMemRepairCommand} {
 			if !strings.Contains(step.Detail, want) {
 				t.Fatalf("detail %q missing %q", step.Detail, want)
 			}
