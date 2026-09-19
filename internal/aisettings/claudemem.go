@@ -239,6 +239,9 @@ func runBunInstall(ctx context.Context, bunPath, dir string) ([]byte, error) {
 	if !filepath.IsAbs(bunPath) {
 		return nil, fmt.Errorf("bun path %q is not absolute", bunPath)
 	}
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command -- bunPath is
+	// exec.LookPath+filepath.Abs output re-checked as absolute above; the
+	// arguments are static and dir is a codex plugin cache glob match.
 	cmd := exec.CommandContext(ctx, bunPath, "install", "--frozen-lockfile")
 	cmd.Dir = dir
 	return cmd.CombinedOutput()
