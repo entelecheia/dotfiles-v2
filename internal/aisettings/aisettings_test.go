@@ -356,6 +356,9 @@ func TestEntriesCoverPiAgentHome(t *testing.T) {
 	for _, path := range []string{
 		".pi/agent/AGENTS.md",
 		".pi/agent/settings.json",
+		// settings.json names a provider models.json defines; restoring one
+		// without the other leaves pi pointing at a provider it cannot resolve.
+		".pi/agent/models.json",
 	} {
 		if !hasEntry(entries, "pi", path) {
 			t.Errorf("pi entry %s missing: %+v", path, entries)

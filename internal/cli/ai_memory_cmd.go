@@ -163,7 +163,10 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			printMemoryState(p, "qwen", status.QwenMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["qwen"]))
 			printMemoryState(p, "kiro", status.KiroMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["kiro"]))
 			printMemoryState(p, "copilot", status.CopilotMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["copilot"]))
-			printMemoryState(p, "pi", status.WatchCount["pi"] > 0, fmt.Sprintf("bridge + %d transcript(s); no MCP recall (pi has none)", status.WatchCount["pi"]))
+			// pi's readiness is the instructions target, not the transcript
+			// count: a machine that has pi wired but has not run a session yet
+			// is installed, not broken.
+			printMemoryState(p, "pi", status.PiAgents, fmt.Sprintf("instructions + %d transcript(s); no MCP recall (pi has none)", status.WatchCount["pi"]))
 			p.Section("Shared runtime")
 			printMemoryState(p, "instructions", status.InstructionsEnabled, "agents SSOT recall policy")
 			printMemoryState(p, "bridge", status.BridgeInstalled && status.BridgeRunning, bridgeStatusDetail(status))

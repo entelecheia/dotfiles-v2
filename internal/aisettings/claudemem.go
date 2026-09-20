@@ -70,9 +70,12 @@ type ClaudeMemStatus struct {
 	CodexCachePath     string
 	CodexCacheRunnable bool
 	// CodexHome is CODEX_HOME when it differs from ~/.codex (see CodexHomeOverride).
-	CodexHome           string
-	KimiMCP             bool
-	QwenMCP             bool
+	CodexHome string
+	KimiMCP   bool
+	QwenMCP   bool
+	// PiAgents reports pi's fan-out instructions target, which is all dot
+	// installs on pi's side: pi has no MCP entry to check.
+	PiAgents            bool
 	KiroMCP             bool
 	CopilotMCP          bool
 	InstructionsEnabled bool
@@ -140,6 +143,12 @@ func (m *ClaudeMemManager) KimiMCPPath() string {
 
 func (m *ClaudeMemManager) QwenMCPPath() string {
 	return filepath.Join(m.HomeDir, ".qwen", "settings.json")
+}
+
+// PiAgentsPath is pi's global instructions target. pi takes no MCP entry, so
+// this file is the only thing dot writes into pi's agent home.
+func (m *ClaudeMemManager) PiAgentsPath() string {
+	return filepath.Join(m.HomeDir, ".pi", "agent", "AGENTS.md")
 }
 
 func (m *ClaudeMemManager) KiroMCPPath() string {
@@ -627,20 +636,10 @@ func qwenSessionWorkspace(chatPath string) string {
 	if readJSONFile(strings.TrimSuffix(chatPath, ".jsonl")+".runtime.json", &runtimeState) && runtimeState.WorkDir != "" {
 		return runtimeState.WorkDir
 	}
-	f, err := os.Open(chatPath)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	reader := bufio.NewReader(f)
-	firstLine, err := reader.ReadString('\n')
-	if err != nil && firstLine == "" {
-		return ""
-	}
 	var line struct {
 		CWD string `json:"cwd"`
 	}
-	if json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), &line) != nil {
+	if !readFirstJSONLine(chatPath, &line) {
 		return ""
 	}
 	return line.CWD
@@ -670,24 +669,31 @@ func (m *ClaudeMemManager) piWatches() []transcriptWatch {
 
 // piSessionWorkspace reads the first line's session header cwd.
 func piSessionWorkspace(sessionPath string) string {
-	f, err := os.Open(sessionPath)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	reader := bufio.NewReader(f)
-	firstLine, err := reader.ReadString('\n')
-	if err != nil && firstLine == "" {
-		return ""
-	}
 	var line struct {
 		Type string `json:"type"`
 		CWD  string `json:"cwd"`
 	}
-	if json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), &line) != nil || line.Type != "session" {
+	if !readFirstJSONLine(sessionPath, &line) || line.Type != "session" {
 		return ""
 	}
 	return line.CWD
+}
+
+// readFirstJSONLine decodes the first line of a JSONL transcript into target.
+// Both pi and Qwen carry the session's cwd there, and a transcript can be huge,
+// so only that line is read. A CRLF line ending, a file with no trailing
+// newline, and an empty file all resolve without an error path of their own.
+func readFirstJSONLine(path string, target any) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	firstLine, err := bufio.NewReader(f).ReadString('\n')
+	if err != nil && firstLine == "" {
+		return false
+	}
+	return json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), target) == nil
 }
 
 func readJSONFile(path string, target any) bool {
@@ -750,6 +756,14 @@ func copilotTranscriptSchema() transcriptSchema {
 // pack thought/text/functionCall parts into one line and there is no
 // session-end marker, so tool_use is not mapped and lines that match no event
 // are ignored.
+//
+// ponytail: a Qwen thought part is {"text": ..., "thought": true}, so the
+// coalesce cannot tell it from a reply part, and an assistant line whose only
+// text is a thought stores that thought as the message. Ruling it out needs a
+// second condition on the same event, which the single-path matcher has no
+// room for. The cost is bounded: assistant_message only feeds
+// last_assistant_message, which the watcher reads on session_end — an event
+// Qwen's format never emits — so nothing leaves the bridge.
 func qwenTranscriptSchema() transcriptSchema {
 	return transcriptSchema{
 		Name: "qwen", Version: "0.24", Description: "Qwen Code chat JSONL per-session log.",
@@ -1160,6 +1174,9 @@ func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMe
 	}
 	status.KimiMCP = hasManagedMCPEntry(m.KimiMCPPath(), m.DotPath)
 	status.QwenMCP = hasManagedMCPEntry(m.QwenMCPPath(), m.DotPath)
+	if info, err := os.Stat(m.PiAgentsPath()); err == nil && !info.IsDir() {
+		status.PiAgents = true
+	}
 	status.KiroMCP = hasManagedMCPEntry(m.KiroMCPPath(), m.DotPath)
 	status.CopilotMCP = hasManagedCopilotMCPEntry(m.CopilotMCPPath(), m.DotPath)
 	status.InstructionsEnabled = HasMemoryInstructions(ssotPath)

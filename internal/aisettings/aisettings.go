@@ -151,10 +151,14 @@ func Entries(includeAuth bool) []Entry {
 		// nothing.
 		{Tool: "kimi", Path: ".kimi-code/config.toml", Description: "Kimi Code config, providers, and models"},
 		// pi has no MCP support by design; its agent home keeps global
-		// instructions and settings only. Sessions, extensions, and skills are
-		// machine state dot never restores.
+		// instructions, settings, and the provider/model catalog. models.json
+		// is what makes settings.json restorable — settings.json names a
+		// provider ("dgx") that only models.json defines — so the two travel
+		// together, the way kimi's config.toml does. Sessions, extensions, and
+		// skills are machine state dot never restores.
 		{Tool: "pi", Path: ".pi/agent/AGENTS.md", Description: "pi global instructions"},
 		{Tool: "pi", Path: ".pi/agent/settings.json", Description: "pi settings"},
+		{Tool: "pi", Path: ".pi/agent/models.json", Description: "pi providers and model catalog"},
 		// Qwen's sessions, memories, and usage record are machine state dot
 		// never restores; settings.json holds the dot-managed claude-mem MCP
 		// entry alongside Qwen's own model/auth settings.

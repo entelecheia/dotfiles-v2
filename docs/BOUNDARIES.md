@@ -28,10 +28,16 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 - `~/.config/shell/30-ai.sh`
 - `~/.maru/settings.json` and `~/.maru/sites.json` only during explicit AI
   backup/restore operations
-- global AGENTS fan-out targets for Claude, Codex, Cursor, Antigravity,
-  Copilot, Aider, Qwen, and pi. pi's session transcripts
-  (`~/.pi/agent/sessions/**`) are read-only scan surfaces for the
-  claude-mem transcript bridge and are never written
+- the global AGENTS fan-out targets, one per registered tool:
+  `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.cursor/AGENTS.md`,
+  `~/.kiro/steering/AGENTS.md`, `~/.kimi-code/AGENTS.md`,
+  `~/.pi/agent/AGENTS.md`, `~/.qwen/AGENTS.md`, `~/.gemini/GEMINI.md`,
+  `~/.copilot/copilot-instructions.md`, and `~/.aider.conf.md`. Each is
+  the whole file, rendered from the agents SSOT; registering a tool adds
+  a target here or the boundary test fails. Session transcripts
+  (`~/.pi/agent/sessions/**`, `~/.qwen/projects/**/chats/**`) are
+  read-only scan surfaces for the claude-mem transcript bridge and are
+  never written
 
 Dot-owned state trees:
 
@@ -71,8 +77,8 @@ tool):
   other key — Qwen's model, provider, auth, and UI settings — is
   preserved. Notably NOT dotfiles-managed: `~/.qwen/.env` (secrets),
   `~/.qwen/projects/**/chats/**`, `~/.qwen/memories/**`, and
-  `~/.qwen/usage_record.jsonl` are machine state dot backs up but never
-  restores
+  `~/.qwen/usage_record.jsonl` are machine state dot neither backs up
+  nor restores
 - `~/.kiro/settings/mcp.json` — the `claude-mem` entry under
   `mcpServers` plus `"disabled": false`, written by `dot ai memory
   install`; every other server entry is preserved
