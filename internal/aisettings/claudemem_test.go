@@ -787,6 +787,28 @@ func TestPiWatchesSkipsSessionsWithoutWorkspace(t *testing.T) {
 	}
 }
 
+func TestPiSessionWorkspaceHandlesLineEndings(t *testing.T) {
+	workspace := "/tmp/work/pi-crlf"
+	for name, firstLine := range map[string]string{
+		"crlf":       `{"type":"session","version":3,"cwd":"` + workspace + `"}` + "\r\n",
+		"no-newline": `{"type":"session","version":3,"cwd":"` + workspace + `"}`,
+		"empty":      "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			sessionPath := filepath.Join(home, ".pi", "agent", "sessions", "--tmp--", "1770000002000-99999999-9999-9999-9999-999999999999.jsonl")
+			mustWriteFile(t, sessionPath, firstLine)
+			got := piSessionWorkspace(sessionPath)
+			if name != "empty" && got != workspace {
+				t.Fatalf("piSessionWorkspace = %q, want %q (first line ending: %s)", got, workspace, name)
+			}
+			if name == "empty" && got != "" {
+				t.Fatalf("piSessionWorkspace on an empty file = %q, want empty", got)
+			}
+		})
+	}
+}
+
 func TestQwenMCPEntryPreservesQwenSettings(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".qwen", "settings.json")

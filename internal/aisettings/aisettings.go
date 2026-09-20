@@ -151,8 +151,8 @@ func Entries(includeAuth bool) []Entry {
 		// nothing.
 		{Tool: "kimi", Path: ".kimi-code/config.toml", Description: "Kimi Code config, providers, and models"},
 		// pi has no MCP support by design; its agent home keeps global
-		// instructions and settings only. Sessions, auth, extensions, and
-		// skills are machine state dot never restores.
+		// instructions and settings only. Sessions, extensions, and skills are
+		// machine state dot never restores.
 		{Tool: "pi", Path: ".pi/agent/AGENTS.md", Description: "pi global instructions"},
 		{Tool: "pi", Path: ".pi/agent/settings.json", Description: "pi settings"},
 		// Qwen's sessions, memories, and usage record are machine state dot
@@ -187,6 +187,7 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "claude", Path: ".config/claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},
 		{Tool: "codex", Path: ".codex/auth.json", Description: "Codex auth credentials", Auth: true},
 		{Tool: "kimi", Path: ".kimi-code/credentials", Description: "Kimi Code credentials", Auth: true},
+		{Tool: "pi", Path: ".pi/agent/auth.json", Description: "pi OAuth credentials", Auth: true},
 		{Tool: "antigravity", Path: ".gemini/oauth_creds.json", Description: "Antigravity/Gemini OAuth credentials", Auth: true},
 		{Tool: "antigravity", Path: ".gemini/google_accounts.json", Description: "Antigravity/Gemini account cache", Auth: true},
 	}

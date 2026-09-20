@@ -9,6 +9,11 @@ Manage portable AI assistant configuration.
 The ai module writes shell/config helper files. It does not install Claude,
 Codex, Antigravity, or ChatGPT apps; use 'dot apps install' for Homebrew casks.
 
+With `--include-auth`, the snapshot carries each tool's credential file
+(`.codex/auth.json`, `.kimi-code/credentials`, `.pi/agent/auth.json`,
+`.gemini/oauth_creds.json`). pi sessions, extensions, and skills stay out:
+they are machine state pi rebuilds itself.
+
 ### Options
 
 ```
