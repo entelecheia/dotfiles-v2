@@ -703,6 +703,90 @@ func TestQwenWatchesSkipsChatsWithoutWorkspace(t *testing.T) {
 	}
 }
 
+func TestPiTranscriptSchemaFields(t *testing.T) {
+	schema := piTranscriptSchema()
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"message.role", "message.content[0].text", "message.toolName", "tool_result", "assistant_message"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("pi schema missing %q: %s", want, raw)
+		}
+	}
+	if schema.Name != "pi" {
+		t.Fatalf("schema.Name = %q, want \"pi\"", schema.Name)
+	}
+	// user-prompt should map to session_init (matching kimi/kiro/copilot/qwen pattern)
+	found := false
+	for _, ev := range schema.Events {
+		if ev.Name == "user-prompt" && ev.Action == "session_init" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("pi schema: user-prompt event must use session_init action")
+	}
+}
+
+func TestPiWatchesDiscoversSessionWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(home, "work", "pi-project")
+	mustMkdirAll(t, workspace)
+
+	// pi has no sidecar file: the first line's session header carries cwd.
+	sessionPath := filepath.Join(home, ".pi", "agent", "sessions", "--tmp-pi-project--", "1770000000000-77777777-7777-7777-7777-777777777777.jsonl")
+	mustWriteFile(t, sessionPath, `{"type":"session","version":3,"id":"77777777-7777-7777-7777-777777777777","timestamp":"2026-09-20T00:00:00.000Z","cwd":"`+workspace+`"}`+"\n"+`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}`+"\n")
+
+	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
+	config, err := mgr.BuildTranscriptConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := countWatches(config.Watches)
+	if counts["pi"] != 1 {
+		t.Fatalf("pi watch count = %d, want 1: %+v", counts["pi"], config.Watches)
+	}
+	var found transcriptWatch
+	for _, w := range config.Watches {
+		if w.Name == "pi" {
+			found = w
+		}
+	}
+	if found.Workspace != workspace {
+		t.Fatalf("pi watch workspace = %q, want %q from the session header", found.Workspace, workspace)
+	}
+	if found.Path != sessionPath {
+		t.Fatalf("pi watch path = %q, want %q", found.Path, sessionPath)
+	}
+	if found.Schema != "pi" {
+		t.Fatalf("pi watch schema = %q, want \"pi\"", found.Schema)
+	}
+	if found.StartAtEnd {
+		t.Fatal("pi watch must replay a newly discovered session from offset zero")
+	}
+	if _, ok := config.Schemas["pi"]; !ok {
+		t.Fatal("BuildTranscriptConfig schemas missing \"pi\"")
+	}
+}
+
+func TestPiWatchesSkipsSessionsWithoutWorkspace(t *testing.T) {
+	home := t.TempDir()
+
+	// Session header missing or without cwd: no workspace to resolve.
+	sessionPath := filepath.Join(home, ".pi", "agent", "sessions", "--tmp-empty--", "1770000001000-88888888-8888-8888-8888-888888888888.jsonl")
+	mustWriteFile(t, sessionPath, `{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}`+"\n")
+
+	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
+	config, err := mgr.BuildTranscriptConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts := countWatches(config.Watches); counts["pi"] != 0 {
+		t.Fatalf("pi watch count = %d, want 0 for a session with no resolvable workspace", counts["pi"])
+	}
+}
+
 func TestQwenMCPEntryPreservesQwenSettings(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".qwen", "settings.json")

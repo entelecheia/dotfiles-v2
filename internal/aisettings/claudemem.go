@@ -32,12 +32,13 @@ const memoryInstructions = `<!-- dotfiles:claude-mem:start -->
 
 - Before non-trivial work, query the ` + "`claude-mem`" + ` MCP server when prior workspace context may affect the result.
 - Treat retrieved memory as a lead, and verify drift-prone facts against the current workspace or live system.
-- Codex hooks and the Kimi/Kiro/Copilot/Qwen transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
+- Codex hooks and the Kimi/Kiro/Copilot/Qwen/pi transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
 <!-- dotfiles:claude-mem:end -->`
 
 // ClaudeMemManager manages the cross-CLI claude-mem integration. Codex uses
-// the plugin's native hooks; Kimi, Kiro, GitHub Copilot CLI, and Qwen Code
-// use MCP for recall and a transcript bridge for capture.
+// the plugin's native hooks; Kimi, Kiro, GitHub Copilot CLI, Qwen Code, and pi
+// use MCP for recall and a transcript bridge for capture — except pi, which
+// has no MCP support by design and joins the transcript bridge only.
 type ClaudeMemManager struct {
 	HomeDir    string
 	DotPath    string
@@ -452,10 +453,11 @@ func HasMemoryInstructions(path string) bool {
 
 // BuildTranscriptConfig discovers concrete session files so each transcript is
 // associated with its workspace: Kimi/Kiro record it in sidecar metadata,
-// Copilot sessions carry it in the session.start event's context, and Qwen
-// sessions carry it in a sibling .runtime.json (first-line cwd as fallback).
+// Copilot sessions carry it in the session.start event's context, Qwen
+// sessions carry it in a sibling .runtime.json (first-line cwd as fallback),
+// and pi sessions carry it in the first line's session header.
 func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error) {
-	watches := append(append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...), m.qwenWatches()...)
+	watches := append(append(append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...), m.qwenWatches()...), m.piWatches()...)
 	if watches == nil {
 		// A machine with no Kimi/Kiro sessions yet leaves this nil, and a nil
 		// slice marshals to `null`, which the plugin's watcher rejects as an
@@ -471,6 +473,7 @@ func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error
 			"kiro":    kiroTranscriptSchema(),
 			"copilot": copilotTranscriptSchema(),
 			"qwen":    qwenTranscriptSchema(),
+			"pi":      piTranscriptSchema(),
 		},
 		Watches:   watches,
 		StateFile: m.TranscriptStatePath(),
@@ -643,6 +646,50 @@ func qwenSessionWorkspace(chatPath string) string {
 	return line.CWD
 }
 
+// piWatches discovers pi session transcripts. Each session carries its cwd in
+// the first line's session header — pi has no sidecar file, unlike Qwen's
+// .runtime.json.
+func (m *ClaudeMemManager) piWatches() []transcriptWatch {
+	pattern := filepath.Join(m.HomeDir, ".pi", "agent", "sessions", "*", "*.jsonl")
+	sessionFiles, _ := filepath.Glob(pattern)
+	var watches []transcriptWatch
+	for _, sessionPath := range sessionFiles {
+		if info, err := os.Stat(sessionPath); err != nil || info.IsDir() {
+			continue
+		}
+		workspace := piSessionWorkspace(sessionPath)
+		if !isAbsoluteDirectory(workspace) {
+			continue
+		}
+		watches = append(watches, transcriptWatch{
+			Name: "pi", Path: sessionPath, Schema: "pi", Workspace: workspace, StartAtEnd: false,
+		})
+	}
+	return watches
+}
+
+// piSessionWorkspace reads the first line's session header cwd.
+func piSessionWorkspace(sessionPath string) string {
+	f, err := os.Open(sessionPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	reader := bufio.NewReader(f)
+	firstLine, err := reader.ReadString('\n')
+	if err != nil && firstLine == "" {
+		return ""
+	}
+	var line struct {
+		Type string `json:"type"`
+		CWD  string `json:"cwd"`
+	}
+	if json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), &line) != nil || line.Type != "session" {
+		return ""
+	}
+	return line.CWD
+}
+
 func readJSONFile(path string, target any) bool {
 	raw, err := os.ReadFile(path)
 	return err == nil && json.Unmarshal(raw, target) == nil
@@ -714,6 +761,24 @@ func qwenTranscriptSchema() transcriptSchema {
 	}
 }
 
+// piTranscriptSchema maps pi session JSONL lines to bridge events. Every
+// entry is a message envelope, so all events match on message.role: user
+// messages carry no provenance marker, toolResult is a message-level role
+// (not a top-level type), and assistant content interleaves thinking/text/
+// toolCall blocks so positions vary — hence the coalesce fallback. pi has no
+// session-end marker and toolCall blocks are not mapped; lines that match no
+// event are ignored.
+func piTranscriptSchema() transcriptSchema {
+	return transcriptSchema{
+		Name: "pi", Version: "3", Description: "pi session JSONL per-session log.",
+		Events: []transcriptEvent{
+			{Name: "user-prompt", Match: equals("message.role", "user"), Action: "session_init", Fields: map[string]any{"prompt": "message.content[0].text"}},
+			{Name: "assistant-message", Match: equals("message.role", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": map[string]any{"coalesce": []any{"message.content[1].text", "message.content[0].text"}}}},
+			{Name: "tool-result", Match: equals("message.role", "toolResult"), Action: "tool_result", Fields: map[string]any{"toolName": "message.toolName", "toolResponse": "message.content[0].text"}},
+		},
+	}
+}
+
 func equals(path string, value any) map[string]any {
 	return map[string]any{"path": path, "equals": value}
 }
@@ -771,7 +836,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 	// Repair the codex cache before locating the plugin: on a machine where the
 	// codex cache is the only claude-mem copy, LocatePlugin can only succeed
 	// after node_modules exists. A failed repair is reported, not fatal, so the
-	// Kimi/Kiro/Copilot/Qwen wiring and the bridge still install.
+	// Kimi/Kiro/Copilot/Qwen/pi wiring and the bridge still install.
 	codexCache, codexErr := m.EnsureCodexCacheRuntime(ctx)
 	codexCacheError := ""
 	if codexErr != nil {
@@ -975,8 +1040,8 @@ func (m *ClaudeMemManager) RunMCPServer(ctx context.Context) error {
 }
 
 // RunBridge supervises the claude-mem transcript watcher and reloads it when a
-// newly created Kimi, Kiro, Copilot, or Qwen session adds a concrete workspace
-// mapping.
+// newly created Kimi, Kiro, Copilot, Qwen, or pi session adds a concrete
+// workspace mapping.
 func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 	if m.BunPath == "" || !filepath.IsAbs(m.BunPath) {
 		return errors.New("bun executable path must be absolute")
@@ -1162,7 +1227,7 @@ func hasManagedCopilotMCPEntry(path, dotPath string) bool {
 }
 
 func countWatches(watches []transcriptWatch) map[string]int {
-	counts := map[string]int{"kimi": 0, "kiro": 0, "copilot": 0, "qwen": 0}
+	counts := map[string]int{"kimi": 0, "kiro": 0, "copilot": 0, "qwen": 0, "pi": 0}
 	for _, watch := range watches {
 		counts[watch.Name]++
 	}

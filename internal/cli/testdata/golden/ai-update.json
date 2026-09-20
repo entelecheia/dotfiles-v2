@@ -32,6 +32,12 @@
       "detail": "kimi not in PATH"
     },
     {
+      "tool": "pi",
+      "step": "self-update",
+      "status": "skipped",
+      "detail": "pi not in PATH"
+    },
+    {
       "tool": "qwen",
       "step": "self-update",
       "status": "skipped",
@@ -62,6 +68,7 @@
     "copilot",
     "gemini",
     "kimi",
+    "pi",
     "qwen",
     "kiro",
     "cursor",

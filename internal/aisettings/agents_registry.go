@@ -48,6 +48,13 @@ func RegisteredAgentTools() []AgentTool {
 			Optional:    true,
 		},
 		{
+			ID:          "pi",
+			DisplayName: "pi",
+			TargetPath:  "~/.pi/agent/AGENTS.md",
+			OverlayFile: "pi.md",
+			Optional:    true,
+		},
+		{
 			ID:          "qwen",
 			DisplayName: "Qwen Code",
 			TargetPath:  "~/.qwen/AGENTS.md",

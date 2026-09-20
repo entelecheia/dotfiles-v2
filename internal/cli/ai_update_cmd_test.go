@@ -176,7 +176,7 @@ func TestResolveUpdateToolsDefaultsToAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if strings.Join(got, ",") != "claude,codex,copilot,gemini,kimi,qwen,kiro,cursor,skills" {
+	if strings.Join(got, ",") != "claude,codex,copilot,gemini,kimi,pi,qwen,kiro,cursor,skills" {
 		t.Fatalf("default tools = %v", got)
 	}
 }
@@ -189,6 +189,7 @@ func TestToolBinaryResolvesRenamedCLIs(t *testing.T) {
 		"kiro":   "kiro-cli",
 		"cursor": "cursor-agent",
 		"kimi":   "kimi",
+		"pi":     "pi",
 		"qwen":   "qwen",
 		"claude": "claude",
 	} {
@@ -205,7 +206,7 @@ func TestToolBinaryResolvesRenamedCLIs(t *testing.T) {
 	// `dot ai list` derives its probe list from the same source, so a rename
 	// cannot leave it reporting "(not found)" forever.
 	names := detectedCLINames()
-	for _, want := range []string{"kiro-cli", "cursor-agent", "kimi", "qwen", "copilot"} {
+	for _, want := range []string{"kiro-cli", "cursor-agent", "kimi", "pi", "qwen", "copilot"} {
 		if !containsString(names, want) {
 			t.Errorf("detectedCLINames() missing %q: %v", want, names)
 		}

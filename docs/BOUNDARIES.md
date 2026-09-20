@@ -29,7 +29,9 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 - `~/.maru/settings.json` and `~/.maru/sites.json` only during explicit AI
   backup/restore operations
 - global AGENTS fan-out targets for Claude, Codex, Cursor, Antigravity,
-  Copilot, Aider, and Qwen
+  Copilot, Aider, Qwen, and pi. pi's session transcripts
+  (`~/.pi/agent/sessions/**`) are read-only scan surfaces for the
+  claude-mem transcript bridge and are never written
 
 Dot-owned state trees:
 
