@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -726,6 +727,31 @@ func TestPiTranscriptSchemaFields(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("pi schema: user-prompt event must use session_init action")
+	}
+	// The coalesce must walk content slots in ascending order: that is what
+	// makes it "the first text block" rather than "whatever sits at a fixed
+	// index". A thinking block keys its prose under "thinking" and a toolCall
+	// block has no text, so an earlier slot resolves only when it really is
+	// text. Reversing this order would store a thinking block as the reply.
+	var assistant transcriptEvent
+	for _, ev := range schema.Events {
+		if ev.Action == "assistant_message" {
+			assistant = ev
+		}
+	}
+	selector, ok := assistant.Fields["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("pi assistant message field is %T, want a coalesce selector", assistant.Fields["message"])
+	}
+	paths, ok := selector["coalesce"].([]any)
+	if !ok || len(paths) < 3 {
+		t.Fatalf("pi assistant coalesce = %v, want at least three content slots", selector["coalesce"])
+	}
+	for i, path := range paths {
+		want := fmt.Sprintf("message.content[%d].text", i)
+		if path != want {
+			t.Fatalf("pi assistant coalesce[%d] = %v, want %q in ascending slot order", i, path, want)
+		}
 	}
 }
 

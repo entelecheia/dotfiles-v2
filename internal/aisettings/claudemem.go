@@ -30,7 +30,7 @@ const (
 const memoryInstructions = `<!-- dotfiles:claude-mem:start -->
 ## Persistent Memory
 
-- Before non-trivial work, query the ` + "`claude-mem`" + ` MCP server when prior workspace context may affect the result.
+- Before non-trivial work, query the ` + "`claude-mem`" + ` MCP server when prior workspace context may affect the result. A CLI without that server (pi has no MCP support) works from the workspace itself; its sessions still reach the store through the transcript bridge.
 - Treat retrieved memory as a lead, and verify drift-prone facts against the current workspace or live system.
 - Codex hooks and the Kimi/Kiro/Copilot/Qwen/pi transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
 <!-- dotfiles:claude-mem:end -->`
@@ -779,15 +779,22 @@ func qwenTranscriptSchema() transcriptSchema {
 // entry is a message envelope, so all events match on message.role: user
 // messages carry no provenance marker, toolResult is a message-level role
 // (not a top-level type), and assistant content interleaves thinking/text/
-// toolCall blocks so positions vary — hence the coalesce fallback. pi has no
-// session-end marker and toolCall blocks are not mapped; lines that match no
-// event are ignored.
+// toolCall blocks so positions vary. The coalesce walks the first content
+// slots in order, which selects the first text block: a pi thinking block
+// keys its prose under "thinking" and a toolCall block has no text at all,
+// so only a real text block resolves. pi has no session-end marker and
+// toolCall blocks are not mapped; lines that match no event are ignored.
+//
+// ponytail: four slots, because the field selector takes literal indices and
+// the watcher's matcher has no way to say "the first block of type text".
+// Text past the fourth block is dropped; widen the list if a real transcript
+// ever shows one.
 func piTranscriptSchema() transcriptSchema {
 	return transcriptSchema{
 		Name: "pi", Version: "3", Description: "pi session JSONL per-session log.",
 		Events: []transcriptEvent{
 			{Name: "user-prompt", Match: equals("message.role", "user"), Action: "session_init", Fields: map[string]any{"prompt": "message.content[0].text"}},
-			{Name: "assistant-message", Match: equals("message.role", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": map[string]any{"coalesce": []any{"message.content[1].text", "message.content[0].text"}}}},
+			{Name: "assistant-message", Match: equals("message.role", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": map[string]any{"coalesce": []any{"message.content[0].text", "message.content[1].text", "message.content[2].text", "message.content[3].text"}}}},
 			{Name: "tool-result", Match: equals("message.role", "toolResult"), Action: "tool_result", Fields: map[string]any{"toolName": "message.toolName", "toolResponse": "message.content[0].text"}},
 		},
 	}
