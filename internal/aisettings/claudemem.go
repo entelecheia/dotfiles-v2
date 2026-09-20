@@ -30,14 +30,15 @@ const (
 const memoryInstructions = `<!-- dotfiles:claude-mem:start -->
 ## Persistent Memory
 
-- Before non-trivial work, query the ` + "`claude-mem`" + ` MCP server when prior workspace context may affect the result.
+- Before non-trivial work, query the ` + "`claude-mem`" + ` MCP server when prior workspace context may affect the result. A CLI without that server (pi has no MCP support) works from the workspace itself; its sessions still reach the store through the transcript bridge.
 - Treat retrieved memory as a lead, and verify drift-prone facts against the current workspace or live system.
-- Codex hooks and the Kimi/Kiro/Copilot/Qwen transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
+- Codex hooks and the Kimi/Kiro/Copilot/Qwen/pi transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
 <!-- dotfiles:claude-mem:end -->`
 
 // ClaudeMemManager manages the cross-CLI claude-mem integration. Codex uses
-// the plugin's native hooks; Kimi, Kiro, GitHub Copilot CLI, and Qwen Code
-// use MCP for recall and a transcript bridge for capture.
+// the plugin's native hooks; Kimi, Kiro, GitHub Copilot CLI, Qwen Code, and pi
+// use MCP for recall and a transcript bridge for capture — except pi, which
+// has no MCP support by design and joins the transcript bridge only.
 type ClaudeMemManager struct {
 	HomeDir    string
 	DotPath    string
@@ -69,9 +70,12 @@ type ClaudeMemStatus struct {
 	CodexCachePath     string
 	CodexCacheRunnable bool
 	// CodexHome is CODEX_HOME when it differs from ~/.codex (see CodexHomeOverride).
-	CodexHome           string
-	KimiMCP             bool
-	QwenMCP             bool
+	CodexHome string
+	KimiMCP   bool
+	QwenMCP   bool
+	// PiAgents reports pi's fan-out instructions target, which is all dot
+	// installs on pi's side: pi has no MCP entry to check.
+	PiAgents            bool
 	KiroMCP             bool
 	CopilotMCP          bool
 	InstructionsEnabled bool
@@ -139,6 +143,12 @@ func (m *ClaudeMemManager) KimiMCPPath() string {
 
 func (m *ClaudeMemManager) QwenMCPPath() string {
 	return filepath.Join(m.HomeDir, ".qwen", "settings.json")
+}
+
+// PiAgentsPath is pi's global instructions target. pi takes no MCP entry, so
+// this file is the only thing dot writes into pi's agent home.
+func (m *ClaudeMemManager) PiAgentsPath() string {
+	return filepath.Join(m.HomeDir, ".pi", "agent", "AGENTS.md")
 }
 
 func (m *ClaudeMemManager) KiroMCPPath() string {
@@ -452,10 +462,11 @@ func HasMemoryInstructions(path string) bool {
 
 // BuildTranscriptConfig discovers concrete session files so each transcript is
 // associated with its workspace: Kimi/Kiro record it in sidecar metadata,
-// Copilot sessions carry it in the session.start event's context, and Qwen
-// sessions carry it in a sibling .runtime.json (first-line cwd as fallback).
+// Copilot sessions carry it in the session.start event's context, Qwen
+// sessions carry it in a sibling .runtime.json (first-line cwd as fallback),
+// and pi sessions carry it in the first line's session header.
 func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error) {
-	watches := append(append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...), m.qwenWatches()...)
+	watches := append(append(append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...), m.qwenWatches()...), m.piWatches()...)
 	if watches == nil {
 		// A machine with no Kimi/Kiro sessions yet leaves this nil, and a nil
 		// slice marshals to `null`, which the plugin's watcher rejects as an
@@ -471,6 +482,7 @@ func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error
 			"kiro":    kiroTranscriptSchema(),
 			"copilot": copilotTranscriptSchema(),
 			"qwen":    qwenTranscriptSchema(),
+			"pi":      piTranscriptSchema(),
 		},
 		Watches:   watches,
 		StateFile: m.TranscriptStatePath(),
@@ -624,23 +636,64 @@ func qwenSessionWorkspace(chatPath string) string {
 	if readJSONFile(strings.TrimSuffix(chatPath, ".jsonl")+".runtime.json", &runtimeState) && runtimeState.WorkDir != "" {
 		return runtimeState.WorkDir
 	}
-	f, err := os.Open(chatPath)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	reader := bufio.NewReader(f)
-	firstLine, err := reader.ReadString('\n')
-	if err != nil && firstLine == "" {
-		return ""
-	}
 	var line struct {
 		CWD string `json:"cwd"`
 	}
-	if json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), &line) != nil {
+	if !readFirstJSONLine(chatPath, &line) {
 		return ""
 	}
 	return line.CWD
+}
+
+// piWatches discovers pi session transcripts. Each session carries its cwd in
+// the first line's session header — pi has no sidecar file, unlike Qwen's
+// .runtime.json.
+func (m *ClaudeMemManager) piWatches() []transcriptWatch {
+	pattern := filepath.Join(m.HomeDir, ".pi", "agent", "sessions", "*", "*.jsonl")
+	sessionFiles, _ := filepath.Glob(pattern)
+	var watches []transcriptWatch
+	for _, sessionPath := range sessionFiles {
+		if info, err := os.Stat(sessionPath); err != nil || info.IsDir() {
+			continue
+		}
+		workspace := piSessionWorkspace(sessionPath)
+		if !isAbsoluteDirectory(workspace) {
+			continue
+		}
+		watches = append(watches, transcriptWatch{
+			Name: "pi", Path: sessionPath, Schema: "pi", Workspace: workspace, StartAtEnd: false,
+		})
+	}
+	return watches
+}
+
+// piSessionWorkspace reads the first line's session header cwd.
+func piSessionWorkspace(sessionPath string) string {
+	var line struct {
+		Type string `json:"type"`
+		CWD  string `json:"cwd"`
+	}
+	if !readFirstJSONLine(sessionPath, &line) || line.Type != "session" {
+		return ""
+	}
+	return line.CWD
+}
+
+// readFirstJSONLine decodes the first line of a JSONL transcript into target.
+// Both pi and Qwen carry the session's cwd there, and a transcript can be huge,
+// so only that line is read. A CRLF line ending, a file with no trailing
+// newline, and an empty file all resolve without an error path of their own.
+func readFirstJSONLine(path string, target any) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	firstLine, err := bufio.NewReader(f).ReadString('\n')
+	if err != nil && firstLine == "" {
+		return false
+	}
+	return json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), target) == nil
 }
 
 func readJSONFile(path string, target any) bool {
@@ -703,6 +756,14 @@ func copilotTranscriptSchema() transcriptSchema {
 // pack thought/text/functionCall parts into one line and there is no
 // session-end marker, so tool_use is not mapped and lines that match no event
 // are ignored.
+//
+// ponytail: a Qwen thought part is {"text": ..., "thought": true}, so the
+// coalesce cannot tell it from a reply part, and an assistant line whose only
+// text is a thought stores that thought as the message. Ruling it out needs a
+// second condition on the same event, which the single-path matcher has no
+// room for. The cost is bounded: assistant_message only feeds
+// last_assistant_message, which the watcher reads on session_end — an event
+// Qwen's format never emits — so nothing leaves the bridge.
 func qwenTranscriptSchema() transcriptSchema {
 	return transcriptSchema{
 		Name: "qwen", Version: "0.24", Description: "Qwen Code chat JSONL per-session log.",
@@ -710,6 +771,31 @@ func qwenTranscriptSchema() transcriptSchema {
 			{Name: "user-prompt", Match: equals("provenance", "real_user"), Action: "session_init", Fields: map[string]any{"prompt": "message.parts[0].text"}},
 			{Name: "assistant-message", Match: equals("type", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": map[string]any{"coalesce": []any{"message.parts[1].text", "message.parts[0].text"}}}},
 			{Name: "tool-result", Match: equals("type", "tool_result"), Action: "tool_result", Fields: map[string]any{"toolName": "message.parts[0].functionResponse.name", "toolResponse": "message.parts[0].functionResponse.response"}},
+		},
+	}
+}
+
+// piTranscriptSchema maps pi session JSONL lines to bridge events. Every
+// entry is a message envelope, so all events match on message.role: user
+// messages carry no provenance marker, toolResult is a message-level role
+// (not a top-level type), and assistant content interleaves thinking/text/
+// toolCall blocks so positions vary. The coalesce walks the first content
+// slots in order, which selects the first text block: a pi thinking block
+// keys its prose under "thinking" and a toolCall block has no text at all,
+// so only a real text block resolves. pi has no session-end marker and
+// toolCall blocks are not mapped; lines that match no event are ignored.
+//
+// ponytail: four slots, because the field selector takes literal indices and
+// the watcher's matcher has no way to say "the first block of type text".
+// Text past the fourth block is dropped; widen the list if a real transcript
+// ever shows one.
+func piTranscriptSchema() transcriptSchema {
+	return transcriptSchema{
+		Name: "pi", Version: "3", Description: "pi session JSONL per-session log.",
+		Events: []transcriptEvent{
+			{Name: "user-prompt", Match: equals("message.role", "user"), Action: "session_init", Fields: map[string]any{"prompt": "message.content[0].text"}},
+			{Name: "assistant-message", Match: equals("message.role", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": map[string]any{"coalesce": []any{"message.content[0].text", "message.content[1].text", "message.content[2].text", "message.content[3].text"}}}},
+			{Name: "tool-result", Match: equals("message.role", "toolResult"), Action: "tool_result", Fields: map[string]any{"toolName": "message.toolName", "toolResponse": "message.content[0].text"}},
 		},
 	}
 }
@@ -771,7 +857,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 	// Repair the codex cache before locating the plugin: on a machine where the
 	// codex cache is the only claude-mem copy, LocatePlugin can only succeed
 	// after node_modules exists. A failed repair is reported, not fatal, so the
-	// Kimi/Kiro/Copilot/Qwen wiring and the bridge still install.
+	// Kimi/Kiro/Copilot/Qwen/pi wiring and the bridge still install.
 	codexCache, codexErr := m.EnsureCodexCacheRuntime(ctx)
 	codexCacheError := ""
 	if codexErr != nil {
@@ -975,8 +1061,8 @@ func (m *ClaudeMemManager) RunMCPServer(ctx context.Context) error {
 }
 
 // RunBridge supervises the claude-mem transcript watcher and reloads it when a
-// newly created Kimi, Kiro, Copilot, or Qwen session adds a concrete workspace
-// mapping.
+// newly created Kimi, Kiro, Copilot, Qwen, or pi session adds a concrete
+// workspace mapping.
 func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 	if m.BunPath == "" || !filepath.IsAbs(m.BunPath) {
 		return errors.New("bun executable path must be absolute")
@@ -1095,6 +1181,9 @@ func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMe
 	}
 	status.KimiMCP = hasManagedMCPEntry(m.KimiMCPPath(), m.DotPath)
 	status.QwenMCP = hasManagedMCPEntry(m.QwenMCPPath(), m.DotPath)
+	if info, err := os.Stat(m.PiAgentsPath()); err == nil && !info.IsDir() {
+		status.PiAgents = true
+	}
 	status.KiroMCP = hasManagedMCPEntry(m.KiroMCPPath(), m.DotPath)
 	status.CopilotMCP = hasManagedCopilotMCPEntry(m.CopilotMCPPath(), m.DotPath)
 	status.InstructionsEnabled = HasMemoryInstructions(ssotPath)
@@ -1162,7 +1251,7 @@ func hasManagedCopilotMCPEntry(path, dotPath string) bool {
 }
 
 func countWatches(watches []transcriptWatch) map[string]int {
-	counts := map[string]int{"kimi": 0, "kiro": 0, "copilot": 0, "qwen": 0}
+	counts := map[string]int{"kimi": 0, "kiro": 0, "copilot": 0, "qwen": 0, "pi": 0}
 	for _, watch := range watches {
 		counts[watch.Name]++
 	}

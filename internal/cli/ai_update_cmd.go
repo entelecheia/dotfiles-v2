@@ -18,7 +18,7 @@ import (
 )
 
 // updateTools is the fixed phase order of `dot ai update`.
-var updateTools = []string{"claude", "codex", "copilot", "gemini", "kimi", "qwen", "kiro", "cursor", "skills"}
+var updateTools = []string{"claude", "codex", "copilot", "gemini", "kimi", "pi", "qwen", "kiro", "cursor", "skills"}
 
 // updateToolBinary maps a phase id to its CLI binary where the two differ.
 // Every other phase id is the binary name.
@@ -107,6 +107,8 @@ func runAIUpdate(cmd *cobra.Command, _ []string) error {
 			steps = append(steps, u.updateGemini(ctx)...)
 		case "kimi":
 			steps = append(steps, u.selfUpdate(ctx, "kimi", "upgrade", "")...)
+		case "pi":
+			steps = append(steps, u.selfUpdate(ctx, "pi", "update", "")...)
 		case "qwen":
 			steps = append(steps, u.selfUpdate(ctx, "qwen", "update", "")...)
 		case "kiro":

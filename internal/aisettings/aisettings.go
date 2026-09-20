@@ -150,6 +150,15 @@ func Entries(includeAuth bool) []Entry {
 		// them to the server definitions, so a whole-file restore orphans
 		// nothing.
 		{Tool: "kimi", Path: ".kimi-code/config.toml", Description: "Kimi Code config, providers, and models"},
+		// pi has no MCP support by design; its agent home keeps global
+		// instructions, settings, and the provider/model catalog. models.json
+		// is what makes settings.json restorable — settings.json names a
+		// provider ("dgx") that only models.json defines — so the two travel
+		// together, the way kimi's config.toml does. Sessions, extensions, and
+		// skills are machine state dot never restores.
+		{Tool: "pi", Path: ".pi/agent/AGENTS.md", Description: "pi global instructions"},
+		{Tool: "pi", Path: ".pi/agent/settings.json", Description: "pi settings"},
+		{Tool: "pi", Path: ".pi/agent/models.json", Description: "pi providers and model catalog"},
 		// Qwen's sessions, memories, and usage record are machine state dot
 		// never restores; settings.json holds the dot-managed claude-mem MCP
 		// entry alongside Qwen's own model/auth settings.
@@ -182,6 +191,7 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "claude", Path: ".config/claude/settings.local.json", Description: "Claude local/auth settings", Auth: true},
 		{Tool: "codex", Path: ".codex/auth.json", Description: "Codex auth credentials", Auth: true},
 		{Tool: "kimi", Path: ".kimi-code/credentials", Description: "Kimi Code credentials", Auth: true},
+		{Tool: "pi", Path: ".pi/agent/auth.json", Description: "pi OAuth credentials", Auth: true},
 		{Tool: "antigravity", Path: ".gemini/oauth_creds.json", Description: "Antigravity/Gemini OAuth credentials", Auth: true},
 		{Tool: "antigravity", Path: ".gemini/google_accounts.json", Description: "Antigravity/Gemini account cache", Auth: true},
 	}

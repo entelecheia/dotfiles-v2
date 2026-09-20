@@ -9,6 +9,11 @@ Manage portable AI assistant configuration.
 The ai module writes shell/config helper files. It does not install Claude,
 Codex, Antigravity, or ChatGPT apps; use 'dot apps install' for Homebrew casks.
 
+With --include-auth, the snapshot carries each tool's credential file
+(.codex/auth.json, .kimi-code/credentials, .pi/agent/auth.json,
+.gemini/oauth_creds.json). pi sessions, extensions, and skills stay out:
+they are machine state pi rebuilds itself.
+
 ### Options
 
 ```
@@ -38,7 +43,7 @@ Codex, Antigravity, or ChatGPT apps; use 'dot apps install' for Homebrew casks.
 * [dot ai hud](dot_ai_hud.md)	 - Manage dot-native Claude Code and Codex HUD status lines
 * [dot ai import](dot_ai_import.md)	 - Import AI settings from a portable tar.gz archive
 * [dot ai list](dot_ai_list.md)	 - List AI helpers, detected CLIs, and managed paths
-* [dot ai memory](dot_ai_memory.md)	 - Manage shared claude-mem integration for Codex, Kimi, Kiro, Copilot, and Qwen
+* [dot ai memory](dot_ai_memory.md)	 - Manage shared claude-mem integration for Codex, Kimi, Kiro, Copilot, Qwen, and pi
 * [dot ai prune](dot_ai_prune.md)	 - Delete older AI config snapshots, keeping the newest N
 * [dot ai restore](dot_ai_restore.md)	 - Restore AI settings from a versioned snapshot
 * [dot ai skills](dot_ai_skills.md)	 - Diagnose AI Markdown skills (read-only; the Maru app manages runtime symlinks)

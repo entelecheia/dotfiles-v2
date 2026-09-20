@@ -1,15 +1,16 @@
 ## dot ai memory
 
-Manage shared claude-mem integration for Codex, Kimi, Kiro, Copilot, and Qwen
+Manage shared claude-mem integration for Codex, Kimi, Kiro, Copilot, Qwen, and pi
 
 ### Synopsis
 
 Use one claude-mem store across Codex, Kimi Code, Kiro CLI, GitHub
-Copilot CLI, and Qwen Code.
+Copilot CLI, Qwen Code, and pi.
 
 Codex keeps the plugin's native lifecycle hooks. Kimi, Kiro, Copilot, and
 Qwen receive the same MCP recall server plus a workspace-aware transcript
-capture bridge.
+capture bridge. pi has no MCP support by design and joins the transcript
+bridge only.
 
 ### Options
 
@@ -32,5 +33,5 @@ capture bridge.
 
 * [dot ai](dot_ai.md)	 - AI CLI/config helpers and settings backup/restore
 * [dot ai memory install](dot_ai_memory_install.md)	 - Install and start the cross-CLI claude-mem integration
-* [dot ai memory status](dot_ai_memory_status.md)	 - Show claude-mem integration health for all five CLIs
+* [dot ai memory status](dot_ai_memory_status.md)	 - Show claude-mem integration health for all six CLIs
 

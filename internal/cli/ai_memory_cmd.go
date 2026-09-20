@@ -16,13 +16,14 @@ import (
 func newAIMemoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "memory",
-		Short: "Manage shared claude-mem integration for Codex, Kimi, Kiro, Copilot, and Qwen",
+		Short: "Manage shared claude-mem integration for Codex, Kimi, Kiro, Copilot, Qwen, and pi",
 		Long: `Use one claude-mem store across Codex, Kimi Code, Kiro CLI, GitHub
-Copilot CLI, and Qwen Code.
+Copilot CLI, Qwen Code, and pi.
 
 Codex keeps the plugin's native lifecycle hooks. Kimi, Kiro, Copilot, and
 Qwen receive the same MCP recall server plus a workspace-aware transcript
-capture bridge.`,
+capture bridge. pi has no MCP support by design and joins the transcript
+bridge only.`,
 	}
 	cmd.AddCommand(newAIMemoryInstallCmd())
 	cmd.AddCommand(newAIMemoryStatusCmd())
@@ -56,6 +57,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				p.KV("Kiro sessions", fmt.Sprintf("%d", config["kiro"]))
 				p.KV("Copilot sessions", fmt.Sprintf("%d", config["copilot"]))
 				p.KV("Qwen sessions", fmt.Sprintf("%d", config["qwen"]))
+				p.KV("pi sessions", fmt.Sprintf("%d", config["pi"]))
 				if cache, runnable := aisettings.CodexClaudeMemCache(mgr.HomeDir); cache != "" && !runnable {
 					p.Line("would run bun install --frozen-lockfile in %s (network access)", cache)
 				}
@@ -77,7 +79,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				return err
 			}
 			apply, err := agents.Apply(aisettings.ApplyOptions{
-				Tools: []string{"codex", "kimi", "qwen", "kiro", "copilot"}, Force: forceAgents,
+				Tools: []string{"codex", "kimi", "pi", "qwen", "kiro", "copilot"}, Force: forceAgents,
 			})
 			if err != nil {
 				return err
@@ -95,6 +97,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				"kiro_sessions":        result.WatchCount["kiro"],
 				"copilot_sessions":     result.WatchCount["copilot"],
 				"qwen_sessions":        result.WatchCount["qwen"],
+				"pi_sessions":          result.WatchCount["pi"],
 			})
 
 			p.Header("Claude-mem Integration")
@@ -104,6 +107,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 			p.KV("Kiro sessions", fmt.Sprintf("%d", result.WatchCount["kiro"]))
 			p.KV("Copilot sessions", fmt.Sprintf("%d", result.WatchCount["copilot"]))
 			p.KV("Qwen sessions", fmt.Sprintf("%d", result.WatchCount["qwen"]))
+			p.KV("pi sessions", fmt.Sprintf("%d", result.WatchCount["pi"]))
 			if cache := firstNonEmpty(repairedCache, result.CodexCachePath); cache != "" {
 				p.Line("Installed the codex plugin cache runtime at %s", cache)
 			}
@@ -114,18 +118,18 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				p.Line("Persistent-memory policy added to the agents SSOT.")
 			}
 			printAgentsApplyResult(p, apply)
-			p.Success("Codex, Kimi, Kiro, Copilot, and Qwen now share claude-mem")
+			p.Success("Codex, Kimi, Kiro, Copilot, Qwen, and pi now share claude-mem")
 			return nil
 		},
 	}
-	c.Flags().Bool("force-agents", false, "Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot/Qwen instruction targets")
+	c.Flags().Bool("force-agents", false, "Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot/Qwen/pi instruction targets")
 	return c
 }
 
 func newAIMemoryStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show claude-mem integration health for all five CLIs",
+		Short: "Show claude-mem integration health for all six CLIs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			mgr, err := newClaudeMemManagerFromCmd(cmd)
@@ -159,6 +163,10 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			printMemoryState(p, "qwen", status.QwenMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["qwen"]))
 			printMemoryState(p, "kiro", status.KiroMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["kiro"]))
 			printMemoryState(p, "copilot", status.CopilotMCP, fmt.Sprintf("MCP + %d transcript(s)", status.WatchCount["copilot"]))
+			// pi's readiness is the instructions target, not the transcript
+			// count: a machine that has pi wired but has not run a session yet
+			// is installed, not broken.
+			printMemoryState(p, "pi", status.PiAgents, fmt.Sprintf("instructions + %d transcript(s); no MCP recall (pi has none)", status.WatchCount["pi"]))
 			p.Section("Shared runtime")
 			printMemoryState(p, "instructions", status.InstructionsEnabled, "agents SSOT recall policy")
 			printMemoryState(p, "bridge", status.BridgeInstalled && status.BridgeRunning, bridgeStatusDetail(status))
@@ -215,7 +223,7 @@ func newAIMemoryMCPServerCmd() *cobra.Command {
 func newAIMemoryBridgeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "bridge",
-		Short:  "Run the Kimi/Kiro/Copilot/Qwen transcript bridge",
+		Short:  "Run the Kimi/Kiro/Copilot/Qwen/pi transcript bridge",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

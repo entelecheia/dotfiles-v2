@@ -351,6 +351,30 @@ func TestEntriesCoverKimiCode(t *testing.T) {
 	}
 }
 
+func TestEntriesCoverPiAgentHome(t *testing.T) {
+	entries := Entries(false)
+	for _, path := range []string{
+		".pi/agent/AGENTS.md",
+		".pi/agent/settings.json",
+		// settings.json names a provider models.json defines; restoring one
+		// without the other leaves pi pointing at a provider it cannot resolve.
+		".pi/agent/models.json",
+	} {
+		if !hasEntry(entries, "pi", path) {
+			t.Errorf("pi entry %s missing: %+v", path, entries)
+		}
+	}
+	if hasEntryPath(entries, ".pi/agent/auth.json") {
+		t.Error("pi auth.json is auth-only and must not be backed up by default")
+	}
+	if hasEntryPath(entries, ".pi/agent/sessions") {
+		t.Error("pi sessions are machine state and must not be backed up")
+	}
+	if !hasEntry(Entries(true), "pi", ".pi/agent/auth.json") {
+		t.Error("pi auth.json missing with IncludeAuth")
+	}
+}
+
 func TestEntriesExcludeSkillRuntimeDirectories(t *testing.T) {
 	entries := Entries(true)
 	excluded := []string{

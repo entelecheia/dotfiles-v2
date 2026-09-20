@@ -57,6 +57,7 @@ var pathBoundaryTable = []pathBoundaryEntry{
 	{"ClaudeMemManager.CopilotMCPPath", classHomeWrite},
 	{"ClaudeMemManager.KimiMCPPath", classHomeWrite},
 	{"ClaudeMemManager.QwenMCPPath", classHomeWrite},
+	{"ClaudeMemManager.PiAgentsPath", classHomeWrite},
 	{"ClaudeMemManager.KiroMCPPath", classHomeWrite},
 	{"ClaudeMemManager.LaunchdPlistPath", classHomeWrite},
 	{"ClaudeMemManager.TranscriptConfigPath", classHomeWrite},
@@ -107,6 +108,18 @@ var allowedBoundaryRoots = []string{
 	"~/.kiro/settings/mcp.json",
 	"~/.copilot/mcp-config.json",
 	"~/.codex/config.toml",
+	// The agents fan-out targets, one root per registry entry. Listing each
+	// one is what makes a newly registered tool a documented grant rather
+	// than a silent one (see TestAgentTargetsResolveUnderAllowedRoots).
+	"~/.codex/AGENTS.md",
+	"~/.cursor/AGENTS.md",
+	"~/.kiro/steering/AGENTS.md",
+	"~/.kimi-code/AGENTS.md",
+	"~/.pi/agent/AGENTS.md",
+	"~/.qwen/AGENTS.md",
+	"~/.gemini/GEMINI.md",
+	"~/.copilot/copilot-instructions.md",
+	"~/.aider.conf.md",
 }
 
 // expandBoundaryRoot expands a tilde-prefixed boundary root against home.
@@ -289,6 +302,8 @@ func resolveHomeWrite(t *testing.T, name, home string) string {
 		return (&ClaudeMemManager{HomeDir: home}).KimiMCPPath()
 	case "ClaudeMemManager.QwenMCPPath":
 		return (&ClaudeMemManager{HomeDir: home}).QwenMCPPath()
+	case "ClaudeMemManager.PiAgentsPath":
+		return (&ClaudeMemManager{HomeDir: home}).PiAgentsPath()
 	case "ClaudeMemManager.KiroMCPPath":
 		return (&ClaudeMemManager{HomeDir: home}).KiroMCPPath()
 	case "ClaudeMemManager.LaunchdPlistPath":
@@ -336,6 +351,35 @@ func resolveCallerRooted(t *testing.T, name, home, root string) string {
 	default:
 		t.Fatalf("no caller-rooted invocation for %s; extend resolveCallerRooted", name)
 		return ""
+	}
+}
+
+// TestAgentTargetsResolveUnderAllowedRoots drives AgentsManager.TargetPath
+// over every registered agent, not just the one representative the
+// pathBoundaryTable row resolves. Registering a tool adds a home write
+// target, and the boundary table cannot see it: qwen and pi each added one
+// while the table kept asserting "claude". Without this the prose boundary
+// grants a path nothing checks.
+func TestAgentTargetsResolveUnderAllowedRoots(t *testing.T) {
+	home := t.TempDir()
+	tools := RegisteredAgentTools()
+	if len(tools) == 0 {
+		t.Fatal("registry is empty: a green boundary must not come from an empty inventory")
+	}
+	m := &AgentsManager{HomeDir: home}
+	for _, tool := range tools {
+		t.Run(tool.ID, func(t *testing.T) {
+			got, err := m.TargetPath(tool.ID)
+			if err != nil {
+				t.Fatalf("TargetPath(%s): %v", tool.ID, err)
+			}
+			for _, root := range allowedBoundaryRoots {
+				if withinBoundary(got, expandBoundaryRoot(root, home)) {
+					return
+				}
+			}
+			t.Errorf("agent %s target %q resolves outside every root docs/BOUNDARIES.md permits; add its path to allowedBoundaryRoots and to docs/BOUNDARIES.md", tool.ID, got)
+		})
 	}
 }
 
