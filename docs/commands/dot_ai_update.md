@@ -6,7 +6,7 @@ Update AI CLIs, plugins, marketplaces, and skills
 
 Bring managed AI tooling current in one pass.
 
-Phases run in a fixed order (claude, codex, copilot, gemini, kimi, kiro, cursor, skills) and are
+Phases run in a fixed order (claude, codex, copilot, gemini, kimi, qwen, kiro, cursor, skills) and are
 partial-failure tolerant: one tool failing never aborts the rest. Missing
 binaries are skipped, not errors.
 
@@ -24,7 +24,7 @@ dot ai update [flags]
       --check          Report available updates without changing anything
   -h, --help           help for update
       --json           Emit machine-readable JSON
-      --tool strings   Limit to specific tools (claude,codex,copilot,gemini,kimi,kiro,cursor,skills)
+      --tool strings   Limit to specific tools (claude,codex,copilot,gemini,kimi,qwen,kiro,cursor,skills)
 ```
 
 ### Options inherited from parent commands

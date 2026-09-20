@@ -48,6 +48,13 @@ func RegisteredAgentTools() []AgentTool {
 			Optional:    true,
 		},
 		{
+			ID:          "qwen",
+			DisplayName: "Qwen Code",
+			TargetPath:  "~/.qwen/AGENTS.md",
+			OverlayFile: "qwen.md",
+			Optional:    true,
+		},
+		{
 			ID:          "antigravity",
 			DisplayName: "Antigravity CLI",
 			TargetPath:  "~/.gemini/GEMINI.md",

@@ -9,7 +9,7 @@ dot ai memory install [flags]
 ### Options
 
 ```
-      --force-agents   Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot instruction targets
+      --force-agents   Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot/Qwen instruction targets
   -h, --help           help for install
 ```
 
@@ -26,5 +26,5 @@ dot ai memory install [flags]
 
 ### SEE ALSO
 
-* [dot ai memory](dot_ai_memory.md)	 - Manage shared claude-mem integration for Codex, Kimi, Kiro, and Copilot
+* [dot ai memory](dot_ai_memory.md)	 - Manage shared claude-mem integration for Codex, Kimi, Kiro, Copilot, and Qwen
 

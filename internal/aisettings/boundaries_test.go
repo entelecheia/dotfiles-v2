@@ -56,6 +56,7 @@ var pathBoundaryTable = []pathBoundaryEntry{
 	{"ClaudeMemManager.BridgeLogPath", classHomeWrite},
 	{"ClaudeMemManager.CopilotMCPPath", classHomeWrite},
 	{"ClaudeMemManager.KimiMCPPath", classHomeWrite},
+	{"ClaudeMemManager.QwenMCPPath", classHomeWrite},
 	{"ClaudeMemManager.KiroMCPPath", classHomeWrite},
 	{"ClaudeMemManager.LaunchdPlistPath", classHomeWrite},
 	{"ClaudeMemManager.TranscriptConfigPath", classHomeWrite},
@@ -102,6 +103,7 @@ var allowedBoundaryRoots = []string{
 	"~/.claude-mem",
 	"~/Library/LaunchAgents/com.dotfiles.claude-mem-bridge.plist",
 	"~/.kimi-code/mcp.json",
+	"~/.qwen/settings.json",
 	"~/.kiro/settings/mcp.json",
 	"~/.copilot/mcp-config.json",
 	"~/.codex/config.toml",
@@ -285,6 +287,8 @@ func resolveHomeWrite(t *testing.T, name, home string) string {
 		return (&ClaudeMemManager{HomeDir: home}).DataDir()
 	case "ClaudeMemManager.KimiMCPPath":
 		return (&ClaudeMemManager{HomeDir: home}).KimiMCPPath()
+	case "ClaudeMemManager.QwenMCPPath":
+		return (&ClaudeMemManager{HomeDir: home}).QwenMCPPath()
 	case "ClaudeMemManager.KiroMCPPath":
 		return (&ClaudeMemManager{HomeDir: home}).KiroMCPPath()
 	case "ClaudeMemManager.LaunchdPlistPath":

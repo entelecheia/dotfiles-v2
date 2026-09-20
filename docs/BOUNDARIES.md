@@ -29,7 +29,7 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 - `~/.maru/settings.json` and `~/.maru/sites.json` only during explicit AI
   backup/restore operations
 - global AGENTS fan-out targets for Claude, Codex, Cursor, Antigravity,
-  Copilot, and Aider
+  Copilot, Aider, and Qwen
 
 Dot-owned state trees:
 
@@ -64,6 +64,13 @@ tool):
 - `~/.kimi-code/mcp.json` — the `claude-mem` entry under `mcpServers`
   (command and args only), written by `dot ai memory install`; every
   other server entry is preserved
+- `~/.qwen/settings.json` — the `claude-mem` entry under `mcpServers`
+  (command and args only), written by `dot ai memory install`; every
+  other key — Qwen's model, provider, auth, and UI settings — is
+  preserved. Notably NOT dotfiles-managed: `~/.qwen/.env` (secrets),
+  `~/.qwen/projects/**/chats/**`, `~/.qwen/memories/**`, and
+  `~/.qwen/usage_record.jsonl` are machine state dot backs up but never
+  restores
 - `~/.kiro/settings/mcp.json` — the `claude-mem` entry under
   `mcpServers` plus `"disabled": false`, written by `dot ai memory
   install`; every other server entry is preserved

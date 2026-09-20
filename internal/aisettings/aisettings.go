@@ -150,6 +150,11 @@ func Entries(includeAuth bool) []Entry {
 		// them to the server definitions, so a whole-file restore orphans
 		// nothing.
 		{Tool: "kimi", Path: ".kimi-code/config.toml", Description: "Kimi Code config, providers, and models"},
+		// Qwen's sessions, memories, and usage record are machine state dot
+		// never restores; settings.json holds the dot-managed claude-mem MCP
+		// entry alongside Qwen's own model/auth settings.
+		{Tool: "qwen", Path: ".qwen/AGENTS.md", Description: "Qwen Code global instructions"},
+		{Tool: "qwen", Path: ".qwen/settings.json", Description: "Qwen Code settings and MCP servers"},
 		{Tool: "antigravity", Path: ".gemini/GEMINI.md", Description: "Antigravity/Gemini global instructions"},
 		{Tool: "antigravity", Path: ".gemini/config/mcp_config.json", Description: "Antigravity shared MCP config"},
 		{Tool: "antigravity", Path: ".gemini/config/hooks.json", Description: "Antigravity global hooks"},

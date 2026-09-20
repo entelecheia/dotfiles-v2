@@ -597,6 +597,177 @@ func TestBuildTranscriptConfigIncludesCopilotInCounts(t *testing.T) {
 	}
 }
 
+func TestQwenTranscriptSchemaFields(t *testing.T) {
+	schema := qwenTranscriptSchema()
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"provenance", "real_user", "message.parts[0].text", "tool_result", "functionResponse", "assistant_message"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("qwen schema missing %q: %s", want, raw)
+		}
+	}
+	if schema.Name != "qwen" {
+		t.Fatalf("schema.Name = %q, want \"qwen\"", schema.Name)
+	}
+	// user-prompt should map to session_init (matching kimi/kiro/copilot pattern)
+	found := false
+	for _, ev := range schema.Events {
+		if ev.Name == "user-prompt" && ev.Action == "session_init" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("qwen schema: user-prompt event must use session_init action")
+	}
+}
+
+func TestQwenWatchesDiscoversSessionWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(home, "work", "qwen-project")
+	mustMkdirAll(t, workspace)
+
+	chatPath := filepath.Join(home, ".qwen", "projects", "-Users-yj-lee-work-qwen-project", "chats", "44444444-4444-4444-4444-444444444444.jsonl")
+	mustWriteJSON(t, strings.TrimSuffix(chatPath, ".jsonl")+".runtime.json", map[string]any{"work_dir": workspace})
+	mustWriteFile(t, chatPath, `{"type":"user","provenance":"real_user","message":{"parts":[{"text":"hi"}]}}`+"\n")
+
+	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
+	config, err := mgr.BuildTranscriptConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := countWatches(config.Watches)
+	if counts["qwen"] != 1 {
+		t.Fatalf("qwen watch count = %d, want 1: %+v", counts["qwen"], config.Watches)
+	}
+	var found transcriptWatch
+	for _, w := range config.Watches {
+		if w.Name == "qwen" {
+			found = w
+		}
+	}
+	if found.Workspace != workspace {
+		t.Fatalf("qwen watch workspace = %q, want %q from the sibling runtime.json", found.Workspace, workspace)
+	}
+	if found.Path != chatPath {
+		t.Fatalf("qwen watch path = %q, want %q", found.Path, chatPath)
+	}
+	if found.Schema != "qwen" {
+		t.Fatalf("qwen watch schema = %q, want \"qwen\"", found.Schema)
+	}
+	if found.StartAtEnd {
+		t.Fatal("qwen watch must replay a newly discovered session from offset zero")
+	}
+	if _, ok := config.Schemas["qwen"]; !ok {
+		t.Fatal("BuildTranscriptConfig schemas missing \"qwen\"")
+	}
+}
+
+func TestQwenWatchesFallsBackToFirstLineCWD(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(home, "work", "qwen-current")
+	mustMkdirAll(t, workspace)
+
+	// No sibling runtime.json: the first chat line's top-level cwd wins.
+	chatPath := filepath.Join(home, ".qwen", "projects", "-Users-yj-lee-work-qwen-current", "chats", "55555555-5555-5555-5555-555555555555.jsonl")
+	mustWriteFile(t, chatPath, `{"cwd":"`+workspace+`","type":"user","provenance":"real_user","message":{"parts":[{"text":"hi"}]}}`+"\n")
+
+	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
+	config, err := mgr.BuildTranscriptConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts := countWatches(config.Watches); counts["qwen"] != 1 {
+		t.Fatalf("qwen watch count = %d, want 1: %+v", counts["qwen"], config.Watches)
+	}
+	if config.Watches[0].Name != "qwen" || config.Watches[0].Workspace != workspace {
+		t.Fatalf("qwen first-line cwd workspace mapping wrong: %+v", config.Watches[0])
+	}
+}
+
+func TestQwenWatchesSkipsChatsWithoutWorkspace(t *testing.T) {
+	home := t.TempDir()
+
+	// Empty transcript with no runtime.json: no cwd to resolve anywhere.
+	chatPath := filepath.Join(home, ".qwen", "projects", "-tmp-empty", "chats", "66666666-6666-6666-6666-666666666666.jsonl")
+	mustWriteFile(t, chatPath, "")
+
+	mgr := NewClaudeMemManager(home, filepath.Join(home, "bin", "dot"), filepath.Join(home, "bin", "node"))
+	config, err := mgr.BuildTranscriptConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts := countWatches(config.Watches); counts["qwen"] != 0 {
+		t.Fatalf("qwen watch count = %d, want 0 for a chat with no resolvable workspace", counts["qwen"])
+	}
+}
+
+func TestQwenMCPEntryPreservesQwenSettings(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".qwen", "settings.json")
+	mustWriteJSON(t, path, map[string]any{
+		"$version": 4,
+		"model":    "qwen3-coder-plus",
+		"modelProviders": []map[string]any{
+			{"name": "modelstudio", "baseURL": "https://dashscope.example/compatible-mode/v1", "apiKey": "sk-test"},
+		},
+		"security": map[string]any{"auth": map[string]any{"selectedType": "qwen-oauth"}},
+		"ui":       map[string]any{"hideWindowTitle": true},
+		"mcpServers": map[string]any{
+			"obsidian": map[string]any{"command": "mcpvault", "args": []string{"obsidian"}},
+		},
+	})
+	dotPath := filepath.Join(home, ".local", "bin", "dot")
+	changed, err := ensureMCPEntry(path, dotPath, mcpVariantStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("first merge reported no change")
+	}
+	var got struct {
+		Version        int    `json:"$version"`
+		Model          string `json:"model"`
+		ModelProviders []any  `json:"modelProviders"`
+		Security       struct {
+			Auth struct {
+				SelectedType string `json:"selectedType"`
+			} `json:"auth"`
+		} `json:"security"`
+		UI         map[string]any `json:"ui"`
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if !readJSONFile(path, &got) {
+		t.Fatal("merged Qwen settings did not parse")
+	}
+	entry := got.MCPServers["claude-mem"]
+	if entry.Command != dotPath {
+		t.Fatalf("command = %q, want %q", entry.Command, dotPath)
+	}
+	if strings.Join(entry.Args, " ") != "ai memory mcp-server" {
+		t.Fatalf("args = %v, want [ai memory mcp-server]", entry.Args)
+	}
+	// Qwen's own model/auth settings must survive the merge untouched.
+	if got.Version != 4 || got.Model != "qwen3-coder-plus" || got.Security.Auth.SelectedType != "qwen-oauth" {
+		t.Fatalf("qwen settings were not preserved: %#v", got)
+	}
+	if len(got.ModelProviders) != 1 || got.UI["hideWindowTitle"] != true {
+		t.Fatalf("qwen settings were not preserved: %#v", got)
+	}
+	if got.MCPServers["obsidian"].Command != "mcpvault" {
+		t.Fatalf("unrelated entry was not preserved: %#v", got.MCPServers)
+	}
+	// idempotency
+	changed, err = ensureMCPEntry(path, dotPath, mcpVariantStandard)
+	if err != nil || changed {
+		t.Fatalf("second merge changed=%v err=%v, want idempotent", changed, err)
+	}
+}
+
 func mustWriteJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	raw, err := json.Marshal(value)

@@ -32,12 +32,12 @@ const memoryInstructions = `<!-- dotfiles:claude-mem:start -->
 
 - Before non-trivial work, query the ` + "`claude-mem`" + ` MCP server when prior workspace context may affect the result.
 - Treat retrieved memory as a lead, and verify drift-prone facts against the current workspace or live system.
-- Codex hooks and the Kimi/Kiro/Copilot transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
+- Codex hooks and the Kimi/Kiro/Copilot/Qwen transcript bridge capture session activity automatically. Do not duplicate it into separate memory files unless explicitly requested.
 <!-- dotfiles:claude-mem:end -->`
 
 // ClaudeMemManager manages the cross-CLI claude-mem integration. Codex uses
-// the plugin's native hooks; Kimi, Kiro, and GitHub Copilot CLI use MCP for
-// recall and a transcript bridge for capture.
+// the plugin's native hooks; Kimi, Kiro, GitHub Copilot CLI, and Qwen Code
+// use MCP for recall and a transcript bridge for capture.
 type ClaudeMemManager struct {
 	HomeDir    string
 	DotPath    string
@@ -71,6 +71,7 @@ type ClaudeMemStatus struct {
 	// CodexHome is CODEX_HOME when it differs from ~/.codex (see CodexHomeOverride).
 	CodexHome           string
 	KimiMCP             bool
+	QwenMCP             bool
 	KiroMCP             bool
 	CopilotMCP          bool
 	InstructionsEnabled bool
@@ -134,6 +135,10 @@ func (m *ClaudeMemManager) BridgeLogPath() string {
 
 func (m *ClaudeMemManager) KimiMCPPath() string {
 	return filepath.Join(m.HomeDir, ".kimi-code", "mcp.json")
+}
+
+func (m *ClaudeMemManager) QwenMCPPath() string {
+	return filepath.Join(m.HomeDir, ".qwen", "settings.json")
 }
 
 func (m *ClaudeMemManager) KiroMCPPath() string {
@@ -446,10 +451,11 @@ func HasMemoryInstructions(path string) bool {
 }
 
 // BuildTranscriptConfig discovers concrete session files so each transcript is
-// associated with its workspace: Kimi/Kiro record it in sidecar metadata, while
-// Copilot sessions carry it in the session.start event's context.
+// associated with its workspace: Kimi/Kiro record it in sidecar metadata,
+// Copilot sessions carry it in the session.start event's context, and Qwen
+// sessions carry it in a sibling .runtime.json (first-line cwd as fallback).
 func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error) {
-	watches := append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...)
+	watches := append(append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...), m.qwenWatches()...)
 	if watches == nil {
 		// A machine with no Kimi/Kiro sessions yet leaves this nil, and a nil
 		// slice marshals to `null`, which the plugin's watcher rejects as an
@@ -464,6 +470,7 @@ func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error
 			"kimi":    kimiTranscriptSchema(),
 			"kiro":    kiroTranscriptSchema(),
 			"copilot": copilotTranscriptSchema(),
+			"qwen":    qwenTranscriptSchema(),
 		},
 		Watches:   watches,
 		StateFile: m.TranscriptStatePath(),
@@ -586,6 +593,56 @@ func copilotSessionWorkspace(eventsPath string) string {
 	return event.Data.Context.GitRoot
 }
 
+// qwenWatches discovers Qwen Code chat transcripts. Each chat has a sibling
+// <session>.runtime.json recording the live work_dir; the first chat line's
+// top-level cwd is the fallback.
+func (m *ClaudeMemManager) qwenWatches() []transcriptWatch {
+	pattern := filepath.Join(m.HomeDir, ".qwen", "projects", "*", "chats", "*.jsonl")
+	chatFiles, _ := filepath.Glob(pattern)
+	var watches []transcriptWatch
+	for _, chatPath := range chatFiles {
+		if info, err := os.Stat(chatPath); err != nil || info.IsDir() {
+			continue
+		}
+		workspace := qwenSessionWorkspace(chatPath)
+		if !isAbsoluteDirectory(workspace) {
+			continue
+		}
+		watches = append(watches, transcriptWatch{
+			Name: "qwen", Path: chatPath, Schema: "qwen", Workspace: workspace, StartAtEnd: false,
+		})
+	}
+	return watches
+}
+
+// qwenSessionWorkspace reads the sibling <session>.runtime.json's work_dir,
+// falling back to the first chat line's top-level cwd.
+func qwenSessionWorkspace(chatPath string) string {
+	var runtimeState struct {
+		WorkDir string `json:"work_dir"`
+	}
+	if readJSONFile(strings.TrimSuffix(chatPath, ".jsonl")+".runtime.json", &runtimeState) && runtimeState.WorkDir != "" {
+		return runtimeState.WorkDir
+	}
+	f, err := os.Open(chatPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	reader := bufio.NewReader(f)
+	firstLine, err := reader.ReadString('\n')
+	if err != nil && firstLine == "" {
+		return ""
+	}
+	var line struct {
+		CWD string `json:"cwd"`
+	}
+	if json.Unmarshal([]byte(strings.TrimRight(firstLine, "\r\n")), &line) != nil {
+		return ""
+	}
+	return line.CWD
+}
+
 func readJSONFile(path string, target any) bool {
 	raw, err := os.ReadFile(path)
 	return err == nil && json.Unmarshal(raw, target) == nil
@@ -635,6 +692,24 @@ func copilotTranscriptSchema() transcriptSchema {
 			{Name: "tool-call", Match: equals("type", "tool.execution_start"), Action: "tool_use", Fields: map[string]any{"toolId": "data.toolCallId", "toolName": "data.toolName", "toolInput": "data.arguments"}},
 			{Name: "tool-result", Match: equals("type", "tool.execution_complete"), Action: "tool_result", Fields: map[string]any{"toolId": "data.toolCallId", "toolResponse": map[string]any{"coalesce": []any{"data.result.content", "data.result"}}}},
 			{Name: "session-end", Match: equals("type", "session.shutdown"), Action: "session_end"},
+		},
+	}
+}
+
+// qwenTranscriptSchema maps Qwen Code chat JSONL lines to bridge events. The
+// watcher matcher supports a single top-level path per event, so every event
+// matches on type or provenance: tool_result lines carry message.role "user"
+// but type "tool_result", so top-level type stays unambiguous. Assistant lines
+// pack thought/text/functionCall parts into one line and there is no
+// session-end marker, so tool_use is not mapped and lines that match no event
+// are ignored.
+func qwenTranscriptSchema() transcriptSchema {
+	return transcriptSchema{
+		Name: "qwen", Version: "0.24", Description: "Qwen Code chat JSONL per-session log.",
+		Events: []transcriptEvent{
+			{Name: "user-prompt", Match: equals("provenance", "real_user"), Action: "session_init", Fields: map[string]any{"prompt": "message.parts[0].text"}},
+			{Name: "assistant-message", Match: equals("type", "assistant"), Action: "assistant_message", Fields: map[string]any{"message": map[string]any{"coalesce": []any{"message.parts[1].text", "message.parts[0].text"}}}},
+			{Name: "tool-result", Match: equals("type", "tool_result"), Action: "tool_result", Fields: map[string]any{"toolName": "message.parts[0].functionResponse.name", "toolResponse": "message.parts[0].functionResponse.response"}},
 		},
 	}
 }
@@ -696,7 +771,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 	// Repair the codex cache before locating the plugin: on a machine where the
 	// codex cache is the only claude-mem copy, LocatePlugin can only succeed
 	// after node_modules exists. A failed repair is reported, not fatal, so the
-	// Kimi/Kiro/Copilot wiring and the bridge still install.
+	// Kimi/Kiro/Copilot/Qwen wiring and the bridge still install.
 	codexCache, codexErr := m.EnsureCodexCacheRuntime(ctx)
 	codexCacheError := ""
 	if codexErr != nil {
@@ -716,6 +791,7 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 		variant mcpEntryVariant
 	}{
 		{m.KimiMCPPath(), mcpVariantStandard},
+		{m.QwenMCPPath(), mcpVariantStandard},
 		{m.KiroMCPPath(), mcpVariantKiro},
 		{m.CopilotMCPPath(), mcpVariantCopilot},
 	} {
@@ -899,7 +975,8 @@ func (m *ClaudeMemManager) RunMCPServer(ctx context.Context) error {
 }
 
 // RunBridge supervises the claude-mem transcript watcher and reloads it when a
-// newly created Kimi, Kiro, or Copilot session adds a concrete workspace mapping.
+// newly created Kimi, Kiro, Copilot, or Qwen session adds a concrete workspace
+// mapping.
 func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 	if m.BunPath == "" || !filepath.IsAbs(m.BunPath) {
 		return errors.New("bun executable path must be absolute")
@@ -1017,6 +1094,7 @@ func (m *ClaudeMemManager) Status(ctx context.Context, ssotPath string) ClaudeMe
 		status.PluginError = err.Error()
 	}
 	status.KimiMCP = hasManagedMCPEntry(m.KimiMCPPath(), m.DotPath)
+	status.QwenMCP = hasManagedMCPEntry(m.QwenMCPPath(), m.DotPath)
 	status.KiroMCP = hasManagedMCPEntry(m.KiroMCPPath(), m.DotPath)
 	status.CopilotMCP = hasManagedCopilotMCPEntry(m.CopilotMCPPath(), m.DotPath)
 	status.InstructionsEnabled = HasMemoryInstructions(ssotPath)
@@ -1084,7 +1162,7 @@ func hasManagedCopilotMCPEntry(path, dotPath string) bool {
 }
 
 func countWatches(watches []transcriptWatch) map[string]int {
-	counts := map[string]int{"kimi": 0, "kiro": 0, "copilot": 0}
+	counts := map[string]int{"kimi": 0, "kiro": 0, "copilot": 0, "qwen": 0}
 	for _, watch := range watches {
 		counts[watch.Name]++
 	}
