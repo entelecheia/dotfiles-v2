@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "dotfiles-v2 Go Workspace",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "output": "dotfiles-v2-rendered.html",
+    "viewBox": [1376, 648],
+    "repository": {
+      "url": "https://github.com/entelecheia/dotfiles-v2",
+      "provider": "github",
+      "revision": "89131369e55c889504150f4f20d402d25138fec2"
+    },
+    "views": [
+      {
+        "id": "check-path",
+        "label": "Check and apply path",
+        "focus": ["user", "cli", "config", "module", "fs"],
+        "note": "Check() diffs desired state, Apply() resolves it per module."
+      },
+      {
+        "id": "sync-path",
+        "label": "Sync and schedule path",
+        "focus": ["cli", "syncer", "fs"],
+        "note": "rsync push/pull plus launchd and systemd user schedulers."
+      },
+      {
+        "id": "secrets-path",
+        "label": "Secrets and backup path",
+        "focus": ["cli", "secrets", "snapstore", "fs"],
+        "note": "age-encrypted store and profile snapshot versioning."
+      }
+    ],
+    "legend": {
+      "mode": "all"
+    }
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "Users / Agents",
+      "sublabel": "CLI + schedulers",
+      "pos": [40, 330],
+      "size": [130, 60],
+      "sources": [
+        { "path": "internal/cli/root.go", "line": 21, "label": "dot: user env management tool" }
+      ]
+    },
+    {
+      "id": "cli",
+      "type": "backend",
+      "label": "dot CLI",
+      "sublabel": "internal/cli, cobra",
+      "tag": "31 commands",
+      "pos": [250, 330],
+      "size": [160, 64],
+      "sources": [
+        { "path": "internal/cli/root.go", "line": 49, "end_line": 105, "label": "AddCommand registry" },
+        { "path": "cmd/dot/main.go", "line": 16, "label": "dot binary entrypoint" }
+      ]
+    },
+    {
+      "id": "config",
+      "type": "backend",
+      "label": "Config Loader",
+      "sublabel": "internal/config",
+      "tag": "profiles + detection",
+      "pos": [250, 110],
+      "size": [160, 60],
+      "sources": [
+        { "path": "internal/config/loader.go", "line": 18, "label": "profile Load entry" },
+        { "path": "internal/config/detector.go", "line": 1, "label": "host detection" }
+      ]
+    },
+    {
+      "id": "module",
+      "type": "backend",
+      "label": "Module Registry",
+      "sublabel": "internal/module",
+      "tag": "14 modules",
+      "pos": [480, 330],
+      "size": [150, 60],
+      "sources": [
+        { "path": "internal/module/module.go", "line": 62, "end_line": 77, "label": "defaultOrder, 14 names" },
+        { "path": "internal/module/module.go", "line": 85, "label": "NewRegistry wiring" }
+      ]
+    },
+    {
+      "id": "syncer",
+      "type": "backend",
+      "label": "Sync Engine",
+      "sublabel": "internal/syncer",
+      "tag": "rsync push/pull",
+      "pos": [695, 110],
+      "size": [170, 60],
+      "sources": [
+        { "path": "internal/syncer/sync.go", "line": 681, "label": "Sync transfer entry" },
+        { "path": "internal/syncer/scheduler.go", "line": 272, "label": "InstallKind wiring" },
+        { "path": "internal/syncer/rsyncbin.go", "line": 1, "label": "rsync binary selection" }
+      ]
+    },
+    {
+      "id": "template",
+      "type": "backend",
+      "label": "Template Engine",
+      "sublabel": "internal/template",
+      "tag": "render + system info",
+      "pos": [695, 330],
+      "size": [170, 64],
+      "sources": [
+        { "path": "internal/template/render.go", "line": 15, "label": "Engine struct" }
+      ]
+    },
+    {
+      "id": "fs",
+      "type": "database",
+      "label": "Home + Targets",
+      "sublabel": "dotfiles home, peer hosts",
+      "tag": "atomic writes",
+      "pos": [930, 330],
+      "size": [150, 60],
+      "sources": [
+        { "path": "internal/exec/runner.go", "line": 186, "label": "WriteFileAtomic" }
+      ]
+    },
+    {
+      "id": "secrets",
+      "type": "security",
+      "label": "Secrets Store",
+      "sublabel": "internal/secrets",
+      "tag": "age encryption",
+      "pos": [250, 500],
+      "size": [160, 60],
+      "sources": [
+        { "path": "internal/secrets/store.go", "line": 119, "label": "encryptFile, 0600 temp" },
+        { "path": "internal/secrets/store.go", "line": 55, "label": "ResolveAgeIdentity" }
+      ]
+    },
+    {
+      "id": "snapstore",
+      "type": "database",
+      "label": "Snapshot Store",
+      "sublabel": "internal/snapstore",
+      "tag": "latest pointer",
+      "pos": [40, 500],
+      "size": [130, 60],
+      "sources": [
+        { "path": "internal/snapstore/snapstore.go", "line": 46, "label": "ResolveLatest pointer" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Single Go binary - one static module registry",
+      "wraps": ["cli", "config", "module", "syncer", "template", "secrets", "snapstore"],
+      "pad": 14
+    },
+    {
+      "kind": "security-group",
+      "label": "age identities, 0600 temp files only",
+      "wraps": ["secrets"],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-cli",
+      "from": "user",
+      "to": "cli",
+      "label": "dot",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-to-config",
+      "from": "cli",
+      "to": "config",
+      "label": "load",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDx": -70
+    },
+    {
+      "id": "config-to-module",
+      "from": "config",
+      "to": "module",
+      "label": "enabled set",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [440, 240]
+    },
+    {
+      "id": "cli-to-module",
+      "from": "cli",
+      "to": "module",
+      "label": "run",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-to-template",
+      "from": "cli",
+      "to": "template",
+      "label": "render",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [[330, 445], [780, 445]]
+    },
+    {
+      "id": "cli-to-secrets",
+      "from": "cli",
+      "to": "secrets",
+      "label": "secrets init",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [260, 408]
+    },
+    {
+      "id": "secrets-to-fs",
+      "from": "secrets",
+      "to": "fs",
+      "label": "0600 archives",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "labelAt": [700, 570]
+    },
+    {
+      "id": "module-to-template",
+      "from": "module",
+      "to": "template",
+      "label": "vars",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "template-to-fs",
+      "from": "template",
+      "to": "fs",
+      "label": "write",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "module-to-syncer",
+      "from": "module",
+      "to": "syncer",
+      "label": "sync ctx",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [670, 250]
+    },
+    {
+      "id": "syncer-to-fs",
+      "from": "syncer",
+      "to": "fs",
+      "label": "atomic writes",
+      "fromSide": "right",
+      "toSide": "top",
+      "labelAt": [935, 140]
+    },
+    {
+      "id": "user-to-snapstore",
+      "from": "user",
+      "to": "snapstore",
+      "label": "dot profile",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [105, 404]
+    },
+    {
+      "id": "snapstore-to-secrets",
+      "from": "snapstore",
+      "to": "secrets",
+      "label": "restore",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [210, 570]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Check and apply",
+      "items": [
+        "14 modules in a fixed defaultOrder; each owns Check() and Apply()",
+        "Config loader merges profile + host detection into a run context",
+        "Every file write goes through WriteFileAtomic with dry-run respected"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Sync and schedule",
+      "items": [
+        "rsync push and intake runs via internal/syncer with rsync binary selection",
+        "dot sync setup installs launchd LaunchAgent or systemd user-timer units",
+        "cloudflared tunnel and SSH drop-ins managed under internal/tunnel"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Secrets and snapshots",
+      "items": [
+        "age-encrypted archives; encryptFile stages 0600 temp files only",
+        "Profile snapshots versioned via UniqueVersion with latest pointer",
+        "dot secrets init/restore/status all derive from the shared entries table"
+      ]
+    }
+  ]
+}
