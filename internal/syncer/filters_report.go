@@ -28,8 +28,12 @@ func FilterReport(cfg *Config) ([]FilterLayer, error) {
 		return len(patterns)
 	}
 
+	alwaysOn := []string{"/.dotfiles/", "/inbox/gdrive/", ".git (any depth, dir or gitlink)"}
+	for _, root := range worktreeRoots {
+		alwaysOn = append(alwaysOn, root+" (any depth, linked worktrees)")
+	}
 	layers := []FilterLayer{
-		{Name: "1. always-on excludes", Detail: []string{"/.dotfiles/", "/inbox/gdrive/", ".git (any depth, dir or gitlink)"}},
+		{Name: "1. always-on excludes", Detail: alwaysOn},
 	}
 
 	// Honor the profile's policy, not just the repo's submodule list. Reporting

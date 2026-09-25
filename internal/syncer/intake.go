@@ -236,13 +236,24 @@ func isAlwaysExcluded(rel string) bool {
 	if rel == "inbox/gdrive" || strings.HasPrefix(rel, "inbox/gdrive/") {
 		return true
 	}
-	// .git at any depth — dir or gitlink file. Mirrors the hardcoded rsync
-	// exclude so VCS internals can never reach the target.
-	if rel == ".git" || strings.HasSuffix(rel, "/.git") ||
-		strings.HasPrefix(rel, ".git/") || strings.Contains(rel, "/.git/") {
+	// .git and worktree roots at any depth, dir or file. Mirrors the hardcoded
+	// rsync excludes so VCS internals and worktree checkouts never reach the target.
+	if hasPathSegment(rel, ".git") {
 		return true
 	}
+	for _, root := range worktreeRoots {
+		if hasPathSegment(rel, root) {
+			return true
+		}
+	}
 	return false
+}
+
+// hasPathSegment reports whether seg (one or more whole path components)
+// appears in rel at any depth, as the path itself or one of its parents.
+func hasPathSegment(rel, seg string) bool {
+	return rel == seg || strings.HasPrefix(rel, seg+"/") ||
+		strings.HasSuffix(rel, "/"+seg) || strings.Contains(rel, "/"+seg+"/")
 }
 
 func isDriveMetadata(rel string) bool {

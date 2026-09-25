@@ -422,8 +422,15 @@ func commonArgs(cfg *Config, rf runtimeFilters) []string {
 	return args
 }
 
+// worktreeRoots are the directories where coding agents park linked Git
+// worktrees (Claude Code, Qwen Code, the common .worktrees convention). A
+// worktree is a branch checkout whose .git gitlink never travels, so a copy on
+// the target is a dead husk, and its bulk create/remove would trip max_delete
+// on every agent cleanup. Its content reaches the other machine through Git.
+var worktreeRoots = []string{".claude/worktrees", ".qwen/worktrees", ".worktrees"}
+
 func alwaysExcludeArgs() []string {
-	return []string{
+	args := []string{
 		"--exclude=/.dotfiles/",
 		"--exclude=/inbox/gdrive/",
 		// .git (dir or gitlink file, any depth) is enforced in code, not just
@@ -431,6 +438,12 @@ func alwaysExcludeArgs() []string {
 		// internals to the target.
 		"--exclude=.git",
 	}
+	// No trailing slash, like .git: isAlwaysExcluded matches files too, and a
+	// rule only one side applies turns into a propagated delete.
+	for _, root := range worktreeRoots {
+		args = append(args, "--exclude="+root)
+	}
+	return args
 }
 
 // secretsFilterArgs renders the allow.txt re-includes (with parent-dir
