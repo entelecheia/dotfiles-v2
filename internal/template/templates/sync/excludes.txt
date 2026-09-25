@@ -12,6 +12,8 @@
 # git internals — match file AND directory at any depth.
 # Submodules and worktrees use a `.git` *file* (gitlink), not a directory,
 # so both shapes are covered. Also enforced in code (always-on layer).
+# Linked worktree roots (.claude/worktrees, .qwen/worktrees, .worktrees) are
+# excluded in code too: a checkout travels through Git, not through sync.
 .git
 .git/
 .git/**

@@ -33,6 +33,9 @@ questions:
              Secrets included. Submodule working trees included, because
              uncommitted work inside a submodule is exactly what Git has
              not seen and what a second machine still needs.
+             Linked Git worktrees (.claude/worktrees, .qwen/worktrees,
+             .worktrees) are never carried: they are branch checkouts that
+             travel through Git.
 
 Routine one-sided changes transfer directly. A path changed differently on
 both machines is resolved by the configured coordinator, and the losing peer

@@ -1,7 +1,10 @@
 package syncer
 
 import (
+	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -210,5 +213,86 @@ func TestCommonArgs_NoDeleteFlags(t *testing.T) {
 		if slices.Contains(args, forbidden) {
 			t.Errorf("commonArgs leaked direction-specific flag %q (must be added by Pull/Push only)", forbidden)
 		}
+	}
+}
+
+// The rsync always-on excludes and their Go twin must agree: a path only the
+// local walk hides looks deleted locally and becomes a propagated delete.
+func TestAlwaysExcluded_RsyncParity(t *testing.T) {
+	if _, err := exec.LookPath("rsync"); err != nil {
+		t.Skip("rsync not installed")
+	}
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	excluded := []string{
+		".claude/worktrees/a/f.txt",
+		".claude/worktrees/a/.git",
+		"dev/x/.claude/worktrees/a/f.txt",
+		"dev/x/.qwen/worktrees/a/f.txt",
+		"sub/.worktrees/b/f.txt",
+		"notes/.worktrees",
+		"dev/x/.git",
+	}
+	kept := []string{
+		"keep.txt",
+		".gitignore",
+		".claude/settings.json",
+		".claude/worktrees-notes.md",
+		"docs/worktrees/x.md",
+		"dev/x/src/main.go",
+	}
+	for _, rel := range append(slices.Clone(excluded), kept...) {
+		path := filepath.Join(source, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(rel), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	args := append([]string{"-r", "--dry-run", "--out-format=%n"}, alwaysExcludeArgs()...)
+	args = append(args, source+"/", filepath.Join(root, "dest")+"/")
+	out, err := exec.Command("rsync", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("rsync: %v\n%s", err, out)
+	}
+	var rsyncKept []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" && !strings.HasSuffix(line, "/") {
+			rsyncKept = append(rsyncKept, line)
+		}
+	}
+
+	var goKept []string
+	err = filepath.WalkDir(source, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == source {
+			return err
+		}
+		rel, _ := filepath.Rel(source, path)
+		rel = filepath.ToSlash(rel)
+		if isAlwaysExcluded(rel) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.IsDir() {
+			goKept = append(goKept, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slices.Sort(rsyncKept)
+	slices.Sort(goKept)
+	slices.Sort(kept)
+	if !slices.Equal(rsyncKept, kept) {
+		t.Errorf("rsync kept %v, want %v", rsyncKept, kept)
+	}
+	if !slices.Equal(goKept, kept) {
+		t.Errorf("isAlwaysExcluded kept %v, want %v", goKept, kept)
 	}
 }
