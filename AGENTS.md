@@ -1,11 +1,30 @@
 # AGENTS.md
 
-Codex adapter only. Do not copy project rules from the source files into this
-file.
+Project instructions for every coding agent working in this repo (Claude Code,
+Codex, Kiro, Kimi, Qwen, pi). This is the only instruction file; do not add a
+CLAUDE.md.
 
-- Scope: this directory and descendants.
-- Local source files: `README.md`.
-- Before changing files here, read the local source files and treat them as the source of truth for project structure, naming, sensitive content, storage rules, and commands.
-- Translate Claude-specific tool, agent, or slash-command references into available Codex tools and skills.
-- When project commands, folder rules, or policies change, update `README.md`, not this adapter.
-- Verify with commands documented in the source files; if no command applies, use the smallest relevant check.
+## Sources of truth
+
+- `README.md`: modules, profiles, configuration, build commands, CI and release flow.
+- `docs/BOUNDARIES.md`: which live files `dot` may write. Stay inside it.
+- `docs/CEILINGS.md`: accepted design limits and when to revisit each.
+  `internal/syncer/ceilings_doc_test.go` checks its code markers.
+- `docs/commands/`: generated from the cobra help; never edit by hand.
+
+Facts owned by those files are updated there. The rules below that no other
+file states are maintained here.
+
+## Verify
+
+- `make build`, `make test`, `make lint` (README, Development).
+- `make docs` after any command help change; CI fails if `docs/commands` drifts.
+- Sync changes: prove rsync and Go filter parity with a real-rsync test, as in
+  `internal/syncer/excludes_test.go`.
+
+## Workflow
+
+- Branch and PR; never commit to `main` directly.
+- Conventional commits, in English.
+- Before merge: CI green and a read-only OCR delegation review of the PR head.
+- Release: README, CI/CD.

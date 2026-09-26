@@ -19,6 +19,8 @@ func RegisteredAgentTools() []AgentTool {
 		{
 			ID:          "claude",
 			DisplayName: "Claude Code",
+			// Stays CLAUDE.md: Claude Code reads AGENTS.md only as project
+			// instructions; user-level memory is ~/.claude/CLAUDE.md alone.
 			TargetPath:  "~/.claude/CLAUDE.md",
 			OverlayFile: "claude.md",
 		},
