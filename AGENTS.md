@@ -8,10 +8,13 @@ CLAUDE.md.
 
 - `README.md`: modules, profiles, configuration, CI and release flow.
 - `docs/BOUNDARIES.md`: which live files `dot` may write. Stay inside it.
-- `docs/CEILINGS.md`: sync scale limits.
+- `docs/CEILINGS.md`: accepted design limits (sync manifests and scheduler,
+  openrsync preview, peer trust, guard hooks, state schema) and when to
+  revisit each. `internal/syncer/ceilings_doc_test.go` checks its code markers.
 - `docs/commands/`: generated from the cobra help; never edit by hand.
 
-Update those files, not this one, when commands or policies change.
+Facts owned by those files are updated there. The Verify and Workflow sections
+below live only here, so update them here when they change.
 
 ## Verify
 
