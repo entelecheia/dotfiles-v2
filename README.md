@@ -404,6 +404,8 @@ secrets:
 
 Same modular Go architecture as [rootfiles-v2](https://github.com/entelecheia/rootfiles-v2).
 
+Interactive blueprint: [docs/architecture/dotfiles-v2-rendered.html](docs/architecture/dotfiles-v2-rendered.html) (spec: [dotfiles-v2.architecture.json](docs/architecture/dotfiles-v2.architecture.json)).
+
 ```
 rootfiles-v2 (root, server)     dotfiles-v2 (user, workstation)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
