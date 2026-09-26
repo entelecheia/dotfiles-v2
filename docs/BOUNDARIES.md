@@ -44,7 +44,7 @@ Dot-owned state trees:
 - `~/.config/dotfiles/agents`: the shared agents instruction SSOT
   (`AGENTS.md`), written by `dot ai agents init|pull|author|edit` (edit
   scaffolds a missing SSOT), by `dot apply` (scaffolds it on a fresh
-  machine), by `dot ai restore`, and by the instruction blocks of `dot ai
+  machine), by `dot ai restore|import`, and by the instruction blocks of `dot ai
   coauthor-guard` and `dot ai memory install`. This dir is synced between
   machines, so it holds no machine state: every agents apply removes the
   legacy apply-state file (`.state.json`) from it, best-effort, after

@@ -871,7 +871,10 @@ func (m *AgentsManager) writeState(st *agentsState) error {
 func (m *AgentsManager) removeLegacyState() error {
 	legacy := m.legacyStatePath()
 	if _, err := os.Lstat(legacy); err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 	if err := m.runner().Remove(legacy); err != nil && !os.IsNotExist(err) {
 		return err
