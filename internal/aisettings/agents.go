@@ -210,7 +210,7 @@ func (m *AgentsManager) StatePath() string {
 }
 
 // legacyStatePath is where the apply state lived before it moved out of the
-// synced SSOT dir. readState migrates it and writeState removes it.
+// synced SSOT dir. readState migrates it and removeLegacyState deletes it.
 func (m *AgentsManager) legacyStatePath() string {
 	return filepath.Join(m.ssotDir(), legacyStateName)
 }
@@ -450,6 +450,9 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 	if !result.DryRun {
 		if err := m.writeState(state); err != nil {
 			return nil, err
+		}
+		if err := m.removeLegacyState(); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("legacy agents state not removed (ignored while %s exists): %v", m.StatePath(), err))
 		}
 	}
 	return result, nil
@@ -846,10 +849,6 @@ func (m *AgentsManager) readLegacyState() (*agentsState, error) {
 	return st, nil
 }
 
-// writeState writes the machine-local state, then removes the legacy file so
-// a stale copy stops syncing to other machines. A legacy file that reappears
-// after migration (synced back from a machine still on an older dot) is
-// ignored by readState and removed again here.
 func (m *AgentsManager) writeState(st *agentsState) error {
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
@@ -860,14 +859,24 @@ func (m *AgentsManager) writeState(st *agentsState) error {
 	if err := m.runner().MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := m.runner().WriteFile(path, data, 0o644); err != nil {
-		return err
-	}
+	return m.runner().WriteFileAtomic(path, data, 0o644)
+}
+
+// removeLegacyState deletes the legacy state file once the machine-local one
+// is written, so a stale copy stops syncing to other machines. A copy that
+// reappears later (synced back from a machine still on an older dot) is
+// ignored by readState and removed again here. The removal is best-effort:
+// the new state already holds the truth, so a failure such as an unwritable
+// SSOT dir is only reported, never allowed to fail the apply.
+func (m *AgentsManager) removeLegacyState() error {
 	legacy := m.legacyStatePath()
 	if _, err := os.Lstat(legacy); err != nil {
 		return nil
 	}
-	return m.runner().Remove(legacy)
+	if err := m.runner().Remove(legacy); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (m *AgentsManager) backupTarget(toolID, path string) (string, error) {

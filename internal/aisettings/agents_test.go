@@ -664,6 +664,42 @@ func TestAgentsLegacyForeignStateNeverConflictsWithCurrentRender(t *testing.T) {
 	}
 }
 
+func TestAgentsApplySucceedsWhenLegacyStateCannotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permission")
+	}
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("shared\n"))
+	legacy := writeLegacyAgentsState(t, mgr, map[string]string{"codex": "stale"})
+	ssotDir := mgr.SSOTDirPath()
+	if err := os.Chmod(ssotDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ssotDir, 0o755) })
+
+	res, err := mgr.Apply(ApplyOptions{Tools: []string{"codex"}})
+	if err != nil {
+		t.Fatalf("apply failed on an unremovable legacy state: %v", err)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "legacy agents state not removed") {
+		t.Fatalf("warnings = %q, want one legacy-removal warning", res.Warnings)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatalf("legacy state should remain in the read-only dir: %v", err)
+	}
+	state, err := mgr.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := mgr.Render("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.LastApplied["codex"] != normalizedHash([]byte(rendered)) {
+		t.Fatalf("state not written: %+v", state.LastApplied)
+	}
+}
+
 func TestAgentsBackupRestoreRoundTrip(t *testing.T) {
 	eng, home, root := testEngine(t)
 	mgr := NewAgentsManager(eng.Runner, home)
