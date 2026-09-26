@@ -41,14 +41,19 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 
 Dot-owned state trees:
 
-- `~/.config/dotfiles/agents` — the shared agents instruction SSOT
-  (`AGENTS.md`) and its apply-state file (`.state.json`), written by
-  `dot ai agents init|apply` and by the coauthor-guard instruction block
-  (`dot ai coauthor-guard`)
-- `~/.local/share/dotfiles` — dot's data tree: the append-only AI audit
-  log (`ai/events.jsonl`, one record per `dot ai` mutation) and the
-  timestamped backup trees (`backup/agents*/<timestamp>/…`) taken before
-  agents SSOT and target edits
+- `~/.config/dotfiles/agents`: the shared agents instruction SSOT
+  (`AGENTS.md`), written by `dot ai agents init|pull|author` and by the
+  coauthor-guard instruction block (`dot ai coauthor-guard`). This dir is
+  synced between machines, so it holds no machine state: `dot ai agents
+  apply` removes the legacy apply-state file (`.state.json`) from it after
+  migrating the entries that match this machine's targets
+- `~/.local/share/dotfiles`: dot's machine-local data tree, holding the
+  append-only AI audit log (`ai/events.jsonl`, one record per `dot ai`
+  mutation), the agents apply state (`agents/state.json`, the
+  last-applied hash of each target on this machine, written by `dot ai
+  agents apply`), and the timestamped backup trees
+  (`backup/agents*/<timestamp>/...`) taken before agents SSOT and target
+  edits
 
 Third-party files dot edits (each entry states what dot writes there and
 under what condition; everything else in the file belongs to its owning

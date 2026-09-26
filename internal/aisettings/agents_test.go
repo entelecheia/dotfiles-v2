@@ -536,6 +536,134 @@ func TestAgentsGeminiLastAppliedStateMigratesToAntigravity(t *testing.T) {
 	}
 }
 
+// writeLegacyAgentsState writes the pre-move state file into the synced SSOT
+// dir, as an older dot or a peer sync from another machine would.
+func writeLegacyAgentsState(t *testing.T, mgr *AgentsManager, lastApplied map[string]string) string {
+	t.Helper()
+	path := filepath.Join(mgr.SSOTDirPath(), ".state.json")
+	mustWriteJSON(t, path, agentsState{LastApplied: lastApplied})
+	return path
+}
+
+// renderToTarget writes the current render of toolID to its target, as a
+// previous apply on this machine would have, and returns its hash.
+func renderToTarget(t *testing.T, mgr *AgentsManager, toolID string) string {
+	t.Helper()
+	rendered, err := mgr.Render(toolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := mgr.TargetPath(toolID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, target, []byte(rendered))
+	return normalizedHash([]byte(rendered))
+}
+
+func TestAgentsApplyWritesStateOutsideSyncedSSOTDir(t *testing.T) {
+	mgr, home := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("shared\n"))
+	if _, err := mgr.Apply(ApplyOptions{Tools: []string{"codex"}}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	want := filepath.Join(home, ".local", "share", "dotfiles", "agents", "state.json")
+	if got := mgr.StatePath(); got != want {
+		t.Fatalf("StatePath = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("state not written to machine-local path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mgr.SSOTDirPath(), ".state.json")); !os.IsNotExist(err) {
+		t.Fatalf("state leaked into the synced SSOT dir, stat err=%v", err)
+	}
+}
+
+func TestAgentsLegacyStateKeepsOnlyEntriesMatchingLiveTargets(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("first\n"))
+	claudeHash := renderToTarget(t, mgr, "claude")
+	renderToTarget(t, mgr, "codex")
+	legacy := writeLegacyAgentsState(t, mgr, map[string]string{
+		"claude":       claudeHash,
+		"codex":        normalizedHash([]byte("another machine's render\n")),
+		"retired-tool": claudeHash,
+	})
+
+	state, err := mgr.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.LastApplied) != 1 || state.LastApplied["claude"] != claudeHash {
+		t.Fatalf("migrated state = %+v, want only the claude entry that matches its target", state.LastApplied)
+	}
+
+	// The SSOT changes on another machine and syncs here. The migrated claude
+	// record still proves the target is this machine's last render.
+	mustWrite(t, mgr.SSOTPath(), []byte("second\n"))
+	if _, err := mgr.Apply(ApplyOptions{Tools: []string{"claude"}}); err != nil {
+		t.Fatalf("apply with migrated record: %v", err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy state not removed after write, stat err=%v", err)
+	}
+	state, err = mgr.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := state.LastApplied["codex"]; ok {
+		t.Fatalf("dropped foreign entry came back: %+v", state.LastApplied)
+	}
+
+	// The dropped codex entry is "no record": its stale target conflicts.
+	_, err = mgr.Apply(ApplyOptions{Tools: []string{"codex"}})
+	var conflict *ProtectedWriteConflictError
+	if !errors.As(err, &conflict) || conflict.ExpectedHash != "" {
+		t.Fatalf("err = %v, want a no-record conflict for codex", err)
+	}
+}
+
+func TestAgentsLegacyForeignStateNeverConflictsWithCurrentRender(t *testing.T) {
+	mgr, _ := testAgentsManager(t)
+	mustWrite(t, mgr.SSOTPath(), []byte("current\n"))
+	want := map[string]string{
+		"claude": renderToTarget(t, mgr, "claude"),
+		"codex":  renderToTarget(t, mgr, "codex"),
+	}
+	foreign := map[string]string{
+		"claude": normalizedHash([]byte("stale\n")),
+		"codex":  normalizedHash([]byte("stale\n")),
+	}
+	legacy := writeLegacyAgentsState(t, mgr, foreign)
+
+	// The second pass is a legacy file synced back from a machine still on
+	// an older dot after this one migrated: ignored, then removed again.
+	for pass := 1; pass <= 2; pass++ {
+		res, err := mgr.Apply(ApplyOptions{Tools: []string{"claude", "codex"}})
+		if err != nil {
+			t.Fatalf("pass %d: apply: %v", pass, err)
+		}
+		for _, item := range res.Items {
+			if item.Conflict || item.Changed {
+				t.Fatalf("pass %d: item = %+v, want in-sync non-conflict", pass, item)
+			}
+		}
+		if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+			t.Fatalf("pass %d: legacy state not removed, stat err=%v", pass, err)
+		}
+		state, err := mgr.readState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for id, hash := range want {
+			if state.LastApplied[id] != hash {
+				t.Fatalf("pass %d: %s last-applied = %q, want %q", pass, id, state.LastApplied[id], hash)
+			}
+		}
+		writeLegacyAgentsState(t, mgr, foreign)
+	}
+}
+
 func TestAgentsBackupRestoreRoundTrip(t *testing.T) {
 	eng, home, root := testEngine(t)
 	mgr := NewAgentsManager(eng.Runner, home)

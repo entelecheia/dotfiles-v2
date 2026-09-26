@@ -23,7 +23,7 @@ const (
 	AgentsSSOTRelPath = ".config/dotfiles/agents"
 	AgentsSSOTName    = "AGENTS.md"
 
-	agentsStateName      = ".state.json"
+	legacyStateName      = ".state.json"
 	agentsManagedHeader  = "<!-- managed by dot ai agents - edit ~/.config/dotfiles/agents/AGENTS.md -->"
 	agentsOverlayPattern = "<!-- overlay:%s -->"
 )
@@ -201,9 +201,18 @@ func (m *AgentsManager) SSOTDirPath() string {
 	return m.ssotDir()
 }
 
-// StatePath returns the absolute path to the apply-state file.
+// StatePath returns the absolute path to the apply-state file. The state
+// records this machine's rendered targets, so it lives in the machine-local
+// data tree next to the agents backups, never in the SSOT dir that is synced
+// between machines.
 func (m *AgentsManager) StatePath() string {
-	return filepath.Join(m.ssotDir(), agentsStateName)
+	return filepath.Join(m.homeDir(), ".local", "share", "dotfiles", "agents", "state.json")
+}
+
+// legacyStatePath is where the apply state lived before it moved out of the
+// synced SSOT dir. readState migrates it and writeState removes it.
+func (m *AgentsManager) legacyStatePath() string {
+	return filepath.Join(m.ssotDir(), legacyStateName)
 }
 
 // DefaultApplyTools returns non-optional tools plus optional tools whose target
@@ -791,7 +800,7 @@ func (m *AgentsManager) readState() (*agentsState, error) {
 	data, err := os.ReadFile(m.StatePath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return st, nil
+			return m.readLegacyState()
 		}
 		return nil, err
 	}
@@ -804,16 +813,61 @@ func (m *AgentsManager) readState() (*agentsState, error) {
 	return st, nil
 }
 
+// readLegacyState imports the pre-move state file from the SSOT dir. That dir
+// is synced between machines, so its entries may record another machine's
+// render: only an entry whose hash equals this machine's live target, hashed
+// header-stripped as Apply compares, is kept. The rest, and an unparsable
+// file, are dropped, which Apply reads as "no record". Dropping never adds a
+// conflict: Apply consults the record only for a target that differs from the
+// current render, where a mismatched record conflicts exactly as a missing
+// one does, and a target equal to the current render never conflicts.
+func (m *AgentsManager) readLegacyState() (*agentsState, error) {
+	st := &agentsState{LastApplied: map[string]string{}}
+	data, err := os.ReadFile(m.legacyStatePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return st, nil
+		}
+		return nil, err
+	}
+	var legacy agentsState
+	if json.Unmarshal(data, &legacy) != nil {
+		return st, nil
+	}
+	for id, hash := range legacy.LastApplied {
+		target, err := m.TargetPath(id)
+		if err != nil {
+			continue
+		}
+		if body, err := os.ReadFile(target); err == nil && normalizedHash(body) == hash {
+			st.LastApplied[id] = hash
+		}
+	}
+	return st, nil
+}
+
+// writeState writes the machine-local state, then removes the legacy file so
+// a stale copy stops syncing to other machines. A legacy file that reappears
+// after migration (synced back from a machine still on an older dot) is
+// ignored by readState and removed again here.
 func (m *AgentsManager) writeState(st *agentsState) error {
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	if err := m.runner().MkdirAll(m.ssotDir(), 0o755); err != nil {
+	path := m.StatePath()
+	if err := m.runner().MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return m.runner().WriteFile(m.StatePath(), data, 0o644)
+	if err := m.runner().WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	legacy := m.legacyStatePath()
+	if _, err := os.Lstat(legacy); err != nil {
+		return nil
+	}
+	return m.runner().Remove(legacy)
 }
 
 func (m *AgentsManager) backupTarget(toolID, path string) (string, error) {
