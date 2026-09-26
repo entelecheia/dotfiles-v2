@@ -70,7 +70,7 @@ dot sync [flags]
 * [dot sync init](dot_sync_init.md)	 - Initialize <workspace>/.dotfiles/sync/ from current state
 * [dot sync intake](dot_sync_intake.md)	 - Stage new mirror-origin files for manual routing
 * [dot sync log](dot_sync_log.md)	 - Show the tail of the profile sync log
-* [dot sync names](dot_sync_names.md)	 - Normalize selected workspace names to Unicode NFD
+* [dot sync names](dot_sync_names.md)	 - Maintain workspace filenames (Unicode NFD, trailing whitespace)
 * [dot sync owner](dot_sync_owner.md)	 - Show or set which machine may push this profile
 * [dot sync pause](dot_sync_pause.md)	 - Set the Paused gate so pull/push/sync refuse to run
 * [dot sync pull](dot_sync_pull.md)	 - Restore/update baseline-tracked mirror payloads into the workspace

@@ -1,6 +1,6 @@
 ## dot sync names
 
-Normalize selected workspace names to Unicode NFD
+Maintain workspace filenames (Unicode NFD, trailing whitespace)
 
 ```
 dot sync names [flags]
@@ -30,4 +30,5 @@ dot sync names [flags]
 
 * [dot sync](dot_sync.md)	 - Sync workspace to a local mirror or SSH remote via rsync
 * [dot sync names normalize](dot_sync_names_normalize.md)	 - Plan or apply Unicode NFD filename normalization
+* [dot sync names trim](dot_sync_names_trim.md)	 - Plan or apply trailing-whitespace filename trims
 
