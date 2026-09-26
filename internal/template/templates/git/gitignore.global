@@ -1,0 +1,109 @@
+# Global gitignore, managed by dotfiles-v2 (module "git", `dot apply`).
+# Source: internal/template/templates/git/gitignore.global
+# Deploys to ~/.config/git/gitignore.global (core.excludesFile).
+# Edit the source in the repo, not the deployed copy.
+#
+# Resolved decisions (issue #142):
+# - *.sql is intentionally NOT ignored: a global *.sql rule silently hid NEW
+#   migration files in repos that track SQL (maru-hub migrations/*.sql,
+#   maru-web).
+# - .env* is ignored with explicit negations below, because plain .env* hid
+#   direnv's .envrc (tracked in eKoNLPy) and the project/vault/example
+#   variants that repos commit on purpose.
+# - .vscode/ stays globally ignored; a repo that shares editor settings
+#   negates it in its own .gitignore.
+# - *.sqlite stays ignored; an intentional database is committed per-repo
+#   with `git add -f`.
+# - Coverage artifacts are global so per-repo ignore lists stay minimal.
+
+# Compiled source #
+###################
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Packages #
+############
+# it's better to unpack these files and commit the raw source
+# git has its own built in compression methods
+*.dmg
+*.iso
+
+# Logs and databases #
+######################
+*.log
+*.sqlite
+
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Internal use #
+################
+.refs
+.links
+
+# Dot env files #
+#################
+.env*
+!.envrc
+!.env.project
+!.env.vault
+!.env.example
+
+# Hypothesis #
+##############
+.hypothesis
+
+# Python #
+##########
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Coverage #
+############
+coverage.xml
+.coverage
+htmlcov/
+.nyc_output/
+
+# Editors #
+###########
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# JS / web tooling #
+####################
+.turbo/
+.next/
+.vercel/
+*.tsbuildinfo
+.playwright-mcp/
+
+# Agent tooling / dependencies #
+################################
+.agenthub/
+.qwen/
+node_modules/
+
+# Claude #
+##########
+**/.claude/settings.local.json

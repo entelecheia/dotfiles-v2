@@ -25,6 +25,12 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 - `~/.claude/statusline-dot.py`
 - `~/.claude/keybindings.json`
 - `~/.config/claude/**`
+- `~/.config/git/gitignore.global` — the global git excludes file
+  (`core.excludesFile`), deployed whole by the `git` module from
+  `internal/template/templates/git/gitignore.global`. The legacy
+  `~/.config/git/ignore` it supersedes is removed by `dot apply`, and only
+  when the file still matches the last managed content byte for byte; a
+  locally edited copy is left alone
 - `~/.config/shell/30-ai.sh`
 - `~/.maru/settings.json` and `~/.maru/sites.json` only during explicit AI
   backup/restore operations
