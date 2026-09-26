@@ -57,7 +57,7 @@
       "pos": [250, 330],
       "size": [160, 64],
       "sources": [
-        { "path": "internal/cli/root.go", "line": 49, "end_line": 105, "label": "AddCommand registry" },
+        { "path": "internal/cli/root.go", "line": 49, "end_line": 102, "label": "AddCommand registry" },
         { "path": "cmd/dot/main.go", "line": 16, "label": "dot binary entrypoint" }
       ]
     },
@@ -118,7 +118,7 @@
       "type": "database",
       "label": "Home + Targets",
       "sublabel": "dotfiles home, peer hosts",
-      "tag": "atomic writes",
+      "tag": "runner-gated writes",
       "pos": [930, 330],
       "size": [150, 60],
       "sources": [
@@ -245,19 +245,19 @@
       "toSide": "left"
     },
     {
-      "id": "module-to-syncer",
-      "from": "module",
+      "id": "cli-to-syncer",
+      "from": "cli",
       "to": "syncer",
-      "label": "sync ctx",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "labelAt": [670, 250]
+      "label": "dot sync",
+      "fromSide": "left",
+      "toSide": "top",
+      "via": [[215, 362], [215, 70], [780, 70]]
     },
     {
       "id": "syncer-to-fs",
       "from": "syncer",
       "to": "fs",
-      "label": "atomic writes",
+      "label": "rsync",
       "fromSide": "right",
       "toSide": "top",
       "labelAt": [935, 140]
@@ -288,7 +288,7 @@
       "items": [
         "14 modules in a fixed defaultOrder; each owns Check() and Apply()",
         "Config loader merges profile + host detection into a run context",
-        "Every file write goes through WriteFileAtomic with dry-run respected"
+        "Module writes go through exec.Runner (WriteFile, WriteFileAtomic) with dry-run respected"
       ]
     },
     {
