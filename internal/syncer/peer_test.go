@@ -339,7 +339,10 @@ func gitInit(t *testing.T, dir string) {
 
 func gitAddCommit(t *testing.T, dir, msg string) {
 	t.Helper()
-	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", msg}} {
+	// -c core.excludesFile=/dev/null: the invoking user's global gitignore
+	// (core.excludesFile, e.g. ~/.config/git/gitignore.global) must not
+	// swallow seeded fixtures like __pycache__/a.pyc.
+	for _, args := range [][]string{{"-c", "core.excludesFile=/dev/null", "add", "-A"}, {"commit", "-q", "-m", msg}} {
 		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
