@@ -41,14 +41,23 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 
 Dot-owned state trees:
 
-- `~/.config/dotfiles/agents` — the shared agents instruction SSOT
-  (`AGENTS.md`) and its apply-state file (`.state.json`), written by
-  `dot ai agents init|apply` and by the coauthor-guard instruction block
-  (`dot ai coauthor-guard`)
-- `~/.local/share/dotfiles` — dot's data tree: the append-only AI audit
-  log (`ai/events.jsonl`, one record per `dot ai` mutation) and the
-  timestamped backup trees (`backup/agents*/<timestamp>/…`) taken before
-  agents SSOT and target edits
+- `~/.config/dotfiles/agents`: the shared agents instruction SSOT
+  (`AGENTS.md`), written by `dot ai agents init|pull|author|edit` (edit
+  scaffolds a missing SSOT), by `dot apply` (scaffolds it on a fresh
+  machine), by `dot ai restore|import`, and by the instruction blocks of `dot ai
+  coauthor-guard` and `dot ai memory install`. This dir is synced between
+  machines, so it holds no machine state: every agents apply removes the
+  legacy apply-state file (`.state.json`) from it, best-effort, after
+  migrating the entries that match this machine's targets
+- `~/.local/share/dotfiles`: dot's machine-local data tree, holding the
+  append-only AI audit log (`ai/events.jsonl`, one record per `dot ai`
+  mutation), the agents apply state (`agents/state.json`, the
+  last-applied hash of each target on this machine), and the timestamped
+  backup trees (`backup/agents*/<timestamp>/...`) taken before agents
+  SSOT and target edits. The apply state is written by every agents
+  apply: `dot ai agents apply`, `dot apply`, `dot ai coauthor-guard
+  apply --apply-agents`, `dot ai memory install`, and `dot ai restore
+  --reapply-agents`
 
 Third-party files dot edits (each entry states what dot writes there and
 under what condition; everything else in the file belongs to its owning

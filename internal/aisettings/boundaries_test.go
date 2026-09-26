@@ -50,9 +50,10 @@ var pathBoundaryTable = []pathBoundaryEntry{
 	{"AIEventsPath", classHomeWrite},
 	{"AgentsManager.SSOTDirPath", classCallerRooted},
 	{"AgentsManager.SSOTPath", classCallerRooted},
-	{"AgentsManager.StatePath", classCallerRooted},
+	{"AgentsManager.StatePath", classHomeWrite},
 	{"AgentsManager.TargetPath", classHomeWrite},
 	{"AgentsManager.backupTargetPath", classHomeWrite},
+	{"AgentsManager.legacyStatePath", classCallerRooted},
 	{"ClaudeMemManager.BridgeLogPath", classHomeWrite},
 	{"ClaudeMemManager.CopilotMCPPath", classHomeWrite},
 	{"ClaudeMemManager.KimiMCPPath", classHomeWrite},
@@ -290,6 +291,8 @@ func resolveHomeWrite(t *testing.T, name, home string) string {
 			t.Error("TargetPath(bogus-tool) = nil error, want an error for an unknown tool")
 		}
 		return got
+	case "AgentsManager.StatePath":
+		return (&AgentsManager{HomeDir: home}).StatePath()
 	case "AgentsManager.backupTargetPath":
 		return (&AgentsManager{HomeDir: home}).backupTargetPath("claude")
 	case "ClaudeMemManager.BridgeLogPath":
@@ -336,8 +339,8 @@ func resolveCallerRooted(t *testing.T, name, home, root string) string {
 		return (&AgentsManager{HomeDir: home, SSOTDir: root}).SSOTDirPath()
 	case "AgentsManager.SSOTPath":
 		return (&AgentsManager{HomeDir: home, SSOTDir: root}).SSOTPath()
-	case "AgentsManager.StatePath":
-		return (&AgentsManager{HomeDir: home, SSOTDir: root}).StatePath()
+	case "AgentsManager.legacyStatePath":
+		return (&AgentsManager{HomeDir: home, SSOTDir: root}).legacyStatePath()
 	case "AgentsManager.ssotDir":
 		return (&AgentsManager{HomeDir: home, SSOTDir: root}).ssotDir()
 	case "Engine.AIConfigRoot":
