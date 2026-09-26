@@ -10,7 +10,7 @@
     "repository": {
       "url": "https://github.com/entelecheia/dotfiles-v2",
       "provider": "github",
-      "revision": "89131369e55c889504150f4f20d402d25138fec2"
+      "revision": "a2517065aef43e63853655dec7f258fb0bbfa0d6"
     },
     "views": [
       {
@@ -98,7 +98,7 @@
       "sources": [
         { "path": "internal/syncer/sync.go", "line": 681, "label": "Sync transfer entry" },
         { "path": "internal/syncer/scheduler.go", "line": 272, "label": "InstallKind wiring" },
-        { "path": "internal/syncer/rsyncbin.go", "line": 1, "label": "rsync binary selection" }
+        { "path": "internal/syncer/excludes.go", "line": 432, "label": "always-on excludes: .git, worktree roots" }
       ]
     },
     {
@@ -296,6 +296,7 @@
       "title": "Sync and schedule",
       "items": [
         "rsync push and intake runs via internal/syncer with rsync binary selection",
+        "Always-on excludes keep .git and linked worktree roots out of every sync profile",
         "dot sync setup installs launchd LaunchAgent or systemd user-timer units",
         "cloudflared tunnel and SSH drop-ins managed under internal/tunnel"
       ]
