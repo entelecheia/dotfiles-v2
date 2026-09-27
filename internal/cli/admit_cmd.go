@@ -40,6 +40,40 @@ var admitNewMonitor = func(runner *exec.Runner, home string) *admission.Monitor 
 // fixed inventory instead of the real process table.
 var admitFindUncovered = admission.FindUncovered
 
+// admitGate is the seam for gate evaluation: tests substitute scripted
+// decisions instead of probing the host.
+var admitGate = func(ctx context.Context, store *admission.Store, m *admission.Monitor, th admission.Thresholds) (admission.Decision, error) {
+	return store.Gate(ctx, m, th)
+}
+
+// gateWithBusyRetry re-evaluates history-lock contention inside the wait
+// budget: contention is a transient busy state, not host pressure, so it
+// defers only once the budget is spent. Pressure defers return immediately.
+func gateWithBusyRetry(ctx context.Context, store *admission.Store, monitor *admission.Monitor, deadline time.Time) (admission.Decision, error) {
+	for {
+		d, err := admitGate(ctx, store, monitor, admission.DefaultThresholds())
+		if err != nil || d.Admit || !admission.IsGateBusy(d) {
+			return d, err
+		}
+		backoff := d.RetryAfter
+		if backoff <= 0 {
+			backoff = 2 * time.Second
+		}
+		if time.Now().Add(backoff).After(deadline) {
+			return d, nil
+		}
+		select {
+		case <-ctx.Done():
+			return d, ctx.Err()
+		case <-time.After(backoff):
+		}
+		// The timer can wake late; never admit past the wait budget.
+		if time.Now().After(deadline) {
+			return d, nil
+		}
+	}
+}
+
 func newAdmitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "admit [--class heavy|maintenance] [--wait 30m] [--json] -- <command> [args...]",
@@ -72,7 +106,7 @@ subcommand names.`,
 }
 
 func runAdmit(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 	p := printerFrom(cmd)
 	class, _ := cmd.Flags().GetString("class")
 	wait, _ := cmd.Flags().GetDuration("wait")
@@ -110,7 +144,8 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 	}
 
 	monitor := admitNewMonitor(runner, home)
-	decision, err := store.Gate(ctx, monitor, admission.DefaultThresholds())
+	deadline := time.Now().Add(wait)
+	decision, err := gateWithBusyRetry(ctx, store, monitor, deadline)
 	if err != nil {
 		return err
 	}
@@ -122,7 +157,6 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(wait)
 	backoff := 2 * time.Second
 	var slot *admission.Slot
 	for {
@@ -153,7 +187,7 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 	// The wait may have been long; re-gate before spending the slot on work
 	// that pressure would now defer anyway.
 	if wait > 0 {
-		decision, err = store.Gate(ctx, monitor, admission.DefaultThresholds())
+		decision, err = gateWithBusyRetry(ctx, store, monitor, deadline)
 		if err != nil {
 			return err
 		}

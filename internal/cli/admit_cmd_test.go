@@ -490,3 +490,69 @@ func TestAdmitPassesLeasesToScan(t *testing.T) {
 		t.Fatalf("scan got leased PIDs %v, want the maintenance holder 4242", got)
 	}
 }
+
+// stubAdmitGate scripts gate decisions: contention and pressure without
+// probing the host or the history lock.
+func stubAdmitGate(t *testing.T, decisions []admission.Decision) *int {
+	t.Helper()
+	calls := new(int)
+	old := admitGate
+	admitGate = func(context.Context, *admission.Store, *admission.Monitor, admission.Thresholds) (admission.Decision, error) {
+		*calls++
+		if *calls > len(decisions) {
+			return decisions[len(decisions)-1], nil
+		}
+		return decisions[*calls-1], nil
+	}
+	t.Cleanup(func() { admitGate = old })
+	return calls
+}
+
+// AC1 (#168): history-lock contention is retried inside --wait; the second
+// evaluation admits and the command runs.
+func TestAdmitBusyGateRetriesWithinWait(t *testing.T) {
+	admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	calls := stubAdmitGate(t, []admission.Decision{
+		{Admit: false, Reasons: []string{admission.GateBusyReason}, RetryAfter: time.Millisecond},
+		{Admit: true},
+		{Admit: true},
+	})
+	_, _, err := runDotForTest("admit", "--wait", "1m", "--", "true")
+	if err != nil {
+		t.Fatalf("admit = %v, want the busy gate retried to admission", err)
+	}
+	if *calls < 2 {
+		t.Errorf("gate evaluations = %d, want the busy evaluation retried", *calls)
+	}
+}
+
+// AC1 (#168): contention defers with exit 75 only once the wait is used up.
+func TestAdmitBusyGateDefersWhenWaitExhausted(t *testing.T) {
+	admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	stubAdmitGate(t, []admission.Decision{
+		{Admit: false, Reasons: []string{admission.GateBusyReason}, RetryAfter: 10 * time.Second},
+	})
+	out, _, err := runDotForTest("admit", "--json", "--wait", "0", "--", "true")
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitDeferred {
+		t.Fatalf("err = %v, want ExitCodeError %d", err, ExitDeferred)
+	}
+	if !strings.Contains(out, admission.GateBusyReason) {
+		t.Errorf("out = %q, want the busy-gate reason", out)
+	}
+}
+
+// AC2 (#168): an episode-less defer (gate contention, slot waits) claims no
+// watchdog alert; alerts stay one per pressure episode.
+func TestNotifyDeferSkipsEpisodeLessDefer(t *testing.T) {
+	home, _ := admitSandbox(t)
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	notifyDefer(context.Background(), nil, store, "scope", admission.ClassHeavy, admission.Decision{
+		Reasons: []string{admission.GateBusyReason},
+	})
+	if _, err := os.Stat(filepath.Join(admission.DefaultStateRoot(home), "notify")); !os.IsNotExist(err) {
+		t.Errorf("episode-less defer left a notify claim: %v", err)
+	}
+}
