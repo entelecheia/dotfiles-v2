@@ -1,0 +1,638 @@
+package syncer
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// GitRepoStatus classifies one discovered repository in a peer git run.
+type GitRepoStatus string
+
+const (
+	// GitRepoAligned means the worktree already matches HEAD's tree.
+	GitRepoAligned GitRepoStatus = "aligned"
+	// GitRepoRealignable means a strict descendant of HEAD matches the
+	// worktree at least as well as HEAD does.
+	GitRepoRealignable GitRepoStatus = "realignable"
+	// GitRepoRealigned means HEAD and the index were moved to the target.
+	GitRepoRealigned GitRepoStatus = "realigned"
+	// GitRepoNoMatch means no strict descendant candidate improves on HEAD.
+	GitRepoNoMatch GitRepoStatus = "no-match"
+	// GitRepoSkipped means the repo was left alone with a recorded reason:
+	// a lock, an operation in progress, unmerged entries, staged changes, an
+	// unborn HEAD or no checkout at the gitlink path.
+	GitRepoSkipped GitRepoStatus = "skipped"
+	// GitRepoUnresolvable means an object the classification needs is
+	// missing (a vanished parent gitlink, an unenumerable upstream chain).
+	GitRepoUnresolvable GitRepoStatus = "unresolvable"
+	// GitRepoLinkedWorktree means the checkout is a linked worktree (its
+	// gitdir carries a commondir file): listed, never realigned.
+	GitRepoLinkedWorktree GitRepoStatus = "linked-worktree"
+)
+
+// GitRepoReport is the per-repo outcome of a status or realign run.
+type GitRepoReport struct {
+	Path   string        `json:"path"` // workspace-relative, "." for the root
+	Status GitRepoStatus `json:"status"`
+	Reason string        `json:"reason,omitempty"`
+	Head   string        `json:"head,omitempty"`
+	// HeadDiffs counts tracked worktree differences against HEAD.
+	HeadDiffs int `json:"headDiffs,omitempty"`
+	// Target is the best candidate commit for a realignable repo.
+	Target      string `json:"target,omitempty"`
+	TargetDiffs int    `json:"targetDiffs,omitempty"`
+	Candidates  int    `json:"candidates,omitempty"`
+	// PreviousHead is the undo record after an applied realign; restore with
+	// `git reset --mixed -q <PreviousHead>`.
+	PreviousHead string `json:"previousHead,omitempty"`
+}
+
+// GitStateResult is one status or realign run over the workspace tree.
+type GitStateResult struct {
+	Root string
+	// Git is the git binary resolved to an absolute path once per run
+	// (launchd and non-interactive shells do not share the user's PATH).
+	Git   string
+	Repos []*GitRepoReport // parent-first
+}
+
+// CountByStatus tallies the reports per status, in a stable order.
+func (r *GitStateResult) CountByStatus() map[GitRepoStatus]int {
+	counts := map[GitRepoStatus]int{}
+	for _, rep := range r.Repos {
+		counts[rep.Status]++
+	}
+	return counts
+}
+
+// GitRepoStatuses is the display/iteration order for statuses.
+var GitRepoStatuses = []GitRepoStatus{
+	GitRepoAligned,
+	GitRepoRealignable,
+	GitRepoRealigned,
+	GitRepoNoMatch,
+	GitRepoSkipped,
+	GitRepoUnresolvable,
+	GitRepoLinkedWorktree,
+}
+
+// PeerGitStatus classifies the workspace root and every submodule,
+// recursively and parent first. It writes no objects, no index entries and no
+// worktree files. repos optionally restricts the report to
+// workspace-relative paths ("." is the root).
+func PeerGitStatus(ctx context.Context, root string, repos []string) (*GitStateResult, error) {
+	return runGitState(ctx, root, repos, false)
+}
+
+// PeerGitRealign runs the same classification and, when apply is true, moves
+// each realignable repo's HEAD and index to its best candidate through git's
+// lockfile protocol. With apply false it is a pure preview and changes
+// nothing under .git.
+func PeerGitRealign(ctx context.Context, root string, repos []string, apply bool) (*GitStateResult, error) {
+	return runGitState(ctx, root, repos, apply)
+}
+
+// gitStateRun carries the per-run state: the resolved git binary and the
+// optional repo restriction.
+type gitStateRun struct {
+	git      string
+	restrict map[string]bool // nil means all repos
+}
+
+func runGitState(ctx context.Context, root string, repos []string, apply bool) (*GitStateResult, error) {
+	root = strings.TrimRight(root, "/")
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return nil, fmt.Errorf("git not found on PATH: %w", err)
+	}
+	run := &gitStateRun{git: gitPath}
+	if len(repos) > 0 {
+		run.restrict = map[string]bool{}
+		for _, arg := range repos {
+			run.restrict[normalizeRepoArg(arg)] = true
+		}
+	}
+	result := &GitStateResult{Root: root, Git: gitPath}
+
+	// Validate the restriction against a read-only discovery walk before any
+	// mutation, so a mistyped repo argument cannot realign half the tree.
+	if run.restrict != nil {
+		known, err := run.discoverPaths(ctx, root)
+		if err != nil {
+			return nil, err
+		}
+		for arg := range run.restrict {
+			if !known[arg] {
+				return nil, fmt.Errorf("no repo at %q under %s", arg, root)
+			}
+		}
+	}
+
+	run.process(ctx, root, ".", "", apply, result)
+	return result, nil
+}
+
+func normalizeRepoArg(arg string) string {
+	arg = strings.TrimRight(strings.TrimSpace(arg), "/")
+	if arg == "" || arg == "." {
+		return "."
+	}
+	return filepath.ToSlash(arg)
+}
+
+func (r *gitStateRun) included(relPath string) bool {
+	if r.restrict == nil {
+		return true
+	}
+	return r.restrict[relPath]
+}
+
+// discoveredPaths lists every repo path the run would visit, without
+// classifying anything. Used only to reject unknown restriction arguments
+// before a realign starts.
+func (r *gitStateRun) discoverPaths(ctx context.Context, root string) (map[string]bool, error) {
+	known := map[string]bool{}
+	var walk func(abs, rel string) error
+	walk = func(abs, rel string) error {
+		known[rel] = true
+		if _, err := r.gitDir(ctx, abs); err != nil {
+			return nil // not a checked-out repo: no children to find
+		}
+		gitlinks, err := r.childGitlinks(ctx, abs)
+		if err != nil {
+			return nil // unenumerable: the real pass reports the repo itself
+		}
+		for _, child := range gitlinks {
+			childAbs := filepath.Join(abs, filepath.FromSlash(child.path))
+			childRel := rel
+			if childRel == "." {
+				childRel = child.path
+			} else {
+				childRel += "/" + child.path
+			}
+			if err := walk(childAbs, childRel); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(root, "."); err != nil {
+		return nil, err
+	}
+	return known, nil
+}
+
+// process classifies (and optionally realigns) one repo, then recurses into
+// its submodule gitlinks. Children are enumerated AFTER the parent has been
+// processed, so a child's candidate gitlink is read from the parent's
+// realigned HEAD.
+func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, apply bool, result *GitStateResult) {
+	rep := &GitRepoReport{Path: rel}
+	included := r.included(rel)
+	defer func() {
+		if included {
+			result.Repos = append(result.Repos, rep)
+		}
+	}()
+
+	gitdir, err := r.gitDir(ctx, abs)
+	if err != nil {
+		rep.Status = GitRepoSkipped
+		if rel == "." {
+			rep.Reason = "not a git repository"
+		} else {
+			rep.Reason = "no checkout at the gitlink path"
+		}
+		return
+	}
+
+	// A linked worktree's gitdir carries a commondir file; a submodule's own
+	// gitdir does not. Listed, never realigned, never recursed into.
+	if _, statErr := os.Stat(filepath.Join(gitdir, "commondir")); statErr == nil {
+		rep.Status = GitRepoLinkedWorktree
+		rep.Reason = "linked worktree"
+		return
+	}
+
+	if included {
+		r.classify(ctx, abs, gitdir, gitlink, rep)
+		if apply && rep.Status == GitRepoRealignable {
+			r.realign(ctx, abs, gitdir, rep)
+		}
+	}
+
+	gitlinks, err := r.childGitlinks(ctx, abs)
+	if err != nil {
+		// Children of a repo whose HEAD cannot be read cannot be discovered;
+		// say so on the parent rather than failing the whole run, but do not
+		// clobber a more precise classification (an unborn HEAD already says
+		// why ls-tree failed).
+		if included && (rep.Status == "" || rep.Status == GitRepoAligned) {
+			rep.Status = GitRepoUnresolvable
+			rep.Reason = "cannot enumerate submodule gitlinks"
+		}
+		return
+	}
+	for _, child := range gitlinks {
+		childRel := child.path
+		if rel != "." {
+			childRel = rel + "/" + child.path
+		}
+		r.process(ctx, filepath.Join(abs, filepath.FromSlash(child.path)), childRel, child.sha, apply, result)
+	}
+}
+
+// classify fills rep with the repo's status without mutating anything.
+func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string, rep *GitRepoReport) {
+	if reason := r.blockReason(ctx, abs, gitdir); reason != "" {
+		rep.Status = GitRepoSkipped
+		rep.Reason = reason
+		return
+	}
+
+	head, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "HEAD")
+	if err != nil {
+		rep.Status = GitRepoSkipped
+		rep.Reason = "no HEAD (unborn branch)"
+		return
+	}
+	rep.Head = head
+
+	headDiffs, err := r.contentDiffs(ctx, abs, gitdir, head)
+	if err != nil {
+		rep.Status = GitRepoUnresolvable
+		rep.Reason = "cannot read HEAD tree: " + shortErr(err)
+		return
+	}
+	rep.HeadDiffs = headDiffs
+	if headDiffs == 0 {
+		rep.Status = GitRepoAligned
+		return
+	}
+
+	candidates, err := r.candidates(ctx, abs, head, gitlink)
+	if err != nil {
+		rep.Status = GitRepoUnresolvable
+		rep.Reason = err.Error()
+		return
+	}
+	rep.Candidates = len(candidates)
+	if len(candidates) == 0 {
+		rep.Status = GitRepoNoMatch
+		rep.Reason = "no strict descendant candidate"
+		return
+	}
+
+	best, bestDiffs := "", -1
+	for _, cand := range candidates {
+		diffs, err := r.contentDiffs(ctx, abs, gitdir, cand)
+		if err != nil {
+			rep.Status = GitRepoUnresolvable
+			rep.Reason = "cannot read candidate tree: " + shortErr(err)
+			return
+		}
+		if bestDiffs < 0 || diffs < bestDiffs {
+			best, bestDiffs = cand, diffs
+		}
+	}
+	// A tie (best == headDiffs) is still a realign: moving to a strict
+	// descendant never makes the classification worse, and a parent whose
+	// only drift is a child's gitlink must move so the child's own realign
+	// reads the parent's new HEAD.
+	if bestDiffs > headDiffs {
+		rep.Status = GitRepoNoMatch
+		rep.Reason = "no descendant commit improves on HEAD"
+		rep.Target = best
+		rep.TargetDiffs = bestDiffs
+		return
+	}
+	rep.Status = GitRepoRealignable
+	rep.Target = best
+	rep.TargetDiffs = bestDiffs
+}
+
+// blockReason reports why a repo must be skipped and reported rather than
+// classified or realigned: a lock, an operation in progress, unmerged
+// entries or staged changes (the 09-24 stale-lock incident class).
+func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) string {
+	if _, err := os.Stat(filepath.Join(gitdir, "index.lock")); err == nil {
+		return "index.lock present"
+	}
+	// Unmerged before the operation markers: a real merge or cherry-pick
+	// conflict sets both, and the unmerged entries are the actionable part.
+	if out, err := r.read(ctx, abs, "ls-files", "-u"); err == nil && strings.TrimSpace(out) != "" {
+		return "unmerged index entries"
+	}
+	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"} {
+		if _, err := os.Stat(filepath.Join(gitdir, marker)); err == nil {
+			return "operation in progress (" + marker + ")"
+		}
+	}
+	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
+		if st, err := os.Stat(filepath.Join(gitdir, dir)); err == nil && st.IsDir() {
+			return "operation in progress (" + dir + ")"
+		}
+	}
+	if code, err := r.run(ctx, abs, nil, true, "diff", "--cached", "--quiet"); err == nil && code == 1 {
+		return "staged changes"
+	}
+	return ""
+}
+
+// candidates returns the strict-descendant candidate commits, parent gitlink
+// first, then the first-parent chain from HEAD to the branch upstream
+// (nearest HEAD first). The command never fetches; the chain reflects
+// whatever the caller fetched beforehand.
+func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string) ([]string, error) {
+	var out []string
+	if gitlink != "" && gitlink != head {
+		if _, err := r.read(ctx, abs, "cat-file", "-e", gitlink+"^{commit}"); err != nil {
+			return nil, errors.New("parent gitlink object is not present locally")
+		}
+		if r.strictDescendant(ctx, abs, head, gitlink) {
+			out = append(out, gitlink)
+		}
+	}
+	if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "@{upstream}"); err != nil {
+		return out, nil // no upstream configured: gitlink-only
+	}
+	chain, err := r.read(ctx, abs, "rev-list", "--first-parent", "HEAD..@{upstream}")
+	if err != nil {
+		return nil, errors.New("cannot enumerate the upstream first-parent chain: " + shortErr(err))
+	}
+	lines := strings.Split(strings.TrimSpace(chain), "\n")
+	for i := len(lines) - 1; i >= 0; i-- { // rev-list is newest-first; want nearest HEAD first
+		sha := strings.TrimSpace(lines[i])
+		if sha == "" || sha == head {
+			continue
+		}
+		if r.strictDescendant(ctx, abs, head, sha) {
+			out = append(out, sha)
+		}
+	}
+	return out, nil
+}
+
+// strictDescendant reports whether cand is a descendant of head and not head
+// itself. This is the fast-forward-only guarantee: realign never moves a ref
+// backward or sideways.
+func (r *gitStateRun) strictDescendant(ctx context.Context, abs, head, cand string) bool {
+	if cand == head {
+		return false
+	}
+	code, err := r.run(ctx, abs, nil, true, "merge-base", "--is-ancestor", head, cand)
+	return err == nil && code == 0
+}
+
+// contentDiffs counts tracked files whose worktree content differs from a
+// commit's tree, using a throwaway index: copy the real index to a temp file,
+// read-tree -m into it, refresh stat info, then diff-files. This writes no
+// objects and holds no lock on the real index. Untracked files never appear.
+func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit string) (int, error) {
+	tempIndex, cleanup, err := r.tempIndexFor(ctx, abs, gitdir, commit)
+	if err != nil {
+		return -1, err
+	}
+	defer cleanup()
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	// update-index exits non-zero exactly when files need update; that is the
+	// expected signal here, not an error.
+	_, _ = r.run(ctx, abs, env, false, "update-index", "-q", "--refresh")
+	out, err := r.readEnv(ctx, abs, env, "diff-files", "--name-only")
+	if err != nil {
+		return -1, err
+	}
+	count := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// tempIndexFor builds a temp index holding the candidate tree. It first
+// tries seeding from the repo's real index so unchanged entries keep their
+// stat info; a one-tree read-tree -m refuses to replace entries the worktree
+// has modified ("not uptodate"), and that is exactly the realign case, so a
+// refusal retries from an empty index and lets the refresh decide by content.
+// The caller removes the file via cleanup.
+func (r *gitStateRun) tempIndexFor(ctx context.Context, abs, gitdir, commit string) (string, func(), error) {
+	seed, err := os.ReadFile(filepath.Join(gitdir, "index"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", func() {}, err
+	}
+	tempIndex, cleanup, err := r.writeTempIndex(ctx, abs, commit, seed)
+	if err == nil {
+		return tempIndex, cleanup, nil
+	}
+	cleanup()
+	return r.writeTempIndex(ctx, abs, commit, nil)
+}
+
+func (r *gitStateRun) writeTempIndex(ctx context.Context, abs, commit string, seed []byte) (string, func(), error) {
+	tmp, err := os.CreateTemp("", "dot-gitstate-index-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+	tempIndex := tmp.Name()
+	cleanup := func() { _ = os.Remove(tempIndex) }
+	if _, err := tmp.Write(seed); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	if len(seed) == 0 {
+		// A zero-byte index file is corrupt to git; an empty index is a
+		// MISSING file. read-tree creates it at the given path.
+		if err := os.Remove(tempIndex); err != nil {
+			return "", func() {}, err
+		}
+	}
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	// read-tree is a write to the temp index only; its lock is the temp's own.
+	if _, err := r.runOutput(ctx, abs, env, false, "read-tree", "-m", commit); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return tempIndex, cleanup, nil
+}
+
+// realign moves HEAD and the index to rep.Target through git's lockfile
+// protocol: create index.lock O_EXCL, write the temp index into it,
+// compare-and-swap HEAD from the recorded old value, rename the lock over the
+// index. The worktree is never written by git. On a compare-and-swap failure
+// the lock is removed and the repo is left exactly as it was.
+func (r *gitStateRun) realign(ctx context.Context, abs, gitdir string, rep *GitRepoReport) {
+	unresolvable := func(reason string) {
+		rep.Status = GitRepoUnresolvable
+		rep.Reason = reason
+	}
+	skipped := func(reason string) {
+		rep.Status = GitRepoSkipped
+		rep.Reason = reason
+	}
+
+	tempIndex, cleanup, err := r.tempIndexFor(ctx, abs, gitdir, rep.Target)
+	if err != nil {
+		unresolvable("cannot build target index: " + shortErr(err))
+		return
+	}
+	defer cleanup()
+
+	index := filepath.Join(gitdir, "index")
+	lockPath := index + ".lock"
+	lock, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		skipped("index.lock appeared before realign: " + shortErr(err))
+		return
+	}
+	built, err := os.ReadFile(tempIndex)
+	if err == nil {
+		_, err = lock.Write(built)
+	}
+	if closeErr := lock.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(lockPath)
+		unresolvable("cannot write index lock: " + shortErr(err))
+		return
+	}
+
+	if _, err := r.runOutput(ctx, abs, nil, false, "update-ref", "-m", "dot peer realign", "HEAD", rep.Target, rep.Head); err != nil {
+		_ = os.Remove(lockPath)
+		skipped("compare-and-swap failed; repo untouched: " + shortErr(err))
+		return
+	}
+	if err := os.Rename(lockPath, index); err != nil {
+		// HEAD already moved; the index rename failing leaves the repo
+		// consistent (index regenerated from the new HEAD) but must be loud.
+		rep.PreviousHead = rep.Head
+		rep.Status = GitRepoRealigned
+		rep.Reason = "HEAD moved; index rename failed: " + shortErr(err)
+		return
+	}
+	rep.PreviousHead = rep.Head
+	rep.Status = GitRepoRealigned
+}
+
+// gitDir resolves the absolute gitdir of the checkout at abs.
+func (r *gitStateRun) gitDir(ctx context.Context, abs string) (string, error) {
+	return r.read(ctx, abs, "rev-parse", "--absolute-git-dir")
+}
+
+type gitlinkEntry struct {
+	path string // relative to the repo root
+	sha  string
+}
+
+// childGitlinks lists the submodule gitlinks recorded in the repo's current
+// HEAD: ls-tree mode 160000 entries, at any depth within this repo (ls-tree
+// does not cross into submodules).
+func (r *gitStateRun) childGitlinks(ctx context.Context, abs string) ([]gitlinkEntry, error) {
+	out, err := r.read(ctx, abs, "ls-tree", "-r", "-z", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	var entries []gitlinkEntry
+	for _, record := range bytes.Split([]byte(out), []byte{0}) {
+		meta, path, ok := bytes.Cut(record, []byte("\t"))
+		if !ok {
+			continue
+		}
+		fields := bytes.Fields(meta)
+		if len(fields) != 3 || string(fields[0]) != "160000" {
+			continue
+		}
+		entries = append(entries, gitlinkEntry{path: string(path), sha: string(fields[2])})
+	}
+	return entries, nil
+}
+
+// read runs a read-only git command and returns trimmed stdout. Read
+// commands always carry --no-optional-locks so classification never takes an
+// optional index lock (the temp-index refresh writes only the temp file).
+func (r *gitStateRun) read(ctx context.Context, abs string, args ...string) (string, error) {
+	return r.readEnv(ctx, abs, nil, args...)
+}
+
+func (r *gitStateRun) readEnv(ctx context.Context, abs string, env []string, args ...string) (string, error) {
+	out, err := r.runOutput(ctx, abs, env, true, args...)
+	return strings.TrimSpace(out), err
+}
+
+// run executes git and reports the exit code. A non-zero git exit is an
+// answer, not an error (diff --quiet, merge-base --is-ancestor); only a
+// command that could not run at all returns a non-nil error.
+func (r *gitStateRun) run(ctx context.Context, abs string, env []string, readOnly bool, args ...string) (int, error) {
+	_, err := r.runOutput(ctx, abs, env, readOnly, args...)
+	if err == nil {
+		return 0, nil
+	}
+	var exitErr *gitExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.code, nil
+	}
+	return -1, err
+}
+
+func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, readOnly bool, args ...string) (string, error) {
+	full := []string{"-C", abs}
+	if readOnly {
+		full = []string{"--no-optional-locks", "-C", abs}
+	}
+	full = append(full, args...)
+	cmd := exec.CommandContext(ctx, r.git, full...)
+	cmd.Dir = abs
+	cmd.Env = append(os.Environ(), env...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return stdout.String(), &gitExitError{code: exitErr.ExitCode(), stderr: strings.TrimSpace(stderr.String())}
+		}
+		return stdout.String(), err
+	}
+	return stdout.String(), nil
+}
+
+// gitExitError carries git's exit code and stderr without the "exit status N"
+// wrapper text, so skip/unresolvable reasons stay readable.
+type gitExitError struct {
+	code   int
+	stderr string
+}
+
+func (e *gitExitError) Error() string {
+	if e.stderr == "" {
+		return "git exit status " + strconv.Itoa(e.code)
+	}
+	return e.stderr
+}
+
+const maxReasonLen = 120
+
+func shortErr(err error) string {
+	msg := err.Error()
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	if len(msg) > maxReasonLen {
+		msg = msg[:maxReasonLen] + "..."
+	}
+	return msg
+}

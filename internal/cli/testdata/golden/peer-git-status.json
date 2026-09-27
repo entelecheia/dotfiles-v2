@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "kind": "peer-git-status",
+  "workspace": "@ROOT@",
+  "git": "@HOME@/bin/git",
+  "summary": {
+    "total": 1,
+    "aligned": 0,
+    "realignable": 0,
+    "realigned": 0,
+    "noMatch": 0,
+    "skipped": 1,
+    "unresolvable": 0,
+    "linkedWorktrees": 0
+  },
+  "repos": [
+    {
+      "path": ".",
+      "status": "skipped",
+      "reason": "not a git repository"
+    }
+  ]
+}

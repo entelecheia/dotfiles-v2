@@ -66,6 +66,7 @@ first and exits cleanly when the other machine is away.`,
 	cmd.AddCommand(newPeerSetupCmd())
 	cmd.AddCommand(newPeerDiffCmd())
 	cmd.AddCommand(newPeerHomePathsCmd())
+	cmd.AddCommand(newPeerGitCmd())
 	return cmd
 }
 
