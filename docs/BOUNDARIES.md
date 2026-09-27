@@ -35,7 +35,7 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
 - `~/.maru/settings.json` and `~/.maru/sites.json` only during explicit AI
   backup/restore operations
 - the global AGENTS fan-out targets, one per registered tool:
-  `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.cursor/AGENTS.md`,
+  `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
   `~/.kiro/steering/AGENTS.md`, `~/.kimi-code/AGENTS.md`,
   `~/.pi/agent/AGENTS.md`, `~/.qwen/AGENTS.md`, `~/.gemini/GEMINI.md`,
   `~/.copilot/copilot-instructions.md`, and `~/.aider.conf.md`. Each is

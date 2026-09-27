@@ -120,7 +120,6 @@ var allowedBoundaryRoots = []string{
 	// one is what makes a newly registered tool a documented grant rather
 	// than a silent one (see TestAgentTargetsResolveUnderAllowedRoots).
 	"~/.codex/AGENTS.md",
-	"~/.cursor/AGENTS.md",
 	"~/.kiro/steering/AGENTS.md",
 	"~/.kimi-code/AGENTS.md",
 	"~/.pi/agent/AGENTS.md",
