@@ -330,3 +330,23 @@ func goldenAdmitStatusFixture(t *testing.T) (home, root string) {
 	}
 	return home, root
 }
+
+// TestAdmitStatusThermalRow: the text status names the thermal state and
+// shows an unavailable probe as such (#161).
+func TestAdmitStatusThermalRow(t *testing.T) {
+	admitSandbox(t)
+	snap := healthyAdmitSnapshot()
+	snap.ThermalState = admission.ThermalSerious
+	stubAdmitMonitor(t, snap)
+	out, _, _ := runDotForTest("admit", "status")
+	if !strings.Contains(out, "serious") {
+		t.Errorf("status output lacks the thermal state name:\n%s", out)
+	}
+	snap.ThermalAvailable = false
+	snap.ThermalState = -1
+	stubAdmitMonitor(t, snap)
+	out, _, _ = runDotForTest("admit", "status")
+	if !strings.Contains(out, "(unavailable)") || strings.Contains(out, "nominal") {
+		t.Errorf("unavailable thermal probe must print (unavailable):\n%s", out)
+	}
+}

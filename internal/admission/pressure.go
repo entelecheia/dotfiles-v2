@@ -84,7 +84,7 @@ type PressureSnapshot struct {
 	MemoryAvailable bool    `json:"memory_available"` // the memory probe succeeded
 	MemoryFreePct   float64 `json:"memory_free_pct"`  // informational; -1 when unknown
 
-	ThermalState     int  `json:"thermal_state"`     // NSProcessInfo.thermalState: 0 nominal .. 3 critical
+	ThermalState     int  `json:"thermal_state"`     // NSProcessInfo.thermalState: 0 nominal .. 3 critical; -1 when unknown
 	ThermalAvailable bool `json:"thermal_available"` // the thermal probe succeeded
 
 	Load1         float64 `json:"load1"`
@@ -344,7 +344,7 @@ func (m *Monitor) SnapshotPressure(ctx context.Context) PressureSnapshot {
 }
 
 func (m *Monitor) snapshotDarwin(ctx context.Context) PressureSnapshot {
-	snap := PressureSnapshot{Platform: "darwin", MemoryFreePct: -1}
+	snap := PressureSnapshot{Platform: "darwin", MemoryFreePct: -1, ThermalState: -1}
 	if res, err := m.query(ctx, "sysctl", "-n", "kern.memorystatus_vm_pressure_level"); err == nil {
 		if level, ok := ParseMemoryPressureLevel(res.Stdout); ok {
 			snap.MemoryLevel = level
@@ -411,7 +411,7 @@ func (m *Monitor) query(ctx context.Context, name string, args ...string) (*exec
 // linux leaves those flags false and EvaluatePressure skips them there.
 func (m *Monitor) snapshotLinux(ctx context.Context) PressureSnapshot {
 	_ = ctx
-	snap := PressureSnapshot{Platform: "linux", MemoryFreePct: -1}
+	snap := PressureSnapshot{Platform: "linux", MemoryFreePct: -1, ThermalState: -1}
 	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
 		if load1, ok := ParseProcLoadavg(string(data)); ok {
 			snap.Load1 = load1

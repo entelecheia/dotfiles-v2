@@ -1,9 +1,14 @@
 package admission
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 // --- Probe parsers (fixtures) ---
@@ -351,5 +356,32 @@ func TestEvaluateLinuxApplicability(t *testing.T) {
 	d = EvaluatePressure(snap, DefaultThresholds(), hist, evalT0)
 	if d.Admit {
 		t.Error("sustained linux load admitted")
+	}
+}
+
+// TestSnapshotDarwinThermalProbe drives the real probe wiring with a stub
+// osascript on PATH: the argument list and parsing are what #161 broke.
+func TestSnapshotDarwinThermalProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name, output string
+		wantState    int
+		wantOK       bool
+	}{
+		{"serious", "2", ThermalSerious, true},
+		{"garbled", "nominal", -1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			script := "#!/bin/sh\n[ \"$1 $2 $3\" = \"-l JavaScript -e\" ] || exit 2\necho " + tc.output + "\n"
+			if err := os.WriteFile(filepath.Join(bin, "osascript"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			m := &Monitor{Runner: exec.NewProbeRunner(), GOOS: "darwin", Home: t.TempDir()}
+			snap := m.SnapshotPressure(context.Background())
+			if snap.ThermalAvailable != tc.wantOK || snap.ThermalState != tc.wantState {
+				t.Errorf("thermal = %d, available %v; want %d, %v", snap.ThermalState, snap.ThermalAvailable, tc.wantState, tc.wantOK)
+			}
+		})
 	}
 }
