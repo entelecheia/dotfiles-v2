@@ -1,13 +1,14 @@
 ## dot watchdog uninstall
 
-Remove the watchdog reaper agent and WARP heal daemon (macOS)
+Remove the watchdog reaper agent, WARP heal daemon, and monit supervision (macOS)
 
 ### Synopsis
 
-Unload and remove the reaper LaunchAgent and, when installed, the root
-WARP heal LaunchDaemon. Restoring the power settings saved by setup
---headless and removing the state directory and logs are interactive-only
-prompts that default to No; --yes never auto-confirms them.
+Unload and remove the reaper LaunchAgent, the monit agent and monitrc,
+and, when installed, the root WARP heal LaunchDaemon. Restoring the power
+settings saved by setup --headless, removing the root Screen Sharing heal
+helper and its sudoers grant, and removing the state directory and logs are
+interactive-only prompts that default to No; --yes never auto-confirms them.
 
 ```
 dot watchdog uninstall [flags]

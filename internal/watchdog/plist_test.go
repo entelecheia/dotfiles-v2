@@ -142,6 +142,32 @@ func TestRenderWarpPlist_PinsTheUsersHome(t *testing.T) {
 	}
 }
 
+func TestRenderMonitPlist_Golden(t *testing.T) {
+	got := RenderMonitPlist("/opt/homebrew/bin/monit", "/Users/test/.config/monit/monitrc", "/Users/test/Library/Logs/dot")
+	golden := filepath.Join("testdata", "monit.plist.golden")
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read golden (run with UPDATE_GOLDEN=1 to create): %v", err)
+	}
+	if got != string(want) {
+		t.Errorf("monit plist drifted from golden:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestRenderMonitPlist_ForegroundAgainstTheControlFile(t *testing.T) {
+	plist := RenderMonitPlist("/usr/local/bin/monit", "/tmp/monitrc", "/tmp/logs")
+	for _, want := range []string{MonitLabel, "<string>-I</string>", "<string>-c</string>", "<string>/tmp/monitrc</string>", "<key>KeepAlive</key>"} {
+		if !strings.Contains(plist, want) {
+			t.Errorf("monit plist missing %q", want)
+		}
+	}
+}
+
 func TestSudoInstallContent_DryRunCoversStaging(t *testing.T) {
 	dry := exec.NewRunner(true, slog.Default())
 	if err := sudoInstallContent(context.Background(), dry, []byte("<plist/>"), "/nonexistent-dest", 0o644); err != nil {

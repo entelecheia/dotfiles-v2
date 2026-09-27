@@ -32,6 +32,11 @@ watchdog:
     headless: true
   monit:
     enabled: true
+    load1_threshold: 12.5
+    cpu_user_threshold: 80
+    cpu_system_threshold: 40
+    cycles: 5
+    screensharing: false
   beszel:
     enabled: false
     hub_url: ""
@@ -68,8 +73,15 @@ watchdog:
 	if !w.Warp.Enabled || w.Warp.Interval.Std() != 120*time.Second || w.Warp.FailThreshold != 2 {
 		t.Errorf("warp = %#v", w.Warp)
 	}
-	if !w.Power.Headless || !w.Monit.Enabled {
-		t.Errorf("power/monit = %#v %#v", w.Power, w.Monit)
+	if !w.Power.Headless {
+		t.Errorf("power = %#v", w.Power)
+	}
+	if !w.Monit.Enabled || w.Monit.Load1Threshold != 12.5 || w.Monit.CPUUserThreshold != 80 ||
+		w.Monit.CPUSystemThreshold != 40 || w.Monit.Cycles != 5 {
+		t.Errorf("monit = %#v", w.Monit)
+	}
+	if w.Monit.ScreenSharing == nil || *w.Monit.ScreenSharing {
+		t.Errorf("monit.screensharing = %#v, want a decoded explicit false", w.Monit.ScreenSharing)
 	}
 	if w.Beszel.Enabled || w.Beszel.HubURL != "" {
 		t.Errorf("beszel = %#v", w.Beszel)

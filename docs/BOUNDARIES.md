@@ -39,7 +39,7 @@ existing globally discoverable skills from unselected agents.
 - `~/.maru/settings.json` and `~/.maru/sites.json` only during explicit AI
   backup/restore operations
 - the global AGENTS fan-out targets, one per registered tool:
-  `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.cursor/AGENTS.md`,
+  `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
   `~/.kiro/steering/AGENTS.md`, `~/.kimi-code/AGENTS.md`,
   `~/.pi/agent/AGENTS.md`, `~/.qwen/AGENTS.md`, `~/.gemini/GEMINI.md`,
   `~/.copilot/copilot-instructions.md`, `~/.aider.conf.md`,
@@ -172,6 +172,28 @@ tool):
   re-validated against Cloudflare's WARP daemon label shape at run time,
   so a local edit of `warp.json` cannot redirect the root daemon at an
   arbitrary service
+- `~/.config/monit/monitrc` — the monit control file rendered by
+  `dot watchdog setup` when `watchdog.monit` is enabled (mode 0600, which
+  monit requires of its control file), and removed by
+  `dot watchdog uninstall` (macOS only)
+- `~/Library/LaunchAgents/com.dotfiles.monit.plist` — the user LaunchAgent
+  that runs monit in the foreground against that control file, written and
+  loaded by `dot watchdog setup` and removed by `dot watchdog uninstall`
+  (macOS only)
+- `/Library/Application Support/dot/screensharing-heal` — the root-owned
+  helper (mode 0755) that runs `launchctl kickstart -k
+  system/com.apple.screensharing`; installed with sudo by
+  `dot watchdog setup` when `watchdog.monit.screensharing` heals, exec'd by
+  monit through passwordless sudo when the VNC handshake on 127.0.0.1:5900
+  fails, and removed only by the interactive-only uninstall prompt. Root
+  ownership is the security property: the monit agent runs as the user, so
+  the file sudo executes must not be user-writable
+- `/etc/sudoers.d/dot-watchdog-screensharing` — the sudoers drop-in (mode
+  0440) granting the installing user passwordless exec of exactly that
+  helper path and nothing else; validated with `visudo -c -f` before it
+  goes live, and removed only by the interactive-only uninstall prompt
+- `~/Library/Logs/dot/monit.log` — monit's own log, written by the monit
+  agent (plus the unit's launchd stdout/stderr logs beside it)
 - `~/.local/state/dot/watchdog/` — the watchdog machine state: the resolved
   config snapshot (`watchdog.yaml`) the scheduled reaper reads, the
   cross-run CPU history (`samples.json`), the WARP heal bookkeeping

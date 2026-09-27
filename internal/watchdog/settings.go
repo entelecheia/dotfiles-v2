@@ -114,3 +114,67 @@ func ResolveWarp(c config.WatchdogWarpConfig) WarpSettings {
 	}
 	return s
 }
+
+// Defaults applied when the profile leaves a monit knob unset. The load
+// threshold has no constant default: it resolves to the host's logical CPU
+// count, injected by the caller. CyclesMax mirrors monit's own parser limit.
+const (
+	DefaultMonitCPUUserThreshold   = 90.0 // percent
+	DefaultMonitCPUSystemThreshold = 50.0 // percent
+	DefaultMonitCycles             = 3
+	MonitCyclesMax                 = 64
+)
+
+// MonitSettings is the resolved, defaults-applied form of
+// config.WatchdogMonitConfig that RenderMonitrc renders against.
+type MonitSettings struct {
+	Load1Threshold     float64
+	CPUUserThreshold   float64
+	CPUSystemThreshold float64
+	Cycles             int
+	ScreenSharing      bool
+}
+
+// ResolveMonit applies defaults and validates the thresholds. logicalCPU is
+// the host's logical CPU count (runtime.NumCPU at the call site), injected so
+// the default load threshold stays deterministic under test.
+func ResolveMonit(c config.WatchdogMonitConfig, logicalCPU int) (MonitSettings, error) {
+	s := MonitSettings{
+		Load1Threshold:     c.Load1Threshold,
+		CPUUserThreshold:   c.CPUUserThreshold,
+		CPUSystemThreshold: c.CPUSystemThreshold,
+		Cycles:             c.Cycles,
+		ScreenSharing:      true,
+	}
+	if c.ScreenSharing != nil {
+		s.ScreenSharing = *c.ScreenSharing
+	}
+	// Only zero means unset: a negative knob is a config mistake and must
+	// surface, not silently resolve to the default.
+	if s.Load1Threshold < 0 || s.CPUUserThreshold < 0 || s.CPUSystemThreshold < 0 || s.Cycles < 0 {
+		return MonitSettings{}, fmt.Errorf("monit thresholds and cycles must not be negative, got load1 %.4g / cpu user %.4g / cpu system %.4g / cycles %d",
+			s.Load1Threshold, s.CPUUserThreshold, s.CPUSystemThreshold, s.Cycles)
+	}
+	if s.Load1Threshold == 0 {
+		if logicalCPU < 1 {
+			return MonitSettings{}, fmt.Errorf("monit load1_threshold is unset and the logical CPU count is %d", logicalCPU)
+		}
+		s.Load1Threshold = float64(logicalCPU)
+	}
+	if s.CPUUserThreshold == 0 {
+		s.CPUUserThreshold = DefaultMonitCPUUserThreshold
+	}
+	if s.CPUSystemThreshold == 0 {
+		s.CPUSystemThreshold = DefaultMonitCPUSystemThreshold
+	}
+	if s.Cycles == 0 {
+		s.Cycles = DefaultMonitCycles
+	}
+	if s.CPUUserThreshold > 100 || s.CPUSystemThreshold > 100 {
+		return MonitSettings{}, fmt.Errorf("monit cpu thresholds are percents of one system, got user %.4g%% / system %.4g%%", s.CPUUserThreshold, s.CPUSystemThreshold)
+	}
+	if s.Cycles > MonitCyclesMax {
+		return MonitSettings{}, fmt.Errorf("monit cycles must be at most %d (monit's parser limit), got %d", MonitCyclesMax, s.Cycles)
+	}
+	return s, nil
+}

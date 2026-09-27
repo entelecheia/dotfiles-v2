@@ -168,7 +168,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **terminal** | minimal | starship prompt, Orca auto-install (macOS/Arch), Warp theme |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (cloud mirror, vault, inbox). Vault location is selectable at init and auto-detected from existing `<workspace>/work/vault` or `<workspace>/vault`; the separate vault repo entry is skipped when the vault lives inside work (e.g. as a submodule). Cloud mirror is selected at init from detected mounts (Dropbox preferred, Google Drive accounts are listed); shell exports `CLOUD_WORKSPACE`/`CLOUD_WORK`, alias `cwork`, and the `ws()` jumper (formerly `GDRIVE_*`/`gwork`) |
-| **ai** | full | AI CLI/config helpers, Claude/Codex/Copilot/Cursor/Kiro/Kimi/Qwen/pi/Antigravity/Aider/Maru settings backup, optional HUD |
+| **ai** | full | AI CLI/config helpers, Claude/Codex/Copilot/Kiro/Kimi/Qwen/pi/Antigravity/Aider/Maru settings backup, optional HUD |
 | **fonts** | full | Nerd Font download from GitHub Releases |
 | **macapps** | full (darwin) | Install selected Homebrew casks from the embedded catalog |
 | **conda** | full | Conda/Mamba `.condarc` defaults; shell hooks live in managed shell init |

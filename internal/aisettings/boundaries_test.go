@@ -123,7 +123,6 @@ var allowedBoundaryRoots = []string{
 	"~/.codex/AGENTS.md",
 	"~/.grok/AGENTS.md",
 	"~/.config/opencode/AGENTS.md",
-	"~/.cursor/AGENTS.md",
 	"~/.kiro/steering/AGENTS.md",
 	"~/.kimi-code/AGENTS.md",
 	"~/.pi/agent/AGENTS.md",
