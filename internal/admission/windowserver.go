@@ -17,9 +17,10 @@ import (
 // single event.
 const DefaultWSGrace = 30 * time.Minute
 
-// wsScanNewest bounds the DiagnosticReports scan to the newest few reports:
-// WindowServer storms write several .ips files, and anything older than the
-// newest handful is outside the grace window anyway.
+// wsScanNewest bounds each DiagnosticReports folder scan to the newest few
+// WindowServer candidates (.ips and watchdog-named reports): storms write
+// several, and anything older than the newest handful is outside the grace
+// window anyway.
 const wsScanNewest = 20
 
 // wsReadLimit bounds each report read. The termination block and captureTime
@@ -33,8 +34,9 @@ const wsReadLimit = 256 * 1024
 // or a WindowServer*.ips report recording a WATCHDOG termination (timestamped
 // by its captureTime). Only the newest newestN candidates by mtime are
 // examined. No recursion. A missing directory is an empty scan, not an error.
-// The bool reports whether the scan completed; any read failure makes it
-// false so the gate defers instead of assuming quiet.
+// The bool reports whether the scan completed; any read failure other than a
+// report vanishing mid-scan (moved to Retired/ or purged) makes it false so
+// the gate defers instead of assuming quiet.
 func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
