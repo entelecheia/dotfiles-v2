@@ -294,7 +294,8 @@ func appendLocked(ctx context.Context, home, path string, data []byte) error {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	defer syscall.Flock(fd, syscall.LOCK_UN)
+	// Unlock is best-effort; the deferred close also releases the lock.
+	defer func() { _ = syscall.Flock(fd, syscall.LOCK_UN) }()
 	st, err := f.Stat()
 	if err != nil {
 		return err
@@ -342,7 +343,8 @@ func Show(ctx context.Context, home, project string) (Report, error) {
 	if err := syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
 		return report, errors.New("handoff log busy; retry later")
 	}
-	defer syscall.Flock(fd, syscall.LOCK_UN)
+	// Unlock is best-effort; the deferred close also releases the lock.
+	defer func() { _ = syscall.Flock(fd, syscall.LOCK_UN) }()
 	st, err := f.Stat()
 	if err != nil {
 		return report, err

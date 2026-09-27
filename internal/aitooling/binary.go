@@ -240,7 +240,7 @@ func (e *Engine) brewEnvironment() []string {
 func (e *Engine) brewPackage(ctx context.Context, path string, spec binarySpec) (brewPackage, error) {
 	p := brewPackage{name: spec.brew}
 	if p.name == "" {
-		return p, fmt.Errorf("Homebrew package identity unavailable; adopt the selected package explicitly")
+		return p, fmt.Errorf("homebrew package identity unavailable; adopt the selected package explicitly")
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -251,12 +251,12 @@ func (e *Engine) brewPackage(ctx context.Context, path string, spec binarySpec) 
 		if i := strings.Index(resolved, marker); i >= 0 {
 			prefix, p.kind = resolved[:i], kind
 			if strings.Split(resolved[i+len(marker):], "/")[0] != p.name {
-				return p, fmt.Errorf("Homebrew package path does not match selected %s", p.name)
+				return p, fmt.Errorf("homebrew package path does not match selected %s", p.name)
 			}
 		}
 	}
 	if prefix == "" {
-		return p, fmt.Errorf("Homebrew Cellar/Caskroom provenance unavailable; explicit adoption required")
+		return p, fmt.Errorf("homebrew Cellar/Caskroom provenance unavailable; explicit adoption required")
 	}
 	p.executable = filepath.Join(prefix, "bin", "brew")
 	if !pathExists(p.executable) {
@@ -264,7 +264,7 @@ func (e *Engine) brewPackage(ctx context.Context, path string, spec binarySpec) 
 	}
 	out, err := e.exec(ctx, command{Path: p.executable, Args: []string{"info", "--json=v2", "--" + p.kind, p.name}, Env: e.brewEnvironment(), Dir: e.opts.HomeDir, Timeout: 30 * time.Second})
 	if err != nil {
-		return p, fmt.Errorf("Homebrew metadata unavailable: %w", err)
+		return p, fmt.Errorf("homebrew metadata unavailable: %w", err)
 	}
 	var info struct {
 		Formulae []struct {
@@ -292,7 +292,7 @@ func (e *Engine) brewPackage(ctx context.Context, path string, spec binarySpec) 
 		}
 		f := info.Formulae[0]
 		if f.Name != p.name || f.Tap != "homebrew/core" || (f.FullName != "" && f.FullName != p.name && f.FullName != "homebrew/core/"+p.name) {
-			return p, fmt.Errorf("Homebrew formula source requires explicit adoption; no tap trust changes performed")
+			return p, fmt.Errorf("homebrew formula source requires explicit adoption; no tap trust changes performed")
 		}
 		p.version, p.pinned = f.Versions.Stable, f.Pinned
 	} else {
@@ -301,22 +301,22 @@ func (e *Engine) brewPackage(ctx context.Context, path string, spec binarySpec) 
 		}
 		c := info.Casks[0]
 		if c.Token != p.name || c.Tap != "homebrew/cask" || (c.FullToken != "" && c.FullToken != p.name && c.FullToken != "homebrew/cask/"+p.name) {
-			return p, fmt.Errorf("Homebrew cask source requires explicit adoption; no tap trust changes performed")
+			return p, fmt.Errorf("homebrew cask source requires explicit adoption; no tap trust changes performed")
 		}
 		p.version = c.Version
 	}
 	if versionInOutput.FindString(p.version) != p.version || p.version == "" {
-		return p, fmt.Errorf("Homebrew stable version unavailable or not exactly representable")
+		return p, fmt.Errorf("homebrew stable version unavailable or not exactly representable")
 	}
 	return p, nil
 }
 func (e *Engine) applyBrew(ctx context.Context, p brewPackage, target string, installed bool) error {
 	actual, _ := os.UserHomeDir()
 	if e.opts.ExplicitHome && filepath.Clean(actual) != filepath.Clean(e.opts.HomeDir) {
-		return fmt.Errorf("Homebrew is host-owned; use the owning user's home for installation")
+		return fmt.Errorf("homebrew is host-owned; use the owning user's home for installation")
 	}
 	if p.pinned {
-		return fmt.Errorf("Homebrew package is pinned; reconcile its pin explicitly")
+		return fmt.Errorf("homebrew package is pinned; reconcile its pin explicitly")
 	}
 	if target != p.version {
 		return fmt.Errorf("requested version %s unavailable in Homebrew (available %s); preserve pin or select an available version", target, p.version)

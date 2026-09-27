@@ -180,3 +180,22 @@ func TestAgentSelectionRespectsXDGAndExplicitHome(t *testing.T) {
 		t.Fatalf("explicit home leaked XDG selection: %v", got)
 	}
 }
+
+func TestOpenCodeUsesCanonicalConfigHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "custom-config"))
+	m := NewAgentsManager(nil, home)
+	if got, err := m.TargetPath("opencode"); err != nil || got != filepath.Join(home, "custom-config", "opencode", "AGENTS.md") {
+		t.Fatalf("ambient: %s %v", got, err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "relative")
+	if _, err := m.TargetPath("opencode"); err == nil {
+		t.Fatal("relative XDG fallback accepted")
+	}
+	explicit := NewAgentsManager(nil, home, true)
+	if got, err := explicit.TargetPath("opencode"); err != nil || got != filepath.Join(home, ".config", "opencode", "AGENTS.md") {
+		t.Fatalf("explicit: %s %v", got, err)
+	}
+}

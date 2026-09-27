@@ -2,6 +2,7 @@ package aisettings
 
 import (
 	"fmt"
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"os"
 	"path/filepath"
 )
@@ -30,8 +31,8 @@ func InstructionPath(home, id string, explicit bool, fallback string) string {
 		root = os.Getenv("KIMI_CODE_HOME")
 	case "opencode":
 		root = os.Getenv("OPENCODE_CONFIG_DIR")
-		if root == "" && os.Getenv("XDG_CONFIG_HOME") != "" {
-			root = filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "opencode")
+		if root == "" {
+			root = filepath.Join(config.ConfigHome(home, explicit), "opencode")
 		}
 	}
 	if root != "" && filepath.IsAbs(root) {
@@ -99,7 +100,9 @@ func validateInstructionOverride(home, id string, explicit bool) error {
 	case "opencode":
 		keys = []string{"OPENCODE_CONFIG_DIR"}
 		if os.Getenv("OPENCODE_CONFIG_DIR") == "" {
-			keys = append(keys, "XDG_CONFIG_HOME")
+			if !filepath.IsAbs(config.ConfigHome(home, explicit)) {
+				return fmt.Errorf("XDG_CONFIG_HOME must be an absolute path; refusing instruction fallback")
+			}
 		}
 	}
 	for _, key := range keys {

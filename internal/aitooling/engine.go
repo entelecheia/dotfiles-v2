@@ -78,6 +78,9 @@ func (e *Engine) Run(ctx context.Context, s config.AIToolingConfig, op Operation
 	if !filepath.IsAbs(e.opts.HomeDir) {
 		return r, errors.New("tooling home must be absolute")
 	}
+	if !filepath.IsAbs(config.ConfigHome(e.opts.HomeDir, e.opts.ExplicitHome)) {
+		return r, errors.New("tooling configuration home must be absolute")
+	}
 	if len(s.Agents) == 0 && len(s.Tools) == 0 && len(s.Skills) == 0 {
 		return r, nil
 	}

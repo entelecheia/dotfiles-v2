@@ -302,7 +302,7 @@ func (g *guard) acquire(ctx context.Context, opts Options) (func(), error) {
 	}
 	// The kernel flock, rather than expiry alone, prevents stealing a live job.
 	// On process death it releases automatically; stale owner metadata is replaced
-	// on the next successful admission, without signalling the former PID.
+	// on the next successful admission, without signaling the former PID.
 	ok = true
 	return release, nil
 }

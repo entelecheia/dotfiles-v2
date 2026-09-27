@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -401,5 +402,42 @@ func TestCommandDiagnosticsExcludeEnvironmentAndInput(t *testing.T) {
 	}
 	if !strings.Contains(out, "/fixture/tool") || !strings.Contains(out, "--version") {
 		t.Fatal("command diagnostics omitted safe path/arguments")
+	}
+}
+
+func TestOpenCodeUsesCanonicalConfigHomeResolver(t *testing.T) {
+	e := testEngine(t)
+	e.opts.ExplicitHome = false
+	t.Setenv("HOME", e.opts.HomeDir)
+	xdg := filepath.Join(e.opts.HomeDir, "custom-config")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	if got := e.profile("opencode"); got != filepath.Join(xdg, "opencode") {
+		t.Fatalf("unexpected profile %q", got)
+	}
+	if !slices.Contains(e.environment(), "XDG_CONFIG_HOME="+xdg) {
+		t.Fatal("subprocess configuration home diverges from canonical resolver")
+	}
+	adopted := filepath.Join(e.opts.HomeDir, "adopted-opencode")
+	t.Setenv("OPENCODE_CONFIG_DIR", adopted)
+	if got := e.profile("opencode"); got != adopted {
+		t.Fatalf("native override lost: %q", got)
+	}
+	e.opts.ExplicitHome = true
+	if got := e.profile("opencode"); got != filepath.Join(e.opts.HomeDir, ".config", "opencode") {
+		t.Fatalf("explicit home escaped: %q", got)
+	}
+}
+func TestRelativeAmbientConfigHomeRejectedBeforeAdmission(t *testing.T) {
+	e := testEngine(t)
+	e.opts.ExplicitHome = false
+	t.Setenv("HOME", e.opts.HomeDir)
+	t.Setenv("XDG_CONFIG_HOME", "relative-config")
+	e.acquire = func(context.Context, resourceguard.Options) (func(), error) {
+		t.Fatal("admitted invalid configuration root")
+		return nil, nil
+	}
+	_, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"codex"}}, Ensure)
+	if err == nil || !strings.Contains(err.Error(), "configuration home must be absolute") {
+		t.Fatalf("got %v", err)
 	}
 }

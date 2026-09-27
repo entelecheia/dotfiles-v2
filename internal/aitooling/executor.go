@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/resourceguard"
 )
 
@@ -85,9 +86,7 @@ func (e *Engine) environment() []string {
 	env = setEnv(env, "KIMI_CODE_HOME", e.profile("kimi"))
 	env = setEnv(env, "OPENCODE_CONFIG_DIR", e.profile("opencode"))
 	env = setEnv(env, "CLAUDE_CONFIG_DIR", e.profile("claude"))
-	if e.opts.ExplicitHome || os.Getenv("XDG_CONFIG_HOME") == "" {
-		env = setEnv(env, "XDG_CONFIG_HOME", filepath.Join(e.opts.HomeDir, ".config"))
-	}
+	env = setEnv(env, "XDG_CONFIG_HOME", config.ConfigHome(e.opts.HomeDir, e.opts.ExplicitHome))
 	env = setEnv(env, "CARGO_BUILD_JOBS", "2")
 	env = setEnv(env, "GOMAXPROCS", "2")
 	env = setEnv(env, "CI", "1")
@@ -102,12 +101,11 @@ func (e *Engine) profile(id string) string {
 		if v := os.Getenv(keys[id]); filepath.IsAbs(v) {
 			return v
 		}
-		if id == "opencode" {
-			if v := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(v) {
-				return filepath.Join(v, "opencode")
-			}
-		}
 	}
+	if id == "opencode" {
+		return filepath.Join(config.ConfigHome(e.opts.HomeDir, e.opts.ExplicitHome), "opencode")
+	}
+
 	return filepath.Join(e.opts.HomeDir, defaults[id])
 }
 func (e *Engine) pathEnv() string {

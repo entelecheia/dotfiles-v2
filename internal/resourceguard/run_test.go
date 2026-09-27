@@ -59,7 +59,7 @@ func TestRunCancellationCleansOwnGroupOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if err := RunCommand(ctx, exec.Command("/bin/sleep", "60")); err == nil {
-		t.Fatal("cancelled job succeeded")
+		t.Fatal("canceled job succeeded")
 	}
 	if err := foreign.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("foreign process affected: %v", err)

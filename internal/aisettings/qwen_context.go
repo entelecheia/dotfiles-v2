@@ -22,14 +22,14 @@ func (m *AgentsManager) ensureQwenContext(dry bool) error {
 		}
 	}
 	if settings == nil {
-		return fmt.Errorf("Qwen settings must be an object")
+		return fmt.Errorf("qwen settings must be an object")
 	}
 	context := map[string]any{}
 	if v, exists := settings["context"]; exists {
 		var ok bool
 		context, ok = v.(map[string]any)
 		if !ok || context == nil {
-			return fmt.Errorf("Qwen context must be an object; preserving settings")
+			return fmt.Errorf("qwen context must be an object; preserving settings")
 		}
 	}
 	var names []string
@@ -42,7 +42,7 @@ func (m *AgentsManager) ensureQwenContext(dry bool) error {
 		for _, name := range v {
 			text, ok := name.(string)
 			if !ok {
-				return fmt.Errorf("Qwen context.fileName must contain strings")
+				return fmt.Errorf("qwen context.fileName must contain strings")
 			}
 			names = append(names, text)
 		}
