@@ -92,7 +92,7 @@ func TestSaveState_StampsOverAnUnversionedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(data), "schema_version: 1\n") {
+	if !strings.HasPrefix(string(data), fmt.Sprintf("schema_version: %d\n", currentSchemaVersion)) {
 		t.Fatalf("rewrite did not stamp the current version:\n%s", data)
 	}
 }
@@ -358,7 +358,7 @@ func TestSaveState_ForceOverridesTheRefusal(t *testing.T) {
 		t.Fatalf("DOT_SCHEMA_FORCE=1 did not override the refusal: %v", err)
 	}
 	data := mustRead(t, path)
-	if !strings.HasPrefix(data, "schema_version: 1\n") {
+	if !strings.HasPrefix(data, fmt.Sprintf("schema_version: %d\n", currentSchemaVersion)) {
 		t.Fatalf("forced save did not rewrite with this binary's version:\n%s", data)
 	}
 	if !strings.Contains(data, "name: Older") {
@@ -394,7 +394,8 @@ func TestSaveState_FirstWriteToMissingDestinationSucceeds(t *testing.T) {
 // the ordinary case, which is every write this release performs.
 func TestSaveState_EqualAndOlderDestinationsSucceed(t *testing.T) {
 	cases := map[string]string{
-		"equal version":  "schema_version: 1\nname: Old\nprofile: full\n",
+		"equal version":  fmt.Sprintf("schema_version: %d\nname: Old\nprofile: full\n", currentSchemaVersion),
+		"v1 migration":   "schema_version: 1\nname: Old\nprofile: full\n",
 		"older version":  "schema_version: 0\nname: Old\nprofile: full\n",
 		"no version key": "name: Old\nprofile: full\n",
 	}

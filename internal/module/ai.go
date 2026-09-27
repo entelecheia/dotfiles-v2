@@ -3,9 +3,11 @@ package module
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
+	"github.com/entelecheia/dotfiles-v2/internal/aitooling"
 )
 
 // AIModule manages AI CLI/config helper shell configs and Claude settings.
@@ -14,7 +16,7 @@ type AIModule struct{}
 func (m *AIModule) Name() string { return "ai" }
 
 func (m *AIModule) managedFiles(rc *RunContext) []templatedFile {
-	return []templatedFile{
+	files := []templatedFile{
 		{
 			templatePath: "shell/30-ai.sh.tmpl",
 			destPath:     filepath.Join(rc.HomeDir, ".config", "shell", "30-ai.sh"),
@@ -28,6 +30,18 @@ func (m *AIModule) managedFiles(rc *RunContext) []templatedFile {
 			perm:         0644,
 		},
 	}
+	if selection := rc.Config.Modules.AI.Tooling; selection != nil {
+		selected := false
+		for _, id := range selection.Agents {
+			if id == "claude" {
+				selected = true
+			}
+		}
+		if !selected {
+			return files[:1]
+		}
+	}
+	return files
 }
 
 func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
@@ -48,7 +62,7 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 	// header) is removed: the old dir also holds IDE auth files, and the
 	// AGENTS.md there could be user-authored.
 	legacyCopilot := filepath.Join(rc.HomeDir, ".config", "github-copilot", "AGENTS.md")
-	if aisettings.IsManagedAgentsFile(legacyCopilot) {
+	if rc.Config.Modules.AI.Tooling == nil && aisettings.IsManagedAgentsFile(legacyCopilot) {
 		changes = append(changes, Change{
 			Description: fmt.Sprintf("remove legacy %s", legacyCopilot),
 			Command:     fmt.Sprintf("rm %q", legacyCopilot),
@@ -63,9 +77,22 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			Command:     fmt.Sprintf("rm %q", retiredCursor),
 		})
 	}
-	if rc.Config.Modules.AI.AgentsSSOT {
-		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
+	if (rc.Config.Modules.AI.Tooling == nil && rc.Config.Modules.AI.AgentsSSOT) || (rc.Config.Modules.AI.Tooling != nil && len(rc.Config.Modules.AI.Tooling.Agents) > 0) {
+		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir, rc.ExplicitHome)
 		manager.Out = rc.out()
+		manager.ExplicitHome = rc.ExplicitHome
+		if selection := rc.Config.Modules.AI.Tooling; selection != nil {
+			manager.SelectedTools = append([]string{}, selection.Agents...)
+		}
+		if rc.Config.Modules.AI.Tooling != nil {
+			needed, err := manager.ContinuityPolicyNeeded()
+			if err != nil {
+				return nil, err
+			}
+			if needed {
+				changes = append(changes, Change{Description: "install shared development context guidance", Command: "dot ai tools apply"})
+			}
+		}
 		statuses, err := manager.Status()
 		if err != nil {
 			return nil, fmt.Errorf("agents SSOT status: %w", err)
@@ -84,7 +111,7 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			})
 		}
 	}
-	if rc.Config.Modules.AI.HUD {
+	if rc.Config.Modules.AI.HUD && rc.Config.Modules.AI.Tooling == nil {
 		manager := aisettings.NewHUDManager(rc.Runner, rc.HomeDir)
 		statuses, err := manager.Status(nil)
 		if err != nil {
@@ -104,7 +131,7 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 	// are owned by the Maru app; dot only offers read-only diagnostics via
 	// `dot ai skills status`.
 	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
-		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
+		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir, rc.ExplicitHome)
 		status, err := manager.Status(mode)
 		if err != nil {
 			return nil, fmt.Errorf("coauthor guard status: %w", err)
@@ -117,11 +144,48 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 		}
 	}
 
+	if selection := rc.Config.Modules.AI.Tooling; selection != nil {
+		report, err := newModuleToolingEngine(rc).Run(ctx, *selection, aitooling.Inspect)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range report.Items {
+			if !toolingStatusSatisfied(item) {
+				changes = append(changes, Change{Description: fmt.Sprintf("%s: %s (%s)", item.ID, item.Status, item.Detail), Command: "dot ai tools apply"})
+			}
+		}
+	}
 	return &CheckResult{Satisfied: len(changes) == 0, Changes: changes}, nil
 }
 
 func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	var messages []string
+	var toolingErr error
+	if selection := rc.Config.Modules.AI.Tooling; selection != nil {
+		if err := aitooling.ValidateSelection(*selection); err != nil {
+			return nil, err
+		}
+		report, err := newModuleToolingEngine(rc).Run(ctx, *selection, aitooling.Ensure)
+		if err != nil && len(report.Items) == 0 {
+			return nil, err
+		}
+		for _, item := range report.Items {
+			messages = append(messages, fmt.Sprintf("%s: %s (%s)", item.ID, item.Status, item.Detail))
+		}
+
+		if ctx.Err() != nil {
+			return &ApplyResult{Messages: messages}, ctx.Err()
+		}
+		for _, item := range report.Items {
+			if item.Kind == "resource" || item.ID == "admission" {
+				return &ApplyResult{Messages: messages}, fmt.Errorf("tooling admission blocked: %s", item.Detail)
+			}
+		}
+		toolingErr = err
+		if toolingErr == nil && (report.Failed > 0 || report.Deferred > 0) {
+			toolingErr = fmt.Errorf("tooling incomplete: %d failed, %d deferred", report.Failed, report.Deferred)
+		}
+	}
 
 	fileMessages, err := applyTemplatedFiles(rc, m.managedFiles(rc))
 	if err != nil {
@@ -138,7 +202,7 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 	}
 	// See Check: only remove the old copilot target if dot rendered it.
 	legacyCopilot := filepath.Join(rc.HomeDir, ".config", "github-copilot", "AGENTS.md")
-	if aisettings.IsManagedAgentsFile(legacyCopilot) {
+	if rc.Config.Modules.AI.Tooling == nil && aisettings.IsManagedAgentsFile(legacyCopilot) {
 		if err := rc.Runner.Remove(legacyCopilot); err != nil {
 			return nil, fmt.Errorf("removing legacy %s: %w", legacyCopilot, err)
 		}
@@ -151,9 +215,27 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 		}
 		messages = append(messages, fmt.Sprintf("removed legacy %s", retiredCursor))
 	}
-	if rc.Config.Modules.AI.AgentsSSOT {
-		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
+	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
+		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir, rc.ExplicitHome)
+		result, err := manager.Apply(aisettings.CoauthorGuardOptions{Mode: mode, DryRun: rc.DryRun, ApplyAgents: rc.Config.Modules.AI.AgentsSSOT && rc.Config.Modules.AI.Tooling == nil})
+		if err != nil {
+			return nil, fmt.Errorf("applying coauthor guard AGENTS instruction: %w", err)
+		}
+		if result.AgentsChanged {
+			messages = append(messages, "applied coauthor guard AGENTS instruction")
+		}
+		if result.AgentsApplied {
+			messages = append(messages, "reapplied agents SSOT after coauthor guard update")
+		}
+	}
+
+	if (rc.Config.Modules.AI.Tooling == nil && rc.Config.Modules.AI.AgentsSSOT) || (rc.Config.Modules.AI.Tooling != nil && len(rc.Config.Modules.AI.Tooling.Agents) > 0) {
+		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir, rc.ExplicitHome)
 		manager.Out = rc.out()
+		manager.ExplicitHome = rc.ExplicitHome
+		if selection := rc.Config.Modules.AI.Tooling; selection != nil {
+			manager.SelectedTools = append([]string{}, selection.Agents...)
+		}
 		ssotMissing := !rc.Runner.FileExists(manager.SSOTPath())
 		if ssotMissing {
 			// Fresh machines enable agents_ssot by default, so the first apply
@@ -162,6 +244,15 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 				return nil, fmt.Errorf("scaffolding agents SSOT: %w", err)
 			}
 			messages = append(messages, fmt.Sprintf("scaffolded agents SSOT %s", manager.SSOTPath()))
+		}
+		if rc.Config.Modules.AI.Tooling != nil {
+			changed, err := manager.EnsureContinuityPolicy()
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				messages = append(messages, "updated shared development context guidance")
+			}
 		}
 		if ssotMissing && rc.DryRun {
 			// Dry-run writes nothing, so there is no SSOT to render yet.
@@ -179,7 +270,7 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 			messages = append(messages, result.Warnings...)
 		}
 	}
-	if rc.Config.Modules.AI.HUD {
+	if rc.Config.Modules.AI.HUD && rc.Config.Modules.AI.Tooling == nil {
 		manager := aisettings.NewHUDManager(rc.Runner, rc.HomeDir)
 		result, err := manager.Apply(aisettings.HUDOptions{DryRun: rc.DryRun})
 		if err != nil {
@@ -191,19 +282,21 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 			}
 		}
 	}
-	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
-		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
-		result, err := manager.Apply(aisettings.CoauthorGuardOptions{Mode: mode, DryRun: rc.DryRun, ApplyAgents: rc.Config.Modules.AI.AgentsSSOT})
-		if err != nil {
-			return nil, fmt.Errorf("applying coauthor guard AGENTS instruction: %w", err)
-		}
-		if result.AgentsChanged {
-			messages = append(messages, "applied coauthor guard AGENTS instruction")
-		}
-		if result.AgentsApplied {
-			messages = append(messages, "reapplied agents SSOT after coauthor guard update")
-		}
-	}
 
-	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, nil
+	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, toolingErr
+}
+
+func newModuleToolingEngine(rc *RunContext) *aitooling.Engine {
+	home, _ := os.UserHomeDir()
+	return aitooling.New(aitooling.Options{HomeDir: rc.HomeDir, ExplicitHome: rc.ExplicitHome || filepath.Clean(home) != filepath.Clean(rc.HomeDir), DryRun: rc.DryRun, Out: rc.out()})
+}
+
+func toolingStatusSatisfied(item aitooling.ItemResult) bool {
+	switch item.Status {
+	case "installed", "ready", "in-sync", "up-to-date", "pinned", "updated":
+		return true
+	case "update-available":
+		return item.Installed != ""
+	}
+	return false
 }

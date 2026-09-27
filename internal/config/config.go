@@ -243,10 +243,11 @@ func (c WatchdogNotifyConfig) IsZero() bool {
 
 // AIConfig configures AI helper files plus optional agents and skills SSOT deployment.
 type AIConfig struct {
-	Enabled    bool           `yaml:"enabled"`
-	AgentsSSOT bool           `yaml:"agents_ssot,omitempty"`
-	HUD        bool           `yaml:"hud,omitempty"`
-	Skills     AISkillsConfig `yaml:"skills,omitempty"`
+	Tooling    *AIToolingConfig `yaml:"tooling,omitempty"`
+	Enabled    bool             `yaml:"enabled"`
+	AgentsSSOT bool             `yaml:"agents_ssot,omitempty"`
+	HUD        bool             `yaml:"hud,omitempty"`
+	Skills     AISkillsConfig   `yaml:"skills,omitempty"`
 }
 
 // AISkillsConfig provides defaults for the read-only `dot ai skills`
@@ -560,4 +561,34 @@ func (c *Config) TemplateData(home string) map[string]any {
 		"CUDAHome":        cudaHome,
 		"HasNVIDIAGPU":    hasNVIDIAGPU,
 	}
+}
+
+// AIToolingConfig is the portable, explicit selection. A nil pointer on AIConfig
+// preserves legacy behavior; a non-nil empty selection manages no agents.
+type AIToolingConfig struct {
+	Pins    map[string]string      `yaml:"pins,omitempty" json:"pins,omitempty"`
+	Agents  []string               `yaml:"agents" json:"agents"`
+	Tools   []string               `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Skills  []string               `yaml:"skills,omitempty" json:"skills,omitempty"`
+	Updates AIUpdateScheduleConfig `yaml:"updates,omitempty" json:"updates,omitempty"`
+}
+
+type AIUpdateScheduleConfig struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled"`
+}
+
+// Clone keeps merged user configuration independent of its persisted slices.
+func (c *AIToolingConfig) Clone() *AIToolingConfig {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Pins = make(map[string]string, len(c.Pins))
+	for k, v := range c.Pins {
+		out.Pins[k] = v
+	}
+	out.Agents = append([]string{}, c.Agents...)
+	out.Tools = append([]string{}, c.Tools...)
+	out.Skills = append([]string{}, c.Skills...)
+	return &out
 }

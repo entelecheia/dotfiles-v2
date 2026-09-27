@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -37,7 +36,7 @@ bridge only.`,
 func newAIMemoryInstallCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "install",
-		Short: "Install and start the cross-CLI claude-mem integration",
+		Short: "Prepare selected memory adapters or install the legacy integration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -48,6 +47,26 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				return err
 			}
 			p := printerFrom(cmd)
+			if mgr.SelectedAgents != nil {
+				if syncPeer != "" {
+					return fmt.Errorf("peer bridge registration is not part of selected-agent preparation")
+				}
+				if dryRun {
+					counts, e := mgr.BuildTranscriptConfigForDisplay()
+					if e != nil {
+						return e
+					}
+					p.Line("would prepare selected memory adapters and bridge watches only: %v (%v)", mgr.SelectedAgents, counts)
+					return nil
+				}
+				result, e := mgr.PrepareSelectedIntegration()
+				if e != nil {
+					return e
+				}
+				p.Line("Prepared selected memory adapters: %v; transcript watches: %v", result.ConfigPaths, result.WatchCount)
+				p.Line("Capture remains unverified; no memory worker was started or restarted. Native Claude/Codex hooks remain plugin-owned; Grok/OpenCode capture is unsupported.")
+				return nil
+			}
 			if dryRun {
 				config, err := mgr.BuildTranscriptConfigForDisplay()
 				if err != nil {
@@ -237,17 +256,21 @@ func newAIMemoryMCPServerCmd() *cobra.Command {
 }
 
 func newAIMemoryBridgeCmd() *cobra.Command {
+	return newAIMemoryBridgeCmdWithManager(newClaudeMemManagerFromCmd)
+}
+
+func newAIMemoryBridgeCmdWithManager(manager func(*cobra.Command) (*aisettings.ClaudeMemManager, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:    "bridge",
 		Short:  "Run the Kimi/Kiro/Copilot/Qwen/pi transcript bridge",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			mgr, err := newClaudeMemManagerFromCmd(cmd)
+			mgr, err := manager(cmd)
 			if err != nil {
 				return err
 			}
-			return mgr.RunBridge(context.Background())
+			return mgr.RunBridge(cmd.Context())
 		},
 	}
 }
@@ -307,6 +330,33 @@ func newClaudeMemManagerFromCmd(cmd *cobra.Command) (*aisettings.ClaudeMemManage
 		return nil, err
 	}
 	mgr := aisettings.NewClaudeMemManager(home, dotPath, "")
+	selection := func() ([]string, error) {
+		selected, e := effectiveToolingForCmd(cmd)
+		if e != nil {
+			return nil, e
+		}
+		if selected == nil {
+			if path, _ := cmd.Flags().GetString("config"); path != "" {
+				return []string{}, nil
+			}
+			return nil, nil
+		}
+		agents := make([]string, len(selected.Agents))
+		copy(agents, selected.Agents)
+		return agents, nil
+	}
+	mgr.SelectedAgents, err = selection()
+	if err != nil {
+		return nil, err
+	}
+	mgr.AgentSelection = selection
+	override, _ := cmd.Flags().GetString("home")
+	mgr.ExplicitHome = override != ""
+	if override == "" {
+		if adopted := os.Getenv("KIMI_CODE_HOME"); filepath.IsAbs(adopted) {
+			mgr.KimiHome = adopted
+		}
+	}
 	if nodePath, lookupErr := exec.LookPath("node"); lookupErr == nil {
 		if nodePath, absErr := filepath.Abs(nodePath); absErr == nil {
 			mgr.NodePath = nodePath

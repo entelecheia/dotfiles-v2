@@ -80,9 +80,12 @@ jobs:
             printf '%s\n' "$deps" | grep -E 'go-md2man|blackfriday'
             exit 1
           fi
+      - name: Generate command docs
+        id: generate_command_docs
+        run: go run ./tools/gendocs docs/commands
       - name: Command docs drift check
+        id: check_command_docs
         run: |
-          go run ./tools/gendocs docs/commands
           # --porcelain, not `git diff`: git diff reports only tracked paths, so
           # a page for a newly added command that nobody committed passes it
           # green. --porcelain sees untracked, deleted and modified alike.
@@ -91,6 +94,14 @@ jobs:
             git status --porcelain docs/commands
             exit 1
           fi
+      - name: Upload generated command docs on drift
+        if: failure() && steps.generate_command_docs.outcome == 'success' && steps.check_command_docs.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: command-docs-${{ github.sha }}
+          path: docs/commands/
+          if-no-files-found: error
+          retention-days: 7
       # Structural guard for the unit job's tool/order/fail-fast contract
       # (BUG-18, BUG-19, G-07-08). Placed after the real lint gates, same rule
       # as the scenario gates above: a bug in this check must not mask a real

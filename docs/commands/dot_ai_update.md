@@ -1,18 +1,15 @@
 ## dot ai update
 
-Update AI CLIs, plugins, marketplaces, and skills
+Update explicitly selected agent CLIs and development tools
 
 ### Synopsis
 
-Bring managed AI tooling current in one pass.
+Update only the saved six-agent/five-addon allowlist.
 
-Phases run in a fixed order (claude, codex, copilot, gemini, kimi, pi, qwen, kiro, cursor, skills) and are
-partial-failure tolerant: one tool failing never aborts the rest. Missing
-binaries are skipped, not errors.
-
-Skills are delegated to 'maru skills update/sync' — dot never writes under a
-tool skill root (see docs/BOUNDARIES.md). Plugin updates take effect after a
-Claude Code restart.
+Run 'dot ai setup' first. Native providers retain installation ownership.
+Heavy work is serialized by the host resource guard. Unavailable metadata,
+unsupported adapters, resource pressure, authentication and trust remain
+explicitly pending; no blanket plugin, marketplace, or skill update runs.
 
 ```
 dot ai update [flags]
@@ -21,10 +18,10 @@ dot ai update [flags]
 ### Options
 
 ```
-      --check          Report available updates without changing anything
+      --check          Inspect installed and available versions without mutation
   -h, --help           help for update
       --json           Emit machine-readable JSON
-      --tool strings   Limit to specific tools (claude,codex,copilot,gemini,kimi,pi,qwen,kiro,cursor,skills)
+      --tool strings   Limit to saved selections (claude,codex,kimi,qwen,grok,opencode,ripwire,ocr,gsd,claude-mem,ponytail)
 ```
 
 ### Options inherited from parent commands
@@ -41,4 +38,5 @@ dot ai update [flags]
 ### SEE ALSO
 
 * [dot ai](dot_ai.md)	 - AI CLI/config helpers and settings backup/restore
+* [dot ai update schedule](dot_ai_update_schedule.md)	 - Manage opt-in Sunday 04:00 stable maintenance (macOS)
 

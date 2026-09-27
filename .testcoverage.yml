@@ -61,6 +61,18 @@ threshold:
 override:
   - path: ^internal/aisettings$ # measured 67.3594% (2431/3609) on darwin after the claude-mem sync landed; launchd install stays unhit
     threshold: 62
+  # New package floors: authoritative Ubuntu unit run 36305525701,
+  # job 108581294497, coverage artifact 10927082672, head 7227f170.
+  # Profile SHA-256: 4b395167dacd918a389b4c91fee3161fa1cf2242fc7cdf2a2f1b89e789deaa85
+  # Each follows floor(measured percentage) - 1; existing floors are unchanged.
+  - path: ^internal/aihandoff$ # measured 73.737374% (219/297) on Linux
+    threshold: 72
+  - path: ^internal/aischedule$ # measured 77.631579% (177/228) on Linux
+    threshold: 76
+  - path: ^internal/aitooling$ # measured 43.145442% (620/1437) on Linux
+    threshold: 42
+  - path: ^internal/resourceguard$ # measured 47.201493% (253/536) on Linux
+    threshold: 46
   - path: ^internal/appsettings$ # measured 54.1133% (296/547)
     threshold: 53
   - path: ^internal/claudecfg$ # measured 83.6735% (41/49)

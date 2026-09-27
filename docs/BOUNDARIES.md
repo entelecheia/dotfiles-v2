@@ -1,11 +1,15 @@
 # Maru / dotfiles-v2 Boundary
 
-`dotfiles-v2` owns environment and AI tool settings. The Maru app (its
-`skill_host` module) owns skill sources, the skills registry, runtime symlinks,
-and tool federation. `dotfiles-v2` never deploys skills; it provides read-only
-diagnostics only (`dot ai skills list|validate|path|status`).
-Maru-managed status/path diagnostics target Claude Code and Codex. Broader
-agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
+`dotfiles-v2` owns selected agent/tool installation orchestration, environment
+and documented tool settings. Maru owns shared skill sources, registry,
+canonical links and target deployment. Dot delegates selected skill sharing to
+Maru's capability-checked CLI; it never copies or rewrites skill trees itself.
+Native/plugin/system bundles remain owned by their native installers.
+
+The selectable agent environments are Claude, Codex, Kimi, Qwen, Grok and
+OpenCode. The automatic add-on catalog is limited to ripwire, Open Code Review,
+GSD, claude-mem and ponytail. Selection limits managed writes; it does not hide
+existing globally discoverable skills from unselected agents.
 
 ## dotfiles-v2 May Write
 
@@ -38,12 +42,18 @@ agents, Gemini, and Antigravity roots remain inventory-only scan surfaces.
   `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
   `~/.kiro/steering/AGENTS.md`, `~/.kimi-code/AGENTS.md`,
   `~/.pi/agent/AGENTS.md`, `~/.qwen/AGENTS.md`, `~/.gemini/GEMINI.md`,
-  `~/.copilot/copilot-instructions.md`, and `~/.aider.conf.md`. Each is
+  `~/.copilot/copilot-instructions.md`, `~/.aider.conf.md`,
+  `~/.grok/AGENTS.md`, and `~/.config/opencode/AGENTS.md`. Each is
   the whole file, rendered from the agents SSOT; registering a tool adds
   a target here or the boundary test fails. Session transcripts
   (`~/.pi/agent/sessions/**`, `~/.qwen/projects/**/chats/**`) are
   read-only scan surfaces for the claude-mem transcript bridge and are
-  never written
+  never written. Selected Codex and Kimi targets honor `CODEX_HOME` and
+  `KIMI_CODE_HOME`; OpenCode honors `OPENCODE_CONFIG_DIR`, then
+  `XDG_CONFIG_HOME/opencode`. Explicit `--home` isolates these destinations
+  from ambient profile overrides.
+- `~/.qwen/settings.json` — only the additive `context.fileName` entry required
+  to discover AGENTS.md; preserve existing filenames and unrelated settings
 
 Dot-owned state trees:
 
@@ -51,7 +61,8 @@ Dot-owned state trees:
   (`AGENTS.md`), written by `dot ai agents init|pull|author|edit` (edit
   scaffolds a missing SSOT), by `dot apply` (scaffolds it on a fresh
   machine), by `dot ai restore|import`, and by the instruction blocks of `dot ai
-  coauthor-guard` and `dot ai memory install`. This dir is synced between
+  coauthor-guard` and `dot ai memory install`, and the selected setup continuity
+  policy block (backed up before upgrading an existing SSOT). This dir is synced between
   machines, so it holds no machine state: every agents apply removes the
   legacy apply-state file (`.state.json`) from it, best-effort, after
   migrating the entries that match this machine's targets
@@ -64,6 +75,31 @@ Dot-owned state trees:
   apply: `dot ai agents apply`, `dot apply`, `dot ai coauthor-guard
   apply --apply-agents`, `dot ai memory install`, and `dot ai restore
   --reapply-agents`
+
+- `~/.local/share/dotfiles/ai/handoffs/<canonical-git-common-dir-hash>.jsonl`
+  — append-only local curated development handoffs shared across project
+  worktrees. Records preserve producer claims, UTC time, commit/worktree and
+  artifact digests. Show marks stale evidence for revalidation; neither command
+  expands raw transcript collection or publishes records externally.
+- `~/.local/share/dotfiles/ai/tooling-state.json` — private machine-local
+  installation receipts: adopted provider/path/version/status/check time.
+  Native provider files remain native-installer owned.
+- `~/.local/share/dotfiles/ai/update-schedule.json`,
+  `update-schedule.lock`, `update-schedule.out.log` and
+  `update-schedule.err.log` in that directory — selected maintenance schedule
+  state, nonblocking state-update lock and launchd run diagnostics
+- `~/Library/LaunchAgents/com.dotfiles.ai.update.plist` — the macOS user
+  stable-update job, owned by `dot ai update schedule enable|disable`
+- `/tmp/dotfiles-resource-<uid>/health.json` and `history.lock` — shared
+  host-pressure recovery history, independent of repository admission scopes
+- `/tmp/dotfiles-resource-<uid>/scopes/<sha256-scope-key>/heavy.lock` and
+  `owner.json` — same-user scoped admission lock and owner identity/heartbeat.
+  `repo:<canonical-git-common-directory>` groups all worktrees of one
+  repository; `maintenance:tooling` serializes global tool installation/update
+  independently of caller repository. HOME and CODEX_HOME do not partition
+  either scope. Healthy different-repository jobs may run concurrently.
+  Kernel locking protects participating jobs; stale metadata must never
+  justify stealing a live lock.
 
 Third-party files dot edits (each entry states what dot writes there and
 under what condition; everything else in the file belongs to its owning
@@ -187,24 +223,31 @@ tool):
   `dot ai hud apply`; the write is an atomic rename because Codex
   rewrites this file continuously. No other key is touched.
 
-## dotfiles-v2 Must Not Write
+## dotfiles-v2 Must Not Write Directly
 
 - anything under any tool skill root (`~/.claude/skills/**`,
   `~/.codex/skills/**`, `~/.agents/skills/**`, `~/.gemini/skills/**`,
-  `~/.gemini/antigravity/skills/**`)
+  `~/.gemini/antigravity/skills/**`, `~/.kimi-code/skills/**`,
+  `~/.qwen/skills/**`, `~/.grok/skills/**`, `~/.config/opencode/skills/**`,
+  and resolved alternate profile skill roots)
 - skill source directories under `~/.maru/skills/**` or any configured
   `modules.ai.skills.ssot_path`
 - `~/.maru/env/**`
 
 Skill directories may be scanned for diagnostics. Backups/restores do not copy
-skills.
+skills. Dot may invoke Maru for selected installable registry entries or a
+selected add-on's native installer for its own bundle; those tools retain write
+ownership. A missing Maru capability defers sharing, never triggers direct
+copies. Do not overwrite foreign skills, implicitly retarget links or enroll a
+generic skill source in automatic updates.
 
 ## Maru Owns
 
 - `~/.maru/**` except the two portable settings files above
 - `~/.maru/skills/registry.json`
 - `~/.maru/skills/<name>` runtime symlinks
-- tool skill root federation (`~/.claude/skills/**`, `~/.codex/skills/**`, …)
+- owned skill symlinks for selected Claude, Codex, Kimi, Qwen, Grok and
+  OpenCode profiles; native/plugin/system entries remain excluded
 - source reconciliation, registry validation, and duplicate-tier policy
 
 If this boundary changes, update the matching Maru boundary document and the

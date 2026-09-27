@@ -27,8 +27,10 @@ const (
 // skill roots. It is read-only: the Maru app owns skill sources, the registry,
 // runtime symlinks, and tool federation; dotfiles only diagnoses.
 type SkillsManager struct {
-	HomeDir string
-	Tools   []SkillTool
+	HomeDir       string
+	Tools         []SkillTool
+	SelectedTools []string
+	ExplicitHome  bool
 }
 
 // SkillTool describes one tool root that can consume Markdown skills.
@@ -80,6 +82,10 @@ type SkillsStatusReport struct {
 // `dot ai skills list|validate`, but are not treated as managed sync targets.
 func RegisteredSkillTools() []SkillTool {
 	return []SkillTool{
+		{ID: "kimi", DisplayName: "Kimi Code", RootPath: "~/.kimi-code/skills"},
+		{ID: "qwen", DisplayName: "Qwen Code", RootPath: "~/.qwen/skills"},
+		{ID: "grok", DisplayName: "Grok", RootPath: "~/.grok/skills"},
+		{ID: "opencode", DisplayName: "OpenCode", RootPath: "~/.config/opencode/skills"},
 		{
 			ID:          "claude",
 			DisplayName: "Claude Code",
@@ -115,6 +121,9 @@ func (m *SkillsManager) DefaultMaruSSOTPath() string {
 // none is detected so informational output is never empty. It never mutates
 // anything.
 func (m *SkillsManager) DefaultTools() []string {
+	if m.SelectedTools != nil {
+		return append([]string{}, m.SelectedTools...)
+	}
 	var ids []string
 	seen := map[string]bool{}
 	for _, tool := range m.registry() {
@@ -161,7 +170,12 @@ func (m *SkillsManager) TargetRoot(toolID string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unknown skills tool %q", toolID)
 	}
-	return expandHome(tool.RootPath, m.homeDir()), nil
+	if err := validateInstructionOverride(m.homeDir(), tool.ID, m.ExplicitHome); err != nil {
+		return "", err
+	}
+	fallback := expandHome(tool.RootPath, m.homeDir())
+	instruction := InstructionPath(m.homeDir(), tool.ID, m.ExplicitHome, filepath.Join(filepath.Dir(fallback), "AGENTS.md"))
+	return filepath.Join(filepath.Dir(instruction), "skills"), nil
 }
 
 // Status reports target symlink drift for all configured source skills.

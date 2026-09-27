@@ -23,7 +23,8 @@ import (
 // smallest thing that satisfies DEBT-02's error message. Version 0 is the
 // sentinel for a file written before the field existed, which is a normal
 // state and not an error.
-const currentSchemaVersion = 1
+// Version 2 adds explicit selected-agent tooling; older writers must not drop it.
+const currentSchemaVersion = 2
 
 // peekSchemaVersion recovers the top-level schema_version from raw state bytes
 // with a second decode into a one-field struct.
@@ -169,15 +170,16 @@ type UserModulesState struct {
 
 // UserAIState holds user selections for AI CLI/config helpers.
 type UserAIState struct {
-	Enabled    bool           `yaml:"enabled,omitempty"`
-	AgentsSSOT bool           `yaml:"agents_ssot,omitempty"`
-	HUD        bool           `yaml:"hud,omitempty"`
-	Skills     AISkillsConfig `yaml:"skills,omitempty"`
+	Tooling    *AIToolingConfig `yaml:"tooling,omitempty"`
+	Enabled    bool             `yaml:"enabled,omitempty"`
+	AgentsSSOT bool             `yaml:"agents_ssot,omitempty"`
+	HUD        bool             `yaml:"hud,omitempty"`
+	Skills     AISkillsConfig   `yaml:"skills,omitempty"`
 }
 
 // IsZero lets yaml.v3 omit an unset AI block from user state.
 func (a UserAIState) IsZero() bool {
-	return !a.Enabled && !a.AgentsSSOT && !a.HUD && a.Skills.IsZero()
+	return !a.Enabled && !a.AgentsSSOT && !a.HUD && a.Skills.IsZero() && a.Tooling == nil
 }
 
 // UserGitState holds user selections for git helper behavior.
@@ -378,6 +380,9 @@ func (s *UserState) Validate() error {
 	}
 	if s.Modules.Guard.FreezeDir != "" && !filepath.IsAbs(s.Modules.Guard.FreezeDir) {
 		return fmt.Errorf("modules.guard.freeze_dir must be an absolute path (got %q)", s.Modules.Guard.FreezeDir)
+	}
+	if err := ValidateAITooling(s.Modules.AI.Tooling); err != nil {
+		return err
 	}
 	if err := validateAISkillsConfig(s.Modules.AI.Skills); err != nil {
 		return err
@@ -743,6 +748,10 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 		cfg.Modules.Workspace.GdriveSymlink = state.Modules.Workspace.GdriveSymlink
 		cfg.Modules.Workspace.Symlink = state.Modules.Workspace.Symlink
 		cfg.Modules.Workspace.Repos = state.Modules.Workspace.Repos
+	}
+	if state.Modules.AI.Tooling != nil {
+		cfg.Modules.AI.Enabled = true
+		cfg.Modules.AI.Tooling = state.Modules.AI.Tooling.Clone()
 	}
 	if state.Modules.AI.Enabled {
 		cfg.Modules.AI.Enabled = true

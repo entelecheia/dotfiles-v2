@@ -32,7 +32,7 @@ bridge only.
 ### SEE ALSO
 
 * [dot ai](dot_ai.md)	 - AI CLI/config helpers and settings backup/restore
-* [dot ai memory install](dot_ai_memory_install.md)	 - Install and start the cross-CLI claude-mem integration
+* [dot ai memory install](dot_ai_memory_install.md)	 - Prepare selected memory adapters or install the legacy integration
 * [dot ai memory status](dot_ai_memory_status.md)	 - Show claude-mem integration health for all six CLIs
 * [dot ai memory sync](dot_ai_memory_sync.md)	 - Replicate the claude-mem store with a peer over ssh
 * [dot ai memory update](dot_ai_memory_update.md)	 - Update claude-mem to the latest marketplace version

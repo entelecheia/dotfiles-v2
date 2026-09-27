@@ -1,6 +1,6 @@
 ## dot ai memory install
 
-Install and start the cross-CLI claude-mem integration
+Prepare selected memory adapters or install the legacy integration
 
 ```
 dot ai memory install [flags]

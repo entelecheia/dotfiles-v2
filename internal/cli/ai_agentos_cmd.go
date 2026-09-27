@@ -175,8 +175,22 @@ func skillsOptionsFromCmd(cmd *cobra.Command) (aisettings.SkillsOptions, error) 
 		if ssot == "" {
 			ssot = cfg.SSOTPath
 		}
-		if len(tools) == 0 && len(cfg.Tools) > 0 {
+		if !cmd.Flags().Changed("tool") && state.Modules.AI.Tooling != nil {
+			tools = append([]string{}, state.Modules.AI.Tooling.Agents...)
+		} else if len(tools) == 0 && len(cfg.Tools) > 0 {
 			tools = append([]string(nil), cfg.Tools...)
+		}
+	}
+
+	if !cmd.Flags().Changed("tool") {
+		selection, err := effectiveToolingForCmd(cmd)
+		if err != nil {
+			return aisettings.SkillsOptions{}, err
+		}
+		if selection != nil {
+			tools = append([]string{}, selection.Agents...)
+		} else if path, _ := cmd.Flags().GetString("config"); path != "" {
+			tools = []string{}
 		}
 	}
 
@@ -204,7 +218,15 @@ func skillsOptionsFromCmd(cmd *cobra.Command) (aisettings.SkillsOptions, error) 
 }
 
 func newSkillsManagerFromCmd(cmd *cobra.Command) *aisettings.SkillsManager {
-	return aisettings.NewSkillsManager(homeFromCmd(cmd))
+	mgr := aisettings.NewSkillsManager(homeFromCmd(cmd))
+	over, _ := cmd.Flags().GetString("home")
+	mgr.ExplicitHome = over != ""
+	if selection, err := effectiveToolingForCmd(cmd); err == nil && selection != nil {
+		mgr.SelectedTools = append([]string{}, selection.Agents...)
+	} else if path, _ := cmd.Flags().GetString("config"); path != "" {
+		mgr.SelectedTools = []string{}
+	}
+	return mgr
 }
 
 func printSkillsStatus(p *Printer, report *aisettings.SkillsStatusReport) {

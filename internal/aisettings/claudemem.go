@@ -45,6 +45,15 @@ type ClaudeMemManager struct {
 	NodePath   string
 	BunPath    string
 	PluginRoot string
+	// SelectedAgents nil retains the legacy integration. A non-nil empty
+	// selection disables new MCP writes and transcript capture.
+	SelectedAgents []string
+	// ExplicitHome forbids integrating a different live user/profile domain.
+	ExplicitHome bool
+	// AgentSelection refreshes configured selection before every bridge scan.
+	AgentSelection func() ([]string, error)
+	// KimiHome is an explicitly adopted native Kimi Code home, never ~/.kimi.
+	KimiHome string
 	// RunBunInstall runs `bun install` in dir; nil uses the real bun. Test seam.
 	RunBunInstall func(ctx context.Context, bunPath, dir string) ([]byte, error)
 }
@@ -138,7 +147,7 @@ func (m *ClaudeMemManager) BridgeLogPath() string {
 }
 
 func (m *ClaudeMemManager) KimiMCPPath() string {
-	return filepath.Join(m.HomeDir, ".kimi-code", "mcp.json")
+	return filepath.Join(m.kimiHomeDir(), "mcp.json")
 }
 
 func (m *ClaudeMemManager) QwenMCPPath() string {
@@ -466,27 +475,29 @@ func HasMemoryInstructions(path string) bool {
 // sessions carry it in a sibling .runtime.json (first-line cwd as fallback),
 // and pi sessions carry it in the first line's session header.
 func (m *ClaudeMemManager) BuildTranscriptConfig() (transcriptWatchConfig, error) {
-	watches := append(append(append(append(m.kimiWatches(), m.kiroWatches()...), m.copilotWatches()...), m.qwenWatches()...), m.piWatches()...)
-	if watches == nil {
-		// A machine with no Kimi/Kiro sessions yet leaves this nil, and a nil
-		// slice marshals to `null`, which the plugin's watcher rejects as an
-		// invalid config - so a fresh machine got a bridge that exited 1 on
-		// every start while `dot ai memory install` reported success.
-		watches = []transcriptWatch{}
+	selection, err := m.memorySelection()
+	if err != nil {
+		return transcriptWatchConfig{}, err
+	}
+	watches := []transcriptWatch{}
+	schemas := map[string]transcriptSchema{}
+	for _, target := range []struct {
+		name     string
+		schema   transcriptSchema
+		discover func() []transcriptWatch
+	}{
+		{"kimi", kimiTranscriptSchema(), m.kimiWatches}, {"kiro", kiroTranscriptSchema(), m.kiroWatches},
+		{"copilot", copilotTranscriptSchema(), m.copilotWatches}, {"qwen", qwenTranscriptSchema(), m.qwenWatches},
+		{"pi", piTranscriptSchema(), m.piWatches},
+	} {
+		if !memoryAgentSelected(selection, target.name) {
+			continue
+		}
+		watches = append(watches, target.discover()...)
+		schemas[target.name] = target.schema
 	}
 	sort.Slice(watches, func(i, j int) bool { return watches[i].Path < watches[j].Path })
-	return transcriptWatchConfig{
-		Version: 1,
-		Schemas: map[string]transcriptSchema{
-			"kimi":    kimiTranscriptSchema(),
-			"kiro":    kiroTranscriptSchema(),
-			"copilot": copilotTranscriptSchema(),
-			"qwen":    qwenTranscriptSchema(),
-			"pi":      piTranscriptSchema(),
-		},
-		Watches:   watches,
-		StateFile: m.TranscriptStatePath(),
-	}, nil
+	return transcriptWatchConfig{Version: 1, Schemas: schemas, Watches: watches, StateFile: m.TranscriptStatePath()}, nil
 }
 
 // BuildTranscriptConfigForDisplay returns discovery counts without exposing
@@ -500,7 +511,7 @@ func (m *ClaudeMemManager) BuildTranscriptConfigForDisplay() (map[string]int, er
 }
 
 func (m *ClaudeMemManager) kimiWatches() []transcriptWatch {
-	pattern := filepath.Join(m.HomeDir, ".kimi-code", "sessions", "*", "session_*", "state.json")
+	pattern := filepath.Join(m.kimiHomeDir(), "sessions", "*", "session_*", "state.json")
 	stateFiles, _ := filepath.Glob(pattern)
 	var watches []transcriptWatch
 	for _, statePath := range stateFiles {
@@ -845,6 +856,14 @@ const (
 // Install wires recall into Kimi/Kiro/Copilot, prepares transcript capture,
 // and loads the macOS user LaunchAgent that keeps new sessions discovered.
 func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult, error) {
+	selection, selectionErr := m.memorySelection()
+	if selectionErr != nil {
+		return ClaudeMemInstallResult{}, selectionErr
+	}
+	if selection != nil {
+		return m.PrepareSelectedIntegration()
+	}
+
 	if m.DotPath == "" || !filepath.IsAbs(m.DotPath) {
 		return ClaudeMemInstallResult{}, errors.New("dot executable path must be absolute")
 	}
@@ -911,6 +930,10 @@ func (m *ClaudeMemManager) Install(ctx context.Context) (ClaudeMemInstallResult,
 }
 
 func ensureMCPEntry(path, dotPath string, variant mcpEntryVariant) (bool, error) {
+	return ensureScopedMCPEntry(path, dotPath, variant, "", "")
+}
+
+func ensureScopedMCPEntry(path, dotPath string, variant mcpEntryVariant, home, pluginRoot string) (bool, error) {
 	doc := map[string]json.RawMessage{}
 	if raw, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(raw, &doc); err != nil {
@@ -926,6 +949,10 @@ func ensureMCPEntry(path, dotPath string, variant mcpEntryVariant) (bool, error)
 		}
 	}
 	entry := map[string]any{"command": dotPath, "args": []string{"ai", "memory", "mcp-server"}}
+	if home != "" {
+		entry["args"] = []string{"--home", home, "ai", "memory", "mcp-server"}
+		entry["env"] = map[string]string{"HOME": home, "CLAUDE_PLUGIN_ROOT": pluginRoot, "PLUGIN_ROOT": pluginRoot, "CODEX_HOME": filepath.Join(home, ".codex")}
+	}
 	switch variant {
 	case mcpVariantKiro:
 		entry["disabled"] = false
@@ -1075,11 +1102,29 @@ func (m *ClaudeMemManager) RunBridge(ctx context.Context) error {
 	var signature string
 	var lastRescanErr string
 	start := func() error {
-		pluginRoot, err := m.LocatePlugin()
+		config, err := m.BuildTranscriptConfig()
 		if err != nil {
 			return err
 		}
-		config, err := m.BuildTranscriptConfig()
+		selection, err := m.memorySelection()
+		if err != nil {
+			return err
+		}
+		if selection != nil && len(config.Watches) == 0 {
+			if child != nil {
+				stopChild(child, done)
+				child, done = nil, nil
+			}
+			signature = ""
+			if _, err := os.Stat(m.TranscriptConfigPath()); err == nil {
+				_, err = m.writeTranscriptConfig(config)
+				return err
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+		pluginRoot, err := m.LocatePlugin()
 		if err != nil {
 			return err
 		}
@@ -1228,7 +1273,11 @@ func hasManagedMCPEntry(path, dotPath string) bool {
 		return false
 	}
 	entry, ok := doc.MCPServers["claude-mem"]
-	return ok && entry.Command == dotPath && len(entry.Args) == 3 && entry.Args[0] == "ai" && entry.Args[1] == "memory" && entry.Args[2] == "mcp-server"
+	args := entry.Args
+	if len(args) == 5 && args[0] == "--home" && filepath.IsAbs(args[1]) {
+		args = args[2:]
+	}
+	return ok && entry.Command == dotPath && len(args) == 3 && args[0] == "ai" && args[1] == "memory" && args[2] == "mcp-server"
 }
 
 func hasManagedCopilotMCPEntry(path, dotPath string) bool {
@@ -1299,4 +1348,89 @@ func atomicWriteFile(path string, content []byte, mode fs.FileMode) error {
 		return err
 	}
 	return os.Rename(tempPath, path)
+}
+
+func (m *ClaudeMemManager) memorySelection() ([]string, error) {
+	if m.AgentSelection != nil {
+		return m.AgentSelection()
+	}
+	return m.SelectedAgents, nil
+}
+func memoryAgentSelected(selection []string, agent string) bool {
+	if selection == nil {
+		return true
+	}
+	for _, selected := range selection {
+		if selected == agent {
+			return true
+		}
+	}
+	return false
+}
+func (m *ClaudeMemManager) kimiHomeDir() string {
+	if filepath.IsAbs(m.KimiHome) {
+		return m.KimiHome
+	}
+	return filepath.Join(m.HomeDir, ".kimi-code")
+}
+
+// PrepareSelectedIntegration updates selected recall adapters and the existing
+// bridge's desired watch configuration only. It never installs dependencies,
+// repairs caches, registers services, starts a backend, or restarts workers.
+// Native Claude/Codex hooks remain plugin-owned. Grok/OpenCode capture has no
+// proven adapter here and is deliberately absent from the watch configuration.
+func (m *ClaudeMemManager) PrepareSelectedIntegration() (ClaudeMemInstallResult, error) {
+	if m.ExplicitHome {
+		return ClaudeMemInstallResult{}, errors.New("selected memory bridge preparation for explicit --home is deferred; adopt the live runtime profile first")
+	}
+	selection, err := m.memorySelection()
+	if err != nil {
+		return ClaudeMemInstallResult{}, err
+	}
+	if selection == nil {
+		return ClaudeMemInstallResult{}, errors.New("explicit agent selection required for safe bridge preparation")
+	}
+	config, err := m.BuildTranscriptConfig()
+	if err != nil {
+		return ClaudeMemInstallResult{}, err
+	}
+	result := ClaudeMemInstallResult{WatchCount: countWatches(config.Watches)}
+	bridgeSelected := memoryAgentSelected(selection, "kimi") || memoryAgentSelected(selection, "qwen")
+	if !bridgeSelected {
+		// Stop exposing previously managed watches without creating a worker
+		// or new configuration tree on a never-configured host.
+		if _, err := os.Stat(m.TranscriptConfigPath()); err == nil {
+			_, err = m.writeTranscriptConfig(config)
+			return result, err
+		} else if !os.IsNotExist(err) {
+			return result, err
+		}
+		return result, nil
+	}
+	if !filepath.IsAbs(m.DotPath) {
+		return result, errors.New("absolute dot executable required for selected memory recall")
+	}
+	result.PluginRoot, err = m.LocatePlugin()
+	if err != nil {
+		return result, err
+	}
+	for _, target := range []struct{ agent, path string }{{"kimi", m.KimiMCPPath()}, {"qwen", m.QwenMCPPath()}} {
+		if !memoryAgentSelected(selection, target.agent) {
+			continue
+		}
+		changed, err := ensureScopedMCPEntry(target.path, m.DotPath, mcpVariantStandard, m.HomeDir, result.PluginRoot)
+		if err != nil {
+			return result, err
+		}
+		if changed {
+			result.ConfigPaths = append(result.ConfigPaths, target.path)
+		}
+	}
+	if _, err = m.writeTranscriptConfig(config); err != nil {
+		return result, err
+	}
+	if err = m.seedTranscriptState(config); err != nil {
+		return result, err
+	}
+	return result, nil
 }

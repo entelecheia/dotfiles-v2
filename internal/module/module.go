@@ -20,13 +20,14 @@ type Module interface {
 
 // RunContext carries config and runtime options to all modules.
 type RunContext struct {
-	Config   *config.Config
-	Runner   *exec.Runner
-	Brew     *exec.Brew
-	Template *template.Engine
-	DryRun   bool
-	Yes      bool
-	HomeDir  string
+	Config       *config.Config
+	Runner       *exec.Runner
+	Brew         *exec.Brew
+	Template     *template.Engine
+	DryRun       bool
+	Yes          bool
+	HomeDir      string
+	ExplicitHome bool
 	// Out receives module progress output; nil means os.Stdout.
 	Out io.Writer
 }

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,7 +24,7 @@ func newCheckCmd() *cobra.Command {
 }
 
 func runCheck(cmd *cobra.Command, _ []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	profileName, _ := cmd.Flags().GetString("profile")
 	moduleFilter, _ := cmd.Flags().GetStringSlice("module")
@@ -73,7 +72,7 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	config.ApplyStateToConfig(cfg, state)
+	applyStateWithToolingAuthority(cfg, state, configPath != "")
 	config.ApplyEnvOverrides(cfg)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -91,13 +90,14 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	modules := registry.Resolve(cfg, moduleFilter)
 
 	rc := &module.RunContext{
-		Config:   cfg,
-		Runner:   runner,
-		Brew:     brew,
-		Template: tmplEngine,
-		DryRun:   true,
-		Yes:      true,
-		HomeDir:  home,
+		ExplicitHome: homeOverride != "",
+		Config:       cfg,
+		Runner:       runner,
+		Brew:         brew,
+		Template:     tmplEngine,
+		DryRun:       true,
+		Yes:          true,
+		HomeDir:      home,
 	}
 
 	results, err := module.CheckAll(ctx, modules, rc)
