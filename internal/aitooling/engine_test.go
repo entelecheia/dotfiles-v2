@@ -579,3 +579,21 @@ func TestAntigravityInstallsWhenMissing(t *testing.T) {
 		t.Fatal(r.Items[0])
 	}
 }
+
+func TestAntigravityDefersUnavailablePin(t *testing.T) {
+	e := testEngine(t)
+	e.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"version":"1.2.12"}`)), Header: make(http.Header)}, nil
+	})
+	e.exec = func(_ context.Context, c command) (string, error) {
+		t.Fatalf("unexpected mutation command: %s", commandDiagnostic(c))
+		return "", nil
+	}
+	r, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"antigravity"}, Pins: map[string]string{"antigravity": "1.0.0"}}, Ensure)
+	if err != nil || len(r.Items) != 1 || r.Items[0].Status != "deferred-pin" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if !strings.Contains(r.Items[0].Detail, "1.2.12") || !strings.Contains(r.Items[0].Detail, "1.0.0") {
+		t.Fatal(r.Items[0])
+	}
+}

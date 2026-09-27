@@ -74,6 +74,11 @@ func (e *Engine) binary(ctx context.Context, en Entry, pin string, op Operation)
 	if pin != "" {
 		target = strings.TrimPrefix(pin, "v")
 	}
+	if spec.selfUpdating && pin != "" && target != latest {
+		r.Status = "deferred-pin"
+		r.Detail = fmt.Sprintf("%s installer only ships the current release %s; requested pin %s unavailable", en.Name, latest, target)
+		return r
+	}
 	if path != "" && provider == "unknown" {
 		r.Status = "deferred-provenance"
 		r.Detail = "existing installation provider is unknown; keep it intact and adopt explicitly"
