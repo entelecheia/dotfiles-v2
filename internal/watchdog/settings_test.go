@@ -68,3 +68,68 @@ func TestResolveWarp_KeepsExplicitValues(t *testing.T) {
 		t.Errorf("explicit values lost: %#v", s)
 	}
 }
+
+func TestResolveMonit_Defaults(t *testing.T) {
+	s, err := ResolveMonit(config.WatchdogMonitConfig{Enabled: true}, 12)
+	if err != nil {
+		t.Fatalf("ResolveMonit: %v", err)
+	}
+	if s.Load1Threshold != 12 {
+		t.Errorf("default load1 threshold = %v, want the injected logical CPU count 12", s.Load1Threshold)
+	}
+	if s.CPUUserThreshold != DefaultMonitCPUUserThreshold || s.CPUSystemThreshold != DefaultMonitCPUSystemThreshold {
+		t.Errorf("default cpu thresholds = %#v", s)
+	}
+	if s.Cycles != DefaultMonitCycles {
+		t.Errorf("default cycles = %d", s.Cycles)
+	}
+	if !s.ScreenSharing {
+		t.Error("screensharing must default to on")
+	}
+}
+
+func TestResolveMonit_KeepsExplicitValues(t *testing.T) {
+	off := false
+	s, err := ResolveMonit(config.WatchdogMonitConfig{
+		Enabled: true, Load1Threshold: 6.5, CPUUserThreshold: 70, CPUSystemThreshold: 30, Cycles: 5, ScreenSharing: &off,
+	}, 12)
+	if err != nil {
+		t.Fatalf("ResolveMonit: %v", err)
+	}
+	if s.Load1Threshold != 6.5 || s.CPUUserThreshold != 70 || s.CPUSystemThreshold != 30 || s.Cycles != 5 {
+		t.Errorf("explicit values lost: %#v", s)
+	}
+	if s.ScreenSharing {
+		t.Error("explicit screensharing: false must survive the true default")
+	}
+}
+
+func TestResolveMonit_Validation(t *testing.T) {
+	if _, err := ResolveMonit(config.WatchdogMonitConfig{CPUUserThreshold: 101}, 8); err == nil {
+		t.Fatal("cpu user threshold above 100% must be rejected")
+	}
+	if _, err := ResolveMonit(config.WatchdogMonitConfig{CPUSystemThreshold: 150}, 8); err == nil {
+		t.Fatal("cpu system threshold above 100% must be rejected")
+	}
+	if _, err := ResolveMonit(config.WatchdogMonitConfig{Cycles: MonitCyclesMax + 1}, 8); err == nil {
+		t.Fatal("cycles above monit's parser limit must be rejected")
+	}
+	if _, err := ResolveMonit(config.WatchdogMonitConfig{}, 0); err == nil {
+		t.Fatal("an unset load threshold with no logical CPU count must fail")
+	}
+}
+
+// Only zero means unset: a negative knob is a config mistake and must fail,
+// not silently resolve to the default.
+func TestResolveMonit_RejectsNegatives(t *testing.T) {
+	for name, cfg := range map[string]config.WatchdogMonitConfig{
+		"load1":      {Load1Threshold: -1},
+		"cpu user":   {CPUUserThreshold: -5},
+		"cpu system": {CPUSystemThreshold: -0.5},
+		"cycles":     {Cycles: -1},
+	} {
+		if _, err := ResolveMonit(cfg, 8); err == nil {
+			t.Errorf("%s: a negative value must be rejected", name)
+		}
+	}
+}
