@@ -1,17 +1,23 @@
-## dot ai memory install
+## dot ai memory update
 
-Install and start the cross-CLI claude-mem integration
+Update claude-mem to the latest marketplace version
+
+### Synopsis
+
+Refresh the thedotmack marketplace checkout, compare the installed
+claude-mem version, and update the Claude Code plugin when behind. The
+codex plugin cache is reinstalled and its bun runtime re-materialized, so
+both CLIs converge on the same version. Idempotent when already current;
+the scheduled peer sync runs this check before every sync.
 
 ```
-dot ai memory install [flags]
+dot ai memory update [flags]
 ```
 
 ### Options
 
 ```
-      --force-agents   Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot/Qwen/pi instruction targets
-  -h, --help           help for install
-      --peer string    ssh target for hourly claude-mem replication (installs the sync LaunchAgent)
+  -h, --help   help for update
 ```
 
 ### Options inherited from parent commands

@@ -80,10 +80,26 @@ tool):
 - `~/.claude-mem` — the cross-CLI transcript watch config and state files
   (`cross-cli-transcript-watch.json`,
   `cross-cli-transcript-watch-state.json`) and the bridge log directory,
-  written by `dot ai memory install`
+  written by `dot ai memory install`; also the claude-mem database itself
+  (`claude-mem.db`: `dot ai memory sync pull` and bidirectional `sync`
+  import peer rows into it locally, and `dot ai memory sync --serve
+  import` does the same when a peer pushes), the peer-sync bookkeeping
+  (`sync-state.json`), and the scheduled sync log
+  (`logs/claude-mem-sync.log`)
 - `~/Library/LaunchAgents/com.dotfiles.claude-mem-bridge.plist` — the
   user LaunchAgent that keeps the claude-mem bridge alive, written and
   bootstrapped by `dot ai memory install` (macOS only)
+- `~/Library/LaunchAgents/com.dotfiles.claude-mem-sync.plist` — the user
+  LaunchAgent that runs `dot ai memory sync --peer <target>` hourly,
+  written and bootstrapped by `dot ai memory install --peer` (macOS only)
+- `~/.claude/plugins/marketplaces/thedotmack` — the claude-mem
+  marketplace checkout, refreshed by `dot ai memory update` (via
+  `claude plugin marketplace update`, or `git pull --ff-only` when the
+  claude CLI is unavailable) and by `dot ai update`; the installed plugin
+  cache under `~/.claude/plugins/cache/` and the codex plugin cache under
+  `~/.codex/plugins/cache/` are updated through their owning CLIs
+  (`claude plugin update`, `codex plugin remove/add`), never edited
+  directly
 - `~/Library/LaunchAgents/com.dotfiles.watchdog.reap.plist` — the user
   LaunchAgent that runs the watchdog reaper on its configured interval,
   written and loaded by `dot watchdog setup` and removed by

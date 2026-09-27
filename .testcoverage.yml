@@ -59,7 +59,7 @@ threshold:
   total: 49
 
 override:
-  - path: ^internal/aisettings$ # measured 63.9678% (1825/2853)
+  - path: ^internal/aisettings$ # measured 67.3594% (2431/3609) on darwin after the claude-mem sync landed; launchd install stays unhit
     threshold: 62
   - path: ^internal/appsettings$ # measured 54.1133% (296/547)
     threshold: 53
@@ -67,7 +67,7 @@ override:
     threshold: 82
   - path: ^internal/clean$ # measured 76.6667% (69/90)
     threshold: 75
-  - path: ^internal/cli$ # measured 41.0866% (2798/6810)
+  - path: ^internal/cli$ # measured 48.0195% (4837/10073) on darwin
     threshold: 40
   - path: ^internal/config$ # measured 70.7516% (433/612)
     threshold: 69

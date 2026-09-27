@@ -27,6 +27,8 @@ bridge only.`,
 	}
 	cmd.AddCommand(newAIMemoryInstallCmd())
 	cmd.AddCommand(newAIMemoryStatusCmd())
+	cmd.AddCommand(newAIMemorySyncCmd())
+	cmd.AddCommand(newAIMemoryUpdateCmd())
 	cmd.AddCommand(newAIMemoryMCPServerCmd())
 	cmd.AddCommand(newAIMemoryBridgeCmd())
 	return cmd
@@ -40,6 +42,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			forceAgents, _ := cmd.Flags().GetBool("force-agents")
+			syncPeer, _ := cmd.Flags().GetString("peer")
 			mgr, err := newClaudeMemManagerFromCmd(cmd)
 			if err != nil {
 				return err
@@ -53,6 +56,9 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				p.Header("Claude-mem Integration")
 				p.Line("would merge MCP config for Kimi, Kiro, Copilot, and Qwen")
 				p.Line("would install %s", mgr.LaunchdPlistPath())
+				if syncPeer != "" {
+					p.Line("would install hourly peer sync agent %s (peer %s)", mgr.SyncLaunchdPlistPath(), syncPeer)
+				}
 				p.KV("Kimi sessions", fmt.Sprintf("%d", config["kimi"]))
 				p.KV("Kiro sessions", fmt.Sprintf("%d", config["kiro"]))
 				p.KV("Copilot sessions", fmt.Sprintf("%d", config["copilot"]))
@@ -89,6 +95,11 @@ func newAIMemoryInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if syncPeer != "" {
+				if err := mgr.InstallSyncAgent(cmd.Context(), syncPeer); err != nil {
+					return fmt.Errorf("installing peer sync agent: %w", err)
+				}
+			}
 			auditAIEventBestEffort(cmd, "ai.memory.install", map[string]any{
 				"bridge_path":          result.BridgePath,
 				"config_paths":         result.ConfigPaths,
@@ -103,6 +114,9 @@ func newAIMemoryInstallCmd() *cobra.Command {
 			p.Header("Claude-mem Integration")
 			p.KV("Plugin", result.PluginRoot)
 			p.KV("Bridge", result.BridgePath)
+			if syncPeer != "" {
+				p.KV("Peer sync", "hourly → "+syncPeer)
+			}
 			p.KV("Kimi sessions", fmt.Sprintf("%d", result.WatchCount["kimi"]))
 			p.KV("Kiro sessions", fmt.Sprintf("%d", result.WatchCount["kiro"]))
 			p.KV("Copilot sessions", fmt.Sprintf("%d", result.WatchCount["copilot"]))
@@ -123,6 +137,7 @@ func newAIMemoryInstallCmd() *cobra.Command {
 		},
 	}
 	c.Flags().Bool("force-agents", false, "Back up and overwrite externally edited Codex/Kimi/Kiro/Copilot/Qwen/pi instruction targets")
+	c.Flags().String("peer", "", "ssh target for hourly claude-mem replication (installs the sync LaunchAgent)")
 	return c
 }
 
@@ -170,6 +185,7 @@ func newAIMemoryStatusCmd() *cobra.Command {
 			p.Section("Shared runtime")
 			printMemoryState(p, "instructions", status.InstructionsEnabled, "agents SSOT recall policy")
 			printMemoryState(p, "bridge", status.BridgeInstalled && status.BridgeRunning, bridgeStatusDetail(status))
+			printMemorySyncStatusSection(p, cmd, mgr)
 			return nil
 		},
 	}
@@ -232,6 +248,50 @@ func newAIMemoryBridgeCmd() *cobra.Command {
 				return err
 			}
 			return mgr.RunBridge(context.Background())
+		},
+	}
+}
+
+func newAIMemoryUpdateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "update",
+		Short: "Update claude-mem to the latest marketplace version",
+		Long: `Refresh the thedotmack marketplace checkout, compare the installed
+claude-mem version, and update the Claude Code plugin when behind. The
+codex plugin cache is reinstalled and its bun runtime re-materialized, so
+both CLIs converge on the same version. Idempotent when already current;
+the scheduled peer sync runs this check before every sync.`,
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			mgr, err := newClaudeMemManagerFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			p := printerFrom(cmd)
+			result, err := mgr.UpdateClaudeMemPlugin(cmd.Context(), memorySyncRunner(dryRun), false)
+			if err != nil {
+				return err
+			}
+			auditAIEventBestEffort(cmd, "ai.memory.update", map[string]any{
+				"before": result.Before, "after": result.After, "updated": result.Updated,
+			})
+			p.Header("claude-mem update")
+			p.KV("Marketplace", result.MarketplaceVersion)
+			if result.Updated {
+				if dryRun {
+					p.Line("  dry-run: would update %s → %s", result.Before, result.MarketplaceVersion)
+				} else {
+					p.Success("✓ updated %s → %s", result.Before, result.After)
+				}
+			} else {
+				p.KV("Installed", result.After+" (current)")
+			}
+			if result.CodexCacheRefresh != "" {
+				p.KV("Codex cache", result.CodexCacheRefresh)
+			}
+			return nil
 		},
 	}
 }
