@@ -37,7 +37,9 @@ func TestRunInteractiveTTYHelper(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("cancellation: %v", err)
 		}
-		fmt.Println("TTY_CANCELED")
+		if _, err := fmt.Fprintln(os.Stdout, "TTY_CANCELED"); err != nil {
+			t.Fatal(err)
+		}
 	} else if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +47,9 @@ func TestRunInteractiveTTYHelper(t *testing.T) {
 	if err != nil || foreground != syscall.Getpgrp() {
 		t.Fatalf("foreground not restored: %d %v", foreground, err)
 	}
-	fmt.Println("TTY_RESTORED")
+	if _, err := fmt.Fprintln(os.Stdout, "TTY_RESTORED"); err != nil {
+		t.Fatal(err)
+	}
 }
 func TestRunInteractiveTTYReadsAndRestoresForeground(t *testing.T) {
 	python, err := exec.LookPath("python3")
