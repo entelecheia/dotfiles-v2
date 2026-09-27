@@ -72,6 +72,7 @@ func seedCLISyncDBSchemaOnly(t *testing.T, home string) *aisettings.SyncDB {
 }
 
 func TestMemorySyncServe_CountMaxExportImport(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // a regression to os.UserHomeDir() must not reach the real worker
 	home := t.TempDir()
 	seedCLISyncDB(t, home)
 

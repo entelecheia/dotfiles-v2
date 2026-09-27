@@ -135,6 +135,7 @@ func TestSSHTransportOverServe(t *testing.T) {
 	seedSession(t, remote, "c1", "m1", "2026-09-20T10:00:00.000Z")
 	seedObs(t, remote, "m1", "2026-09-20T10:01:00.000Z", "x")
 
+	t.Setenv("HOME", t.TempDir()) // a regression to os.UserHomeDir() must not reach the real worker
 	var lastArgs []string
 	home := t.TempDir() // no claude-mem settings: the import kick must stay local
 	transport := &SSHTransport{Run: func(ctx context.Context, target string, serveArgs []string, stdin []byte) ([]byte, error) {
@@ -332,11 +333,20 @@ func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
 	src2 := newTestSyncDB(t)
 	seedSession(t, src2, "c2", "m2", "2026-09-21T10:00:00.000Z")
 	seedObs(t, src2, "m2", "2026-09-21T10:01:00.000Z", "y")
-	bundle2, _ := src2.Export(nil, false)
+	bundle2, err := src2.Export(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req2, _ := json.Marshal(serveRequest{Bundle: bundle2})
 	out.Reset()
 	if err := ServeOp(context.Background(), dst.Path, "", "import", bytes.NewReader(req2), &out); err != nil {
 		t.Fatal(err)
+	}
+	// The kick branch is only reached when rows land; without this the
+	// no-kick assertion below could pass vacuously.
+	var resp2 serveResponse
+	if err := json.Unmarshal(out.Bytes(), &resp2); err != nil || resp2.Result == nil || resp2.Result.Obs != 1 {
+		t.Fatalf("second import must land one observation: %s", out.String())
 	}
 	if *hits != 0 || *trapHits != 0 {
 		t.Fatalf("empty home kicked: given home = %d, process HOME = %d; want 0, 0", *hits, *trapHits)
