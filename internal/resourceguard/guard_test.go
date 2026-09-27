@@ -239,7 +239,7 @@ func TestAdapterWaitEndingDuringGateDefers(t *testing.T) {
 		}
 		return admission.Lease{Owner: "adapter@test", PID: os.Getpid(), PIDStart: "x"}, nil
 	}
-	if _, err := a.acquire(ctx, Options{ProjectDir: t.TempDir()}); !deferred(err) || !strings.Contains(err.Error(), "wait ended") {
+	if _, err := a.acquire(ctx, Options{ProjectDir: t.TempDir()}); !deferred(err) || !strings.Contains(err.Error(), "outlived the wait") {
 		t.Fatalf("mid-gate wait end = %v, want a deferral", err)
 	}
 }

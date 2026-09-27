@@ -142,7 +142,7 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 	if ctx.Err() != nil {
 		// The wait ended during the gate; report it as a deferral, not as a
 		// later identity-probe failure.
-		return nil, &DeferredError{Reason: "wait ended: " + ctx.Err().Error()}
+		return nil, &DeferredError{Reason: "the gate outlived the wait"}
 	}
 	lease, err := a.lease(ctx, a.runner, dir)
 	if err != nil {

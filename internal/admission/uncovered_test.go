@@ -160,15 +160,15 @@ func TestLeasedPIDsSkipsExpiredLeases(t *testing.T) {
 	now := time.Date(2026, 9, 28, 3, 0, 0, 0, time.UTC)
 	store := NewStore(t.TempDir(), nil)
 	store.Now = func() time.Time { return now }
-	for scope, pid := range map[string]int{"repo-old": 11, "repo-new": 22} {
+	seed := func(scope string, pid int) {
 		slot, _, err := store.Acquire(context.Background(), scope, ClassHeavy, Lease{Owner: "t@mac", PID: pid, PIDStart: "x"})
 		if err != nil || slot == nil {
 			t.Fatalf("seeding %s = %v, %v", scope, slot, err)
 		}
-		if scope == "repo-old" {
-			now = now.Add(2 * store.HeartbeatStaleAfter())
-		}
 	}
+	seed("repo-old", 11)
+	now = now.Add(2 * store.HeartbeatStaleAfter())
+	seed("repo-new", 22)
 	if got := LeasedPIDs(store); len(got) != 1 || got[0] != 22 {
 		t.Fatalf("LeasedPIDs = %v, want only the live lease 22", got)
 	}
