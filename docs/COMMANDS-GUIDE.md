@@ -28,6 +28,10 @@ For dev builds (no ldflags), `dot version` falls back to Go's embedded VCS info 
 
 `dot tunnel setup` renders explicit `--config /etc/cloudflared/config.yml tunnel run` arguments, avoiding the macOS service-install form that omits the run command. Cloudflare Access policy creation stays in the dashboard; then run `dot tunnel client add <hostname>` on clients.
 
+## Watchdog operation
+
+`dot watchdog` ships disabled in every profile; a host opts in with `watchdog.enabled: true` and `dot watchdog setup`, which writes a resolved config snapshot to `~/.local/state/dot/watchdog/watchdog.yaml` and loads the user LaunchAgent `com.dotfiles.watchdog.reap`. The scheduled `dot watchdog reap` reads only that snapshot, so profile edits take effect on the next `setup`, not the next pass. "Sustained" CPU is measured across runs via `samples.json`, keyed by PID plus process start time so PID reuse cannot inherit a streak, and a below-threshold sample resets it. `dry-run` mode only logs and notifies; `enforce` sends SIGTERM, waits `kill_grace`, then SIGKILLs. Every candidate and kill lands as a JSON line in `~/Library/Logs/dot/watchdog.log`; `dot watchdog log [N]` tails it. `dot watchdog uninstall` removes the LaunchAgent; deleting state and logs is an interactive-only prompt that `--yes` never auto-confirms.
+
 ## Guard operation and limits
 
 `dot guard` edits only entries marked `# dot-guard`; a semantic rewrite may sort JSON keys but does not alter other values. `enable` and `disable` apply to new Claude Code sessions, while `freeze` and `unfreeze` update live state.

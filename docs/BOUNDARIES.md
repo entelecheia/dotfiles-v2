@@ -84,6 +84,18 @@ tool):
 - `~/Library/LaunchAgents/com.dotfiles.claude-mem-bridge.plist` — the
   user LaunchAgent that keeps the claude-mem bridge alive, written and
   bootstrapped by `dot ai memory install` (macOS only)
+- `~/Library/LaunchAgents/com.dotfiles.watchdog.reap.plist` — the user
+  LaunchAgent that runs the watchdog reaper on its configured interval,
+  written and loaded by `dot watchdog setup` and removed by
+  `dot watchdog uninstall` (macOS only)
+- `~/.local/state/dot/watchdog/` — the watchdog machine state: the resolved
+  config snapshot (`watchdog.yaml`) the scheduled reaper reads and the
+  cross-run CPU history (`samples.json`), written by `dot watchdog setup`
+  and every `dot watchdog reap` pass; removed only by the interactive
+  uninstall prompt
+- `~/Library/Logs/dot/watchdog.log` — the watchdog JSON-lines event log
+  (`dot watchdog log` tails it), plus the reaper unit's launchd
+  stdout/stderr logs beside it
 - `~/.kimi-code/mcp.json` — the `claude-mem` entry under `mcpServers`
   (command and args only), written by `dot ai memory install`; every
   other server entry is preserved

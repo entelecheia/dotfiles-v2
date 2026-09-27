@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dotfiles.watchdog.reap</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/test/.local/bin/dot</string>
+    <string>watchdog</string>
+    <string>reap</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>DOT_WATCHDOG_RUN</key>
+    <string>1</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/test/Library/Logs/dot/reap.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/test/Library/Logs/dot/reap.err.log</string>
+</dict>
+</plist>

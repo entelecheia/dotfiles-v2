@@ -22,6 +22,8 @@ files=(
   "internal/cli/ai_cmd.go"
   "internal/cli/peer_cmd.go"
   "internal/cli/sync_cmd.go"
+  "internal/cli/watchdog_cmd.go"
+  "internal/cli/watchdog_setup.go"
 )
 
 if [[ ${#files[@]} -eq 0 ]]; then
