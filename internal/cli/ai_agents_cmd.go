@@ -20,7 +20,7 @@ func newAIAgentsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "agents",
 		Short: "Manage the shared AI agents instruction SSOT",
-		Long:  "Manage ~/.config/dotfiles/agents/AGENTS.md and copy-render it to Claude, Codex, Cursor, and optional AI coding tool targets.",
+		Long:  "Manage ~/.config/dotfiles/agents/AGENTS.md and copy-render it to Claude, Codex, and optional AI coding tool targets.",
 	}
 	c.AddCommand(newAIAgentsListCmd(false))
 	c.AddCommand(newAIAgentsListCmd(true))

@@ -139,7 +139,6 @@ func Entries(includeAuth bool) []Entry {
 		{Tool: "codex", Path: ".codex/prompts", Description: "Codex prompts"},
 		{Tool: "codex", Path: ".codex/rules", Description: "Codex rules"},
 		{Tool: "agents", Path: AgentsSSOTRelPath, Description: "AI agents SSOT"},
-		{Tool: "cursor", Path: ".cursor/AGENTS.md", Description: "Cursor global instructions"},
 		{Tool: "kiro", Path: ".kiro/steering/AGENTS.md", Description: "Kiro global steering instructions"},
 		{Tool: "kiro", Path: ".kiro/settings/mcp.json", Description: "Kiro CLI MCP servers"},
 		{Tool: "kimi", Path: ".kimi-code/AGENTS.md", Description: "Kimi Code global instructions"},
@@ -1304,6 +1303,12 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 		// Copilot CLI moved its instructions file out of ~/.config.
 		".config/github-copilot/AGENTS.md": ".copilot/copilot-instructions.md",
 	}
+	// Retired inventory entries have no current target: old snapshots still
+	// list them, so they are recognized and skipped rather than rejected as
+	// unknown.
+	retiredSources := map[string]bool{
+		".cursor/AGENTS.md": true,
+	}
 	seenSource := map[string]bool{}
 	seenTarget := map[string]bool{}
 	validated := make([]validatedRestoreEntry, 0, len(manifest.Entries))
@@ -1315,6 +1320,9 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 			return nil, fmt.Errorf("duplicate archive manifest entry %q", summary.Path)
 		}
 		seenSource[summary.Path] = true
+		if retiredSources[summary.Path] {
+			continue
+		}
 		target, ok := known[summary.Path]
 		legacy := false
 		if mapped, isLegacy := legacySources[summary.Path]; isLegacy {

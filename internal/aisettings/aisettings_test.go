@@ -757,6 +757,38 @@ func TestRestoreMigratesLegacyCopilotPath(t *testing.T) {
 	}
 }
 
+// Snapshots written while Cursor was in the agents registry carry a
+// .cursor/AGENTS.md manifest entry — recorded even when the file was absent.
+// The retired entry must not fail the restore; it is skipped, not restored.
+func TestRestoreSkipsRetiredCursorEntry(t *testing.T) {
+	eng, home, _ := testEngine(t)
+	version := "retired-cursor"
+	root := eng.VersionPath(version)
+	mustWrite(t, filepath.Join(root, homePrefix, ".cursor", "AGENTS.md"), []byte("# instructions\n"))
+	mustWrite(t, filepath.Join(root, homePrefix, ".codex", "config.toml"), []byte("model = \"gpt\"\n"))
+	manifest, err := yaml.Marshal(ArchiveManifest{Schema: archiveVersion, Entries: []EntrySummary{
+		{Tool: "cursor", Path: ".cursor/AGENTS.md"},
+		{Tool: "codex", Path: ".codex/config.toml"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, "manifest.yaml"), manifest)
+	if _, err := eng.Restore(RestoreOptions{Version: version}); err != nil {
+		t.Fatalf("restore snapshot with retired cursor entry: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".cursor", "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("retired cursor target should not be restored: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("codex config was not restored: %v", err)
+	}
+	if string(got) != "model = \"gpt\"\n" {
+		t.Fatalf("restored codex config = %q", got)
+	}
+}
+
 // Claude keeps large machine-local state in ~/.claude.json; only the small
 // mcpServers projection is archived, so state size must not block backup.
 func TestBackupAllowsLargeClaudeState(t *testing.T) {

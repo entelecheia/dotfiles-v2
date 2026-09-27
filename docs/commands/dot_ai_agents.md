@@ -4,7 +4,7 @@ Manage the shared AI agents instruction SSOT
 
 ### Synopsis
 
-Manage ~/.config/dotfiles/agents/AGENTS.md and copy-render it to Claude, Codex, Cursor, and optional AI coding tool targets.
+Manage ~/.config/dotfiles/agents/AGENTS.md and copy-render it to Claude, Codex, and optional AI coding tool targets.
 
 ### Options
 
