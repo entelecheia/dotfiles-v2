@@ -6,9 +6,12 @@ import (
 	"os"
 	osexec "os/exec"
 	"os/user"
+	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/ui"
 	"github.com/entelecheia/dotfiles-v2/internal/watchdog"
 )
@@ -18,18 +21,19 @@ import (
 
 // setupMonitStep ensures the monit binary, renders the monitrc, and loads the
 // user LaunchAgent, then installs the root Screen Sharing heal helper when
-// the resolved config heals screensharing. dotPath is the resolved `dot`
-// binary the monitrc's notify execs invoke.
+// the operator consented to it. dotPath is the resolved `dot` binary the
+// monitrc's notify execs invoke.
 func setupMonitStep(p *Printer, mgr *watchdog.Manager, wcfg config.WatchdogConfig, dotPath string, yes bool) error {
 	settings, err := watchdog.ResolveMonit(wcfg.Monit, runtime.NumCPU())
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
-	if !mgr.Runner.CommandExists("monit") {
-		install, err := ui.Confirm("monit is not installed; install it with `brew install monit`?", yes)
-		if err != nil {
-			return err
+	monitPath, err := resolveMonitPath(ctx, mgr.Runner)
+	if err != nil {
+		install, cerr := ui.Confirm("monit is not installed; install it with `brew install monit`?", yes)
+		if cerr != nil {
+			return cerr
 		}
 		if !install {
 			return fmt.Errorf("monit is required by watchdog.monit; install it (`brew install monit`) and rerun `dot watchdog setup`")
@@ -37,10 +41,10 @@ func setupMonitStep(p *Printer, mgr *watchdog.Manager, wcfg config.WatchdogConfi
 		if err := mgr.Runner.RunInteractive(ctx, "brew", "install", "monit"); err != nil {
 			return fmt.Errorf("installing monit: %w", err)
 		}
-	}
-	monitPath, err := osexec.LookPath("monit")
-	if err != nil {
-		return fmt.Errorf("monit still not in PATH after the install step: %w", err)
+		monitPath, err = resolveMonitPath(ctx, mgr.Runner)
+		if err != nil {
+			return fmt.Errorf("monit still not found after the brew install: %w", err)
+		}
 	}
 	ok, err := ui.Confirm("Install the monit LaunchAgent "+watchdog.MonitLabel+" (load/CPU alerts to dot watchdog notify)?", yes)
 	if err != nil {
@@ -50,31 +54,63 @@ func setupMonitStep(p *Printer, mgr *watchdog.Manager, wcfg config.WatchdogConfi
 		p.Line("Skipped monit agent.")
 		return nil
 	}
-	if err := mgr.InstallMonit(ctx, monitPath, watchdog.RenderMonitrc(dotPath, mgr.MonitLogPath(), settings)); err != nil {
+	// The heal consent is decided BEFORE the render: the monitrc's
+	// screensharing check execs the sudo grant this step installs, so a
+	// declined helper must leave a monitrc without the check.
+	heal := false
+	if settings.ScreenSharing {
+		heal, err = ui.Confirm(fmt.Sprintf("Install the Screen Sharing heal helper %s and its passwordless sudo grant (root)?", watchdog.ScreenSharingHealPath), yes)
+		if err != nil {
+			return err
+		}
+		if !heal {
+			settings.ScreenSharing = false
+			p.Line("Screen Sharing heal helper skipped; the monitrc omits the screensharing check.")
+		}
+	}
+	monitrc, err := watchdog.RenderMonitrc(dotPath, mgr.MonitLogPath(), settings)
+	if err != nil {
+		return err
+	}
+	if err := mgr.InstallMonit(ctx, monitPath, monitrc); err != nil {
 		return err
 	}
 	p.Line("  ✓ monit agent installed (load > %g, cpu user > %g%%, system > %g%%, %d cycles)",
 		settings.Load1Threshold, settings.CPUUserThreshold, settings.CPUSystemThreshold, settings.Cycles)
-	if settings.ScreenSharing {
-		if err := setupScreenSharingHealStep(p, mgr, yes); err != nil {
+	if heal {
+		if err := installScreenSharingHeal(p, mgr); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// setupScreenSharingHealStep installs the root-owned heal helper and its
-// passwordless sudoers grant, with the same prime-then-install discipline as
-// the WARP daemon step.
-func setupScreenSharingHealStep(p *Printer, mgr *watchdog.Manager, yes bool) error {
-	ok, err := ui.Confirm(fmt.Sprintf("Install the Screen Sharing heal helper %s and its passwordless sudo grant (root)?", watchdog.ScreenSharingHealPath), yes)
-	if err != nil {
-		return err
+// resolveMonitPath finds the monit binary: PATH first, then the Homebrew
+// prefix locations. The fallback matters in GUI/launchd contexts where
+// /opt/homebrew/bin (or /usr/local/bin on Intel) is not in the process PATH
+// and a fresh `brew install monit` still leaves LookPath empty-handed.
+func resolveMonitPath(ctx context.Context, runner *exec.Runner) (string, error) {
+	if path, err := osexec.LookPath("monit"); err == nil {
+		return path, nil
 	}
-	if !ok {
-		p.Line("Skipped Screen Sharing heal helper.")
-		return nil
+	candidates := []string{"/opt/homebrew/bin/monit", "/usr/local/bin/monit"}
+	if out, err := runner.RunQuery(ctx, "brew", "--prefix"); err == nil {
+		if prefix := strings.TrimSpace(out.Stdout); prefix != "" {
+			candidates = append([]string{filepath.Join(prefix, "bin", "monit")}, candidates...)
+		}
 	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("monit not found in PATH or the Homebrew prefix locations")
+}
+
+// installScreenSharingHeal installs the root-owned heal helper and its
+// passwordless sudoers grant after the operator consented, with the same
+// prime-then-install discipline as the WARP daemon step.
+func installScreenSharingHeal(p *Printer, mgr *watchdog.Manager) error {
 	ctx := context.Background()
 	if err := mgr.Runner.RunInteractive(ctx, "sudo", "-v"); err != nil {
 		return fmt.Errorf("sudo is required for the root helper and sudoers grant: %w", err)
@@ -129,7 +165,11 @@ func monitrcStatus(mgr *watchdog.Manager, wcfg *config.WatchdogConfig) string {
 	if err != nil {
 		return "present (dot not in PATH; drift unknown)"
 	}
-	if string(data) == watchdog.RenderMonitrc(dotPath, mgr.MonitLogPath(), settings) {
+	monitrc, err := watchdog.RenderMonitrc(dotPath, mgr.MonitLogPath(), settings)
+	if err != nil {
+		return "present (render error: " + err.Error() + ")"
+	}
+	if string(data) == monitrc {
 		return "in sync"
 	}
 	return "DRIFTED — rerun `dot watchdog setup`"

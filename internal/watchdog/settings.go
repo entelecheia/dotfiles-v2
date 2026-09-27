@@ -149,19 +149,25 @@ func ResolveMonit(c config.WatchdogMonitConfig, logicalCPU int) (MonitSettings, 
 	if c.ScreenSharing != nil {
 		s.ScreenSharing = *c.ScreenSharing
 	}
-	if s.Load1Threshold <= 0 {
+	// Only zero means unset: a negative knob is a config mistake and must
+	// surface, not silently resolve to the default.
+	if s.Load1Threshold < 0 || s.CPUUserThreshold < 0 || s.CPUSystemThreshold < 0 || s.Cycles < 0 {
+		return MonitSettings{}, fmt.Errorf("monit thresholds and cycles must not be negative, got load1 %.4g / cpu user %.4g / cpu system %.4g / cycles %d",
+			s.Load1Threshold, s.CPUUserThreshold, s.CPUSystemThreshold, s.Cycles)
+	}
+	if s.Load1Threshold == 0 {
 		if logicalCPU < 1 {
 			return MonitSettings{}, fmt.Errorf("monit load1_threshold is unset and the logical CPU count is %d", logicalCPU)
 		}
 		s.Load1Threshold = float64(logicalCPU)
 	}
-	if s.CPUUserThreshold <= 0 {
+	if s.CPUUserThreshold == 0 {
 		s.CPUUserThreshold = DefaultMonitCPUUserThreshold
 	}
-	if s.CPUSystemThreshold <= 0 {
+	if s.CPUSystemThreshold == 0 {
 		s.CPUSystemThreshold = DefaultMonitCPUSystemThreshold
 	}
-	if s.Cycles <= 0 {
+	if s.Cycles == 0 {
 		s.Cycles = DefaultMonitCycles
 	}
 	if s.CPUUserThreshold > 100 || s.CPUSystemThreshold > 100 {

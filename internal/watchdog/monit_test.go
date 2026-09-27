@@ -22,8 +22,17 @@ func monitTestSettings(t *testing.T) MonitSettings {
 	return s
 }
 
+func renderMonitrcOrFail(t *testing.T, dotPath, logPath string, s MonitSettings) string {
+	t.Helper()
+	rc, err := RenderMonitrc(dotPath, logPath, s)
+	if err != nil {
+		t.Fatalf("RenderMonitrc: %v", err)
+	}
+	return rc
+}
+
 func TestRenderMonitrc_Golden(t *testing.T) {
-	got := RenderMonitrc("/Users/test/.local/bin/dot", "/Users/test/Library/Logs/dot/monit.log", monitTestSettings(t))
+	got := renderMonitrcOrFail(t, "/Users/test/.local/bin/dot", "/Users/test/Library/Logs/dot/monit.log", monitTestSettings(t))
 	golden := filepath.Join("testdata", "monitrc.golden")
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
 		if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
@@ -46,14 +55,14 @@ func TestRenderMonitrc_RendersThresholdsAndCycles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveMonit: %v", err)
 	}
-	rc := RenderMonitrc("/usr/local/bin/dot", "/tmp/monit.log", s)
+	rc := renderMonitrcOrFail(t, "/usr/local/bin/dot", "/tmp/monit.log", s)
 	for _, want := range []string{
 		"if loadavg(5min) > 12.5 for 5 cycles then",
 		"if cpu(user) > 80% for 5 cycles then",
 		"if cpu(system) > 40% for 5 cycles then",
 		`if failed port 5900 send "" expect "RFB" for 5 cycles then`,
 		"set daemon 60",
-		"set logfile /tmp/monit.log",
+		`set logfile "/tmp/monit.log"`,
 	} {
 		if !strings.Contains(rc, want) {
 			t.Errorf("monitrc missing %q:\n%s", want, rc)
@@ -61,6 +70,27 @@ func TestRenderMonitrc_RendersThresholdsAndCycles(t *testing.T) {
 	}
 	if strings.Contains(rc, "set httpd") {
 		t.Error("monitrc must keep the web UI off (no set httpd)")
+	}
+}
+
+// monit strings cannot carry a double quote or a newline: paths containing
+// either must be rejected at render time, while spaces survive quoting.
+func TestRenderMonitrc_RejectsUnquotablePaths(t *testing.T) {
+	s := monitTestSettings(t)
+	for _, bad := range []string{`/Users/te"st/dot`, "/Users/te\nst/dot", "/Users/te\rst/dot"} {
+		if _, err := RenderMonitrc(bad, "/tmp/monit.log", s); err == nil {
+			t.Errorf("dot path %q must be rejected", bad)
+		}
+		if _, err := RenderMonitrc("/usr/local/bin/dot", bad, s); err == nil {
+			t.Errorf("log path %q must be rejected", bad)
+		}
+	}
+	rc, err := RenderMonitrc("/Users/te st/.local/bin/dot", "/Users/te st/Library/Logs/dot/monit.log", s)
+	if err != nil {
+		t.Fatalf("paths with spaces must survive quoting: %v", err)
+	}
+	if !strings.Contains(rc, `set logfile "/Users/te st/Library/Logs/dot/monit.log"`) {
+		t.Errorf("spaced log path lost its quotes:\n%s", rc)
 	}
 }
 
@@ -72,7 +102,7 @@ func TestRenderMonitrc_OmitsScreenSharingWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveMonit: %v", err)
 	}
-	rc := RenderMonitrc("/usr/local/bin/dot", "/tmp/monit.log", s)
+	rc := renderMonitrcOrFail(t, "/usr/local/bin/dot", "/tmp/monit.log", s)
 	for _, bad := range []string{"check host screensharing", "5900", "screensharing-heal"} {
 		if strings.Contains(rc, bad) {
 			t.Errorf("disabled screensharing still rendered %q:\n%s", bad, rc)
@@ -84,7 +114,7 @@ func TestRenderMonitrc_OmitsScreenSharingWhenDisabled(t *testing.T) {
 // exec programs through: without the inner quotes the space in
 // "/Library/Application Support" would split the command.
 func TestRenderMonitrc_QuotesTheSpacedHelperPath(t *testing.T) {
-	rc := RenderMonitrc("/usr/local/bin/dot", "/tmp/monit.log", monitTestSettings(t))
+	rc := renderMonitrcOrFail(t, "/usr/local/bin/dot", "/tmp/monit.log", monitTestSettings(t))
 	want := `exec "/usr/bin/sudo -n '/Library/Application Support/dot/screensharing-heal'"`
 	if !strings.Contains(rc, want) {
 		t.Errorf("monitrc missing %q:\n%s", want, rc)
@@ -201,5 +231,81 @@ func TestManager_ProbeMonitOffDarwinIsPlistOnly(t *testing.T) {
 	st := m.ProbeMonit(context.Background())
 	if !st.PlistExists || st.Loaded {
 		t.Fatalf("monit probe = %#v, want {true false}", st)
+	}
+}
+
+// stubSudo shadows sudo with a script that logs every invocation and fails
+// visudo when failVisudo is set, so the heal install's command sequence and
+// failure cleanup are testable without root.
+func stubSudo(t *testing.T, failVisudo bool) string {
+	t.Helper()
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"echo \"$*\" >> \"$DOT_TEST_SUDO_LOG\"\n"
+	if failVisudo {
+		script += "if [ \"$1\" = \"visudo\" ]; then exit 1; fi\n"
+	}
+	script += "exit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	logPath := filepath.Join(t.TempDir(), "sudo.log")
+	t.Setenv("DOT_TEST_SUDO_LOG", logPath)
+	return logPath
+}
+
+func fakeDarwinManager(home string) *Manager {
+	m := NewManager(exec.NewRunner(false, slog.Default()), home)
+	m.GOOS = "darwin"
+	return m
+}
+
+// The fresh-Mac sequence: create the parent dir (BSD install makes no
+// parents), install the helper, validate the sudoers file, install it.
+func TestManager_InstallScreenSharingHeal_CommandSequence(t *testing.T) {
+	logPath := stubSudo(t, false)
+	m := fakeDarwinManager(t.TempDir())
+	if err := m.InstallScreenSharingHeal(context.Background(), "alice"); err != nil {
+		t.Fatalf("InstallScreenSharingHeal: %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read sudo log: %v", err)
+	}
+	log := string(data)
+	sequence := []string{
+		"install -d -m 0755 -o root -g wheel /Library/Application Support/dot",
+		"-o root -g wheel", // the helper install itself (temp source varies)
+		"visudo -c -f",
+		"dot-watchdog-screensharing",
+	}
+	at := 0
+	for _, step := range sequence {
+		idx := strings.Index(log[at:], step)
+		if idx < 0 {
+			t.Fatalf("sudo log missing %q after offset %d:\n%s", step, at, log)
+		}
+		at += idx + len(step)
+	}
+	if !strings.Contains(log, ScreenSharingHealPath) {
+		t.Fatalf("sudo log never installed the helper:\n%s", log)
+	}
+}
+
+// A failed visudo must not leave the un-granted root helper behind.
+func TestManager_InstallScreenSharingHeal_RemovesHelperWhenSudoersFails(t *testing.T) {
+	logPath := stubSudo(t, true)
+	m := fakeDarwinManager(t.TempDir())
+	err := m.InstallScreenSharingHeal(context.Background(), "alice")
+	if err == nil || !strings.Contains(err.Error(), "visudo") {
+		t.Fatalf("a visudo failure must surface, got: %v", err)
+	}
+	data, rerr := os.ReadFile(logPath)
+	if rerr != nil {
+		t.Fatalf("read sudo log: %v", rerr)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(string(data)), "rm -f "+ScreenSharingHealPath) {
+		t.Fatalf("the failed install must end by removing the helper:\n%s", data)
 	}
 }

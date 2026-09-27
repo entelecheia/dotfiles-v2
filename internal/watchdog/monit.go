@@ -46,7 +46,16 @@ func (m *Manager) MonitLogPath() string {
 // check that heals Screen Sharing after cycles consecutive VNC handshake
 // failures. No `set httpd`: the web UI stays off. The daemon cycle is 60s,
 // so the default 3 cycles means ~3 minutes of sustained breach before acting.
-func RenderMonitrc(dotPath, logPath string, s MonitSettings) string {
+// Both paths are validated first: monit strings cannot carry a double quote
+// or a newline, and a home directory with either would silently corrupt the
+// control file. Spaces are fine — every path lands inside double quotes.
+func RenderMonitrc(dotPath, logPath string, s MonitSettings) (string, error) {
+	if err := validMonitPath(dotPath); err != nil {
+		return "", fmt.Errorf("dot path: %w", err)
+	}
+	if err := validMonitPath(logPath); err != nil {
+		return "", fmt.Errorf("log path: %w", err)
+	}
 	load := strconv.FormatFloat(s.Load1Threshold, 'f', -1, 64)
 	cpuUser := strconv.FormatFloat(s.CPUUserThreshold, 'f', -1, 64)
 	cpuSystem := strconv.FormatFloat(s.CPUSystemThreshold, 'f', -1, 64)
@@ -57,7 +66,7 @@ func RenderMonitrc(dotPath, logPath string, s MonitSettings) string {
 	b.WriteString("# dot watchdog monit control file, rendered by `dot watchdog setup`.\n")
 	b.WriteString("# Edit watchdog.monit in the active profile and rerun setup to change it.\n")
 	b.WriteString("set daemon 60\n")
-	fmt.Fprintf(&b, "set logfile %s\n", logPath)
+	fmt.Fprintf(&b, "set logfile \"%s\"\n", logPath)
 	b.WriteString("\ncheck system $HOST\n")
 	fmt.Fprintf(&b, "  if loadavg(5min) > %s for %d cycles then %s\n",
 		load, s.Cycles, notify(fmt.Sprintf("monit: loadavg(5min) above %s for %d cycles", load, s.Cycles)))
@@ -75,7 +84,16 @@ func RenderMonitrc(dotPath, logPath string, s MonitSettings) string {
 			"  if failed port 5900 send \"\" expect \"RFB\" for %d cycles then exec \"/usr/bin/sudo -n '%s'\"\n",
 			s.Cycles, ScreenSharingHealPath)
 	}
-	return b.String()
+	return b.String(), nil
+}
+
+// validMonitPath rejects what monit's string lexer cannot represent inside
+// double quotes: a double quote or a line break.
+func validMonitPath(path string) error {
+	if strings.ContainsAny(path, "\"\n\r") {
+		return fmt.Errorf("path %q contains a double quote or newline, which monit cannot parse", path)
+	}
+	return nil
 }
 
 // RenderScreenSharingHeal renders the root-owned helper: kickstart the
@@ -158,17 +176,27 @@ func (m *Manager) ProbeMonit(ctx context.Context) Status {
 
 // InstallScreenSharingHeal installs the root-owned heal helper and the
 // sudoers drop-in that lets the installing user run exactly it without a
-// password. The sudoers content is validated with `visudo -c -f` before it
-// goes live: a bad drop-in can break sudo for the whole host, so a failed
-// check refuses the install. The caller primes sudo first.
+// password. The parent directory is created with `sudo install -d` first:
+// BSD install does not create parents, and /Library/Application Support/dot
+// does not exist on a fresh Mac. The sudoers content is validated with
+// `visudo -c -f` before it goes live; when the sudoers install fails the
+// helper is removed again best-effort, so an un-granted root helper never
+// stays behind. The caller primes sudo first.
 func (m *Manager) InstallScreenSharingHeal(ctx context.Context, user string) error {
 	if m.goos() != "darwin" {
 		return ErrNeedsDarwin
 	}
+	if _, err := m.Runner.Run(ctx, "sudo", "install", "-d", "-m", "0755", "-o", "root", "-g", "wheel", filepath.Dir(ScreenSharingHealPath)); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(ScreenSharingHealPath), err)
+	}
 	if err := sudoInstallContent(ctx, m.Runner, []byte(RenderScreenSharingHeal()), ScreenSharingHealPath, 0o755); err != nil {
 		return err
 	}
-	return m.sudoInstallSudoers(ctx, []byte(RenderScreenSharingSudoers(user)), ScreenSharingSudoersPath)
+	if err := m.sudoInstallSudoers(ctx, []byte(RenderScreenSharingSudoers(user)), ScreenSharingSudoersPath); err != nil {
+		_, _ = m.Runner.Run(ctx, "sudo", "rm", "-f", ScreenSharingHealPath)
+		return err
+	}
+	return nil
 }
 
 // sudoInstallSudoers stages the drop-in, validates it with visudo, then

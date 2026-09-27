@@ -1,7 +1,7 @@
 # dot watchdog monit control file, rendered by `dot watchdog setup`.
 # Edit watchdog.monit in the active profile and rerun setup to change it.
 set daemon 60
-set logfile /Users/test/Library/Logs/dot/monit.log
+set logfile "/Users/test/Library/Logs/dot/monit.log"
 
 check system $HOST
   if loadavg(5min) > 8 for 3 cycles then exec "/Users/test/.local/bin/dot watchdog notify warn 'monit: loadavg(5min) above 8 for 3 cycles'"

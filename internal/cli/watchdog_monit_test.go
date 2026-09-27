@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,7 +94,11 @@ func TestMonitrcStatus_DriftAndSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveMonit: %v", err)
 	}
-	writeCLITestFile(t, mgr.MonitrcPath(), watchdog.RenderMonitrc(dot, mgr.MonitLogPath(), settings))
+	rendered, err := watchdog.RenderMonitrc(dot, mgr.MonitLogPath(), settings)
+	if err != nil {
+		t.Fatalf("RenderMonitrc: %v", err)
+	}
+	writeCLITestFile(t, mgr.MonitrcPath(), rendered)
 	if got := monitrcStatus(mgr, wcfg); got != "in sync" {
 		t.Fatalf("freshly rendered monitrc = %q, want in sync", got)
 	}
@@ -130,5 +135,55 @@ func TestWatchdogUninstall_DryRunCoversMonit(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "com.dotfiles.monit.plist") || !strings.Contains(out.String(), "monitrc") {
 		t.Fatalf("dry-run uninstall must cover the monit files:\n%s", out.String())
+	}
+}
+
+// The consent-yes flow, end to end on a dry runner with a stub monit on PATH:
+// binary resolution, agent install, and the root helper install all report.
+func TestSetupMonitStep_DryRunEndToEnd(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "monit"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	mgr := watchdog.NewManager(watchdogRunner(true), t.TempDir())
+	mgr.GOOS = "darwin"
+	cmd := watchdogFlagCmd(t, nil)
+	var out strings.Builder
+	cmd.SetOut(&out)
+	wcfg := config.WatchdogConfig{Monit: config.WatchdogMonitConfig{Enabled: true}}
+	if err := setupMonitStep(printerFrom(cmd), mgr, wcfg, "/usr/local/bin/dot", true); err != nil {
+		t.Fatalf("setupMonitStep: %v", err)
+	}
+	for _, want := range []string{"monit agent installed", "heal helper installed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("setup output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// When PATH lacks monit (GUI/launchd context), the resolver must find the
+// binary under the brew prefix instead of erroring.
+func TestResolveMonitPath_BrewPrefixFallback(t *testing.T) {
+	prefix := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "bin", "monit"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	brew := "#!/bin/sh\nif [ \"$1\" = \"--prefix\" ]; then echo \"" + prefix + "\"; fi\n"
+	if err := os.WriteFile(filepath.Join(bin, "brew"), []byte(brew), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// PATH carries the brew stub but deliberately no monit.
+	t.Setenv("PATH", bin)
+	got, err := resolveMonitPath(context.Background(), watchdogRunner(false))
+	if err != nil {
+		t.Fatalf("resolveMonitPath: %v", err)
+	}
+	if got != filepath.Join(prefix, "bin", "monit") {
+		t.Fatalf("resolveMonitPath = %q, want the brew-prefix candidate", got)
 	}
 }

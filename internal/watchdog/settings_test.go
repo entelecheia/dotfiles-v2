@@ -118,3 +118,18 @@ func TestResolveMonit_Validation(t *testing.T) {
 		t.Fatal("an unset load threshold with no logical CPU count must fail")
 	}
 }
+
+// Only zero means unset: a negative knob is a config mistake and must fail,
+// not silently resolve to the default.
+func TestResolveMonit_RejectsNegatives(t *testing.T) {
+	for name, cfg := range map[string]config.WatchdogMonitConfig{
+		"load1":      {Load1Threshold: -1},
+		"cpu user":   {CPUUserThreshold: -5},
+		"cpu system": {CPUSystemThreshold: -0.5},
+		"cycles":     {Cycles: -1},
+	} {
+		if _, err := ResolveMonit(cfg, 8); err == nil {
+			t.Errorf("%s: a negative value must be rejected", name)
+		}
+	}
+}
