@@ -173,6 +173,11 @@ func deferExit(p *Printer, scope, class, owner string, d admission.Decision, asJ
 // releases the claim so the next defer retries. Best-effort: a host
 // without watchdog configuration simply gets no alert.
 func notifyDefer(ctx context.Context, cmd *cobra.Command, store *admission.Store, scope, class string, d admission.Decision) {
+	if d.Next.DeferSince.IsZero() {
+		// Episode-less defers (gate contention, slot waits) are transient and
+		// keyed on "now", so they can never deduplicate; send nothing.
+		return
+	}
 	claimed, claimPath, err := store.ClaimNotify(scope, class, d.Next.DeferSince)
 	if err != nil || !claimed {
 		return

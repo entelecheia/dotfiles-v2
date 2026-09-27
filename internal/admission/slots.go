@@ -479,6 +479,17 @@ func SaveHistory(path string, h History) error {
 	return os.Rename(tmp.Name(), path)
 }
 
+// GateBusyReason marks history-lock contention between concurrent gate
+// evaluations: a transient busy state the caller may retry, not host
+// pressure. A busy decision carries no defer episode.
+const GateBusyReason = "another admission gate evaluation is in progress"
+
+// IsGateBusy reports whether the decision is gate-lock contention rather
+// than a pressure defer.
+func IsGateBusy(d Decision) bool {
+	return !d.Admit && len(d.Reasons) == 1 && d.Reasons[0] == GateBusyReason
+}
+
 // Gate runs one pressure-gate evaluation: snapshot, evaluate against the
 // persisted history, persist the updated history. The load-evaluate-save
 // cycle holds a short mkdir lock so concurrent invocations cannot interleave
@@ -494,7 +505,7 @@ func (s *Store) Gate(ctx context.Context, m *Monitor, th Thresholds) (Decision, 
 	if busy {
 		return Decision{
 			Admit:      false,
-			Reasons:    []string{"another admission gate evaluation is in progress"},
+			Reasons:    []string{GateBusyReason},
 			RetryAfter: 10 * time.Second,
 		}, nil
 	}
