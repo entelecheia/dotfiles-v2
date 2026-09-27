@@ -62,8 +62,9 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		}
 		info, err := e.Info()
 		if os.IsNotExist(err) {
-			// macOS moved the report into Retired/ after the listing; the
-			// caller scans each folder's Retired/ after it, so it is still seen.
+			// The report vanished after the listing. In a top folder macOS
+			// moved it into Retired/, which the caller scans next; in Retired/
+			// it was purged, and no later scan can see it either.
 			continue
 		}
 		if err != nil {
@@ -85,7 +86,7 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		}
 		content, err := readBounded(r.path, wsReadLimit)
 		if os.IsNotExist(err) {
-			continue // moved into Retired/ mid-scan; see above
+			continue // vanished mid-scan; see above
 		}
 		if err != nil {
 			return time.Time{}, false, err

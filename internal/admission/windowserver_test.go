@@ -208,3 +208,16 @@ func TestScanWindowServerDirsUnreadableFolder(t *testing.T) {
 		t.Error("an unreadable folder must leave the scan incomplete")
 	}
 }
+
+// TestScanWindowServerDirsNewestWins: the newest event wins even when an
+// earlier folder holds it; a later folder's older event must not replace it.
+func TestScanWindowServerDirsNewestWins(t *testing.T) {
+	system, retired := t.TempDir(), t.TempDir()
+	fresh := time.Date(2026, 9, 27, 6, 30, 0, 0, time.UTC)
+	writeIPS(t, system, "WindowServer_2026-09-27_Mac.userspace_watchdog_timeout.spin", "x", fresh)
+	writeIPS(t, retired, "WindowServer-2026-09-27-134223.ips", watchdogIPS, time.Date(2026, 9, 27, 5, 42, 23, 0, time.UTC))
+	got, ok, err := ScanWindowServerDirs([]string{system, retired}, wsScanNewest)
+	if err != nil || !ok || !got.Equal(fresh) {
+		t.Fatalf("event = %v, %v, %v; want the newer top-folder report %v", got, ok, err, fresh)
+	}
+}
