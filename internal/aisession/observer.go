@@ -68,7 +68,12 @@ func (o *observer) event(line []byte) {
 		Item              *struct {
 			Type   string `json:"type"`
 			Status string `json:"status"`
-			Error  *struct {
+			Server string `json:"server"`
+			Tool   string `json:"tool"`
+			Result *struct {
+				Content []json.RawMessage `json:"content"`
+			} `json:"result"`
+			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
 		} `json:"item"`
@@ -97,7 +102,11 @@ func (o *observer) event(line []byte) {
 				return
 			}
 		case "mcp_tool_call":
-			if event.Item.Status == "failed" || event.Item.Error != nil {
+			// A returned application error from a known lookup (for example, a
+			// missing note) is not a native approval/transport error. Writes remain
+			// ambiguous even if the server returned an application error envelope.
+			returnedLookupError := event.Item.Error == nil && event.Item.Result != nil && event.Item.Result.Content != nil && readOnlyKnowledgeTool(event.Item.Server, event.Item.Tool)
+			if event.Item.Error != nil || (event.Item.Status == "failed" && !returnedLookupError) {
 				o.err = errors.New("native MCP call failed; approval or external effect may be ambiguous; no automatic routing")
 				return
 			}
@@ -132,4 +141,22 @@ func (o *observer) event(line []byte) {
 	if o.agent == "codex" && event.Type == "turn.completed" {
 		o.completed = true
 	}
+}
+
+// This intentionally excludes record/edit tools and unknown server aliases.
+// Tool-result text never establishes permission authority.
+func readOnlyKnowledgeTool(server, tool string) bool {
+	switch server {
+	case "obsidian":
+		switch tool {
+		case "read_note", "read_multiple_notes", "search_notes", "list_directory", "get_notes_info", "get_frontmatter", "get_vault_stats", "list_all_tags":
+			return true
+		}
+	case "mcp-search", "plugin_claude-mem_mcp-search":
+		switch tool {
+		case "search", "timeline", "get_observations", "get_tool_uses", "session_start_context", "smart_search", "smart_outline", "smart_unfold", "list_corpora", "query_corpus", "observation_search", "observation_context", "observation_generation_status":
+			return true
+		}
+	}
+	return false
 }
