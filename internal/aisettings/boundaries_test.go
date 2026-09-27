@@ -48,6 +48,7 @@ type pathBoundaryEntry struct {
 // resolvers, not a cleverer matcher.
 var pathBoundaryTable = []pathBoundaryEntry{
 	{"AIEventsPath", classHomeWrite},
+	{"InstructionPath", classHomeWrite},
 	{"AgentsManager.SSOTDirPath", classCallerRooted},
 	{"AgentsManager.SSOTPath", classCallerRooted},
 	{"AgentsManager.StatePath", classHomeWrite},
@@ -120,6 +121,8 @@ var allowedBoundaryRoots = []string{
 	// one is what makes a newly registered tool a documented grant rather
 	// than a silent one (see TestAgentTargetsResolveUnderAllowedRoots).
 	"~/.codex/AGENTS.md",
+	"~/.grok/AGENTS.md",
+	"~/.config/opencode/AGENTS.md",
 	"~/.cursor/AGENTS.md",
 	"~/.kiro/steering/AGENTS.md",
 	"~/.kimi-code/AGENTS.md",
@@ -286,6 +289,8 @@ func TestPathsResolveUnderAllowedRoots(t *testing.T) {
 func resolveHomeWrite(t *testing.T, name, home string) string {
 	t.Helper()
 	switch name {
+	case "InstructionPath":
+		return InstructionPath(home, "codex", true, filepath.Join(home, ".codex", "AGENTS.md"))
 	case "AIEventsPath":
 		return AIEventsPath(home)
 	case "AgentsManager.TargetPath":

@@ -26,6 +26,10 @@ With --include-auth, the snapshot carries each tool's credential file
 .gemini/oauth_creds.json). pi sessions, extensions, and skills stay out:
 they are machine state pi rebuilds itself.`,
 	}
+	cmd.AddCommand(newAIHandoffCmd())
+	cmd.AddCommand(newAISetupCmd())
+	cmd.AddCommand(newAIToolsCmd())
+	cmd.AddCommand(newAIRunCmd())
 	cmd.AddCommand(newAIListCmd())
 	cmd.AddCommand(newAIStatusCmd())
 	cmd.AddCommand(newAIBackupCmd())
@@ -64,14 +68,7 @@ var extraDetectedCLIs = []string{"agy", "gh", "fabric"}
 // rename in updateToolBinary cannot leave this list silently reporting
 // "(not found)".
 func detectedCLINames() []string {
-	names := make([]string, 0, len(updateTools)+len(extraDetectedCLIs))
-	for _, tool := range updateTools {
-		if tool == "skills" {
-			continue // maru-delegated, not a CLI of its own
-		}
-		names = append(names, toolBinary(tool))
-	}
-	return append(names, extraDetectedCLIs...)
+	return append([]string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "copilot", "gemini", "pi", "kiro-cli", "cursor-agent"}, extraDetectedCLIs...)
 }
 
 func runAIList(cmd *cobra.Command, _ []string) error {

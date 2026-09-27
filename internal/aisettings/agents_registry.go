@@ -16,6 +16,8 @@ func RegisteredAgentTools() []AgentTool {
 	// Keep this registry to instruction/settings targets only. Skill target
 	// symlinks are handled by SkillsManager when modules.ai.skills is enabled.
 	return []AgentTool{
+		{ID: "grok", DisplayName: "Grok", TargetPath: "~/.grok/AGENTS.md", OverlayFile: "grok.md", Optional: true},
+		{ID: "opencode", DisplayName: "OpenCode", TargetPath: "~/.config/opencode/AGENTS.md", OverlayFile: "opencode.md", Optional: true},
 		{
 			ID:          "claude",
 			DisplayName: "Claude Code",

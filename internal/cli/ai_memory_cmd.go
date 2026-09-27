@@ -37,7 +37,7 @@ bridge only.`,
 func newAIMemoryInstallCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "install",
-		Short: "Install and start the cross-CLI claude-mem integration",
+		Short: "Prepare selected memory adapters or install the legacy integration",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -48,6 +48,26 @@ func newAIMemoryInstallCmd() *cobra.Command {
 				return err
 			}
 			p := printerFrom(cmd)
+			if mgr.SelectedAgents != nil {
+				if syncPeer != "" {
+					return fmt.Errorf("peer bridge registration is not part of selected-agent preparation")
+				}
+				if dryRun {
+					counts, e := mgr.BuildTranscriptConfigForDisplay()
+					if e != nil {
+						return e
+					}
+					p.Line("would prepare selected memory adapters and bridge watches only: %v (%v)", mgr.SelectedAgents, counts)
+					return nil
+				}
+				result, e := mgr.PrepareSelectedIntegration()
+				if e != nil {
+					return e
+				}
+				p.Line("Prepared selected memory adapters: %v; transcript watches: %v", result.ConfigPaths, result.WatchCount)
+				p.Line("Capture remains unverified; no memory worker was started or restarted. Native Claude/Codex hooks remain plugin-owned; Grok/OpenCode capture is unsupported.")
+				return nil
+			}
 			if dryRun {
 				config, err := mgr.BuildTranscriptConfigForDisplay()
 				if err != nil {
@@ -307,6 +327,30 @@ func newClaudeMemManagerFromCmd(cmd *cobra.Command) (*aisettings.ClaudeMemManage
 		return nil, err
 	}
 	mgr := aisettings.NewClaudeMemManager(home, dotPath, "")
+	selection := func() ([]string, error) {
+		state, e := loadStateForCmd(cmd)
+		if e != nil {
+			return nil, e
+		}
+		if state.Modules.AI.Tooling == nil {
+			return nil, nil
+		}
+		agents := make([]string, len(state.Modules.AI.Tooling.Agents))
+		copy(agents, state.Modules.AI.Tooling.Agents)
+		return agents, nil
+	}
+	mgr.SelectedAgents, err = selection()
+	if err != nil {
+		return nil, err
+	}
+	mgr.AgentSelection = selection
+	override, _ := cmd.Flags().GetString("home")
+	mgr.ExplicitHome = override != ""
+	if override == "" {
+		if adopted := os.Getenv("KIMI_CODE_HOME"); filepath.IsAbs(adopted) {
+			mgr.KimiHome = adopted
+		}
+	}
 	if nodePath, lookupErr := exec.LookPath("node"); lookupErr == nil {
 		if nodePath, absErr := filepath.Abs(nodePath); absErr == nil {
 			mgr.NodePath = nodePath

@@ -56,8 +56,18 @@ func newAgentsManagerFromCmd(cmd *cobra.Command) *aisettings.AgentsManager {
 		home = over
 	}
 	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelWarn}))
-	mgr := aisettings.NewAgentsManager(execrun.NewRunner(dryRun, logger), home)
+	over, _ := cmd.Flags().GetString("home")
+	mgr := aisettings.NewAgentsManager(execrun.NewRunner(dryRun, logger), home, over != "")
 	mgr.Out = cmd.OutOrStdout()
+	if selection, err := effectiveToolingForCmd(cmd); err != nil {
+		mgr.SelectionError = err
+	} else if selection != nil {
+		mgr.SelectionError = nil
+		mgr.SelectedTools = append([]string{}, selection.Agents...)
+	} else if path, _ := cmd.Flags().GetString("config"); path != "" {
+		mgr.SelectionError = nil
+		mgr.SelectedTools = []string{}
+	}
 	return mgr
 }
 
@@ -78,7 +88,8 @@ func newCoauthorGuardManagerFromCmd(cmd *cobra.Command) *aisettings.CoauthorGuar
 		home = over
 	}
 	logger := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelWarn}))
-	return aisettings.NewCoauthorGuardManager(execrun.NewRunner(dryRun, logger), home)
+	over, _ := cmd.Flags().GetString("home")
+	return aisettings.NewCoauthorGuardManager(execrun.NewRunner(dryRun, logger), home, over != "")
 }
 
 func loadStateForCmd(cmd *cobra.Command) (*config.UserState, error) {
@@ -93,4 +104,38 @@ func saveStateForCmd(cmd *cobra.Command, state *config.UserState) error {
 		return config.SaveStateForHome(homeOverride, state)
 	}
 	return config.SaveState(state)
+}
+
+// effectiveToolingForCmd gives an explicitly supplied config authority over saved
+// selections, including an absent/empty tooling block (no broad fallback).
+func effectiveToolingForCmd(cmd *cobra.Command) (*config.AIToolingConfig, error) {
+	path, _ := cmd.Flags().GetString("config")
+	if path != "" {
+		cfg, err := config.Load("", path, nil)
+		if err != nil {
+			return nil, err
+		}
+		return cfg.Modules.AI.Tooling.Clone(), nil
+	}
+	state, err := loadStateForCmd(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return state.Modules.AI.Tooling.Clone(), nil
+}
+
+// Explicit config owns both selection presence and AI enablement. Empty tooling
+// blocks stop legacy fanout without enabling an omitted/disabled AI module.
+func applyStateWithToolingAuthority(cfg *config.Config, state *config.UserState, explicit bool) {
+	selected := cfg.Modules.AI.Tooling.Clone()
+	enabled := cfg.Modules.AI.Enabled
+	hasSelection := selected != nil
+	config.ApplyStateToConfig(cfg, state)
+	if explicit {
+		if selected == nil {
+			selected = &config.AIToolingConfig{Agents: []string{}}
+		}
+		cfg.Modules.AI.Tooling = selected
+		cfg.Modules.AI.Enabled = enabled || hasSelection
+	}
 }

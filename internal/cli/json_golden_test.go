@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/entelecheia/dotfiles-v2/internal/aischedule"
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -89,11 +91,18 @@ func (tc goldenCase) goldenPath() string {
 // table-driven convention (internal/config/detector_test.go:26).
 func goldenCases() []goldenCase {
 	return []goldenCase{
+		{surface: "ai handoff show", args: []string{"ai", "handoff", "show", "--json"}, fixture: goldenAIHandoffFixture},
+		{surface: "ai tools list", args: []string{"ai", "tools", "list", "--json"}, fixture: goldenAIFixture},
+		{surface: "ai tools apply", args: []string{"ai", "tools", "apply", "--json", "--dry-run"}, fixture: goldenAIEmptySelectionFixture},
+		{surface: "ai tools status", args: []string{"ai", "tools", "status", "--json"}, fixture: goldenAIEmptySelectionFixture},
+		{surface: "ai update schedule enable", args: []string{"ai", "update", "schedule", "enable", "--json", "--dry-run"}, fixture: goldenAIScheduleFixture},
+		{surface: "ai update schedule disable", args: []string{"ai", "update", "schedule", "disable", "--json", "--dry-run"}, fixture: goldenAIScheduleFixture},
+		{surface: "ai update schedule status", args: []string{"ai", "update", "schedule", "status", "--json", "--dry-run"}, fixture: goldenAIScheduleFixture},
 		{surface: "ai auth status", args: []string{"ai", "auth", "status", "--json"}, fixture: goldenAIFixture},
 		{surface: "ai skills list", args: []string{"ai", "skills", "list", "--json"}, fixture: goldenAIFixture},
 		{surface: "ai skills status", args: []string{"ai", "skills", "status", "--json"}, fixture: goldenAIFixture},
 		{surface: "ai skills validate", args: []string{"ai", "skills", "validate", "--json"}, fixture: goldenAIFixture},
-		{surface: "ai update", args: []string{"ai", "update", "--json", "--dry-run"}, fixture: goldenAIFixture},
+		{surface: "ai update", args: []string{"ai", "update", "--json", "--dry-run", "--tool", "ponytail"}, fixture: goldenAIUpdateFixture},
 		{surface: "peer home-paths get", args: []string{"peer", "home-paths", "get", "--json"}, fixture: goldenSyncFixture},
 		{surface: "peer home-paths set", args: []string{"peer", "home-paths", "set", "--json"}, stdin: "peer-host-a\npeer-host-b\n", fixture: goldenSyncFixture},
 		{surface: "peer home-paths tracked get", args: []string{"peer", "home-paths", "tracked", "get", "--json"}, fixture: goldenSyncFixture},
@@ -144,6 +153,19 @@ func goldenAIFixture(t *testing.T) (home, root string) {
 	writeCLITestFile(t, filepath.Join(f.home, ".claude", "skills", "golden-skill", "SKILL.md"), skill)
 	writeCLITestFile(t, filepath.Join(f.home, ".maru", "skills", "golden-skill", "SKILL.md"), skill)
 	return f.home, f.root
+}
+
+func goldenAIUpdateFixture(t *testing.T) (home, root string) {
+	home, root = goldenAIFixture(t)
+	state, err := config.LoadStateForHome(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Modules.AI.Tooling = &config.AIToolingConfig{Agents: []string{"grok"}, Tools: []string{"ponytail"}}
+	if err = config.SaveStateForHome(home, state); err != nil {
+		t.Fatal(err)
+	}
+	return home, root
 }
 
 // sandboxGoldenPATH empties PATH so every CommandExists probe answers the same
@@ -396,4 +418,61 @@ func didFatal(fn func(*testing.T)) bool {
 	<-done
 	inner = t2
 	return inner.Failed()
+}
+
+func goldenAIEmptySelectionFixture(t *testing.T) (home, root string) {
+	home, root = goldenAIFixture(t)
+	state, err := config.LoadStateForHome(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Modules.AI.Tooling = &config.AIToolingConfig{Agents: []string{}}
+	if err := config.SaveStateForHome(home, state); err != nil {
+		t.Fatal(err)
+	}
+	return home, root
+}
+func goldenAIPinnedSelectionFixture(t *testing.T) (home, root string) {
+	home, root = goldenAIEmptySelectionFixture(t)
+	state, err := config.LoadStateForHome(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Modules.AI.Tooling = &config.AIToolingConfig{Agents: []string{"grok"}, Pins: map[string]string{"grok": "1.0.0"}}
+	if err := config.SaveStateForHome(home, state); err != nil {
+		t.Fatal(err)
+	}
+	return home, root
+}
+func goldenAIScheduleFixture(t *testing.T) (home, root string) {
+	home, root = goldenAIPinnedSelectionFixture(t)
+	original := newAIScheduleManager
+	t.Cleanup(func() { newAIScheduleManager = original })
+	newAIScheduleManager = func(home string, dry bool) *aischedule.Manager {
+		manager := aischedule.New(home, dry)
+		manager.GOOS = "darwin"
+		manager.CurrentHome = home
+		manager.Executable = "/usr/local/bin/dot"
+		manager.Environment = map[string]string{"HOME": home, "PATH": "/usr/bin:/bin"}
+		return manager
+	}
+	return home, root
+}
+func goldenAIHandoffFixture(t *testing.T) (home, root string) {
+	home, root = goldenAIFixture(t)
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = canonical
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+	script := "#!/bin/sh\ncase \"$*\" in\n*--show-toplevel*) printf '%s\\n' " + quote(root) + ";;\n*--git-common-dir*) printf '%s\\n' " + quote(filepath.Join(root, ".git")) + ";;\n*) printf '%s\\n' 0123456789012345678901234567890123456789;;\nesac\n"
+	bin := filepath.Join(os.Getenv("PATH"), "git")
+	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return home, root
 }

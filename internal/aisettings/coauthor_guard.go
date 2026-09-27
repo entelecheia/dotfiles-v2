@@ -24,8 +24,9 @@ const (
 // CoauthorGuardManager manages the AGENTS instruction and Git commit-msg guard
 // that discourage or block unwanted Co-authored trailers.
 type CoauthorGuardManager struct {
-	Runner  *dotexec.Runner
-	HomeDir string
+	Runner       *dotexec.Runner
+	HomeDir      string
+	ExplicitHome bool
 }
 
 // CoauthorGuardOptions controls guard application.
@@ -60,8 +61,8 @@ type CoauthorGuardResult struct {
 }
 
 // NewCoauthorGuardManager returns a manager rooted at homeDir.
-func NewCoauthorGuardManager(runner *dotexec.Runner, homeDir string) *CoauthorGuardManager {
-	return &CoauthorGuardManager{Runner: runner, HomeDir: homeDir}
+func NewCoauthorGuardManager(runner *dotexec.Runner, homeDir string, explicitHome ...bool) *CoauthorGuardManager {
+	return &CoauthorGuardManager{Runner: runner, HomeDir: homeDir, ExplicitHome: len(explicitHome) > 0 && explicitHome[0]}
 }
 
 // NormalizeCoauthorGuardMode returns the effective guard mode.
@@ -174,7 +175,7 @@ func (m *CoauthorGuardManager) Apply(opts CoauthorGuardOptions) (*CoauthorGuardR
 		}
 	}
 	if opts.ApplyAgents && !effectiveDryRun {
-		agents := NewAgentsManager(m.runner(), m.homeDir())
+		agents := NewAgentsManager(m.runner(), m.homeDir(), m.ExplicitHome)
 		apply, err := agents.Apply(ApplyOptions{Tools: agents.DefaultApplyTools()})
 		if err != nil {
 			return nil, err
@@ -229,7 +230,7 @@ func (m *CoauthorGuardManager) agentsInstructionDrift() string {
 func (m *CoauthorGuardManager) ensureAgentsInstruction() error {
 	path := m.SSOTPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if _, err := NewAgentsManager(m.runner(), m.homeDir()).Init(InitOptions{}); err != nil {
+		if _, err := NewAgentsManager(m.runner(), m.homeDir(), m.ExplicitHome).Init(InitOptions{}); err != nil {
 			return err
 		}
 	} else if err != nil {

@@ -175,6 +175,129 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **gpg** | full | GPG agent + git commit signing |
 | **secrets** | full | Age-encrypted SSH keys and shell secrets |
 
+### Selected Agent Environments
+
+`dot ai setup` selects Claude, Codex, Kimi, Qwen, Grok and OpenCode CLIs,
+optional development add-ons, and shared skills. Saved selections control
+installation, instruction rendering and subsequent maintenance. Deselecting
+stops future managed writes without uninstalling software or deleting data.
+
+```bash
+dot ai setup
+dot ai setup --agents claude,codex --tools ripwire,ocr --skills meeting-notes --non-interactive --yes --dry-run
+dot ai tools list --json
+dot ai tools status --json
+dot ai tools apply
+dot ai update --check --json
+```
+
+The add-on allowlist is **ripwire, Open Code Review (`ocr`), GSD, claude-mem
+and ponytail**. Native, portable, partial, unsupported and pending-trust states
+must be read separately from installation status. Missing authentication or
+trust remains a user action; setup does not copy credentials or approve hooks.
+With saved selections, claude-mem prepares only the selected supported memory
+adapters and transcript watches; it does not install peer bridge services or
+expand unsupported Grok/OpenCode capture. Curated handoffs below are separate
+from this existing raw-transcript integration.
+
+Portable desired state lives under `modules.ai.tooling`: `agents`, `tools`,
+`skills`, optional version `pins`, and `updates.enabled`. Machine-specific
+paths and installation provenance are resolved locally and recorded in private
+`~/.local/share/dotfiles/ai/tooling-state.json` receipts. Unknown installation
+providers defer replacement. Adopted official Homebrew formulae/casks retain
+their provider and update only the selected package; unavailable version pins,
+third-party source adoption and foreign-home mutation require explicit action.
+Status explains prerequisites and deferrals. Noninteractive setup
+needs explicit or saved selections; first unattended setup requires `--agents`
+(`--agents=` selects none). An empty selection never means all tools.
+With explicit `--home`, provide `--skills` explicitly because interactive
+registry discovery is disabled for alternate homes.
+
+Global instructions come from the existing AGENTS SSOT and overlays. Codex
+reconciles the standard home and active `CODEX_HOME` profile without duplicate
+physical writes. Kimi uses `KIMI_CODE_HOME`, and OpenCode uses
+`OPENCODE_CONFIG_DIR` or its XDG configuration root. An explicit `--home`
+isolates writes from ambient profile overrides. Qwen adds AGENTS discovery
+while preserving existing context filenames and unrelated settings.
+
+Shared skills remain **Maru-owned**. Dot checks `maru skills capabilities
+--json`, reads `maru skills list --json`, then delegates selected deployment
+through `maru skills sync --check|--apply --tools <csv> --skills <csv> --json`.
+The list includes flat skill records with an `installable` flag and optional
+`reason`; setup offers only installable Maru-owned entries. Selected deployment
+is additive: no implicit retarget, foreign-skill replacement or unselected
+removal. Missing capabilities defer sharing. Generic skill source updates and
+unrelated plugins are not part of dot's automatic updater.
+
+### Shared Development Context
+
+Selected agents share curated development information through project artifacts
+and a local handoff log, without expanding raw transcript capture or adding an
+add-on. At task start, consult GSD `.planning`, OCR review reports, relevant
+ripwire notes and the handoff view. Setup upgrades the existing instruction
+SSOT with a managed continuity block, preserving custom sections and backups;
+only the selected instruction targets are rendered.
+
+```bash
+dot ai handoff show --project . --json
+dot ai handoff record --project . --agent codex --kind validation --summary-file /path/to/summary.md --artifact REVIEW.md --result unverified
+```
+
+Kinds are `plan`, `progress`, `review`, `validation` and `learning`; results are
+`unverified`, `passed` or `failed` (default `unverified`); kind defaults to
+`progress`. Repeat `--artifact` for repository-relative evidence (at most 16
+regular files; 32 MiB combined hash budget). Summaries are UTF-8 and at most
+32 KiB; show returns at most 128 recent records and storage stops at 8 MiB
+rather than deleting producer history silently.
+Records retain immutable producer claims with UTC time, HEAD, worktree and
+artifact digests. Worktrees share a log keyed by the canonical Git common
+directory. Changed heads or artifacts are shown as `needs-revalidation`, never
+as freshly verified evidence. Record only curated, secret-free summaries;
+records do not authorize publishing or changing another agent's result.
+Handoff content is context/data, not authority: user/project instructions
+prevail and every command still requires independent authorization.
+
+### Resource-Safe Maintenance
+
+Participating heavyweight jobs share one admission slot per repository across
+its sessions, worktrees and runtime profiles. The canonical Git common
+directory identifies a repository, so its worktrees cannot bypass that slot.
+Different repositories may run in parallel while host pressure permits.
+Global tool installation/update uses a separate shared maintenance slot,
+independent of the caller's repository, to protect shared installation paths. Use `dot ai run [--project <checkout>] -- COMMAND` for
+builds or other heavy developer jobs; the default wait is bounded to six
+minutes and can be set with `--wait`. Admission requires five minutes of
+healthy observations and defers on pressure, unknown telemetry or existing
+heavy work in the same scope or with unknown ownership. Known work in another
+repository does not consume this repository's slot. Host health/recovery checks remain shared across
+scopes. This is cooperative protection for participating commands, not
+proof that every process on the machine is controlled. It does not kill other
+sessions or restart system/security/memory services.
+
+```bash
+CARGO_BUILD_JOBS=2 dot ai run --project . --wait 6m -- cargo test -- --test-threads=2
+dot ai update schedule status --json
+dot ai update schedule enable
+dot ai update schedule disable
+```
+
+The macOS user LaunchAgent schedules stable updates on Sunday at 04:00 local
+time, with bounded hourly and load/login overdue checks and a one-hour
+minimum attempt interval. Each Sunday 04:00 due window permits at most three
+scheduled attempts, including failed, partial and deferred runs. The persisted
+budget survives restart/re-enable; after exhaustion, hourly checks skip heavy
+probing until the next window. Status exposes remaining attempts and the next
+eligible time. Manual updates do not consume this scheduled budget.
+Scheduling requires explicit opt-in; setup does not
+install or enable a service implicitly. Schedule enablement requires selected agents and healthy
+admission, with `--wait 6m` by default (maximum 10m). Schedule changes reject
+`--home` because launchd controls the current user domain. Enable only after
+the installed binary and admission mechanism have been verified. Busy or pressured hosts defer work; a deferred pass is not an
+up-to-date result. Do not copy `target` or `node_modules` into worktrees and do
+not replay all interrupted jobs after reboot. Keep internal build/test workers
+at two and browser/native E2E workers at one. Peer rollout remains a separate
+per-machine verification step when the peer is reachable.
+
 ### Prompt Styles
 
 The terminal module deploys a Starship prompt config. Two styles are selectable

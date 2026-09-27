@@ -163,6 +163,8 @@ func Entries(includeAuth bool) []Entry {
 		// never restores; settings.json holds the dot-managed claude-mem MCP
 		// entry alongside Qwen's own model/auth settings.
 		{Tool: "qwen", Path: ".qwen/AGENTS.md", Description: "Qwen Code global instructions"},
+		{Tool: "grok", Path: ".grok/AGENTS.md", Description: "Grok global instructions"},
+		{Tool: "opencode", Path: ".config/opencode/AGENTS.md", Description: "OpenCode global instructions"},
 		{Tool: "qwen", Path: ".qwen/settings.json", Description: "Qwen Code settings and MCP servers"},
 		{Tool: "antigravity", Path: ".gemini/GEMINI.md", Description: "Antigravity/Gemini global instructions"},
 		{Tool: "antigravity", Path: ".gemini/config/mcp_config.json", Description: "Antigravity shared MCP config"},

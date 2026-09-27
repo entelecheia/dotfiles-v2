@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -193,5 +196,17 @@ func Execute(version, commit string) error {
 		return err
 	}
 
-	return cmd.Execute()
+	return executeWithSignals(cmd)
+}
+
+// executeWithSignals lets owned child process groups finish cancellation and
+// cleanup before main exits and releases the host-wide admission lock.
+func executeWithSignals(cmd *cobra.Command) error {
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return cmd.ExecuteContext(ctx)
 }

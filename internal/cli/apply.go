@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,7 +28,7 @@ func newApplyCmd() *cobra.Command {
 }
 
 func runApply(cmd *cobra.Command, _ []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	yes, _ := cmd.Flags().GetBool("yes")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -135,7 +134,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Apply user state to config
-	config.ApplyStateToConfig(cfg, state)
+	applyStateWithToolingAuthority(cfg, state, configPath != "")
 
 	// Apply env overrides
 	config.ApplyEnvOverrides(cfg)
@@ -193,14 +192,15 @@ func runApply(cmd *cobra.Command, _ []string) error {
 
 	// Execute modules
 	rc := &module.RunContext{
-		Config:   cfg,
-		Runner:   runner,
-		Brew:     brew,
-		Template: tmplEngine,
-		DryRun:   dryRun,
-		Yes:      yes,
-		HomeDir:  home,
-		Out:      p.Out,
+		ExplicitHome: homeOverride != "",
+		Config:       cfg,
+		Runner:       runner,
+		Brew:         brew,
+		Template:     tmplEngine,
+		DryRun:       dryRun,
+		Yes:          yes,
+		HomeDir:      home,
+		Out:          p.Out,
 	}
 
 	p.Line("")

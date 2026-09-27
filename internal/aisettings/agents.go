@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
+
 	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
 	dottemplate "github.com/entelecheia/dotfiles-v2/internal/template"
 )
@@ -42,10 +44,14 @@ var defaultAgentSections = []string{
 // AgentsManager manages the shared AI agents instruction SSOT and deployed
 // per-tool copies.
 type AgentsManager struct {
-	Runner  *dotexec.Runner
-	HomeDir string
-	SSOTDir string
-	Tools   []AgentTool
+	Runner         *dotexec.Runner
+	HomeDir        string
+	SSOTDir        string
+	Tools          []AgentTool
+	SelectedTools  []string
+	SelectionError error
+	ExplicitHome   bool
+	profilePass    bool
 	// Out receives progress and prompt output; nil means os.Stdout.
 	Out io.Writer
 }
@@ -183,12 +189,27 @@ type agentApplyPlan struct {
 }
 
 // NewAgentsManager returns an agents manager rooted at homeDir.
-func NewAgentsManager(runner *dotexec.Runner, homeDir string) *AgentsManager {
-	return &AgentsManager{
+func NewAgentsManager(runner *dotexec.Runner, homeDir string, explicitHome ...bool) *AgentsManager {
+	m := &AgentsManager{
 		Runner:  runner,
 		HomeDir: homeDir,
 		Tools:   RegisteredAgentTools(),
 	}
+	m.ExplicitHome = len(explicitHome) > 0 && explicitHome[0]
+	var state *config.UserState
+	var err error
+	actual, _ := os.UserHomeDir()
+	if !m.ExplicitHome && filepath.Clean(homeDir) == filepath.Clean(actual) {
+		state, err = config.LoadState()
+	} else {
+		state, err = config.LoadStateForHome(homeDir)
+	}
+	if err != nil {
+		m.SelectionError = err
+	} else if state.Modules.AI.Tooling != nil {
+		m.SelectedTools = append([]string{}, state.Modules.AI.Tooling.Agents...)
+	}
+	return m
 }
 
 // SSOTPath returns the absolute path to the shared AGENTS.md file.
@@ -218,6 +239,9 @@ func (m *AgentsManager) legacyStatePath() string {
 // DefaultApplyTools returns non-optional tools plus optional tools whose target
 // file already exists.
 func (m *AgentsManager) DefaultApplyTools() []string {
+	if m.SelectedTools != nil {
+		return append([]string{}, m.SelectedTools...)
+	}
 	var ids []string
 	seen := map[string]bool{}
 	for _, tool := range m.registry() {
@@ -264,7 +288,10 @@ func (m *AgentsManager) TargetPath(toolID string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unknown agents tool %q", toolID)
 	}
-	return m.expandHome(tool.TargetPath), nil
+	if err := validateInstructionOverride(m.homeDir(), tool.ID, m.ExplicitHome); err != nil {
+		return "", err
+	}
+	return InstructionPath(m.homeDir(), tool.ID, m.ExplicitHome, m.expandHome(tool.TargetPath)), nil
 }
 
 // Status reports SSOT drift for every registered tool.
@@ -278,6 +305,9 @@ func (m *AgentsManager) Status() ([]AgentStatus, error) {
 
 	var out []AgentStatus
 	for _, tool := range m.registry() {
+		if m.SelectedTools != nil && !containsAgentID(m.SelectedTools, tool.ID) {
+			continue
+		}
 		target, err := m.TargetPath(tool.ID)
 		if err != nil {
 			return nil, err
@@ -316,6 +346,27 @@ func (m *AgentsManager) Status() ([]AgentStatus, error) {
 		}
 		out = append(out, st)
 	}
+	if !m.profilePass && (m.SelectedTools == nil || containsAgentID(m.SelectedTools, "codex")) {
+		if extra := m.codexStandardProfile(); extra != nil {
+			extra.Tools = []AgentTool{{ID: "codex", DisplayName: "Codex standard profile", TargetPath: "~/.codex/AGENTS.md", OverlayFile: "codex.md"}}
+			statuses, err := extra.Status()
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, statuses...)
+		}
+	}
+	for i := range out {
+		if out[i].Tool.ID == "qwen" && out[i].Drift == "in-sync" {
+			ready, err := m.qwenContextReady()
+			if err != nil {
+				return nil, err
+			}
+			if !ready {
+				out[i].Drift = "context-missing"
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -337,9 +388,15 @@ func (m *AgentsManager) Render(toolID string) (string, error) {
 // applies to every registered tool; command callers can pass DefaultApplyTools
 // when they want a narrower CLI default.
 func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
+	if m.SelectionError != nil {
+		return nil, fmt.Errorf("read tooling selection: %w", m.SelectionError)
+	}
 	ids, err := m.resolveToolIDs(opts.Tools)
 	if err != nil {
 		return nil, err
+	}
+	if len(ids) == 0 {
+		return &ApplyResult{DryRun: opts.DryRun || m.runner().DryRun}, nil
 	}
 	state, err := m.readState()
 	if err != nil {
@@ -413,6 +470,27 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 	if firstConflict != nil {
 		return result, firstConflict
 	}
+	if !m.profilePass && containsAgentID(ids, "codex") {
+		if extra := m.codexStandardProfile(); extra != nil {
+			preflight, err := extra.Apply(ApplyOptions{Tools: []string{"codex"}, DryRun: true, Force: opts.Force})
+			if err != nil {
+				return result, err
+			}
+			if !opts.Force && !result.DryRun {
+				for _, item := range preflight.Items {
+					if item.Conflict {
+						return result, &ProtectedWriteConflictError{ToolID: item.ToolID, TargetPath: item.TargetPath, ExpectedHash: item.ExpectedHash, ActualHash: item.ActualHash}
+					}
+				}
+			}
+		}
+	}
+
+	if containsAgentID(ids, "qwen") {
+		if err := m.ensureQwenContext(result.DryRun); err != nil {
+			return result, err
+		}
+	}
 
 	if opts.Force && !result.DryRun {
 		for i := range plans {
@@ -441,7 +519,7 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 			}
 		}
 		if !result.DryRun && (!plan.changed || plan.targetExists || plan.renderedHash != "") {
-			state.LastApplied[plan.id] = plan.renderedHash
+			state.LastApplied[m.stateKey(plan.id)] = plan.renderedHash
 			for _, alias := range m.toolAliases(plan.id) {
 				delete(state.LastApplied, alias)
 			}
@@ -453,6 +531,18 @@ func (m *AgentsManager) Apply(opts ApplyOptions) (*ApplyResult, error) {
 		}
 		if err := m.removeLegacyState(); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("legacy agents state not removed (ignored while %s exists): %v", m.StatePath(), err))
+		}
+	}
+	if !m.profilePass && containsAgentID(ids, "codex") {
+		if extra := m.codexStandardProfile(); extra != nil {
+			other, err := extra.Apply(ApplyOptions{Tools: []string{"codex"}, DryRun: opts.DryRun, Force: opts.Force})
+			if other != nil {
+				result.Items = append(result.Items, other.Items...)
+				result.Warnings = append(result.Warnings, other.Warnings...)
+			}
+			if err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil
@@ -713,6 +803,12 @@ func (m *AgentsManager) renderTool(tool AgentTool, ssotBytes []byte) (string, bo
 }
 
 func (m *AgentsManager) resolveToolIDs(ids []string) ([]string, error) {
+	if len(ids) == 0 && m.SelectedTools != nil {
+		ids = append([]string{}, m.SelectedTools...)
+		if len(ids) == 0 {
+			return ids, nil
+		}
+	}
 	if len(ids) == 0 {
 		seen := map[string]bool{}
 		for _, tool := range m.registry() {
@@ -730,6 +826,9 @@ func (m *AgentsManager) resolveToolIDs(ids []string) ([]string, error) {
 		id = strings.ToLower(strings.TrimSpace(id))
 		if id == "" {
 			continue
+		}
+		if m.SelectedTools != nil && !containsAgentID(m.SelectedTools, id) {
+			return nil, fmt.Errorf("agent %q is not selected; run dot ai setup --agents to change the selection", id)
 		}
 		tool, ok := m.Tool(id)
 		if !ok {
@@ -779,7 +878,7 @@ func (m *AgentsManager) lastAppliedHash(st *agentsState, toolID string) string {
 	if st == nil {
 		return ""
 	}
-	if hash := st.LastApplied[toolID]; hash != "" {
+	if hash := st.LastApplied[m.stateKey(toolID)]; hash != "" {
 		return hash
 	}
 	for _, alias := range m.toolAliases(toolID) {
@@ -883,7 +982,7 @@ func (m *AgentsManager) removeLegacyState() error {
 }
 
 func (m *AgentsManager) backupTarget(toolID, path string) (string, error) {
-	dst := m.backupTargetPath(toolID)
+	dst := m.backupTargetPath(toolID + "-" + normalizedHash([]byte(path))[:12])
 	info, err := os.Lstat(path)
 	if err != nil {
 		return "", err
