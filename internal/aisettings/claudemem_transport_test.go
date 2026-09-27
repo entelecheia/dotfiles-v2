@@ -281,6 +281,12 @@ func TestSyncReportSummarize(t *testing.T) {
 // and a counter of the restart kicks that worker received.
 func workerHome(t *testing.T) (string, *int) {
 	t.Helper()
+	return workerHomeAt(t, t.TempDir())
+}
+
+// workerHomeAt writes fake-worker claude-mem settings under home.
+func workerHomeAt(t *testing.T, home string) (string, *int) {
+	t.Helper()
 	hits := new(int)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/admin/restart" {
@@ -288,7 +294,6 @@ func workerHome(t *testing.T) (string, *int) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	home := t.TempDir()
 	memDir := filepath.Join(home, ".claude-mem")
 	if err := os.MkdirAll(memDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -330,7 +335,9 @@ func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
 		t.Fatalf("kicks: given home = %d, process HOME = %d; want 1, 0", *hits, *trapHits)
 	}
 
-	// An empty home skips the kick entirely.
+	// An empty home skips the kick entirely: neither the process HOME nor the
+	// DB's grandparent (the fallback removed for #160) may be kicked.
+	_, grandHits := workerHomeAt(t, filepath.Dir(filepath.Dir(dst.Path)))
 	*hits = 0
 	src2 := newTestSyncDB(t)
 	seedSession(t, src2, "c2", "m2", "2026-09-21T10:00:00.000Z")
@@ -350,7 +357,7 @@ func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &resp2); err != nil || resp2.Result == nil || resp2.Result.Obs != 1 {
 		t.Fatalf("second import must land one observation: %s", out.String())
 	}
-	if *hits != 0 || *trapHits != 0 {
-		t.Fatalf("empty home kicked: given home = %d, process HOME = %d; want 0, 0", *hits, *trapHits)
+	if *hits != 0 || *trapHits != 0 || *grandHits != 0 {
+		t.Fatalf("empty home kicked: given home = %d, process HOME = %d, DB grandparent = %d; want 0, 0, 0", *hits, *trapHits, *grandHits)
 	}
 }

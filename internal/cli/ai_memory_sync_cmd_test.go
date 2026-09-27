@@ -157,7 +157,15 @@ func TestMemorySyncServe_CountMaxExportImport(t *testing.T) {
 	// kick follows the process home.
 	home3 := t.TempDir()
 	seedCLISyncDBSchemaOnly(t, home3)
-	if err := os.WriteFile(filepath.Join(home3, ".claude-mem", "settings.json"), settings, 0o644); err != nil {
+	kicks3 := 0
+	worker3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/admin/restart" {
+			kicks3++
+		}
+	}))
+	defer worker3.Close()
+	settings3, _ := json.Marshal(map[string]string{"CLAUDE_MEM_WORKER_PORT": strings.TrimPrefix(worker3.URL, "http://127.0.0.1:")})
+	if err := os.WriteFile(filepath.Join(home3, ".claude-mem", "settings.json"), settings3, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("DOTFILES_HOME", "")
@@ -165,8 +173,8 @@ func TestMemorySyncServe_CountMaxExportImport(t *testing.T) {
 	if _, _, err = runDotForTestStdin(t, string(reqBody), "ai", "memory", "sync", "--serve", "import"); err != nil {
 		t.Fatalf("serve import without --home: %v", err)
 	}
-	if kicks != 2 {
-		t.Fatalf("serve import without --home: worker kicks = %d, want 2 (one per import)", kicks)
+	if kicks3 != 1 || kicks != 1 {
+		t.Fatalf("serve import without --home: process-home worker kicks = %d, --home worker kicks = %d; want 1, 1", kicks3, kicks)
 	}
 }
 
