@@ -8,16 +8,24 @@ import (
 func TestRender_StaticGitIgnore(t *testing.T) {
 	e := NewEngine()
 
-	out, err := e.Render("git/ignore", nil)
+	out, err := e.Render("git/gitignore.global", nil)
 	if err != nil {
-		t.Fatalf("Render git/ignore: %v", err)
+		t.Fatalf("Render git/gitignore.global: %v", err)
 	}
 
 	content := string(out)
-	// git/ignore is a static file; check known entries
-	for _, entry := range []string{".DS_Store", ".env", "node_modules/"} {
+	// git/gitignore.global is a static file; check known entries
+	for _, entry := range []string{".DS_Store", ".env*", "!.envrc", "node_modules/"} {
 		if !strings.Contains(content, entry) {
-			t.Errorf("Render git/ignore: expected %q in output", entry)
+			t.Errorf("Render git/gitignore.global: expected %q in output", entry)
+		}
+	}
+	// Regression for #142: a global *.sql rule silently hid new migration
+	// files in repos that track SQL. The header documents the decision, so
+	// only an active (non-comment) pattern line may fail the check.
+	for line := range strings.Lines(content) {
+		if strings.TrimSpace(line) == "*.sql" {
+			t.Error("Render git/gitignore.global: *.sql must not be an active ignore pattern")
 		}
 	}
 }
@@ -34,17 +42,17 @@ func TestRender_InvalidTemplate(t *testing.T) {
 func TestReadStatic(t *testing.T) {
 	e := NewEngine()
 
-	out, err := e.ReadStatic("git/ignore")
+	out, err := e.ReadStatic("git/gitignore.global")
 	if err != nil {
-		t.Fatalf("ReadStatic git/ignore: %v", err)
+		t.Fatalf("ReadStatic git/gitignore.global: %v", err)
 	}
 
 	if len(out) == 0 {
-		t.Error("ReadStatic git/ignore: expected non-empty content")
+		t.Error("ReadStatic git/gitignore.global: expected non-empty content")
 	}
 
 	if !strings.Contains(string(out), ".DS_Store") {
-		t.Error("ReadStatic git/ignore: expected .DS_Store in content")
+		t.Error("ReadStatic git/gitignore.global: expected .DS_Store in content")
 	}
 }
 
