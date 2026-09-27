@@ -59,6 +59,8 @@ threshold:
   total: 49
 
 override:
+  - path: ^internal/admission$ # measured 73.0% on darwin at introduction; the two live-probe shell-out bodies (snapshotDarwin/snapshotLinux) stay fixture-bypassed and unhit by design
+    threshold: 70
   # Initial constrained Darwin fixture run for #153 measured 78.0% and 80.4%.
   # Linux CI remains authoritative; existing floors are unchanged.
   - path: ^internal/aipolicy$

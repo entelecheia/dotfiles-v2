@@ -595,6 +595,20 @@ secrets:
 
 ---
 
+## Resource admission (`dot admit`)
+
+`dot admit` is the repository-scoped admission controller for heavy work (builds, full test runs, indexing, bulk copies, dependency updates): at most one heavy job per project repo at a time — shared across all its worktrees, branches, and agent sessions — while different repos run in parallel. A host-pressure gate defers new work on memory pressure warning/critical, verifiable thermal pressure, CPU idle below 15% or load1 at the CPU count sustained 60s, or a recent WindowServer watchdog termination; recovery requires five continuous minutes of normal telemetry. Missing or failed telemetry always defers — the gate never reports a machine it cannot measure as healthy.
+
+```bash
+dot admit -- make test                          # one heavy slot per repo
+dot admit --class maintenance -- brew upgrade   # the single host-wide maintenance slot
+dot admit status                                # owners, pressure evidence, hysteresis countdown
+```
+
+On defer the exit code is 75 (`EX_TEMPFAIL`) and `--json` prints the machine-readable outcome (`scope`, `owner`, `reason`, `retry_after`). Leases carry pid + start time and a heartbeat, so a crashed owner's slot is reclaimed safely; jobs not launched via `dot admit` are not visible to the controller. Thresholds mirror the workspace resource policy; state lives in `~/.local/state/dot/admission/`.
+
+---
+
 ## Architecture
 
 Same modular Go architecture as [rootfiles-v2](https://github.com/entelecheia/rootfiles-v2).
@@ -632,6 +646,7 @@ dotfiles-v2/
 │   │   ├── scheduler_darwin.go   # macOS launchd
 │   │   └── scheduler_other.go    # Linux systemd
 │   ├── watchdog/                 # Runaway-process reaper + notifier (used by dot watchdog)
+│   ├── admission/                # Repo-scoped heavy-job slots + host-pressure gate (used by dot admit)
 │   ├── workspace/                # Workspace management
 │   │   ├── config.go             # Project config, YAML load/save
 │   │   ├── deploy.go             # Shell script deployer (go:embed)

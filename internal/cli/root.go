@@ -79,6 +79,9 @@ Also available as 'dotfiles' for back-compat.`,
 	// Watchdog (runaway-process reaper, alerts)
 	root.AddCommand(newWatchdogCmd())
 
+	// Resource admission (per-repo heavy-job slots + host-pressure gate)
+	root.AddCommand(newAdmitCmd())
+
 	// Claude Code safety hooks (careful + freeze)
 	root.AddCommand(newGuardCmd())
 

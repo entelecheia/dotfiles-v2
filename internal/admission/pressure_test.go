@@ -1,0 +1,352 @@
+package admission
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// --- Probe parsers (fixtures) ---
+
+func TestParseMemoryPressureLevel(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want string
+		ok   bool
+	}{
+		{"1\n", MemoryNormal, true},
+		{"2\n", MemoryWarn, true},
+		{"4\n", MemoryCritical, true},
+		{"3\n", "", false},
+		{"", "", false},
+	} {
+		got, ok := ParseMemoryPressureLevel(tc.out)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("ParseMemoryPressureLevel(%q) = %q, %v; want %q, %v", tc.out, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestParseMemoryFreePct(t *testing.T) {
+	out := "The system has 206158430208 (12584984 pages with 16384 bytes per page)\nSystem-wide memory free percentage: 42%\n"
+	pct, ok := ParseMemoryFreePct(out)
+	if !ok || pct != 42 {
+		t.Errorf("ParseMemoryFreePct = %v, %v; want 42, true", pct, ok)
+	}
+	if _, ok := ParseMemoryFreePct("no such line\n"); ok {
+		t.Error("expected miss on output without the free-percentage line")
+	}
+}
+
+func TestParseThermalLimit(t *testing.T) {
+	log := "CPU_Speed_Limit \t = 100 \nCPU_Sched_Limit \t = 100 \nCPU_Available_CPUs \t = 10 \n"
+	limit, ok := ParseThermalLimit(log)
+	if !ok || limit != 100 {
+		t.Errorf("ParseThermalLimit = %d, %v; want 100, true", limit, ok)
+	}
+	repeated := "CPU_Speed_Limit \t = 100 \nCPU_Speed_Limit \t = 65 \n"
+	limit, ok = ParseThermalLimit(repeated)
+	if !ok || limit != 65 {
+		t.Errorf("ParseThermalLimit repeated = %d, %v; want last sample 65, true", limit, ok)
+	}
+	if _, ok := ParseThermalLimit("Note: No thermal warning level has been recorded\n"); ok {
+		t.Error("expected miss when no CPU_Speed_Limit line exists")
+	}
+}
+
+func TestParseLoadAvgAndNCPU(t *testing.T) {
+	load1, ok := ParseLoadAvg("{ 2.01 1.98 2.10 }\n")
+	if !ok || load1 != 2.01 {
+		t.Errorf("ParseLoadAvg = %v, %v", load1, ok)
+	}
+	if _, ok := ParseLoadAvg("{ }\n"); ok {
+		t.Error("expected miss on empty loadavg")
+	}
+	n, ok := ParseNCPU("10\n")
+	if !ok || n != 10 {
+		t.Errorf("ParseNCPU = %d, %v", n, ok)
+	}
+	if _, ok := ParseNCPU("0\n"); ok {
+		t.Error("zero CPUs is not valid telemetry")
+	}
+}
+
+func TestParseTopCPUUsage(t *testing.T) {
+	out := "Processes: 500 total\nCPU usage: 7.14% user, 14.28% sys, 78.57% idle\nSharedLibs: 300 resident\n"
+	idle, ok := ParseTopCPUUsage(out)
+	if !ok || idle != 78.57 {
+		t.Errorf("ParseTopCPUUsage = %v, %v", idle, ok)
+	}
+	twoSamples := "CPU usage: 50.0% user, 10.0% sys, 40.0% idle\nCPU usage: 1.0% user, 1.0% sys, 98.0% idle\n"
+	idle, ok = ParseTopCPUUsage(twoSamples)
+	if !ok || idle != 98.0 {
+		t.Errorf("ParseTopCPUUsage two samples = %v, %v; want last sample 98.0", idle, ok)
+	}
+	if _, ok := ParseTopCPUUsage("no cpu line\n"); ok {
+		t.Error("expected miss without a CPU usage line")
+	}
+}
+
+func TestParseProcFixtures(t *testing.T) {
+	load1, ok := ParseProcLoadavg("2.01 1.98 2.10 3/456 7890\n")
+	if !ok || load1 != 2.01 {
+		t.Errorf("ParseProcLoadavg = %v, %v", load1, ok)
+	}
+	meminfo := "MemTotal:       16384000 kB\nMemFree:         1000000 kB\nMemAvailable:    8192000 kB\nBuffers:          100000 kB\n"
+	pct, ok := ParseProcMemInfo(meminfo)
+	if !ok || pct != 50 {
+		t.Errorf("ParseProcMemInfo = %v, %v; want 50", pct, ok)
+	}
+	if _, ok := ParseProcMemInfo("MemTotal:       16384000 kB\n"); ok {
+		t.Error("expected miss without MemAvailable")
+	}
+	stat := "cpu  1 2 3 4 5 6 7 8 9 10\nbtime 1758900000\nprocesses 12345\n"
+	boot, ok := ParseProcStatBtime(stat)
+	if !ok || boot.Unix() != 1758900000 {
+		t.Errorf("ParseProcStatBtime = %v, %v", boot, ok)
+	}
+	sysctlBoot, ok := ParseSysctlBoottime("{ sec = 1758900000, usec = 0 } Sat Sep 26 12:00:00 2026\n")
+	if !ok || sysctlBoot.Unix() != 1758900000 {
+		t.Errorf("ParseSysctlBoottime = %v, %v", sysctlBoot, ok)
+	}
+	if _, ok := ParseSysctlBoottime("garbage\n"); ok {
+		t.Error("expected miss on malformed boottime")
+	}
+}
+
+func TestMemoryLevelFromAvailPct(t *testing.T) {
+	th := DefaultThresholds()
+	for pct, want := range map[float64]string{
+		50:  MemoryNormal,
+		10:  MemoryNormal,
+		9.9: MemoryWarn,
+		5:   MemoryWarn,
+		4.9: MemoryCritical,
+	} {
+		if got := MemoryLevelFromAvailPct(pct, th); got != want {
+			t.Errorf("MemoryLevelFromAvailPct(%v) = %q, want %q", pct, got, want)
+		}
+	}
+}
+
+// --- EvaluatePressure ---
+
+var evalT0 = time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+
+func healthyDarwin() PressureSnapshot {
+	return PressureSnapshot{
+		Platform:         "darwin",
+		MemoryLevel:      MemoryNormal,
+		MemoryAvailable:  true,
+		MemoryFreePct:    55,
+		ThermalCPULimit:  100,
+		ThermalAvailable: true,
+		Load1:            3.0,
+		NumCPU:           10,
+		LoadAvailable:    true,
+		IdlePct:          85,
+		IdleAvailable:    true,
+		WSScanOK:         true,
+		BootAvailable:    true,
+		BootTime:         evalT0.Add(-time.Hour),
+	}
+}
+
+func evalDeferReasons(d Decision) string {
+	return strings.Join(d.Reasons, "; ")
+}
+
+func TestEvaluateHealthy(t *testing.T) {
+	d := EvaluatePressure(healthyDarwin(), DefaultThresholds(), History{}, evalT0)
+	if !d.Admit {
+		t.Errorf("healthy snapshot deferred: %s", evalDeferReasons(d))
+	}
+}
+
+func TestEvaluateMemoryWarnAndCritical(t *testing.T) {
+	for _, level := range []string{MemoryWarn, MemoryCritical} {
+		snap := healthyDarwin()
+		snap.MemoryLevel = level
+		d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
+		if d.Admit {
+			t.Errorf("memory %s admitted", level)
+		}
+		if !d.Next.DeferActive {
+			t.Errorf("memory %s did not open a defer episode", level)
+		}
+		if d.Next.DeferSince.IsZero() {
+			t.Errorf("memory %s did not record the episode start", level)
+		}
+	}
+}
+
+func TestEvaluateThermalPressure(t *testing.T) {
+	snap := healthyDarwin()
+	snap.ThermalCPULimit = 65
+	d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
+	if d.Admit || !strings.Contains(evalDeferReasons(d), "thermal") {
+		t.Errorf("thermal pressure = %+v, want defer with thermal reason", d)
+	}
+}
+
+// TestEvaluateMissingTelemetryDefers is the no-false-healthy rule: every
+// required probe that failed is its own defer reason.
+func TestEvaluateMissingTelemetryDefers(t *testing.T) {
+	snap := healthyDarwin()
+	snap.MemoryAvailable = false
+	snap.ThermalAvailable = false
+	d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
+	reasons := evalDeferReasons(d)
+	if d.Admit {
+		t.Error("missing telemetry admitted")
+	}
+	if !strings.Contains(reasons, "telemetry unavailable: memory pressure") ||
+		!strings.Contains(reasons, "telemetry unavailable: thermal pressure") {
+		t.Errorf("reasons = %q, want both unavailable probes named", reasons)
+	}
+}
+
+func TestEvaluateLoadSustain(t *testing.T) {
+	th := DefaultThresholds()
+	snap := healthyDarwin()
+	snap.Load1 = 12 // >= 10 CPUs
+	// First over-threshold sample: admitted, but the excursion clock starts.
+	d := EvaluatePressure(snap, th, History{}, evalT0)
+	if !d.Admit {
+		t.Errorf("first over-threshold sample deferred: %s", evalDeferReasons(d))
+	}
+	if d.Next.OverSince.IsZero() {
+		t.Error("excursion start not recorded")
+	}
+	// Sustained past DeferSustain: deferred.
+	d = EvaluatePressure(snap, th, d.Next, evalT0.Add(th.DeferSustain+time.Second))
+	if d.Admit || !strings.Contains(evalDeferReasons(d), "sustained") {
+		t.Errorf("sustained load = %+v, want defer", d)
+	}
+	// A normal sample resets the excursion clock.
+	d = EvaluatePressure(healthyDarwin(), th, d.Next, evalT0.Add(2*time.Minute))
+	if !d.Next.OverSince.IsZero() {
+		t.Error("normal sample did not reset the excursion clock")
+	}
+}
+
+func TestEvaluateIdleSustain(t *testing.T) {
+	th := DefaultThresholds()
+	snap := healthyDarwin()
+	snap.IdlePct = 10
+	d := EvaluatePressure(snap, th, History{}, evalT0)
+	if !d.Admit {
+		t.Errorf("first low-idle sample deferred: %s", evalDeferReasons(d))
+	}
+	d = EvaluatePressure(snap, th, d.Next, evalT0.Add(61*time.Second))
+	if d.Admit || !strings.Contains(evalDeferReasons(d), "cpu idle") {
+		t.Errorf("sustained low idle = %+v, want defer", d)
+	}
+}
+
+func TestEvaluateWindowServerGrace(t *testing.T) {
+	th := DefaultThresholds()
+	snap := healthyDarwin()
+	snap.WSEvent = evalT0.Add(-10 * time.Minute) // inside the 30m grace
+	d := EvaluatePressure(snap, th, History{}, evalT0)
+	if d.Admit || !strings.Contains(evalDeferReasons(d), "WindowServer") {
+		t.Errorf("recent WindowServer event = %+v, want defer", d)
+	}
+	if d.RetryAfter != 20*time.Minute {
+		t.Errorf("retry after = %v, want 20m (grace remainder)", d.RetryAfter)
+	}
+	// Outside the grace window: admitted.
+	snap.WSEvent = evalT0.Add(-time.Hour)
+	d = EvaluatePressure(snap, th, History{}, evalT0)
+	if !d.Admit {
+		t.Errorf("old WindowServer event deferred: %s", evalDeferReasons(d))
+	}
+	// Pre-boot evidence is suppressed.
+	snap.WSEvent = evalT0.Add(-10 * time.Minute)
+	snap.BootTime = evalT0.Add(-5 * time.Minute) // booted after the event
+	d = EvaluatePressure(snap, th, History{}, evalT0)
+	if !d.Admit {
+		t.Errorf("pre-boot WindowServer event deferred: %s", evalDeferReasons(d))
+	}
+}
+
+// TestEvaluateFullHysteresis walks a whole episode: open on memory warn,
+// recover only after five continuous minutes of normality, restart the
+// window when a condition breaks.
+func TestEvaluateFullHysteresis(t *testing.T) {
+	th := DefaultThresholds()
+	snap := healthyDarwin()
+	snap.MemoryLevel = MemoryWarn
+	d := EvaluatePressure(snap, th, History{}, evalT0)
+	if d.Admit || !d.Next.DeferActive {
+		t.Fatal("episode did not open")
+	}
+
+	normal := healthyDarwin()
+	// Pressure cleared, but the recovery window has just started.
+	d = EvaluatePressure(normal, th, d.Next, evalT0.Add(time.Minute))
+	if d.Admit || !strings.Contains(evalDeferReasons(d), "recovering") {
+		t.Errorf("early recovery = %+v, want defer with recovering reason", d)
+	}
+	if d.Next.RecoverSince.IsZero() {
+		t.Error("recovery streak start not recorded")
+	}
+	// Four minutes in: still recovering.
+	d = EvaluatePressure(normal, th, d.Next, evalT0.Add(4*time.Minute))
+	if d.Admit {
+		t.Error("admitted before the recovery window completed")
+	}
+	// A condition breaks at minute four: the window restarts.
+	blocked := healthyDarwin()
+	blocked.IdlePct = 20 // above the 15% defer floor, below the 30% recovery bar
+	d = EvaluatePressure(blocked, th, d.Next, evalT0.Add(4*time.Minute+30*time.Second))
+	if d.Admit || !strings.Contains(evalDeferReasons(d), "recovery conditions not met") {
+		t.Errorf("broken recovery = %+v, want defer with blockers", d)
+	}
+	if !d.Next.RecoverSince.IsZero() {
+		t.Error("recovery streak should restart when a condition breaks")
+	}
+	// Five continuous minutes of normality after that: admitted, episode closed.
+	d = EvaluatePressure(normal, th, d.Next, evalT0.Add(5*time.Minute))
+	d = EvaluatePressure(normal, th, d.Next, evalT0.Add(10*time.Minute))
+	if !d.Admit {
+		t.Errorf("completed recovery still deferred: %s", evalDeferReasons(d))
+	}
+	if d.Next.DeferActive {
+		t.Error("episode did not close on recovery")
+	}
+}
+
+func TestEvaluateRecoveryBlockedByTelemetryGap(t *testing.T) {
+	th := DefaultThresholds()
+	hist := History{DeferActive: true, DeferSince: evalT0.Add(-time.Hour)}
+	snap := healthyDarwin()
+	snap.IdleAvailable = false
+	d := EvaluatePressure(snap, th, hist, evalT0)
+	if d.Admit || !strings.Contains(evalDeferReasons(d), "telemetry unavailable") {
+		t.Errorf("telemetry gap during recovery = %+v, want defer", d)
+	}
+}
+
+// TestEvaluateLinuxApplicability: thermal, CPU idle, and the WindowServer
+// scan do not exist on linux; their absence must not defer there.
+func TestEvaluateLinuxApplicability(t *testing.T) {
+	snap := PressureSnapshot{
+		Platform:        "linux",
+		MemoryLevel:     MemoryNormal,
+		MemoryAvailable: true,
+		Load1:           1.0,
+		NumCPU:          8,
+		LoadAvailable:   true,
+	}
+	d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
+	if !d.Admit {
+		t.Errorf("linux snapshot deferred on macOS-only probes: %s", evalDeferReasons(d))
+	}
+	snap.Load1 = 9
+	hist := History{OverSince: evalT0.Add(-2 * time.Minute)}
+	d = EvaluatePressure(snap, DefaultThresholds(), hist, evalT0)
+	if d.Admit {
+		t.Error("sustained linux load admitted")
+	}
+}

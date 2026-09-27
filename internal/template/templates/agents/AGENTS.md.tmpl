@@ -44,6 +44,18 @@ List durable rules the assistant should follow across tools and machines.
 
 Capture global conventions that apply unless a repository provides local instructions.
 
+## System Resource Safety
+
+<!-- Per-repo admission limit + host-pressure deferral, mirroring the
+     workspace resource policy at per-repo granularity. -->
+
+- Per-repo heavy-work limit: at most ONE build, full test run, recursive bulk copy, indexing/embedding, or dependency/tool update per project repo (including all its worktrees) at a time, across sessions, profiles, and subagents. Heavy work in different repos may run in parallel, subject to the host-pressure checks below. This takes precedence over parallel-delegation guidance.
+- Launch heavy jobs through the admission controller: `dot admit -- <cmd>` (one slot per repo, shared across its worktrees and sessions), `dot admit --class maintenance -- <cmd>` for global tool installs/updates. A defer exits 75 and reports the owner and reason; retry later instead of launching a duplicate.
+- Default internal concurrency: 2 build/test workers; 1 browser/native E2E worker. Go: `GOMAXPROCS=2`, build/test `-p 2`, test `-parallel 2`. Rust: `CARGO_BUILD_JOBS=2`, `--test-threads=2`.
+- Defer new heavy work on memory pressure warning/critical, verifiable thermal pressure, CPU idle below 15% or 1-minute load at the CPU count sustained 60s, a fresh WindowServer watchdog termination, or a user overload report. Missing or failed telemetry is not proof of health; defer conservatively.
+- Resume one heavy job only after 5 continuous minutes of normal memory, CPU idle at least 30%, and load1 below 70% of the CPU count. Do not immediately replay all jobs after a reboot.
+- Do not copy whole `target`/`node_modules` trees into parallel worktrees. Never launch a duplicate check because an existing one is slow. Jobs not launched via `dot admit` are invisible to the controller; `dot admit status` shows what it sees.
+
 ## Tool-Specific Notes
 
 Keep common content here only when it applies across tools. Put tool-only addenda in overlays.

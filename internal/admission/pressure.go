@@ -1,0 +1,567 @@
+package admission
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
+)
+
+// Threshold defaults mirror the workspace resource policy
+// (work/_meta/rules/development-resource-policy.md): defer new heavy work on
+// memory pressure warning/critical, verifiable thermal pressure, a fresh
+// WindowServer watchdog termination, or CPU idle below 15% / load1 at the
+// logical CPU count sustained 60s; resume one job only after five continuous
+// minutes of normal memory with idle at or above 30% and load1 below 70% of
+// the CPU count.
+const (
+	DefaultIdleDeferBelow  = 15.0 // percent
+	DefaultIdleRecoverAt   = 30.0 // percent
+	DefaultLoadDeferFrac   = 1.0  // load1 >= this * ncpu defers
+	DefaultLoadRecoverFrac = 0.7  // load1 < this * ncpu recovers
+	DefaultDeferSustain    = time.Minute
+	DefaultRecoverSustain  = 5 * time.Minute
+
+	// Linux memory levels derive from MemAvailable percent; the workspace
+	// policy is written against macOS pressure levels, so these two cutoffs
+	// are this package's chosen Linux analogs.
+	DefaultMemAvailWarnPct     = 10.0
+	DefaultMemAvailCriticalPct = 5.0
+)
+
+// Memory pressure levels, shared by the darwin sysctl mapping and the linux
+// MemAvailable mapping.
+const (
+	MemoryNormal   = "normal"
+	MemoryWarn     = "warn"
+	MemoryCritical = "critical"
+)
+
+// Thresholds is the resolved knob set EvaluatePressure decides against.
+type Thresholds struct {
+	IdleDeferBelow      float64
+	IdleRecoverAt       float64
+	LoadDeferFrac       float64
+	LoadRecoverFrac     float64
+	DeferSustain        time.Duration
+	RecoverSustain      time.Duration
+	WSGrace             time.Duration
+	MemAvailWarnPct     float64
+	MemAvailCriticalPct float64
+}
+
+// DefaultThresholds returns the policy thresholds above.
+func DefaultThresholds() Thresholds {
+	return Thresholds{
+		IdleDeferBelow:      DefaultIdleDeferBelow,
+		IdleRecoverAt:       DefaultIdleRecoverAt,
+		LoadDeferFrac:       DefaultLoadDeferFrac,
+		LoadRecoverFrac:     DefaultLoadRecoverFrac,
+		DeferSustain:        DefaultDeferSustain,
+		RecoverSustain:      DefaultRecoverSustain,
+		WSGrace:             DefaultWSGrace,
+		MemAvailWarnPct:     DefaultMemAvailWarnPct,
+		MemAvailCriticalPct: DefaultMemAvailCriticalPct,
+	}
+}
+
+// PressureSnapshot is one probe of host pressure. Every probe carries an
+// availability flag: a probe that failed or is missing must defer admission
+// (the no-false-healthy rule), which only an explicit flag can express.
+// Probes that do not exist on a platform (thermal, CPU idle, and the
+// WindowServer scan on linux) are simply skipped by EvaluatePressure.
+type PressureSnapshot struct {
+	Platform string `json:"platform"` // runtime GOOS the probe ran on
+
+	MemoryLevel     string  `json:"memory_level"`     // MemoryNormal/Warn/Critical when MemoryAvailable
+	MemoryAvailable bool    `json:"memory_available"` // the memory probe succeeded
+	MemoryFreePct   float64 `json:"memory_free_pct"`  // informational; -1 when unknown
+
+	ThermalCPULimit  int  `json:"thermal_cpu_limit"` // CPU_Speed_Limit percent; 100 = no limit
+	ThermalAvailable bool `json:"thermal_available"` // the thermal probe succeeded
+
+	Load1         float64 `json:"load1"`
+	NumCPU        int     `json:"num_cpu"`
+	LoadAvailable bool    `json:"load_available"` // load1 AND a positive CPU count were read
+
+	IdlePct       float64 `json:"idle_pct"`
+	IdleAvailable bool    `json:"idle_available"` // the CPU idle probe succeeded
+
+	WSEvent  time.Time `json:"ws_event"`   // last WindowServer watchdog termination; zero = none
+	WSScanOK bool      `json:"ws_scan_ok"` // the DiagnosticReports scan completed
+
+	BootTime      time.Time `json:"boot_time"`
+	BootAvailable bool      `json:"boot_available"` // boot time known; only suppresses pre-boot evidence
+}
+
+// History is the cross-invocation pressure state persisted between gate
+// evaluations: which defer episode is active, when the current CPU/load
+// excursion began (the 60-second sustain), and when the current all-normal
+// streak began (the 5-minute recovery window).
+type History struct {
+	DeferActive  bool      `json:"defer_active,omitempty"`
+	DeferSince   time.Time `json:"defer_since,omitempty"`
+	OverSince    time.Time `json:"over_since,omitempty"`
+	RecoverSince time.Time `json:"recover_since,omitempty"`
+}
+
+// Decision is the gate verdict plus the history the caller must persist.
+// RetryAfter is advisory: when the defer is worth rechecking.
+type Decision struct {
+	Admit      bool
+	Reasons    []string
+	RetryAfter time.Duration
+	Next       History
+}
+
+// EvaluatePressure decides admission from one snapshot. Pure: same inputs,
+// same decision. The hysteresis is full — once any reason opens a defer
+// episode, recovery requires the policy's five continuous minutes of normal
+// memory, idle >= 30%, and load1 < 70% of the CPU count before Admit returns
+// true again, and a telemetry gap blocks recovery the same way it blocks
+// admission.
+func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now time.Time) Decision {
+	next := hist
+	var reasons []string
+	retry := 30 * time.Second
+	bump := func(d time.Duration) {
+		if d > retry {
+			retry = d
+		}
+	}
+
+	// Required telemetry first: a failed probe is a defer reason of its own,
+	// never an implicit pass.
+	for _, p := range requiredProbes(snap) {
+		if !p.ok {
+			reasons = append(reasons, "telemetry unavailable: "+p.name)
+		}
+	}
+	if snap.MemoryAvailable {
+		switch snap.MemoryLevel {
+		case MemoryWarn:
+			reasons = append(reasons, "memory pressure warning")
+		case MemoryCritical:
+			reasons = append(reasons, "memory pressure critical")
+		}
+	}
+	if thermalApplies(snap.Platform) && snap.ThermalAvailable && snap.ThermalCPULimit < 100 {
+		reasons = append(reasons, fmt.Sprintf("thermal pressure (CPU speed limit %d%%)", snap.ThermalCPULimit))
+	}
+	if windowServerApplies(snap.Platform) && snap.WSScanOK && !snap.WSEvent.IsZero() {
+		// Pre-boot evidence is stale by construction: a WindowServer event
+		// from before the current boot cannot describe this session's load.
+		preBoot := snap.BootAvailable && snap.WSEvent.Before(snap.BootTime)
+		if !preBoot {
+			if d := snap.WSEvent.Add(th.WSGrace).Sub(now); d > 0 {
+				reasons = append(reasons, "recent WindowServer watchdog termination at "+snap.WSEvent.Format(time.RFC3339))
+				bump(d)
+			}
+		}
+	}
+
+	// CPU/load defers only after the excursion sustains for DeferSustain;
+	// a brief spike is recorded but admitted.
+	cpuOver, cpuDetail := cpuExcursion(snap, th)
+	if cpuOver {
+		if next.OverSince.IsZero() {
+			next.OverSince = now
+		}
+		if now.Sub(next.OverSince) >= th.DeferSustain {
+			reasons = append(reasons, "cpu saturation sustained "+th.DeferSustain.String()+": "+cpuDetail)
+			bump(th.DeferSustain)
+		}
+	} else {
+		next.OverSince = time.Time{}
+	}
+
+	if len(reasons) > 0 {
+		if !next.DeferActive {
+			next.DeferSince = now
+		}
+		next.DeferActive = true
+		next.RecoverSince = time.Time{}
+		return Decision{Admit: false, Reasons: reasons, RetryAfter: retry, Next: next}
+	}
+	if !next.DeferActive {
+		return Decision{Admit: true, Next: next}
+	}
+
+	// Inside an episode, admission stays closed until the recovery window
+	// completes. The window restarts whenever any condition breaks.
+	if blockers := recoveryBlockers(snap, th); len(blockers) > 0 {
+		next.RecoverSince = time.Time{}
+		return Decision{
+			Admit:      false,
+			Reasons:    []string{"recovery conditions not met: " + strings.Join(blockers, "; ")},
+			RetryAfter: th.RecoverSustain,
+			Next:       next,
+		}
+	}
+	if next.RecoverSince.IsZero() {
+		next.RecoverSince = now
+	}
+	remaining := th.RecoverSustain - now.Sub(next.RecoverSince)
+	if remaining <= 0 {
+		next.DeferActive = false
+		next.DeferSince = time.Time{}
+		next.RecoverSince = time.Time{}
+		return Decision{Admit: true, Next: next}
+	}
+	return Decision{
+		Admit:      false,
+		Reasons:    []string{fmt.Sprintf("recovering from resource pressure (%s of normal telemetry still required)", remaining.Round(time.Second))},
+		RetryAfter: remaining,
+		Next:       next,
+	}
+}
+
+type probeCheck struct {
+	name string
+	ok   bool
+}
+
+// requiredProbes lists the telemetry that must succeed for a Healthy
+// verdict on this platform. Memory and load are required everywhere;
+// thermal, CPU idle, and the WindowServer scan are macOS-only concerns.
+func requiredProbes(snap PressureSnapshot) []probeCheck {
+	probes := []probeCheck{
+		{name: "memory pressure", ok: snap.MemoryAvailable},
+		{name: "load average", ok: snap.LoadAvailable},
+	}
+	if snap.Platform == "darwin" {
+		probes = append(probes,
+			probeCheck{name: "thermal pressure", ok: snap.ThermalAvailable},
+			probeCheck{name: "cpu idle", ok: snap.IdleAvailable},
+			probeCheck{name: "windowserver reports", ok: snap.WSScanOK},
+		)
+	}
+	return probes
+}
+
+func thermalApplies(platform string) bool      { return platform == "darwin" }
+func windowServerApplies(platform string) bool { return platform == "darwin" }
+
+// cpuExcursion reports whether the snapshot is past the defer thresholds
+// (idle below 15% or load1 at the CPU count), with the evidence detail.
+func cpuExcursion(snap PressureSnapshot, th Thresholds) (bool, string) {
+	var parts []string
+	if snap.LoadAvailable && snap.NumCPU > 0 && snap.Load1 >= th.LoadDeferFrac*float64(snap.NumCPU) {
+		parts = append(parts, fmt.Sprintf("load1 %.2f >= %d CPUs", snap.Load1, snap.NumCPU))
+	}
+	if snap.Platform == "darwin" && snap.IdleAvailable && snap.IdlePct < th.IdleDeferBelow {
+		parts = append(parts, fmt.Sprintf("cpu idle %.0f%% < %.0f%%", snap.IdlePct, th.IdleDeferBelow))
+	}
+	return len(parts) > 0, strings.Join(parts, "; ")
+}
+
+// recoveryBlockers lists why the snapshot does not yet satisfy the recovery
+// conditions (normal memory, idle >= 30%, load1 < 70% of ncpu, no thermal or
+// WindowServer pressure). A telemetry gap is a blocker: recovery from an
+// unmeasurable machine is unprovable.
+func recoveryBlockers(snap PressureSnapshot, th Thresholds) []string {
+	var out []string
+	for _, p := range requiredProbes(snap) {
+		if !p.ok {
+			out = append(out, "telemetry unavailable: "+p.name)
+		}
+	}
+	if snap.MemoryAvailable && snap.MemoryLevel != MemoryNormal {
+		out = append(out, "memory pressure "+snap.MemoryLevel)
+	}
+	if thermalApplies(snap.Platform) && snap.ThermalAvailable && snap.ThermalCPULimit < 100 {
+		out = append(out, fmt.Sprintf("thermal pressure (CPU speed limit %d%%)", snap.ThermalCPULimit))
+	}
+	if snap.LoadAvailable && snap.NumCPU > 0 && snap.Load1 >= th.LoadRecoverFrac*float64(snap.NumCPU) {
+		out = append(out, fmt.Sprintf("load1 %.2f >= %.0f%% of %d CPUs", snap.Load1, th.LoadRecoverFrac*100, snap.NumCPU))
+	}
+	if snap.Platform == "darwin" && snap.IdleAvailable && snap.IdlePct < th.IdleRecoverAt {
+		out = append(out, fmt.Sprintf("cpu idle %.0f%% < %.0f%%", snap.IdlePct, th.IdleRecoverAt))
+	}
+	return out
+}
+
+// MemoryLevelFromAvailPct maps a Linux MemAvailable percentage onto the
+// shared memory levels.
+func MemoryLevelFromAvailPct(pct float64, th Thresholds) string {
+	switch {
+	case pct < th.MemAvailCriticalPct:
+		return MemoryCritical
+	case pct < th.MemAvailWarnPct:
+		return MemoryWarn
+	default:
+		return MemoryNormal
+	}
+}
+
+// Monitor probes host resource pressure. GOOS is injected (never a build
+// tag) so tests pose as either platform; Now and SnapshotFunc are the seams
+// the CLI's golden fixtures substitute for a fixed clock and deterministic
+// evidence.
+type Monitor struct {
+	Runner *exec.Runner
+	Home   string
+	GOOS   string // empty means runtime.GOOS
+	Now    func() time.Time
+	// SnapshotFunc, when set, replaces live probing entirely.
+	SnapshotFunc func(ctx context.Context, m *Monitor) PressureSnapshot
+}
+
+func (m *Monitor) goos() string {
+	if m.GOOS != "" {
+		return m.GOOS
+	}
+	return runtime.GOOS
+}
+
+// SnapshotPressure gathers one probe. Probe failures land in the snapshot's
+// availability flags — they are never silently treated as healthy.
+func (m *Monitor) SnapshotPressure(ctx context.Context) PressureSnapshot {
+	if m.SnapshotFunc != nil {
+		return m.SnapshotFunc(ctx, m)
+	}
+	if m.goos() == "darwin" {
+		return m.snapshotDarwin(ctx)
+	}
+	return m.snapshotLinux(ctx)
+}
+
+func (m *Monitor) snapshotDarwin(ctx context.Context) PressureSnapshot {
+	snap := PressureSnapshot{Platform: "darwin", MemoryFreePct: -1}
+	if res, err := m.query(ctx, "sysctl", "-n", "kern.memorystatus_vm_pressure_level"); err == nil {
+		if level, ok := ParseMemoryPressureLevel(res.Stdout); ok {
+			snap.MemoryLevel = level
+			snap.MemoryAvailable = true
+		}
+	}
+	if res, err := m.query(ctx, "memory_pressure"); err == nil {
+		if pct, ok := ParseMemoryFreePct(res.Stdout); ok {
+			snap.MemoryFreePct = pct
+		}
+	}
+	if res, err := m.query(ctx, "pmset", "-g", "thermlog"); err == nil {
+		if limit, ok := ParseThermalLimit(res.Stdout); ok {
+			snap.ThermalCPULimit = limit
+			snap.ThermalAvailable = true
+		}
+	}
+	loadRes, loadErr := m.query(ctx, "sysctl", "-n", "vm.loadavg")
+	ncpuRes, ncpuErr := m.query(ctx, "sysctl", "-n", "hw.ncpu")
+	if loadErr == nil && ncpuErr == nil {
+		load1, lok := ParseLoadAvg(loadRes.Stdout)
+		ncpu, nok := ParseNCPU(ncpuRes.Stdout)
+		if lok && nok {
+			snap.Load1 = load1
+			snap.NumCPU = ncpu
+			snap.LoadAvailable = true
+		}
+	}
+	if res, err := m.query(ctx, "top", "-l", "1", "-n", "0"); err == nil {
+		if idle, ok := ParseTopCPUUsage(res.Stdout); ok {
+			snap.IdlePct = idle
+			snap.IdleAvailable = true
+		}
+	}
+	event, ok, err := ScanWindowServerWatchdog(filepath.Join(m.Home, "Library", "Logs", "DiagnosticReports"), wsScanNewest)
+	if err == nil {
+		snap.WSEvent = event
+		snap.WSScanOK = ok
+	}
+	if res, err := m.query(ctx, "sysctl", "-n", "kern.boottime"); err == nil {
+		if boot, ok := ParseSysctlBoottime(res.Stdout); ok {
+			snap.BootTime = boot
+			snap.BootAvailable = true
+		}
+	}
+	return snap
+}
+
+// probeTimeout bounds one telemetry probe. A hung probe (`top` on a
+// saturated host is exactly the incident shape this controller exists for)
+// must degrade to "unavailable" and defer, never hang the gate itself.
+const probeTimeout = 10 * time.Second
+
+func (m *Monitor) query(ctx context.Context, name string, args ...string) (*exec.Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	return m.Runner.RunQuery(ctx, name, args...)
+}
+
+// snapshotLinux reads /proc directly: loadavg + CPU count, MemAvailable, and
+// boot time. Thermal, CPU idle, and WindowServer are macOS-only concerns, so
+// linux leaves those flags false and EvaluatePressure skips them there.
+func (m *Monitor) snapshotLinux(ctx context.Context) PressureSnapshot {
+	_ = ctx
+	snap := PressureSnapshot{Platform: "linux", MemoryFreePct: -1}
+	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
+		if load1, ok := ParseProcLoadavg(string(data)); ok {
+			snap.Load1 = load1
+			snap.NumCPU = runtime.NumCPU()
+			snap.LoadAvailable = snap.NumCPU > 0
+		}
+	}
+	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+		if pct, ok := ParseProcMemInfo(string(data)); ok {
+			snap.MemoryFreePct = pct
+			snap.MemoryLevel = MemoryLevelFromAvailPct(pct, DefaultThresholds())
+			snap.MemoryAvailable = true
+		}
+	}
+	if data, err := os.ReadFile("/proc/stat"); err == nil {
+		if boot, ok := ParseProcStatBtime(string(data)); ok {
+			snap.BootTime = boot
+			snap.BootAvailable = true
+		}
+	}
+	return snap
+}
+
+// ParseMemoryPressureLevel maps `sysctl -n kern.memorystatus_vm_pressure_level`
+// output: 1 normal, 2 warning, 4 critical (the values the workspace policy
+// names). Anything else is unknown telemetry, which the caller must treat as
+// unavailable rather than normal.
+func ParseMemoryPressureLevel(out string) (string, bool) {
+	switch strings.TrimSpace(out) {
+	case "1":
+		return MemoryNormal, true
+	case "2":
+		return MemoryWarn, true
+	case "4":
+		return MemoryCritical, true
+	}
+	return "", false
+}
+
+var memoryFreeRE = regexp.MustCompile(`(?m)System-wide memory free percentage:\s*([0-9]+)%`)
+
+// ParseMemoryFreePct extracts the free percentage from `memory_pressure`
+// output (informational only; the pressure level carries the decision).
+func ParseMemoryFreePct(out string) (float64, bool) {
+	matches := memoryFreeRE.FindAllStringSubmatch(out, -1)
+	if len(matches) == 0 {
+		return 0, false
+	}
+	pct, err := strconv.ParseFloat(matches[len(matches)-1][1], 64)
+	return pct, err == nil
+}
+
+var thermalLimitRE = regexp.MustCompile(`(?m)CPU_Speed_Limit\s*=\s*([0-9]+)`)
+
+// ParseThermalLimit extracts the last CPU_Speed_Limit from `pmset -g
+// thermlog` output (the log can repeat the line; the latest sample wins).
+// Below 100 the CPU is throttled, which the policy reads as verifiable
+// thermal pressure.
+func ParseThermalLimit(out string) (int, bool) {
+	matches := thermalLimitRE.FindAllStringSubmatch(out, -1)
+	if len(matches) == 0 {
+		return 0, false
+	}
+	limit, err := strconv.Atoi(matches[len(matches)-1][1])
+	return limit, err == nil
+}
+
+// ParseLoadAvg parses `sysctl -n vm.loadavg` output: "{ 2.01 1.98 2.10 }".
+func ParseLoadAvg(out string) (float64, bool) {
+	fields := strings.Fields(strings.Trim(out, "{} \n"))
+	if len(fields) < 1 {
+		return 0, false
+	}
+	load1, err := strconv.ParseFloat(fields[0], 64)
+	return load1, err == nil
+}
+
+// ParseNCPU parses `sysctl -n hw.ncpu` output.
+func ParseNCPU(out string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
+}
+
+var topCPUUsageRE = regexp.MustCompile(`(?m)CPU usage:\s*[0-9.]+%\s*user,\s*[0-9.]+%\s*sys,\s*([0-9.]+)%\s*idle`)
+
+// ParseTopCPUUsage extracts the idle percentage from `top -l 1 -n 0` output.
+// The last "CPU usage" line wins so the parser stays correct if the probe
+// ever moves to `top -l 2` (whose first sample is the since-boot average).
+func ParseTopCPUUsage(out string) (float64, bool) {
+	matches := topCPUUsageRE.FindAllStringSubmatch(out, -1)
+	if len(matches) == 0 {
+		return 0, false
+	}
+	idle, err := strconv.ParseFloat(matches[len(matches)-1][1], 64)
+	return idle, err == nil
+}
+
+// ParseProcLoadavg parses /proc/loadavg: "2.01 1.98 2.10 3/456 7890".
+func ParseProcLoadavg(content string) (float64, bool) {
+	fields := strings.Fields(content)
+	if len(fields) < 1 {
+		return 0, false
+	}
+	load1, err := strconv.ParseFloat(fields[0], 64)
+	return load1, err == nil
+}
+
+// ParseProcMemInfo computes MemAvailable as a percent of MemTotal.
+func ParseProcMemInfo(content string) (float64, bool) {
+	var total, available float64
+	var haveTotal, haveAvail bool
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		kb, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			continue
+		}
+		switch fields[0] {
+		case "MemTotal:":
+			total, haveTotal = kb, true
+		case "MemAvailable:":
+			available, haveAvail = kb, true
+		}
+	}
+	if !haveTotal || !haveAvail || total <= 0 {
+		return 0, false
+	}
+	return available / total * 100, true
+}
+
+// ParseSysctlBoottime parses `sysctl -n kern.boottime` output:
+// "{ sec = 1758900000, usec = 0 } Sat Sep 26 12:00:00 2026".
+func ParseSysctlBoottime(out string) (time.Time, bool) {
+	re := regexp.MustCompile(`sec\s*=\s*([0-9]+)`)
+	m := re.FindStringSubmatch(out)
+	if m == nil {
+		return time.Time{}, false
+	}
+	sec, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(sec, 0), true
+}
+
+// ParseProcStatBtime parses the btime line of /proc/stat.
+func ParseProcStatBtime(content string) (time.Time, bool) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "btime" {
+			sec, err := strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				return time.Time{}, false
+			}
+			return time.Unix(sec, 0), true
+		}
+	}
+	return time.Time{}, false
+}

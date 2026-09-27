@@ -37,6 +37,7 @@ var defaultAgentSections = []string{
 	"Text Encoding",
 	"Operating Principles",
 	"Project Conventions",
+	"System Resource Safety",
 	"Tool-Specific Notes",
 	"Custom",
 }

@@ -28,6 +28,7 @@ dot [flags]
 
 ### SEE ALSO
 
+* [dot admit](dot_admit.md)	 - Run one heavy job per repo behind the host-pressure gate
 * [dot ai](dot_ai.md)	 - AI CLI/config helpers and settings backup/restore
 * [dot apply](dot_apply.md)	 - Apply dot configuration
 * [dot apps](dot_apps.md)	 - macOS app install and settings backup/restore

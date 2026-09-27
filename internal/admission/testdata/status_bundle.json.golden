@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-09-27T12:00:00+09:00",
+  "platform": "darwin",
+  "admit": true,
+  "snapshot": {
+    "platform": "darwin",
+    "memory_level": "normal",
+    "memory_available": true,
+    "memory_free_pct": 55,
+    "thermal_cpu_limit": 100,
+    "thermal_available": true,
+    "load1": 3.2,
+    "num_cpu": 10,
+    "load_available": true,
+    "idle_pct": 82,
+    "idle_available": true,
+    "ws_event": "0001-01-01T00:00:00Z",
+    "ws_scan_ok": true,
+    "boot_time": "2026-09-27T10:00:00+09:00",
+    "boot_available": true
+  },
+  "history": {
+    "defer_since": "0001-01-01T00:00:00Z",
+    "over_since": "0001-01-01T00:00:00Z",
+    "recover_since": "0001-01-01T00:00:00Z"
+  },
+  "owners": [
+    {
+      "owner": "builder@mac-mini",
+      "session": "sess-1",
+      "pid": 4242,
+      "pid_start": "Sun Sep 27 11:00:00 2026",
+      "pgid": 4242,
+      "class": "heavy",
+      "scope": "/Users/u/work/repo/.git",
+      "cwd": "/Users/u/work/repo",
+      "acquired_at": "2026-09-27T11:00:00+09:00",
+      "heartbeat_at": "2026-09-27T11:59:00+09:00",
+      "deadline": "2026-09-27T12:01:00+09:00"
+    }
+  ],
+  "note": "jobs not launched via `dot admit` are not visible to the admission controller"
+}

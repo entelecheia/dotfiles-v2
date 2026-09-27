@@ -1,0 +1,6 @@
+{
+  "class": "heavy",
+  "exit_code": 0,
+  "outcome": "completed",
+  "scope": "@ROOT@/repo/.git"
+}
