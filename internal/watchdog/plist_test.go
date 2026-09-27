@@ -103,3 +103,74 @@ func TestManager_ProbeOffDarwinIsPlistOnly(t *testing.T) {
 		t.Fatalf("probe = %#v, want {true false}", st)
 	}
 }
+
+func TestRenderWarpPlist_Golden(t *testing.T) {
+	got := RenderWarpPlist("/Users/test/.local/bin/dot", "/Users/test", 120*time.Second, "/Users/test/Library/Logs/dot")
+	golden := filepath.Join("testdata", "warp.plist.golden")
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read golden (run with UPDATE_GOLDEN=1 to create): %v", err)
+	}
+	if got != string(want) {
+		t.Errorf("warp plist drifted from golden:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestRenderWarpPlist_CarriesLabelMarkerAndInterval(t *testing.T) {
+	plist := RenderWarpPlist("/usr/local/bin/dot", "/Users/test", 120*time.Second, "/tmp/logs")
+	for _, want := range []string{WarpLabel, "<key>" + ScheduledRunEnv + "</key>", "<integer>120</integer>", "watchdog</string>", "warp</string>"} {
+		if !strings.Contains(plist, want) {
+			t.Errorf("warp plist missing %q", want)
+		}
+	}
+}
+
+// The root daemon runs as root: without the owning user's home pinned in
+// its arguments, homeFor resolves /var/root and the pass never finds the
+// setup snapshot.
+func TestRenderWarpPlist_PinsTheUsersHome(t *testing.T) {
+	plist := RenderWarpPlist("/usr/local/bin/dot", "/Users/test", 120*time.Second, "/tmp/logs")
+	for _, want := range []string{"<string>--home</string>", "<string>/Users/test</string>"} {
+		if !strings.Contains(plist, want) {
+			t.Errorf("warp plist missing %q", want)
+		}
+	}
+}
+
+func TestSudoInstallContent_DryRunCoversStaging(t *testing.T) {
+	dry := exec.NewRunner(true, slog.Default())
+	if err := sudoInstallContent(context.Background(), dry, []byte("<plist/>"), "/nonexistent-dest", 0o644); err != nil {
+		t.Fatalf("dry-run staging must succeed end to end: %v", err)
+	}
+}
+
+func TestManager_WarpRefusalsOffDarwin(t *testing.T) {
+	m := linuxManager(t.TempDir())
+	if _, err := m.InstallWarp(context.Background(), "/usr/local/bin/dot", 120*time.Second); !errors.Is(err, ErrNeedsDarwin) {
+		t.Fatalf("InstallWarp off-darwin = %v, want ErrNeedsDarwin", err)
+	}
+	if err := m.UninstallWarp(context.Background()); !errors.Is(err, ErrNeedsDarwin) {
+		t.Fatalf("UninstallWarp off-darwin = %v, want ErrNeedsDarwin", err)
+	}
+	if st := m.ProbeWarp(context.Background()); st.PlistExists || st.Loaded {
+		t.Fatalf("warp probe off-darwin = %#v, want all false", st)
+	}
+}
+
+func TestManager_WarpStatePaths(t *testing.T) {
+	m := NewManager(nil, "/home/u")
+	if got := m.WarpPlistPath(); got != "/Library/LaunchDaemons/com.dotfiles.watchdog.warp.plist" {
+		t.Errorf("WarpPlistPath = %q", got)
+	}
+	if got := m.WarpStatePath(); got != "/home/u/.local/state/dot/watchdog/warp.json" {
+		t.Errorf("WarpStatePath = %q", got)
+	}
+	if got := m.PowerStatePath(); got != "/home/u/.local/state/dot/watchdog/power.json" {
+		t.Errorf("PowerStatePath = %q", got)
+	}
+}

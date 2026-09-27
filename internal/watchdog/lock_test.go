@@ -29,7 +29,7 @@ func TestAcquireReapLock_ReclaimsStaleLock(t *testing.T) {
 	if err := os.Mkdir(lockPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := time.Now().Add(-reapLockStaleAfter - time.Minute)
+	stale := time.Now().Add(-passLockStaleAfter - time.Minute)
 	if err := os.Chtimes(lockPath, stale, stale); err != nil {
 		t.Fatal(err)
 	}

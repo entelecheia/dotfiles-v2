@@ -85,3 +85,32 @@ func ResolveReaper(c config.WatchdogReaperConfig) (ReaperSettings, error) {
 func ResolveNotify(c config.WatchdogNotifyConfig) NotifySettings {
 	return NotifySettings{MacOS: c.MacOS, NtfyURL: c.NtfyURL}
 }
+
+// Defaults applied when the profile leaves a warp knob unset: probe every
+// two minutes, act after two consecutive failures.
+const (
+	DefaultWarpInterval      = 120 * time.Second
+	DefaultWarpFailThreshold = 2
+)
+
+// WarpSettings is the resolved, defaults-applied form of
+// config.WatchdogWarpConfig.
+type WarpSettings struct {
+	Interval      time.Duration
+	FailThreshold int
+}
+
+// ResolveWarp applies defaults.
+func ResolveWarp(c config.WatchdogWarpConfig) WarpSettings {
+	s := WarpSettings{
+		Interval:      c.Interval.Std(),
+		FailThreshold: c.FailThreshold,
+	}
+	if s.Interval <= 0 {
+		s.Interval = DefaultWarpInterval
+	}
+	if s.FailThreshold <= 0 {
+		s.FailThreshold = DefaultWarpFailThreshold
+	}
+	return s
+}

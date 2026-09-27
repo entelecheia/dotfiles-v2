@@ -88,14 +88,35 @@ tool):
   LaunchAgent that runs the watchdog reaper on its configured interval,
   written and loaded by `dot watchdog setup` and removed by
   `dot watchdog uninstall` (macOS only)
+- `/Library/LaunchDaemons/com.dotfiles.watchdog.warp.plist` — the root
+  LaunchDaemon that runs the WARP heal pass, installed with sudo by
+  `dot watchdog setup` when `watchdog.warp` is enabled and removed by
+  `dot watchdog uninstall` (macOS only). Trust note: the daemon executes
+  the same user-installed `dot` binary (with `--home` pinned to the
+  installing user). On the single-user Macs dot targets that user already
+  holds sudo, so the user-writable binary is not a privilege boundary;
+  hardening it would need a root-owned copy refreshed on every dot
+  update, which is a documented non-goal for now. The kickstart target is
+  re-validated against Cloudflare's WARP daemon label shape at run time,
+  so a local edit of `warp.json` cannot redirect the root daemon at an
+  arbitrary service
 - `~/.local/state/dot/watchdog/` — the watchdog machine state: the resolved
-  config snapshot (`watchdog.yaml`) the scheduled reaper reads and the
-  cross-run CPU history (`samples.json`), written by `dot watchdog setup`
-  and every `dot watchdog reap` pass; removed only by the interactive
-  uninstall prompt
+  config snapshot (`watchdog.yaml`) the scheduled reaper reads, the
+  cross-run CPU history (`samples.json`), the WARP heal bookkeeping
+  (`warp.json`: consecutive failures, reconnect attempts, last daemon
+  restart, resolved WARP daemon label), and the pre-hardening power values
+  (`power.json`) that uninstall restores from; written by
+  `dot watchdog setup`, every `dot watchdog reap`/`dot watchdog warp`
+  pass, and removed only by the interactive uninstall prompt
 - `~/Library/Logs/dot/watchdog.log` — the watchdog JSON-lines event log
   (`dot watchdog log` tails it), plus the reaper unit's launchd
   stdout/stderr logs beside it
+- the power-management keys `sleep` (charger profile), `autorestart`, and
+  `womp` via `pmset`, and `restartfreeze` via `systemsetup` — written only
+  by `dot watchdog setup --headless`, after the prior values are saved to
+  `power.json`, and restored by `dot watchdog uninstall` under the
+  interactive-only restore prompt. No other pmset/systemsetup key is
+  touched.
 - `~/.kimi-code/mcp.json` — the `claude-mem` entry under `mcpServers`
   (command and args only), written by `dot ai memory install`; every
   other server entry is preserved

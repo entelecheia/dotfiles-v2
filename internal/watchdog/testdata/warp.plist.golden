@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dotfiles.watchdog.warp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/test/.local/bin/dot</string>
+    <string>--home</string>
+    <string>/Users/test</string>
+    <string>watchdog</string>
+    <string>warp</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>DOT_WATCHDOG_RUN</key>
+    <string>1</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>120</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/test/Library/Logs/dot/warp.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/test/Library/Logs/dot/warp.err.log</string>
+</dict>
+</plist>
