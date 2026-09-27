@@ -63,6 +63,9 @@ func Resolve(policy *config.AIPolicyConfig, request Request, inventory []Runtime
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
+	projectPaths := map[string][]string{}
+	projectErrors := map[string]error{}
+	inspectedPaths := map[string]bool{}
 	for _, t := range targets {
 		if request.Agent != "" && t.Agent != request.Agent {
 			continue
@@ -95,7 +98,15 @@ func Resolve(policy *config.AIPolicyConfig, request Request, inventory []Runtime
 			continue
 		}
 		if t.Billing == "subscription" {
-			conflict, e := projectSubscriptionConflict(t.Agent, request.CWD)
+			if !inspectedPaths[t.Agent] {
+				projectPaths[t.Agent], projectErrors[t.Agent] = projectSettingsFiles(t.Agent, request.CWD)
+				inspectedPaths[t.Agent] = true
+			}
+			e := projectErrors[t.Agent]
+			conflict := false
+			if e == nil {
+				conflict = projectFilesSubscriptionConflict(t.Agent, projectPaths[t.Agent])
+			}
 			if e != nil {
 				reject(e.Error())
 				continue
@@ -152,7 +163,7 @@ func Resolve(policy *config.AIPolicyConfig, request Request, inventory []Runtime
 			reject("knowledge approval inspection failed: " + knowledgeErr.Error())
 			continue
 		}
-		conflicts, knowledgeErr := KnowledgeConflicts(runtime, request.CWD, approvals)
+		conflicts, knowledgeErr := knowledgeConflictsForProjectFiles(runtime, projectPaths[t.Agent], approvals)
 		if knowledgeErr != nil {
 			reject(knowledgeErr.Error())
 			continue
@@ -201,9 +212,9 @@ func permissionArgs(r Runtime, unattended bool) ([]string, string, error) {
 		}
 	case "kimi":
 		if unattended {
-			return nil, "", fmt.Errorf("Kimi risk-aware asking does not authorize unattended writes")
+			return nil, "", fmt.Errorf("kimi risk-aware asking does not authorize unattended writes")
 		}
-		return nil, "", fmt.Errorf("Kimi requires a verified host-mediated approval path")
+		return nil, "", fmt.Errorf("kimi requires a verified host-mediated approval path")
 	case "opencode":
 		return nil, "", fmt.Errorf("OpenCode rules are not an automatic reviewer; host-mediated path required")
 	}

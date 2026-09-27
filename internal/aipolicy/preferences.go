@@ -350,11 +350,11 @@ func (p Preferences) Plan(policy *config.AIPolicyConfig, inventory []Runtime) ([
 				nativeHome = filepath.Join(p.Home, ".codex")
 			}
 			if !filepath.IsAbs(nativeHome) {
-				return nil, fmt.Errorf("Codex home must be absolute")
+				return nil, fmt.Errorf("codex home must be absolute")
 			}
 			relative, relErr := filepath.Rel(p.Home, nativeHome)
 			if relErr != nil || strings.HasPrefix(relative, "..") {
-				return nil, fmt.Errorf("Codex home must be within preference home")
+				return nil, fmt.Errorf("codex home must be within preference home")
 			}
 			base := filepath.Join(nativeHome, "config.toml")
 			if err = safePreferencePath(base); err != nil {
@@ -452,7 +452,7 @@ func (p Preferences) writeFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer root.Remove(temp)
+	defer func() { _ = root.Remove(temp) }()
 	if _, err = file.Write(data); err != nil {
 		file.Close()
 		return err

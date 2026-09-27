@@ -109,12 +109,12 @@ func TestPreferencesSymlinkAndMalformedReceipt(t *testing.T) {
 	}
 }
 func TestPreferencesCodexIsolated(t *testing.T) {
-	prefs, policy, inventory := preferenceFixture(t)
+	prefs, policy, _ := preferenceFixture(t)
 	target := &policy.Targets[0]
 	target.Agent = "codex"
 	target.Version = "0.157.1"
 	target.Model = "gpt-5"
-	inventory = []Runtime{{Agent: "codex", Available: true, AutoReview: true, Version: "0.157.1", Home: "/ignored/ambient-home"}}
+	inventory := []Runtime{{Agent: "codex", Available: true, AutoReview: true, Version: "0.157.1", Home: "/ignored/ambient-home"}}
 	native := filepath.Join(prefs.Home, ".codex")
 	if err := os.MkdirAll(native, 0700); err != nil {
 		t.Fatal(err)

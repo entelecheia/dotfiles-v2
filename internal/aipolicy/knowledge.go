@@ -67,7 +67,7 @@ func KnowledgeApprovals(runtime Runtime) ([]KnowledgeApproval, error) {
 			return nil, err
 		}
 		if len(data) > 1024*1024 {
-			return nil, fmt.Errorf("Codex config too large for knowledge binding inspection")
+			return nil, fmt.Errorf("codex config too large for knowledge binding inspection")
 		}
 		// This is a conservative recognizer of known table spellings, not a TOML
 		// rewriter. Multiline strings can impersonate table headers, so refuse them.
@@ -237,7 +237,7 @@ func knowledgeTable(header string) string {
 			}
 			token = strings.TrimSpace(token)
 			for _, ch := range token {
-				if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-') {
+				if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '_' && ch != '-' {
 					return ""
 				}
 			}

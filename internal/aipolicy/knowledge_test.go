@@ -87,7 +87,7 @@ func TestKnowledgeClaudePreciseGrants(t *testing.T) {
 	}
 }
 func TestKnowledgeOverlayContainsOnlyPermissionLeaves(t *testing.T) {
-	prefs, policy, inventory := preferenceFixture(t)
+	prefs, policy, _ := preferenceFixture(t)
 	policy.Targets[0].Agent = "codex"
 	policy.Targets[0].Version = "0.157.1"
 	home := filepath.Join(prefs.Home, ".codex")
@@ -97,7 +97,7 @@ func TestKnowledgeOverlayContainsOnlyPermissionLeaves(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[mcp_servers.obsidian]\ncommand = \"private-executable\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	inventory = []Runtime{{Agent: "codex", Home: home, Version: "0.157.1", Available: true, AutoReview: true, SubscriptionVerified: true}}
+	inventory := []Runtime{{Agent: "codex", Home: home, Version: "0.157.1", Available: true, AutoReview: true, SubscriptionVerified: true}}
 	changes, err := prefs.Apply(policy, inventory, false)
 	if err != nil {
 		t.Fatal(err)

@@ -79,6 +79,7 @@ func Inspect(ctx context.Context, home string, explicit bool) ([]Runtime, error)
 			cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(cctx, binary, args...)
+			cmd.Dir = home
 			cmd.Env = probeEnvironment(home, explicit, r)
 			output := &boundedProbeOutput{}
 			cmd.Stdout = output
@@ -256,34 +257,21 @@ func allowedPreference(value string) bool {
 // Native CLIs may inherit project settings from ancestors. Check every possible
 // project root, without reading credentials or traversing directories recursively.
 func projectSubscriptionConflict(agent, cwd string) (bool, error) {
-	if cwd == "" {
-		return false, nil
+	files, err := projectSettingsFiles(agent, cwd)
+	if err != nil {
+		return false, err
 	}
-	if !filepath.IsAbs(cwd) {
-		return false, fmt.Errorf("request cwd must be absolute")
-	}
-	dir := filepath.Clean(cwd)
-	for depth := 0; depth < 64; depth++ {
-		if agent == "claude" || agent == "codex" {
-			r := Runtime{Agent: agent, Home: filepath.Join(dir, "."+agent)}
-			inspectPreferences(&r)
-			if r.SubscriptionConflict {
-				return true, nil
-			}
-			if agent == "claude" {
-				inspectPreferencesFile(&r, "settings.local.json")
-				if r.SubscriptionConflict {
-					return true, nil
-				}
-			}
+	return projectFilesSubscriptionConflict(agent, files), nil
+}
+func projectFilesSubscriptionConflict(agent string, files []string) bool {
+	for _, file := range files {
+		r := Runtime{Agent: agent, Home: filepath.Dir(file)}
+		inspectPreferencesFile(&r, filepath.Base(file))
+		if r.SubscriptionConflict {
+			return true
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return false, nil
-		}
-		dir = parent
 	}
-	return false, fmt.Errorf("project settings ancestry exceeds inspection limit")
+	return false
 }
 
 func codexSubscription(home string) bool {
@@ -348,6 +336,13 @@ func probeEnvironment(home string, explicit bool, r Runtime) []string {
 // KnowledgeConflicts preserves native ask/deny rules and surfaces precedence
 // conflicts instead of describing shadowed grants as no-confirm permissions.
 func KnowledgeConflicts(r Runtime, cwd string, grants []KnowledgeApproval) ([]string, error) {
+	projectFiles, err := projectSettingsFiles(r.Agent, cwd)
+	if err != nil {
+		return nil, err
+	}
+	return knowledgeConflictsForProjectFiles(r, projectFiles, grants)
+}
+func knowledgeConflictsForProjectFiles(r Runtime, projectFiles []string, grants []KnowledgeApproval) ([]string, error) {
 	conflicts := []string{}
 	if r.Agent != "claude" || len(grants) == 0 {
 		return conflicts, nil
@@ -362,23 +357,11 @@ func KnowledgeConflicts(r Runtime, cwd string, grants []KnowledgeApproval) ([]st
 	case "linux":
 		files = append(files, "/etc/claude-code/managed-settings.json")
 	}
-	if cwd != "" {
-		if !filepath.IsAbs(cwd) {
-			return nil, fmt.Errorf("knowledge settings cwd must be absolute")
-		}
-		dir := filepath.Clean(cwd)
-		for depth := 0; depth < 64; depth++ {
-			files = append(files, filepath.Join(dir, ".claude", "settings.json"), filepath.Join(dir, ".claude", "settings.local.json"))
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			if depth == 63 {
-				return nil, fmt.Errorf("knowledge settings ancestry exceeds limit")
-			}
-			dir = parent
-		}
-	}
+	return knowledgeConflictsFromFiles(r, append(files, projectFiles...), grants)
+}
+func knowledgeConflictsFromFiles(r Runtime, files []string, grants []KnowledgeApproval) ([]string, error) {
+	conflicts := []string{}
+
 	seen := map[string]bool{}
 	for _, file := range files {
 		if seen[file] {
