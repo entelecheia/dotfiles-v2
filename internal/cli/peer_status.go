@@ -37,6 +37,11 @@ type peerStatusJSON struct {
 	RunCount      *int           `json:"runCount"`
 	LastHeldAt    *string        `json:"lastHeldAt"`
 	HomePathsPath string         `json:"homePathsPath"`
+	// Worktrees lists the linked-worktree roots detected in the workspace.
+	// Optional and omitted when empty: the schema stays at version 1 and a
+	// peer on a previous release simply sends nothing, which decodes as the
+	// empty list the sticky union already tolerates.
+	Worktrees []string `json:"worktrees,omitempty"`
 }
 
 func newPeerStatusCmd() *cobra.Command {
@@ -90,6 +95,9 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	}
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	if jsonOutput {
+		// Detection is filesystem-only and read-only; a walk error must not
+		// take the whole status document down with it.
+		worktrees, _ := syncer.DetectLinkedWorktrees(st.LocalPath)
 		encoder := json.NewEncoder(cmd.OutOrStdout())
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(peerStatusJSON{
@@ -101,11 +109,15 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 			RunCount:      snapshot.RunCount,
 			LastHeldAt:    timeJSON(st.LastHeld),
 			HomePathsPath: syncer.PeerHomePathsFile(cfg.LocalPaths),
+			Worktrees:     worktrees,
 		})
 	}
 	p := printerFrom(cmd)
 	p.Header("Peer Status")
 	p.KV("Workspace", st.LocalPath)
+	if worktrees, _ := syncer.DetectLinkedWorktrees(st.LocalPath); len(worktrees) > 0 {
+		p.KV("Linked worktrees", strconv.Itoa(len(worktrees))+" (excluded from sync)")
+	}
 	p.KV("Target", st.Target.String())
 	p.KV("Scheduler", snapshot.State)
 	if snapshot.IntervalSeconds > 0 {

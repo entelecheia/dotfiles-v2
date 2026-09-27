@@ -71,6 +71,7 @@ func parsePatternLines(content []byte) ([]string, error) {
 type runtimeFilters struct {
 	SharedDyn     string // shared-folder excludes (operator-curated)
 	SubmodulesDyn string // git submodule paths — synced via Git, never rsync
+	WorktreesDyn  string // linked-worktree roots (peer profile only, sticky)
 	TrackedDyn    string // include layer: tracked relpaths ∪ baseline keys
 	TombstonesDyn string // paths deleted locally — must not be pulled back
 
@@ -363,6 +364,8 @@ func patternMatchesPathOrAncestor(pattern excludePattern, path string) bool {
 //     re-admit them and the pull cannot restore what was just deleted
 //  1. always-on state paths (/.dotfiles/, /inbox/gdrive/)
 //  2. submodule excludes (submodules sync through Git)
+//     2b. linked-worktree excludes (peer profile only — branch checkouts whose
+//     content travels through Git)
 //  3. allow.txt re-includes — the only way secrets sync — plus the
 //     env-template builtins
 //  4. hardcoded secrets excludes
@@ -393,6 +396,9 @@ func commonArgs(cfg *Config, rf runtimeFilters) []string {
 	args = append(args, alwaysExcludeArgs()...)
 	if rf.SubmodulesDyn != "" {
 		args = append(args, "--exclude-from="+rf.SubmodulesDyn)
+	}
+	if rf.WorktreesDyn != "" {
+		args = append(args, "--exclude-from="+rf.WorktreesDyn)
 	}
 	args = append(args, secretsFilterArgs(cfg.AllowPatterns)...)
 	excludeFiles := []string{cfg.ExcludesFile, cfg.IgnoreFile, rf.SharedDyn}

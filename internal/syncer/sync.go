@@ -81,6 +81,13 @@ type Config struct {
 	// them to the target.
 	Tombstones []string
 
+	// WorktreeExcludes are the linked-worktree roots excluded from the peer
+	// payload for one run: the sticky union MergePeerWorktrees computed from
+	// the stored list, local detection and the remote report. Runtime-only
+	// and peer-profile-only; prepareRuntimeFilters and newSyncFilter both
+	// read it so the rsync argv and the Go walk agree layer for layer.
+	WorktreeExcludes []string
+
 	// NamesNormalized avoids a second full workspace scan when a CLI caller
 	// already ran the marker-gated NFD preflight under the shared lock.
 	NamesNormalized bool
@@ -537,6 +544,16 @@ func prepareRuntimeFilters(cfg *Config, dryRun bool) (runtimeFilters, error) {
 	rf.SubmodulesDyn, err = MaterializeSubmodulesDynFile(dynDir, submodules)
 	if err != nil {
 		return rf, err
+	}
+	// The linked-worktree layer is peer-only (#135): the mirror profile never
+	// carries it, and isAlwaysExcluded stays static because intake and NFD
+	// normalization share it. cfg.WorktreeExcludes is the sticky union the
+	// caller computed for this run (MergePeerWorktrees).
+	if cfg.Profile == PeerProfile {
+		rf.WorktreesDyn, err = MaterializeWorktreesDynFile(dynDir, cfg.WorktreeExcludes)
+		if err != nil {
+			return rf, err
+		}
 	}
 	baseline, err := LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
 	if err != nil {

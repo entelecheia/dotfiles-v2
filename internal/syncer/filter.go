@@ -10,6 +10,7 @@ import (
 type syncFilter struct {
 	mode            FilterMode
 	submodules      []string         // sorted relpaths — excluded wholesale, synced via Git
+	worktrees       []string         // linked-worktree roots (peer profile only, sticky)
 	allowPatterns   []excludePattern // allow.txt + env-template builtins — win over every exclude
 	allowDirs       map[string]bool  // literal parent dirs of anchored allow patterns
 	secretPatterns  []excludePattern // deny-by-default secrets layer
@@ -32,6 +33,12 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 	f.submodules = gitSubmodulePaths(local)
 	if cfg.IncludeSubmodules {
 		f.submodules = nil
+	}
+	// The linked-worktree layer mirrors rf.WorktreesDyn in commonArgs: peer
+	// profile only, ahead of the allow layer so a worktree path cannot be
+	// re-included (same as submodules).
+	if cfg.Profile == PeerProfile {
+		f.worktrees = cfg.WorktreeExcludes
 	}
 
 	f.allowDirs = map[string]bool{}
@@ -130,10 +137,10 @@ func loadExcludeFile(path, base string) ([]excludePattern, error) {
 }
 
 // shouldSkip mirrors the rsync filter chain in commonArgs, layer for layer:
-// always-excluded state paths, submodules, allow re-includes, secrets
-// deny-by-default, static/shared excludes, then (include mode) directory
-// traversal, tracked ∪ baseline includes, the binary allowlist, and the
-// final catch-all.
+// always-excluded state paths, submodules, linked worktrees (peer only),
+// allow re-includes, secrets deny-by-default, static/shared excludes, then
+// (include mode) directory traversal, tracked ∪ baseline includes, the
+// binary allowlist, and the final catch-all.
 func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 	rel = normalizeRel(rel)
 	if rel == "" || rel == "." {
@@ -144,6 +151,11 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 	}
 	for _, sub := range f.submodules {
 		if rel == sub || strings.HasPrefix(rel, sub+"/") {
+			return true
+		}
+	}
+	for _, wt := range f.worktrees {
+		if rel == wt || strings.HasPrefix(rel, wt+"/") {
 			return true
 		}
 	}
