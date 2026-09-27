@@ -33,12 +33,6 @@ func RegisteredAgentTools() []AgentTool {
 			OverlayFile: "codex.md",
 		},
 		{
-			ID:          "cursor",
-			DisplayName: "Cursor",
-			TargetPath:  "~/.cursor/AGENTS.md",
-			OverlayFile: "cursor.md",
-		},
-		{
 			ID:          "kiro",
 			DisplayName: "Kiro CLI",
 			TargetPath:  "~/.kiro/steering/AGENTS.md",

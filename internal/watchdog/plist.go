@@ -13,6 +13,11 @@ const ReapLabel = "com.dotfiles.watchdog.reap"
 // WARP heal pass (a daemon restart needs the system domain).
 const WarpLabel = "com.dotfiles.watchdog.warp"
 
+// MonitLabel is the launchd label of the user LaunchAgent that keeps monit
+// running in the foreground (launchd owns the keepalive; monit's own daemon
+// mode is only its 60s check cycle).
+const MonitLabel = "com.dotfiles.monit"
+
 // ScheduledRunEnv marks a reaper run as scheduled (set by the plist, read by
 // the CLI to keep scheduled runs off interactive stdout), mirroring the sync
 // scheduler's DOT_SCHEDULED_RUN.
@@ -103,4 +108,41 @@ func RenderWarpPlist(dotPath, homeDir string, interval time.Duration, logDir str
 </dict>
 </plist>
 `, WarpLabel, dotPath, homeDir, ScheduledRunEnv, seconds, logDir, logDir)
+}
+
+// RenderMonitPlist renders the user LaunchAgent that runs monit in the
+// foreground (-I) against the rendered control file. Same explicit-PATH
+// rationale as the reaper unit; launchd's KeepAlive replaces monit's own
+// daemon self-supervision.
+func RenderMonitPlist(monitPath, monitrcPath string, logDir string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>%s</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>%s</string>
+    <string>-I</string>
+    <string>-c</string>
+    <string>%s</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>%s/monit.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>%s/monit.err.log</string>
+</dict>
+</plist>
+`, MonitLabel, monitPath, monitrcPath, logDir, logDir)
 }
