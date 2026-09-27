@@ -1,6 +1,7 @@
 package module
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -111,6 +112,8 @@ func TestGitModule_ApplyRemovesByteIdenticalLegacyIgnore(t *testing.T) {
 func TestGitModule_ApplyKeepsLocallyEditedLegacyIgnore(t *testing.T) {
 	rc := gitRunContext(t)
 	seedLegacyIgnore(t, rc, legacyGitIgnore+"*.local-only\n")
+	var out bytes.Buffer
+	rc.Out = &out
 	m := &GitModule{}
 
 	if _, err := m.Apply(context.Background(), rc); err != nil {
@@ -123,6 +126,11 @@ func TestGitModule_ApplyKeepsLocallyEditedLegacyIgnore(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "*.local-only") {
 		t.Errorf("legacy ignore content changed by Apply:\n%s", body)
+	}
+	// The excludesFile pointer moved, so the run must name every custom
+	// pattern that just stopped applying (codex P1 on #143).
+	if !strings.Contains(out.String(), "orphaned pattern: *.local-only") {
+		t.Errorf("Apply does not list the orphaned custom pattern:\n%s", out.String())
 	}
 }
 
