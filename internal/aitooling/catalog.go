@@ -18,6 +18,8 @@ func Catalog() []Entry {
 		{"claude", "agent", "Claude Code", "claude"}, {"codex", "agent", "Codex", "codex"},
 		{"kimi", "agent", "Kimi Code", "kimi"}, {"qwen", "agent", "Qwen Code", "qwen"},
 		{"grok", "agent", "Grok", "grok"}, {"opencode", "agent", "OpenCode", "opencode"},
+		{"gencode", "agent", "Genspark Gencode", "gencode"}, {"pi", "agent", "pi", "pi"},
+		{"antigravity", "agent", "Antigravity CLI", "agy"},
 		{"ripwire", "tool", "ripwire", "ripwire"}, {"ocr", "tool", "Open Code Review", "ocr"},
 		{"gsd", "tool", "GSD", "gsd"}, {"claude-mem", "tool", "claude-mem", ""},
 		{"ponytail", "tool", "ponytail", ""},
@@ -61,7 +63,10 @@ func ValidateSelection(s config.AIToolingConfig) error {
 			return fmt.Errorf("gsd-pi pin requires gsd")
 		}
 		if !stableVersion.MatchString(version) {
-			return fmt.Errorf("pin for %s must be a stable X.Y.Z version", id)
+			spec := binarySpecs()[id]
+			if !spec.allowSuffix || versionInOutput.FindString(version) != version {
+				return fmt.Errorf("pin for %s must be a stable X.Y.Z version", id)
+			}
 		}
 	}
 	return nil

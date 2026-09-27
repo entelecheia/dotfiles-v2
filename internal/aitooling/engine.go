@@ -226,6 +226,13 @@ func (e *Engine) get(ctx context.Context, url string) ([]byte, error) {
 	return b, nil
 }
 func (e *Engine) latest(ctx context.Context, source string) (string, error) {
+	return e.latestVersion(ctx, source, false)
+}
+
+// latestVersion resolves the newest stable version from a metadata endpoint.
+// allowSuffix also accepts prerelease-suffixed versions (e.g. 1.18.32-gencode.1)
+// for publishers that never ship plain X.Y.Z tags.
+func (e *Engine) latestVersion(ctx context.Context, source string, allowSuffix bool) (string, error) {
 	b, err := e.get(ctx, source)
 	if err != nil {
 		return "", err
@@ -248,6 +255,12 @@ func (e *Engine) latest(ctx context.Context, source string) (string, error) {
 		if v == "" {
 			v = doc.Tag
 		}
+	}
+	if allowSuffix {
+		if versionInOutput.FindString(v) != v {
+			return "", errors.New("stable version metadata is unknown")
+		}
+		return strings.TrimPrefix(v, "v"), nil
 	}
 	if !stableVersion.MatchString(v) {
 		return "", errors.New("stable version metadata is unknown")

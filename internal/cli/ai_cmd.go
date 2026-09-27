@@ -70,7 +70,7 @@ var extraDetectedCLIs = []string{"agy", "gh", "fabric"}
 // rename in updateToolBinary cannot leave this list silently reporting
 // "(not found)".
 func detectedCLINames() []string {
-	return append([]string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "copilot", "gemini", "pi", "kiro-cli", "cursor-agent"}, extraDetectedCLIs...)
+	return append([]string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "gencode", "pi", "agy", "copilot", "gemini", "kiro-cli", "cursor-agent"}, extraDetectedCLIs...)
 }
 
 func runAIList(cmd *cobra.Command, _ []string) error {

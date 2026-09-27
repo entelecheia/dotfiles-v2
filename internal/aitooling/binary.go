@@ -6,11 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
 
-type binarySpec struct{ npm, metadata, installer, relpath, brew string }
+type binarySpec struct {
+	npm, metadata, installer, relpath, brew string
+	// allowSuffix accepts prerelease-suffixed versions (e.g. 1.18.32-gencode.1)
+	// for metadata and pins; the strict stable X.Y.Z rule otherwise applies.
+	allowSuffix bool
+	// platformManifest formats the metadata URL with a runtime platform token.
+	platformManifest bool
+	// selfUpdating binaries update themselves; dot installs but never updates.
+	selfUpdating bool
+}
 
 func binarySpecs() map[string]binarySpec {
 	return map[string]binarySpec{
@@ -20,8 +30,12 @@ func binarySpecs() map[string]binarySpec {
 		"kimi":     {metadata: "https://code.kimi.com/kimi-code/latest", installer: "https://code.kimi.com/kimi-code/install.sh", relpath: ".kimi-code/bin/kimi"},
 		"grok":     {metadata: "https://x.ai/cli/stable", installer: "https://x.ai/cli/install.sh", relpath: ".grok/bin/grok"},
 		"opencode": {npm: "opencode-ai", metadata: "https://api.github.com/repos/anomalyco/opencode/releases/latest", installer: "https://opencode.ai/install", relpath: ".opencode/bin/opencode", brew: "opencode"},
-		"ripwire":  {metadata: "https://api.github.com/repos/redhat-et/ripwire/releases/latest", installer: "https://raw.githubusercontent.com/redhat-et/ripwire/v%s/scripts/install.sh", relpath: ".local/bin/ripwire"},
-		"ocr":      {npm: "@alibaba-group/open-code-review", metadata: "https://registry.npmjs.org/@alibaba-group/open-code-review/latest"},
+		"gencode":  {npm: "@genspark/gencode", metadata: "https://registry.npmjs.org/@genspark/gencode/latest", allowSuffix: true},
+		"pi":       {npm: "@earendil-works/pi-coding-agent", metadata: "https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest"},
+		// pi.dev/install.sh is interactive; the npm provider is the managed route.
+		"antigravity": {metadata: "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/%s.json", installer: "https://antigravity.google/cli/install.sh", relpath: ".local/bin/agy", platformManifest: true, selfUpdating: true},
+		"ripwire":     {metadata: "https://api.github.com/repos/redhat-et/ripwire/releases/latest", installer: "https://raw.githubusercontent.com/redhat-et/ripwire/v%s/scripts/install.sh", relpath: ".local/bin/ripwire"},
+		"ocr":         {npm: "@alibaba-group/open-code-review", metadata: "https://registry.npmjs.org/@alibaba-group/open-code-review/latest"},
 	}
 }
 func (e *Engine) binary(ctx context.Context, en Entry, pin string, op Operation) ItemResult {
@@ -46,7 +60,7 @@ func (e *Engine) binary(ctx context.Context, en Entry, pin string, op Operation)
 	if provider == "brew" {
 		return e.brewBinary(ctx, en, pin, op, path, spec, r)
 	}
-	latest, err := e.latest(ctx, spec.metadata)
+	latest, err := e.latestVersion(ctx, metadataURL(spec), spec.allowSuffix)
 	if err != nil {
 		r.Status = "unknown"
 		r.Detail = err.Error()
@@ -109,6 +123,11 @@ func (e *Engine) binary(ctx context.Context, en Entry, pin string, op Operation)
 		r.Detail = "existing npm prefix belongs outside requested home; preserve it"
 		return r
 	}
+	if spec.selfUpdating && path != "" {
+		r.Status = "deferred-self-update"
+		r.Detail = en.Name + " self-updates in the background; remove " + path + " and run dot ai ensure to reinstall"
+		return r
+	}
 	if err = e.installBinary(ctx, en.ID, target, path, provider, prefix, spec); err != nil {
 		r.Status = "failed"
 		r.Detail = err.Error()
@@ -135,6 +154,24 @@ func (e *Engine) binary(ctx context.Context, en Entry, pin string, op Operation)
 	e.record(en.ID, provider, afterPath, after, r.Status)
 	return r
 }
+
+// metadataURL resolves the latest-version metadata endpoint, expanding the
+// platform token for platform-specific manifests.
+func metadataURL(s binarySpec) string {
+	if !s.platformManifest {
+		return s.metadata
+	}
+	platform := runtime.GOOS + "_" + runtime.GOARCH
+	switch platform {
+	case "darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64":
+	default:
+		// Unsupported platforms keep the literal template; the metadata fetch
+		// fails and the entry defers instead of installing a wrong build.
+		return s.metadata
+	}
+	return fmt.Sprintf(s.metadata, platform)
+}
+
 func (e *Engine) provenance(id, path string, s binarySpec) (string, string) {
 	if path == "" {
 		if s.installer != "" {
@@ -212,6 +249,8 @@ func (e *Engine) installBinary(ctx context.Context, id, version, path, provider,
 		case "grok":
 			env = setEnv(env, "GROK_CHANNEL", "stable")
 			env = setEnv(env, "GROK_BIN_DIR", filepath.Join(e.opts.HomeDir, ".grok", "bin"))
+		case "antigravity":
+			args = []string{"-s", "--", "--dir", filepath.Join(e.opts.HomeDir, ".local", "bin")}
 		}
 		_, err = e.exec(ctx, command{Path: "/bin/bash", Args: args, Env: env, Dir: e.opts.HomeDir, Input: body})
 		return err

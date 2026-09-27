@@ -12,7 +12,7 @@ import (
 )
 
 // updateTools is the fixed phase order of `dot ai update`.
-var updateTools = []string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "ripwire", "ocr", "gsd", "claude-mem", "ponytail"}
+var updateTools = []string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "gencode", "pi", "antigravity", "ripwire", "ocr", "gsd", "claude-mem", "ponytail"}
 
 func newAIUpdateCmd() *cobra.Command {
 	c := &cobra.Command{Use: "update", Short: "Update explicitly selected agent CLIs and development tools", Long: `Update only the saved six-agent/five-addon allowlist.

@@ -21,7 +21,7 @@ dot ai update [flags]
       --check          Inspect installed and available versions without mutation
   -h, --help           help for update
       --json           Emit machine-readable JSON
-      --tool strings   Limit to saved selections (claude,codex,kimi,qwen,grok,opencode,ripwire,ocr,gsd,claude-mem,ponytail)
+      --tool strings   Limit to saved selections (claude,codex,kimi,qwen,grok,opencode,gencode,pi,antigravity,ripwire,ocr,gsd,claude-mem,ponytail)
 ```
 
 ### Options inherited from parent commands

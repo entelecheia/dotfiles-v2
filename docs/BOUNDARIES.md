@@ -6,10 +6,13 @@ canonical links and target deployment. Dot delegates selected skill sharing to
 Maru's capability-checked CLI; it never copies or rewrites skill trees itself.
 Native/plugin/system bundles remain owned by their native installers.
 
-The selectable agent environments are Claude, Codex, Kimi, Qwen, Grok and
-OpenCode. The automatic add-on catalog is limited to ripwire, Open Code Review,
-GSD, claude-mem and ponytail. Selection limits managed writes; it does not hide
-existing globally discoverable skills from unselected agents.
+The selectable agent environments are Claude, Codex, Kimi, Qwen, Grok,
+OpenCode, Genspark Gencode, pi and Antigravity. The automatic add-on catalog
+is limited to ripwire, Open Code Review, GSD, claude-mem and ponytail.
+Selection limits managed writes; it does not hide existing globally
+discoverable skills from unselected agents. Gencode and pi install through
+the managed npm prefix; Antigravity installs `agy` under `~/.local/bin` and
+self-updates, so update operations defer rather than reinstall.
 
 ## dotfiles-v2 May Write
 
