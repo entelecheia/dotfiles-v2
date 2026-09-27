@@ -137,7 +137,9 @@ func TestSSHTransportOverServe(t *testing.T) {
 
 	t.Setenv("HOME", t.TempDir()) // a regression to os.UserHomeDir() must not reach the real worker
 	var lastArgs []string
-	home := t.TempDir() // no claude-mem settings: the import kick must stay local
+	// This test's import dedupes to zero rows, so the kick branch is not
+	// reached; the settings-free temp home keeps it local if that changes.
+	home := t.TempDir()
 	transport := &SSHTransport{Run: func(ctx context.Context, target string, serveArgs []string, stdin []byte) ([]byte, error) {
 		lastArgs = serveArgs
 		// serveArgs: ai memory sync --serve <op> [--remote-db <path>]
