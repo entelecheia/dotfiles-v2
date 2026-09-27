@@ -67,6 +67,10 @@ func gateWithBusyRetry(ctx context.Context, store *admission.Store, monitor *adm
 			return d, ctx.Err()
 		case <-time.After(backoff):
 		}
+		// The timer can wake late; never admit past the wait budget.
+		if time.Now().After(deadline) {
+			return d, nil
+		}
 	}
 }
 
@@ -102,7 +106,7 @@ subcommand names.`,
 }
 
 func runAdmit(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 	p := printerFrom(cmd)
 	class, _ := cmd.Flags().GetString("class")
 	wait, _ := cmd.Flags().GetDuration("wait")
