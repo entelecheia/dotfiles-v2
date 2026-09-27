@@ -96,3 +96,17 @@ func TestUserStateRootFollowsHome(t *testing.T) {
 		t.Fatalf("UserStateRoot = %q, %v; want %q", got, err, DefaultStateRoot(home))
 	}
 }
+
+// TestParseProcessTableNamesFromArgv0: tools started by absolute path are
+// classified by their real name, not a truncated comm column.
+func TestParseProcessTableNamesFromArgv0(t *testing.T) {
+	rows, parents, err := parseProcessTable("  101     1   5.0 /opt/homebrew/bin/go test ./...\n  102   101  99.0 /usr/bin/make -j2\n  103     1   0.1 /opt/homebrew/bin/dot ai memory bridge\n")
+	if err != nil || len(rows) != 3 || parents[102] != 101 {
+		t.Fatalf("rows=%+v parents=%v err=%v", rows, parents, err)
+	}
+	for i, want := range []bool{true, true, false} {
+		if got := heavyweight(rows[i].name, rows[i].args); got != want {
+			t.Errorf("row %+v heavyweight = %v, want %v", rows[i], got, want)
+		}
+	}
+}

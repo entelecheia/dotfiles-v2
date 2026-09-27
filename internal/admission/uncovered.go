@@ -94,33 +94,12 @@ type processRow struct {
 }
 
 func scanHeavyJobs(ctx context.Context) ([]HeavyJob, error) {
-	out, err := boundedOutput(ctx, "/bin/ps", "-axo", "pid=,ppid=,%cpu=,comm=,args=")
+	out, err := boundedOutput(ctx, "/bin/ps", "-axo", "pid=,ppid=,%cpu=,args=")
 	if err != nil {
 		return nil, fmt.Errorf("process inventory: %w", err)
 	}
-	var rows []processRow
-	parents := map[int]int{}
-	scan := bufio.NewScanner(strings.NewReader(out))
-	scan.Buffer(make([]byte, 4096), 1<<20)
-	for scan.Scan() {
-		f := strings.Fields(scan.Text())
-		if len(f) < 4 {
-			continue
-		}
-		pid, e := strconv.Atoi(f[0])
-		if e != nil {
-			continue
-		}
-		ppid, e := strconv.Atoi(f[1])
-		if e != nil {
-			continue
-		}
-		cpu, _ := strconv.ParseFloat(f[2], 64)
-		r := processRow{pid: pid, ppid: ppid, cpu: cpu, name: filepath.Base(f[3]), args: strings.Join(f[4:], " ")}
-		rows = append(rows, r)
-		parents[pid] = ppid
-	}
-	if err := scan.Err(); err != nil {
+	rows, parents, err := parseProcessTable(out)
+	if err != nil {
 		return nil, err
 	}
 	ancestors := map[int]bool{}
@@ -140,6 +119,34 @@ func scanHeavyJobs(ctx context.Context) ([]HeavyJob, error) {
 		}
 	}
 	return resolveJobDirectories(ctx, found), nil
+}
+
+// parseProcessTable reads `ps -axo pid=,ppid=,%cpu=,args=` output. The name
+// is argv[0]'s base name: macOS truncates the comm column to 16 characters,
+// so /opt/homebrew/bin/go would read as "bi" and escape the name rules.
+func parseProcessTable(out string) ([]processRow, map[int]int, error) {
+	var rows []processRow
+	parents := map[int]int{}
+	scan := bufio.NewScanner(strings.NewReader(out))
+	scan.Buffer(make([]byte, 4096), 1<<20)
+	for scan.Scan() {
+		f := strings.Fields(scan.Text())
+		if len(f) < 4 {
+			continue
+		}
+		pid, e := strconv.Atoi(f[0])
+		if e != nil {
+			continue
+		}
+		ppid, e := strconv.Atoi(f[1])
+		if e != nil {
+			continue
+		}
+		cpu, _ := strconv.ParseFloat(f[2], 64)
+		rows = append(rows, processRow{pid: pid, ppid: ppid, cpu: cpu, name: filepath.Base(f[3]), args: strings.Join(f[3:], " ")})
+		parents[pid] = ppid
+	}
+	return rows, parents, scan.Err()
 }
 
 func heavyweight(name, args string) bool {
