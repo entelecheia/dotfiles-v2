@@ -7,7 +7,7 @@
     "memory_level": "normal",
     "memory_available": true,
     "memory_free_pct": 55,
-    "thermal_cpu_limit": 100,
+    "thermal_state": 0,
     "thermal_available": true,
     "load1": 2,
     "num_cpu": 10,

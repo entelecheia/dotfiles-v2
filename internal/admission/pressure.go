@@ -84,7 +84,7 @@ type PressureSnapshot struct {
 	MemoryAvailable bool    `json:"memory_available"` // the memory probe succeeded
 	MemoryFreePct   float64 `json:"memory_free_pct"`  // informational; -1 when unknown
 
-	ThermalCPULimit  int  `json:"thermal_cpu_limit"` // CPU_Speed_Limit percent; 100 = no limit
+	ThermalState     int  `json:"thermal_state"`     // NSProcessInfo.thermalState: 0 nominal .. 3 critical; -1 when unknown
 	ThermalAvailable bool `json:"thermal_available"` // the thermal probe succeeded
 
 	Load1         float64 `json:"load1"`
@@ -152,8 +152,8 @@ func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now ti
 			reasons = append(reasons, "memory pressure critical")
 		}
 	}
-	if thermalApplies(snap.Platform) && snap.ThermalAvailable && snap.ThermalCPULimit < 100 {
-		reasons = append(reasons, fmt.Sprintf("thermal pressure (CPU speed limit %d%%)", snap.ThermalCPULimit))
+	if thermalPressure(snap) {
+		reasons = append(reasons, thermalReason(snap))
 	}
 	if windowServerApplies(snap.Platform) && snap.WSScanOK && !snap.WSEvent.IsZero() {
 		// Pre-boot evidence is stale by construction: a WindowServer event
@@ -246,7 +246,17 @@ func requiredProbes(snap PressureSnapshot) []probeCheck {
 	return probes
 }
 
-func thermalApplies(platform string) bool      { return platform == "darwin" }
+func thermalApplies(platform string) bool { return platform == "darwin" }
+
+// thermalPressure: serious (2) or critical (3) thermal state, the same
+// threshold resourceguard uses.
+func thermalPressure(snap PressureSnapshot) bool {
+	return thermalApplies(snap.Platform) && snap.ThermalAvailable && snap.ThermalState >= ThermalSerious
+}
+
+func thermalReason(snap PressureSnapshot) string {
+	return "thermal pressure (state " + ThermalStateName(snap.ThermalState) + ")"
+}
 func windowServerApplies(platform string) bool { return platform == "darwin" }
 
 // cpuExcursion reports whether the snapshot is past the defer thresholds
@@ -276,8 +286,8 @@ func recoveryBlockers(snap PressureSnapshot, th Thresholds) []string {
 	if snap.MemoryAvailable && snap.MemoryLevel != MemoryNormal {
 		out = append(out, "memory pressure "+snap.MemoryLevel)
 	}
-	if thermalApplies(snap.Platform) && snap.ThermalAvailable && snap.ThermalCPULimit < 100 {
-		out = append(out, fmt.Sprintf("thermal pressure (CPU speed limit %d%%)", snap.ThermalCPULimit))
+	if thermalPressure(snap) {
+		out = append(out, thermalReason(snap))
 	}
 	if snap.LoadAvailable && snap.NumCPU > 0 && snap.Load1 >= th.LoadRecoverFrac*float64(snap.NumCPU) {
 		out = append(out, fmt.Sprintf("load1 %.2f >= %.0f%% of %d CPUs", snap.Load1, th.LoadRecoverFrac*100, snap.NumCPU))
@@ -334,7 +344,7 @@ func (m *Monitor) SnapshotPressure(ctx context.Context) PressureSnapshot {
 }
 
 func (m *Monitor) snapshotDarwin(ctx context.Context) PressureSnapshot {
-	snap := PressureSnapshot{Platform: "darwin", MemoryFreePct: -1}
+	snap := PressureSnapshot{Platform: "darwin", MemoryFreePct: -1, ThermalState: -1}
 	if res, err := m.query(ctx, "sysctl", "-n", "kern.memorystatus_vm_pressure_level"); err == nil {
 		if level, ok := ParseMemoryPressureLevel(res.Stdout); ok {
 			snap.MemoryLevel = level
@@ -346,9 +356,11 @@ func (m *Monitor) snapshotDarwin(ctx context.Context) PressureSnapshot {
 			snap.MemoryFreePct = pct
 		}
 	}
-	if res, err := m.query(ctx, "pmset", "-g", "thermlog"); err == nil {
-		if limit, ok := ParseThermalLimit(res.Stdout); ok {
-			snap.ThermalCPULimit = limit
+	// `pmset -g thermlog` streams and prints nothing until a thermal event,
+	// so it never answers within probeTimeout on an idle Mac (#161).
+	if res, err := m.query(ctx, "osascript", "-l", "JavaScript", "-e", thermalStateScript); err == nil {
+		if state, ok := ParseThermalState(res.Stdout); ok {
+			snap.ThermalState = state
 			snap.ThermalAvailable = true
 		}
 	}
@@ -399,7 +411,7 @@ func (m *Monitor) query(ctx context.Context, name string, args ...string) (*exec
 // linux leaves those flags false and EvaluatePressure skips them there.
 func (m *Monitor) snapshotLinux(ctx context.Context) PressureSnapshot {
 	_ = ctx
-	snap := PressureSnapshot{Platform: "linux", MemoryFreePct: -1}
+	snap := PressureSnapshot{Platform: "linux", MemoryFreePct: -1, ThermalState: -1}
 	if data, err := os.ReadFile("/proc/loadavg"); err == nil {
 		if load1, ok := ParseProcLoadavg(string(data)); ok {
 			snap.Load1 = load1
@@ -452,19 +464,40 @@ func ParseMemoryFreePct(out string) (float64, bool) {
 	return pct, err == nil
 }
 
-var thermalLimitRE = regexp.MustCompile(`(?m)CPU_Speed_Limit\s*=\s*([0-9]+)`)
+// Thermal states reported by NSProcessInfo.thermalState.
+const (
+	ThermalNominal = iota
+	ThermalFair
+	ThermalSerious
+	ThermalCritical
+)
 
-// ParseThermalLimit extracts the last CPU_Speed_Limit from `pmset -g
-// thermlog` output (the log can repeat the line; the latest sample wins).
-// Below 100 the CPU is throttled, which the policy reads as verifiable
-// thermal pressure.
-func ParseThermalLimit(out string) (int, bool) {
-	matches := thermalLimitRE.FindAllStringSubmatch(out, -1)
-	if len(matches) == 0 {
+// thermalStateScript reads NSProcessInfo.thermalState through JXA; it
+// answers immediately, unlike `pmset -g thermlog`.
+const thermalStateScript = `ObjC.import("Foundation"); $.NSProcessInfo.processInfo.thermalState`
+
+// ParseThermalState parses the osascript output: a single 0..3 integer.
+func ParseThermalState(out string) (int, bool) {
+	state, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || state < ThermalNominal || state > ThermalCritical {
 		return 0, false
 	}
-	limit, err := strconv.Atoi(matches[len(matches)-1][1])
-	return limit, err == nil
+	return state, true
+}
+
+// ThermalStateName names a thermal state for status output and reasons.
+func ThermalStateName(state int) string {
+	switch state {
+	case ThermalNominal:
+		return "nominal"
+	case ThermalFair:
+		return "fair"
+	case ThermalSerious:
+		return "serious"
+	case ThermalCritical:
+		return "critical"
+	}
+	return "unknown"
 }
 
 // ParseLoadAvg parses `sysctl -n vm.loadavg` output: "{ 2.01 1.98 2.10 }".

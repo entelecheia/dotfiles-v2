@@ -1,9 +1,14 @@
 package admission
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 // --- Probe parsers (fixtures) ---
@@ -38,19 +43,16 @@ func TestParseMemoryFreePct(t *testing.T) {
 	}
 }
 
-func TestParseThermalLimit(t *testing.T) {
-	log := "CPU_Speed_Limit \t = 100 \nCPU_Sched_Limit \t = 100 \nCPU_Available_CPUs \t = 10 \n"
-	limit, ok := ParseThermalLimit(log)
-	if !ok || limit != 100 {
-		t.Errorf("ParseThermalLimit = %d, %v; want 100, true", limit, ok)
+func TestParseThermalState(t *testing.T) {
+	for out, want := range map[string]int{"0\n": 0, "1\n": 1, " 2 ": 2, "3": 3} {
+		if got, ok := ParseThermalState(out); !ok || got != want {
+			t.Errorf("ParseThermalState(%q) = %d, %v; want %d, true", out, got, ok, want)
+		}
 	}
-	repeated := "CPU_Speed_Limit \t = 100 \nCPU_Speed_Limit \t = 65 \n"
-	limit, ok = ParseThermalLimit(repeated)
-	if !ok || limit != 65 {
-		t.Errorf("ParseThermalLimit repeated = %d, %v; want last sample 65, true", limit, ok)
-	}
-	if _, ok := ParseThermalLimit("Note: No thermal warning level has been recorded\n"); ok {
-		t.Error("expected miss when no CPU_Speed_Limit line exists")
+	for _, out := range []string{"", "4", "-1", "nominal", "Note: No thermal warning level has been recorded\n"} {
+		if _, ok := ParseThermalState(out); ok {
+			t.Errorf("ParseThermalState(%q) accepted invalid output", out)
+		}
 	}
 }
 
@@ -139,7 +141,6 @@ func healthyDarwin() PressureSnapshot {
 		MemoryLevel:      MemoryNormal,
 		MemoryAvailable:  true,
 		MemoryFreePct:    55,
-		ThermalCPULimit:  100,
 		ThermalAvailable: true,
 		Load1:            3.0,
 		NumCPU:           10,
@@ -182,10 +183,20 @@ func TestEvaluateMemoryWarnAndCritical(t *testing.T) {
 
 func TestEvaluateThermalPressure(t *testing.T) {
 	snap := healthyDarwin()
-	snap.ThermalCPULimit = 65
-	d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
-	if d.Admit || !strings.Contains(evalDeferReasons(d), "thermal") {
-		t.Errorf("thermal pressure = %+v, want defer with thermal reason", d)
+	for state, reason := range map[int]string{
+		ThermalSerious:  "thermal pressure (state serious)",
+		ThermalCritical: "thermal pressure (state critical)",
+	} {
+		snap.ThermalState = state
+		d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
+		if d.Admit || !strings.Contains(evalDeferReasons(d), reason) {
+			t.Errorf("thermal state %d = %+v, want defer with %q", state, d, reason)
+		}
+	}
+	// Fair is not pressure: it must not block admission on its own.
+	snap.ThermalState = ThermalFair
+	if d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0); strings.Contains(evalDeferReasons(d), "thermal") {
+		t.Errorf("thermal state fair produced a thermal defer: %+v", d)
 	}
 }
 
@@ -348,5 +359,44 @@ func TestEvaluateLinuxApplicability(t *testing.T) {
 	d = EvaluatePressure(snap, DefaultThresholds(), hist, evalT0)
 	if d.Admit {
 		t.Error("sustained linux load admitted")
+	}
+}
+
+// TestSnapshotDarwinThermalProbe drives the real probe wiring with a stub
+// osascript on PATH: the argument list and parsing are what #161 broke.
+func TestSnapshotDarwinThermalProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name, output string
+		wantState    int
+		wantOK       bool
+	}{
+		{"serious", "echo 2", ThermalSerious, true},
+		{"garbled", "echo nominal", -1, false},
+		// A failed probe must stay unavailable even if it printed a digit.
+		{"failed", "echo 0; exit 1", -1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			// Builtins only: PATH holds just this stub.
+			script := "#!/bin/sh\n[ \"$#\" -eq 4 ] || exit 2\n[ \"$1 $2 $3\" = \"-l JavaScript -e\" ] || exit 2\n" +
+				"case \"$4\" in *'NSProcessInfo.processInfo.thermalState'*) ;; *) exit 2;; esac\n" + tc.output + "\n"
+			if err := os.WriteFile(filepath.Join(bin, "osascript"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin)
+			m := &Monitor{Runner: exec.NewProbeRunner(), GOOS: "darwin", Home: t.TempDir()}
+			snap := m.SnapshotPressure(context.Background())
+			if snap.ThermalAvailable != tc.wantOK || snap.ThermalState != tc.wantState {
+				t.Errorf("thermal = %d, available %v; want %d, %v", snap.ThermalState, snap.ThermalAvailable, tc.wantState, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestThermalStateName(t *testing.T) {
+	for state, want := range map[int]string{-1: "unknown", 0: "nominal", 1: "fair", 2: "serious", 3: "critical", 4: "unknown"} {
+		if got := ThermalStateName(state); got != want {
+			t.Errorf("ThermalStateName(%d) = %q, want %q", state, got, want)
+		}
 	}
 }

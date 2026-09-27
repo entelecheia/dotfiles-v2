@@ -263,8 +263,8 @@ func TestHistoryRoundTripAndGate(t *testing.T) {
 		SnapshotFunc: func(context.Context, *Monitor) PressureSnapshot {
 			return PressureSnapshot{
 				Platform: "darwin", MemoryLevel: MemoryWarn, MemoryAvailable: true,
-				ThermalCPULimit: 100, ThermalAvailable: true,
-				Load1: 1, NumCPU: 10, LoadAvailable: true,
+				ThermalAvailable: true,
+				Load1:            1, NumCPU: 10, LoadAvailable: true,
 				IdlePct: 90, IdleAvailable: true, WSScanOK: true,
 			}
 		},

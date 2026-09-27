@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,6 @@ func healthyAdmitSnapshot() admission.PressureSnapshot {
 		MemoryLevel:      admission.MemoryNormal,
 		MemoryAvailable:  true,
 		MemoryFreePct:    55,
-		ThermalCPULimit:  100,
 		ThermalAvailable: true,
 		Load1:            2,
 		NumCPU:           10,
@@ -330,4 +330,26 @@ func goldenAdmitStatusFixture(t *testing.T) (home, root string) {
 		t.Fatalf("seeding the owner = %v, %v, %v", slot, holder, err)
 	}
 	return home, root
+}
+
+// TestAdmitStatusThermalRow: the text status names the thermal state and
+// shows an unavailable probe as such (#161).
+func TestAdmitStatusThermalRow(t *testing.T) {
+	admitSandbox(t)
+	snap := healthyAdmitSnapshot()
+	// Fair does not defer, so the name can only come from the Thermal row,
+	// not from a defer-reason bullet.
+	snap.ThermalState = admission.ThermalFair
+	stubAdmitMonitor(t, snap)
+	out, _, _ := runDotForTest("admit", "status")
+	if !regexp.MustCompile(`Thermal:\s+fair`).MatchString(out) {
+		t.Errorf("Thermal row does not name the state:\n%s", out)
+	}
+	snap.ThermalAvailable = false
+	snap.ThermalState = -1
+	stubAdmitMonitor(t, snap)
+	out, _, _ = runDotForTest("admit", "status")
+	if !regexp.MustCompile(`Thermal:\s+\(unavailable\)`).MatchString(out) || strings.Contains(out, "nominal") {
+		t.Errorf("unavailable thermal probe must print (unavailable):\n%s", out)
+	}
 }
