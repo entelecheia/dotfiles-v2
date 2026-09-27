@@ -47,9 +47,23 @@ func (m *Manager) BeszelEnvRef(envPath string) string {
 // file and be fully removed by `dot watchdog uninstall` inside the
 // documented boundaries. envPath and agentPath are rendered as given — the
 // caller resolves the agent binary (brew prefix) and passes BeszelEnvRef for
-// the env path. Both are operator-owned local paths; like the reaper/warp
-// units they are interpolated unescaped.
-func RenderBeszelPlist(agentPath, envPath, logDir string) string {
+// the env path. listen lands as the LISTEN fallback in the shell line:
+// `export LISTEN="${LISTEN:-<listen>}"`, so an env-file LISTEN wins and the
+// resolved config value (default :45876) only applies when the env file
+// leaves it unset (precedence: env file > config).
+//
+// Every interpolated value is validated against validPlistPath (no double
+// quote, no line break — the same rule monit's renderer enforces) and then
+// XML-escaped; a path or listen value that fails validation is an error,
+// never a corrupted unit.
+func RenderBeszelPlist(agentPath, envPath, listen, logDir string) (string, error) {
+	for name, path := range map[string]string{"agent path": agentPath, "env path": envPath, "log dir": logDir, "listen": listen} {
+		if err := validPlistPath(path); err != nil {
+			return "", fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	script := fmt.Sprintf(`set -a; . "%s"; set +a; export LISTEN="${LISTEN:-%s}"; exec "%s"`,
+		xmlEscape(envPath), xmlEscape(listen), xmlEscape(agentPath))
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -61,7 +75,7 @@ func RenderBeszelPlist(agentPath, envPath, logDir string) string {
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>set -a; . "%s"; set +a; exec "%s"</string>
+    <string>%s</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -73,21 +87,26 @@ func RenderBeszelPlist(agentPath, envPath, logDir string) string {
   <string>%s/beszel.err.log</string>
 </dict>
 </plist>
-`, BeszelLabel, envPath, agentPath, logDir, logDir)
+`, BeszelLabel, script, xmlEscape(logDir), xmlEscape(logDir)), nil
 }
 
 // InstallBeszel writes the agent plist (0644) and (re)loads the
 // LaunchAgent. Idempotent like Install: any pre-loaded copy is unloaded
 // first so a binary- or env-path change takes effect on rerun. The env file
 // is NOT written here — it is secret material restored by `dot secrets`.
-func (m *Manager) InstallBeszel(ctx context.Context, agentPath, envPath string) error {
+// listen is the resolved watchdog.beszel.listen value (see RenderBeszelPlist
+// for the env-file-wins precedence).
+func (m *Manager) InstallBeszel(ctx context.Context, agentPath, envPath, listen string) error {
 	if m.goos() != "darwin" {
 		return ErrNeedsDarwin
+	}
+	plist, err := RenderBeszelPlist(agentPath, m.BeszelEnvRef(envPath), listen, m.LogDir())
+	if err != nil {
+		return err
 	}
 	if err := m.Runner.MkdirAll(filepath.Dir(m.BeszelPlistPath()), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(m.BeszelPlistPath()), err)
 	}
-	plist := RenderBeszelPlist(agentPath, m.BeszelEnvRef(envPath), m.LogDir())
 	if err := m.Runner.WriteFileAtomic(m.BeszelPlistPath(), []byte(plist), 0o644); err != nil {
 		return fmt.Errorf("writing beszel plist: %w", err)
 	}

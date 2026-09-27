@@ -179,3 +179,23 @@ func TestResolveBeszel_KeepsExplicitValues(t *testing.T) {
 		t.Errorf("explicit values lost: %#v", s)
 	}
 }
+
+// A relative env_path would resolve against launchd's cwd (not the user's
+// home) when the plist sources it; ResolveBeszel pins it against the manager
+// home so BeszelEnvRef always renders an absolute-or-$HOME path.
+func TestResolveBeszel_RelativeEnvPathIsAbsolutized(t *testing.T) {
+	s, err := ResolveBeszel(config.WatchdogBeszelConfig{
+		HubURL:  "https://hub.example",
+		EnvPath: ".config/beszel/custom.env",
+	}, "/home/u")
+	if err != nil {
+		t.Fatalf("ResolveBeszel: %v", err)
+	}
+	if s.EnvPath != "/home/u/.config/beszel/custom.env" {
+		t.Errorf("relative env path = %q, want it joined against the home", s.EnvPath)
+	}
+	m := NewManager(nil, "/home/u")
+	if ref := m.BeszelEnvRef(s.EnvPath); ref != "$HOME/.config/beszel/custom.env" {
+		t.Errorf("absolutized env ref = %q, want $HOME-relative", ref)
+	}
+}

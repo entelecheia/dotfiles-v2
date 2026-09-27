@@ -9,7 +9,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>set -a; . "$HOME/.config/beszel/agent.env"; set +a; exec "/opt/homebrew/bin/beszel-agent"</string>
+    <string>set -a; . "$HOME/.config/beszel/agent.env"; set +a; export LISTEN="${LISTEN:-:45876}"; exec "/opt/homebrew/bin/beszel-agent"</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

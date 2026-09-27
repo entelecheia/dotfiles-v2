@@ -53,6 +53,32 @@ func beszelStepPrinter(out, errOut *strings.Builder) *Printer {
 	return &Printer{Out: out, Err: errOut}
 }
 
+// stubLoggingBrew installs a brew stub that records every invocation and
+// exits 1, so a code path that must NOT touch Homebrew can prove it didn't.
+// Returns the invocation log path; it exists only if brew was called.
+func stubLoggingBrew(t *testing.T) (logPath string) {
+	t.Helper()
+	bin := t.TempDir()
+	logPath = filepath.Join(t.TempDir(), "brew-calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> \"" + logPath + "\"\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "brew"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
+	return logPath
+}
+
+func assertNoBrewCalls(t *testing.T, logPath string) {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if err == nil {
+		t.Fatalf("the step touched Homebrew (%s) before validating; the documented skip must need no brew", strings.TrimSpace(string(data)))
+	}
+	if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
 func TestBeszelFormula_CoreMissFallsBackToUpstreamTap(t *testing.T) {
 	prefix := t.TempDir()
 	stubBeszelBrew(t, prefix)
@@ -63,9 +89,7 @@ func TestBeszelFormula_CoreMissFallsBackToUpstreamTap(t *testing.T) {
 }
 
 func TestWatchdogSetupBeszel_SkipsWithoutHubURL(t *testing.T) {
-	prefix := t.TempDir()
-	stubBeszelBrew(t, prefix)
-	fakeBeszelBinary(t, prefix)
+	brewLog := stubLoggingBrew(t)
 	home := t.TempDir()
 	mgr := watchdog.NewManager(watchdogRunner(false), home)
 
@@ -80,12 +104,11 @@ func TestWatchdogSetupBeszel_SkipsWithoutHubURL(t *testing.T) {
 	if _, statErr := os.Stat(mgr.BeszelPlistPath()); !os.IsNotExist(statErr) {
 		t.Fatalf("plist was installed despite the missing hub_url: %v", statErr)
 	}
+	assertNoBrewCalls(t, brewLog)
 }
 
 func TestWatchdogSetupBeszel_SkipsWithoutEnvFile(t *testing.T) {
-	prefix := t.TempDir()
-	stubBeszelBrew(t, prefix)
-	fakeBeszelBinary(t, prefix)
+	brewLog := stubLoggingBrew(t)
 	home := t.TempDir()
 	mgr := watchdog.NewManager(watchdogRunner(false), home)
 
@@ -100,6 +123,59 @@ func TestWatchdogSetupBeszel_SkipsWithoutEnvFile(t *testing.T) {
 	}
 	if _, statErr := os.Stat(mgr.BeszelPlistPath()); !os.IsNotExist(statErr) {
 		t.Fatalf("plist was installed despite the missing env file: %v", statErr)
+	}
+	assertNoBrewCalls(t, brewLog)
+}
+
+// A custom env_path skips too, but its message must point at placing the
+// file MANUALLY: only the default ~/.config/beszel/agent.env pair is covered
+// by `dot secrets` backup/restore.
+func TestWatchdogSetupBeszel_CustomEnvPathSkipNamesManualPlacement(t *testing.T) {
+	brewLog := stubLoggingBrew(t)
+	home := t.TempDir()
+	mgr := watchdog.NewManager(watchdogRunner(false), home)
+
+	var out, errOut strings.Builder
+	bcfg := config.WatchdogBeszelConfig{Enabled: true, HubURL: "https://hub.example", EnvPath: "~/.config/beszel/custom.env"}
+	err := setupBeszelStep(beszelStepPrinter(&out, &errOut), mgr, bcfg, true)
+	if err != nil {
+		t.Fatalf("a missing custom env file must skip, not fail: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "manually") || !strings.Contains(errOut.String(), "not covered by `dot secrets`") {
+		t.Fatalf("custom-path skip must say the file is placed manually and is not secrets-covered:\n%s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "restore it with `dot secrets restore`") {
+		t.Fatalf("custom-path skip must not point at `dot secrets restore`:\n%s", errOut.String())
+	}
+	assertNoBrewCalls(t, brewLog)
+}
+
+// A custom env_path that EXISTS installs fine, with a clear note that the
+// path is outside `dot secrets` coverage.
+func TestWatchdogSetupBeszel_CustomEnvPathInstallNotesSecretsCoverage(t *testing.T) {
+	prefix := t.TempDir()
+	stubBeszelBrew(t, prefix)
+	fakeBeszelBinary(t, prefix)
+	home := t.TempDir()
+	mgr := watchdog.NewManager(watchdogRunner(false), home)
+	mgr.GOOS = "darwin"
+	customEnv := filepath.Join(home, ".config", "beszel", "custom.env")
+	writeCLITestFile(t, customEnv, "KEY=x\n")
+
+	var out, errOut strings.Builder
+	bcfg := config.WatchdogBeszelConfig{Enabled: true, HubURL: "https://hub.example", EnvPath: "~/.config/beszel/custom.env"}
+	if err := setupBeszelStep(beszelStepPrinter(&out, &errOut), mgr, bcfg, true); err != nil {
+		t.Fatalf("setup step: %v\nstderr=%s", err, errOut.String())
+	}
+	if !strings.Contains(out.String(), "not covered by `dot secrets`") {
+		t.Fatalf("install with a custom env_path must note the secrets-coverage gap:\n%s", out.String())
+	}
+	data, err := os.ReadFile(mgr.BeszelPlistPath())
+	if err != nil {
+		t.Fatalf("plist not installed: %v", err)
+	}
+	if !strings.Contains(string(data), `$HOME/.config/beszel/custom.env`) {
+		t.Errorf("plist does not source the custom env file:\n%s", data)
 	}
 }
 
@@ -125,7 +201,7 @@ func TestWatchdogSetupBeszel_InstallsPlistWhenReady(t *testing.T) {
 	if !strings.Contains(plist, watchdog.BeszelLabel) {
 		t.Errorf("plist lost the label:\n%s", plist)
 	}
-	if !strings.Contains(plist, `set -a; . "$HOME/.config/beszel/agent.env"; set +a; exec "`+agentPath+`"`) {
+	if !strings.Contains(plist, `set -a; . "$HOME/.config/beszel/agent.env"; set +a; export LISTEN="${LISTEN:-:45876}"; exec "`+agentPath+`"`) {
 		t.Errorf("plist lost the env-sourcing exec line:\n%s", plist)
 	}
 	// The secrets-managed env file is never read into output or rewritten.

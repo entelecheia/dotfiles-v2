@@ -31,23 +31,34 @@ import (
 var beszelFormulas = []string{"beszel-agent", "henrygd/beszel/beszel-agent"}
 
 // setupBeszelStep installs the Beszel agent LaunchAgent when
-// watchdog.beszel.enabled. A missing hub_url or env file skips the plist
-// install with a warning instead of failing setup: the env file carries the
-// hub KEY/TOKEN, is secrets-managed, and arrives via `dot secrets restore`.
+// watchdog.beszel.enabled. Validation runs BEFORE any Homebrew interaction:
+// a missing hub_url or env file performs the documented non-fatal skip with
+// no brew prompt and no install. The default env file carries the hub
+// KEY/TOKEN, is secrets-managed, and arrives via `dot secrets restore`; a
+// custom watchdog.beszel.env_path is NOT covered by `dot secrets`
+// backup/restore, which both the missing-file skip and the install note say.
 func setupBeszelStep(p *Printer, mgr *watchdog.Manager, bcfg config.WatchdogBeszelConfig, yes bool) error {
-	ctx := context.Background()
-	agentPath, err := ensureBeszelAgent(ctx, p, mgr.Runner, yes)
-	if err != nil {
-		return err
-	}
 	settings, err := watchdog.ResolveBeszel(bcfg, mgr.Home)
 	if err != nil {
 		p.Warn("skipping the Beszel agent plist: %v", err)
 		return nil
 	}
+	secretsCovered := settings.EnvPath == mgr.BeszelEnvPath()
 	if !mgr.Runner.FileExists(settings.EnvPath) {
-		p.Warn("skipping the Beszel agent plist: %s not found — restore it with `dot secrets restore` (it carries the hub KEY/TOKEN)", settings.EnvPath)
+		if secretsCovered {
+			p.Warn("skipping the Beszel agent plist: %s not found — restore it with `dot secrets restore` (it carries the hub KEY/TOKEN)", settings.EnvPath)
+		} else {
+			p.Warn("skipping the Beszel agent plist: %s not found — place it there manually; a custom watchdog.beszel.env_path is not covered by `dot secrets` backup/restore", settings.EnvPath)
+		}
 		return nil
+	}
+	if !secretsCovered {
+		p.Line("note: %s is a custom env_path — it is not covered by `dot secrets` backup/restore; back it up yourself", settings.EnvPath)
+	}
+	ctx := context.Background()
+	agentPath, err := ensureBeszelAgent(ctx, p, mgr.Runner, yes)
+	if err != nil {
+		return err
 	}
 	ok, err := ui.Confirm("Install the Beszel agent LaunchAgent "+watchdog.BeszelLabel+"?", yes)
 	if err != nil {
@@ -57,10 +68,10 @@ func setupBeszelStep(p *Printer, mgr *watchdog.Manager, bcfg config.WatchdogBesz
 		p.Line("Skipped Beszel agent.")
 		return nil
 	}
-	if err := mgr.InstallBeszel(ctx, agentPath, settings.EnvPath); err != nil {
+	if err := mgr.InstallBeszel(ctx, agentPath, settings.EnvPath, settings.Listen); err != nil {
 		return err
 	}
-	p.Line("  ✓ Beszel agent installed (%s, hub %s)", agentPath, settings.HubURL)
+	p.Line("  ✓ Beszel agent installed (%s, hub %s, listen fallback %s)", agentPath, settings.HubURL, settings.Listen)
 	return nil
 }
 
