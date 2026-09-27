@@ -125,6 +125,22 @@ func TestPlanWorkspaceNameTrim_WhitespaceOnlyNameIsRefused(t *testing.T) {
 	}
 }
 
+// Regression for codex P2 on #144: a whitespace-only name OUTSIDE the sync
+// set is irrelevant to the transfer and must not abort the trim.
+func TestPlanWorkspaceNameTrim_FilteredOutWhitespaceOnlyNameIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	writeNFDTestFile(t, root, "node_modules/ ", "bad")
+	writeNFDTestFile(t, root, "report.md ", "payload")
+
+	plan, err := PlanWorkspaceNameTrim(nfdTestConfig(t, root))
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if len(plan.Renames) != 1 || plan.Renames[0].OldRel != "report.md " {
+		t.Fatalf("renames = %#v, want only report.md", plan.Renames)
+	}
+}
+
 func TestPlanWorkspaceNameTrim_ExcludedTreesAndSymlinks(t *testing.T) {
 	root := t.TempDir()
 	writeNFDTestFile(t, root, ".dotfiles/state .json", "protected")

@@ -71,7 +71,7 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Submodules", fmt.Sprintf("%d excluded — they sync via Git, not `dot sync`", st.SubmoduleCount))
 	}
 	if st.UnsupportedNames > 0 {
-		p.KV("Unsupported names", ui.StyleWarning.Render(fmt.Sprintf("%d — Dropbox/Windows cannot store these; run `dot sync names trim`", st.UnsupportedNames)))
+		p.KV("Unsupported names", ui.StyleWarning.Render(fmt.Sprintf("%d — Dropbox/Windows cannot store these; `dot sync names trim` fixes trailing whitespace, names ending in a period need a manual rename", st.UnsupportedNames)))
 	}
 	if st.AllowCount > 0 {
 		p.KV("Secrets", ui.StyleWarning.Render(fmt.Sprintf("allowed: %d pattern(s) in allow.txt — these sync to the target", st.AllowCount)))

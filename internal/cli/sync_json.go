@@ -12,7 +12,10 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-const syncStatusSchemaVersion = 2
+// syncStatusSchemaVersion advances whenever the status document gains,
+// drops, or renames a field, so a strict consumer can reject a document
+// shape it does not know. v3 adds unsupportedNameCount.
+const syncStatusSchemaVersion = 3
 
 type syncTargetJSON struct {
 	Kind string `json:"kind"`

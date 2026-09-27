@@ -112,13 +112,6 @@ func PlanWorkspaceNameTrim(cfg *Config) (*NameNormalizationPlan, error) {
 
 		parent := filepath.Dir(absPath)
 		trimmedName := trimNameTrailingWhitespace(name)
-		if trimmedName == "" {
-			emptyTargets = append(emptyTargets, rel)
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		if byTarget, ok := siblings[parent]; ok {
 			if existing := byTarget[trimmedName]; len(existing) > 0 {
 				duplicate := false
@@ -171,6 +164,17 @@ func PlanWorkspaceNameTrim(cfg *Config) (*NameNormalizationPlan, error) {
 
 		if isNFDHardExcluded(rel) || filter.shouldSkip(absPath, rel, isDir) {
 			plan.Skipped++
+			if isDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// A whitespace-only name has no safe trim target, but only inside the
+		// sync set: a filtered-out entry is irrelevant to the transfer and must
+		// not abort the trim (codex P2 on #144).
+		if trimmedName == "" {
+			emptyTargets = append(emptyTargets, rel)
 			if isDir {
 				return filepath.SkipDir
 			}
