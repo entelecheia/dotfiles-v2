@@ -55,7 +55,14 @@ losing payload under ~/.dot-peer-conflicts. Host paths left in home-paths.txt
 alone stay additive, newest-mtime wins.
 
 A peer that is offline is not an error: the scheduled run probes reachability
-first and exits cleanly when the other machine is away.`,
+first and exits cleanly when the other machine is away.
+
+One Mac is the coordinator at a time, but the role can move. A planned switch
+(dot peer handover) syncs once, moves ownership with a higher epoch, and
+bootstraps the new coordinator with no baseline. An unplanned switch (dot
+peer takeover) installs the replica the last coordinator pushed after every
+complete run, then fences the returning machine by epoch: the loser adopts
+the new owner and removes its scheduler, so two coordinators never run.`,
 		RunE: func(c *cobra.Command, _ []string) error { return c.Help() },
 	}
 
@@ -67,6 +74,9 @@ first and exits cleanly when the other machine is away.`,
 	cmd.AddCommand(newPeerDiffCmd())
 	cmd.AddCommand(newPeerHomePathsCmd())
 	cmd.AddCommand(newPeerGitCmd())
+	cmd.AddCommand(newPeerHandoverCmd())
+	cmd.AddCommand(newPeerTakeoverCmd())
+	cmd.AddCommand(newPeerAdoptCmd())
 	return cmd
 }
 
@@ -154,6 +164,15 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 			p.Warn("no host-path list at %s; skipping", e.Path)
 		case syncer.PeerEventPartialTransfer:
 			reportPartial(p, e.Err)
+		case syncer.PeerEventPeerLacksHandover:
+			version := e.Path
+			if version == "" {
+				version = "unknown (pre-handover release)"
+			}
+			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", version)
+		case syncer.PeerEventReplicaPushFailed:
+			p.Warn("replica push failed: %v", e.Err)
+			p.Line("  The run itself is complete; the next unplanned switch may lack a fresh replica.")
 		}
 	}
 }
@@ -270,6 +289,11 @@ on a laptop.`,
 			}
 			if res.Unreachable {
 				p.Warn("peer %s unreachable; nothing to do", bs.Config.Target.Host)
+				return nil
+			}
+			if res.Demoted {
+				p.Warn("this machine lost the coordinator fence: it adopted the peer's owner and epoch")
+				p.Line("  Its scheduler was removed and nothing was transferred.")
 				return nil
 			}
 			p.Blank()

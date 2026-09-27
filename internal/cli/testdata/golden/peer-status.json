@@ -54,5 +54,6 @@
   "lastExitCode": null,
   "runCount": null,
   "lastHeldAt": null,
-  "homePathsPath": "@ROOT@/.dotfiles/peer/home-paths.txt"
+  "homePathsPath": "@ROOT@/.dotfiles/peer/home-paths.txt",
+  "dotVersion": "dev (test)"
 }

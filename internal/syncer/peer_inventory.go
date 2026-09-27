@@ -86,6 +86,9 @@ type remotePeerStatus struct {
 	SchemaVersion int      `json:"schemaVersion"`
 	Kind          string   `json:"kind"`
 	Worktrees     []string `json:"worktrees"`
+	OwnerEpoch    int      `json:"ownerEpoch"`
+	FencePending  bool     `json:"fencePending"`
+	DotVersion    string   `json:"dotVersion"`
 	Profile       struct {
 		Configured    bool   `json:"configured"`
 		Owner         string `json:"owner"`
@@ -102,18 +105,63 @@ type remotePeerStatus struct {
 // The validated document is returned so the run can reuse what it carries
 // (the remote's linked-worktree list) without a second ssh round trip.
 func checkRemotePeerOwner(ctx context.Context, runner *exec.Runner, cfg *Config) (*remotePeerStatus, error) {
-	if cfg == nil || !cfg.Target.IsSSH() {
-		return nil, fmt.Errorf("peer coordinator check: target is not SSH")
-	}
 	if strings.TrimSpace(cfg.Owner) == "" {
 		return nil, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+	}
+	status, err := fetchRemotePeerStatus(ctx, runner, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkRemotePeerTopology(cfg, status); err != nil {
+		return nil, err
+	}
+	if err := checkRemotePeerOwnerMatch(cfg, status); err != nil {
+		return nil, err
+	}
+	return status, nil
+}
+
+// fetchRemotePeerStatus reads the remote `dot peer status --json` document
+// and validates only its envelope (schema, kind, configured). Owner and
+// topology checks stay with the caller: PeerSchedule wants the bilateral
+// owner agreement, while PeerSync resolves owner divergence through the
+// epoch fence.
+func fetchRemotePeerStatus(ctx context.Context, runner *exec.Runner, cfg *Config) (*remotePeerStatus, error) {
+	if cfg == nil || !cfg.Target.IsSSH() {
+		return nil, fmt.Errorf("peer coordinator check: target is not SSH")
 	}
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand)
 	if err != nil {
 		return nil, fmt.Errorf("peer coordinator check: reading remote peer status: %w", err)
 	}
-	status, err := parseRemotePeerStatus(cfg, res.Stdout)
+	return parseRemotePeerStatusDoc(res.Stdout)
+}
+
+// parseRemotePeerStatusDoc validates only the document envelope. Epoch
+// fields stay zero when a previous release omits them, which the fence reads
+// as "no epoch support".
+func parseRemotePeerStatusDoc(raw string) (*remotePeerStatus, error) {
+	var status remotePeerStatus
+	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+		return nil, fmt.Errorf("peer coordinator check: invalid remote status JSON: %w", err)
+	}
+	if status.SchemaVersion != PeerStatusSchemaVersion || status.Kind != "peer" || !status.Profile.Configured {
+		return nil, fmt.Errorf("peer coordinator check: remote peer profile is not configured with the supported schema")
+	}
+	return &status, nil
+}
+
+// parseRemotePeerStatus is the full pre-epoch validation: envelope, topology
+// and owner match. Focused tests use it directly.
+func parseRemotePeerStatus(cfg *Config, raw string) (*remotePeerStatus, error) {
+	status, err := parseRemotePeerStatusDoc(raw)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkRemotePeerTopology(cfg, status); err != nil {
+		return nil, err
+	}
+	if err := checkRemotePeerOwnerMatch(cfg, status); err != nil {
 		return nil, err
 	}
 	return status, nil
@@ -124,45 +172,39 @@ func checkRemotePeerOwner(ctx context.Context, runner *exec.Runner, cfg *Config)
 // it on machines where the owner check is not its business. A remote on a
 // previous release answers with no worktrees field and the list is empty.
 func fetchRemotePeerWorktrees(ctx context.Context, runner *exec.Runner, cfg *Config) ([]string, error) {
-	if cfg == nil || !cfg.Target.IsSSH() {
-		return nil, fmt.Errorf("peer worktrees: target is not SSH")
-	}
-	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand)
+	status, err := fetchRemotePeerStatus(ctx, runner, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("peer worktrees: reading remote peer status: %w", err)
-	}
-	var status remotePeerStatus
-	if err := json.Unmarshal([]byte(res.Stdout), &status); err != nil {
-		return nil, fmt.Errorf("peer worktrees: invalid remote status JSON: %w", err)
+		return nil, err
 	}
 	return status.Worktrees, nil
 }
 
-func parseRemotePeerStatus(cfg *Config, raw string) (*remotePeerStatus, error) {
-	var status remotePeerStatus
-	if err := json.Unmarshal([]byte(raw), &status); err != nil {
-		return nil, fmt.Errorf("peer coordinator check: invalid remote status JSON: %w", err)
-	}
-	if status.SchemaVersion != PeerStatusSchemaVersion || status.Kind != "peer" || !status.Profile.Configured {
-		return nil, fmt.Errorf("peer coordinator check: remote peer profile is not configured with the supported schema")
-	}
-	wantOwner := NormalizeHostname(cfg.Owner)
-	gotOwner := NormalizeHostname(status.Profile.Owner)
-	if wantOwner == "" || gotOwner != wantOwner {
-		return nil, fmt.Errorf(
-			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
-			cfg.Owner, status.Profile.Owner, cfg.Owner)
-	}
+// checkRemotePeerTopology proves the remote profile points back at this
+// workspace: the pair must be exactly two machines, each naming the other.
+func checkRemotePeerTopology(cfg *Config, status *remotePeerStatus) error {
 	remoteWorkspace := filepath.Clean(status.Profile.WorkspacePath)
 	wantRemoteWorkspace := filepath.Clean(cfg.Target.Path)
 	remoteTarget := filepath.Clean(status.Profile.Target.Path)
 	wantRemoteTarget := filepath.Clean(strings.TrimRight(cfg.LocalPath, "/"))
 	if remoteWorkspace != wantRemoteWorkspace || remoteTarget != wantRemoteTarget {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"peer coordinator check: remote profile does not point back to this workspace (remote workspace %q target %q; expected %q -> %q)",
 			status.Profile.WorkspacePath, status.Profile.Target.Path, wantRemoteWorkspace, wantRemoteTarget)
 	}
-	return &status, nil
+	return nil
+}
+
+// checkRemotePeerOwnerMatch is the pre-epoch refusal: without an epoch to
+// order them, two different owners can never both proceed.
+func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
+	wantOwner := NormalizeHostname(cfg.Owner)
+	gotOwner := NormalizeHostname(status.Profile.Owner)
+	if wantOwner == "" || gotOwner != wantOwner {
+		return fmt.Errorf(
+			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
+			cfg.Owner, status.Profile.Owner, cfg.Owner)
+	}
+	return nil
 }
 
 func normalizeRemotePeerNames(ctx context.Context, runner *exec.Runner, cfg *Config) error {

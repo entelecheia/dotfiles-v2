@@ -464,6 +464,10 @@ type OwnerOptions struct {
 
 // SetOwner records which machine may push this profile and returns the owner
 // as written; an empty string means the restriction was removed.
+//
+// On the peer profile every deliberate owner change also bumps the owner
+// epoch and clears a pending fence: a recorded decision outranks any earlier
+// takeover, and the epoch is what the first contact after a switch compares.
 func SetOwner(opts OwnerOptions) (string, error) {
 	cfg := opts.Config
 	paths := cfg.LocalPaths
@@ -474,6 +478,7 @@ func SetOwner(opts OwnerOptions) (string, error) {
 	if !ok || local == nil {
 		return "", fmt.Errorf("profile %q has no config yet; run dot sync init first", cfg.Profile)
 	}
+	previous := local.Owner
 	switch {
 	case opts.Clear:
 		local.Owner = ""
@@ -484,6 +489,10 @@ func SetOwner(opts OwnerOptions) (string, error) {
 		}
 	default:
 		local.Owner = opts.SetTo
+	}
+	if cfg.Profile == PeerProfile && local.Owner != previous {
+		local.OwnerEpoch++
+		local.FencePending = false
 	}
 	if err := SaveLocalConfig(paths, local); err != nil {
 		return "", err

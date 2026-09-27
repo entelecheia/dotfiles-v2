@@ -42,6 +42,15 @@ type peerStatusJSON struct {
 	// peer on a previous release simply sends nothing, which decodes as the
 	// empty list the sticky union already tolerates.
 	Worktrees []string `json:"worktrees,omitempty"`
+	// OwnerEpoch and FencePending carry the coordinator-transition state the
+	// fence compares on first contact. Optional: a peer on a previous release
+	// sends neither, which the fence reads as "no epoch support" and answers
+	// with the pre-epoch owner-mismatch refusal (AC8).
+	OwnerEpoch   int  `json:"ownerEpoch,omitempty"`
+	FencePending bool `json:"fencePending,omitempty"`
+	// DotVersion names this binary so a newer peer can word its
+	// feature-skipped messages after the version that lacks the feature.
+	DotVersion string `json:"dotVersion,omitempty"`
 }
 
 func newPeerStatusCmd() *cobra.Command {
@@ -115,6 +124,9 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 			LastHeldAt:    timeJSON(st.LastHeld),
 			HomePathsPath: syncer.PeerHomePathsFile(cfg.LocalPaths),
 			Worktrees:     worktrees,
+			OwnerEpoch:    cfg.OwnerEpoch,
+			FencePending:  cfg.FencePending,
+			DotVersion:    cmd.Root().Version,
 		})
 	}
 	p := printerFrom(cmd)
