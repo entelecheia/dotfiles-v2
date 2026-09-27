@@ -51,7 +51,16 @@ func admitSandbox(t *testing.T) (home, workdir string) {
 	t.Setenv(admission.NestedEnv, "")
 	t.Setenv(admission.OwnerEnv, "test-owner@test-host")
 	t.Chdir(workdir)
+	stubAdmitUncovered(t, nil)
 	return home, workdir
+}
+
+// stubAdmitUncovered replaces the process-table scan with a fixed inventory.
+func stubAdmitUncovered(t *testing.T, jobs []string) {
+	t.Helper()
+	old := admitFindUncovered
+	admitFindUncovered = func(context.Context, string, bool) ([]string, error) { return jobs, nil }
+	t.Cleanup(func() { admitFindUncovered = old })
 }
 
 func fallbackScopeFor(t *testing.T, dir string) string {
@@ -266,6 +275,7 @@ func goldenAdmitBase(t *testing.T, snap admission.PressureSnapshot) (home, root 
 	t.Setenv(admission.OwnerEnv, "golden-owner@golden-host")
 	t.Setenv(admission.SessionEnv, "golden-session")
 	stubAdmitMonitorAt(t, snap, goldenAdmitClock)
+	stubAdmitUncovered(t, nil)
 	repo := filepath.Join(root, "repo")
 	runner := exec.NewRunner(false, slog.Default())
 	if _, err := runner.Run(context.Background(), "git", "init", repo); err != nil {
@@ -351,5 +361,58 @@ func TestAdmitStatusThermalRow(t *testing.T) {
 	out, _, _ = runDotForTest("admit", "status")
 	if !regexp.MustCompile(`Thermal:\s+\(unavailable\)`).MatchString(out) || strings.Contains(out, "nominal") {
 		t.Errorf("unavailable thermal probe must print (unavailable):\n%s", out)
+	}
+}
+
+// AC6 (CLI side): heavy work that holds no slot defers `dot admit` (#162).
+func TestAdmitDefersOnUncoveredWork(t *testing.T) {
+	admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	stubAdmitUncovered(t, []string{"cargo(pid=77,parent=1,repo=)"})
+	out, _, err := runDotForTest("admit", "--json", "--wait", "0", "--", "true")
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitDeferred {
+		t.Fatalf("err = %v, want ExitCodeError %d", err, ExitDeferred)
+	}
+	if !strings.Contains(out, "uncovered heavyweight work: cargo(pid=77") {
+		t.Errorf("out = %q, want the uncovered job as the reason", out)
+	}
+}
+
+// AC7: --home does not open a second slot; the slot lives under the real
+// user's state root (#162).
+func TestAdmitSlotIgnoresHomeFlag(t *testing.T) {
+	home, workdir := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	slot, _, err := store.Acquire(context.Background(), fallbackScopeFor(t, workdir), admission.ClassHeavy, admission.Lease{
+		Owner: "builder@mac-mini", PID: 4242, PIDStart: "Sun Sep 27 11:00:00 2026", CWD: workdir,
+	})
+	if err != nil || slot == nil {
+		t.Fatalf("seeding the slot = %v, %v", slot, err)
+	}
+	defer func() { _ = slot.Release() }()
+	out, _, err := runDotForTest("--home", t.TempDir(), "admit", "--json", "--wait", "0", "--", "true")
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitDeferred || !strings.Contains(out, "builder@mac-mini") {
+		t.Fatalf("an alternate --home bypassed the slot: err=%v out=%q", err, out)
+	}
+}
+
+// AC4: a `dot ai run` lease shows in `dot admit status` with its purpose.
+func TestAdmitStatusShowsLeaseSession(t *testing.T) {
+	home, workdir := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	slot, _, err := store.Acquire(context.Background(), fallbackScopeFor(t, workdir), admission.ClassHeavy, admission.Lease{
+		Owner: "yj@mac", Session: "manual heavyweight command", PID: 4242, PIDStart: "Sun Sep 27 11:00:00 2026", CWD: workdir,
+	})
+	if err != nil || slot == nil {
+		t.Fatalf("seeding the slot = %v, %v", slot, err)
+	}
+	defer func() { _ = slot.Release() }()
+	out, _, _ := runDotForTest("admit", "status")
+	if !strings.Contains(out, "yj@mac pid 4242") || !strings.Contains(out, "(manual heavyweight command)") {
+		t.Errorf("status does not list the lease with its purpose:\n%s", out)
 	}
 }

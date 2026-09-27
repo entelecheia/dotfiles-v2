@@ -8,8 +8,6 @@ import (
 	"os"
 	osexec "os/exec"
 	"os/signal"
-	"os/user"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,52 +18,6 @@ import (
 
 // The run side of `dot admit`: lease identity, process launch, heartbeat,
 // signal forwarding. The gate and slot acquisition live in admit_cmd.go.
-
-// buildSelfLease fills the process-identity fields of the lease this run
-// would hold. PIDStart is normalized exactly the way the watchdog compares
-// it, so a later stale-owner probe matches this incarnation. It fails
-// closed: without a verified start time the lease's identity is
-// unverifiable, and an unverifiable lease could later be reclaimed from a
-// live owner — so no lease is better than a guess.
-func buildSelfLease(ctx context.Context, runner *exec.Runner, cwd string) (admission.Lease, error) {
-	owner := os.Getenv(admission.OwnerEnv)
-	if owner == "" {
-		username := "unknown"
-		if u, err := user.Current(); err == nil {
-			username = u.Username
-		}
-		host, _ := os.Hostname()
-		owner = username + "@" + host
-	}
-	started, err := psStartTime(ctx, runner, os.Getpid())
-	if err != nil {
-		return admission.Lease{}, fmt.Errorf("cannot verify this process's start time (%v); refusing to acquire a slot with an unverifiable identity", err)
-	}
-	pgid, _ := syscall.Getpgid(os.Getpid())
-	return admission.Lease{
-		Owner:    owner,
-		Session:  os.Getenv(admission.SessionEnv),
-		PID:      os.Getpid(),
-		PIDStart: started,
-		PGID:     pgid,
-		CWD:      cwd,
-	}, nil
-}
-
-// psStartTime reads one process's lstart, normalized the way
-// watchdog.ProcessStartMatches compares it. An empty result is an error:
-// it would record an unverifiable identity.
-func psStartTime(ctx context.Context, runner *exec.Runner, pid int) (string, error) {
-	res, err := runner.RunQuery(ctx, "ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
-	if err != nil {
-		return "", err
-	}
-	started := strings.Join(strings.Fields(res.Stdout), " ")
-	if started == "" {
-		return "", fmt.Errorf("ps returned no start time for pid %d", pid)
-	}
-	return started, nil
-}
 
 // runAdmittedChild executes the wrapped command with stdio and signal
 // forwarding, a heartbeat goroutine while a slot is held, and the nested-run
@@ -92,7 +44,7 @@ func runAdmittedChild(ctx context.Context, p *Printer, runner *exec.Runner, args
 		return fmt.Errorf("starting %q: %w", strings.Join(args, " "), err)
 	}
 	if slot != nil {
-		started, err := psStartTime(ctx, runner, child.Process.Pid)
+		started, err := admission.ProcessStart(ctx, runner, child.Process.Pid)
 		if err == nil {
 			err = slot.UpdateIdentity(child.Process.Pid, started)
 		}

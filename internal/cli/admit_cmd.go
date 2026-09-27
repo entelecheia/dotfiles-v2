@@ -39,6 +39,10 @@ var admitNewMonitor = func(runner *exec.Runner, home string) *admission.Monitor 
 	return &admission.Monitor{Runner: runner, Home: home}
 }
 
+// admitFindUncovered is the seam for the heavy-work scan: tests substitute a
+// fixed inventory instead of the real process table.
+var admitFindUncovered = admission.FindUncovered
+
 func newAdmitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "admit [--class heavy|maintenance] [--wait 30m] [--json] -- <command> [args...]",
@@ -54,9 +58,11 @@ run in parallel. --class maintenance takes the single host-wide maintenance
 slot instead. On defer the exit code is 75 (EX_TEMPFAIL) with a
 machine-readable outcome on stdout when --json is set. When a command runs,
 its own stdout is the payload and the --json completion record goes to
-stderr, so the exit code is the machine-readable result. Jobs launched
-without 'dot admit' are not visible to the controller. Use '--' before
-commands that collide with subcommand names.`,
+stderr, so the exit code is the machine-readable result. 'dot ai run' and
+the tooling updates share these slots. Heavy work launched outside both
+holds no lease; a bounded process-table scan defers when such work runs in
+this repo or its repo is unknown. Use '--' before commands that collide with
+subcommand names.`,
 		Args:         cobra.MinimumNArgs(1),
 		RunE:         runAdmit,
 		SilenceUsage: true,
@@ -86,7 +92,11 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	store := admission.NewStore(admission.DefaultStateRoot(home), runner)
+	root, err := admission.UserStateRoot()
+	if err != nil {
+		return err
+	}
+	store := admission.NewStore(root, runner)
 	scope, err := admission.ResolveScope(ctx, runner, cwd)
 	if err != nil {
 		return err
@@ -111,8 +121,18 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 		notifyDefer(ctx, cmd, store, effective, class, decision)
 		return deferExit(p, effective, class, "", decision, asJSON)
 	}
+	// Heavy work that holds no slot is invisible to the leases; a scan that
+	// fails or finds work in this repository (or of unknown ownership) defers.
+	if jobs, uerr := admitFindUncovered(ctx, cwd, class == admission.ClassMaintenance); uerr != nil || len(jobs) > 0 {
+		reason := "heavy-work inventory unavailable"
+		if uerr == nil {
+			reason = "uncovered heavyweight work: " + strings.Join(jobs, ", ")
+		}
+		d := admission.Decision{Admit: false, Reasons: []string{reason}, RetryAfter: 30 * time.Second}
+		return deferExit(p, effective, class, "", d, asJSON)
+	}
 
-	lease, err := buildSelfLease(ctx, runner, cwd)
+	lease, err := admission.SelfLease(ctx, runner, cwd)
 	if err != nil {
 		return err
 	}

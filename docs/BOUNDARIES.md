@@ -113,16 +113,10 @@ Dot-owned state trees:
   state, nonblocking state-update lock and launchd run diagnostics
 - `~/Library/LaunchAgents/com.dotfiles.ai.update.plist` — the macOS user
   stable-update job, owned by `dot ai update schedule enable|disable`
-- `/tmp/dotfiles-resource-<uid>/health.json` and `history.lock` — shared
-  host-pressure recovery history, independent of repository admission scopes
-- `/tmp/dotfiles-resource-<uid>/scopes/<sha256-scope-key>/heavy.lock` and
-  `owner.json` — same-user scoped admission lock and owner identity/heartbeat.
-  `repo:<canonical-git-common-directory>` groups all worktrees of one
-  repository; `maintenance:tooling` serializes global tool installation/update
-  independently of caller repository. HOME and CODEX_HOME do not partition
-  either scope. Healthy different-repository jobs may run concurrently.
-  Kernel locking protects participating jobs; stale metadata must never
-  justify stealing a live lock.
+- `dot ai run`, the selected-tooling updates and `dot ai update schedule
+  enable` hold their slots in the admission state root below (the same slots
+  and pressure history as `dot admit`, #162). The former
+  `/tmp/dotfiles-resource-<uid>/` store is no longer written.
 
 Third-party files dot edits (each entry states what dot writes there and
 under what condition; everything else in the file belongs to its owning
@@ -222,9 +216,12 @@ tool):
   slot, each holding a `lease.json` with the owner pid/start, heartbeat and
   deadline), the cross-invocation pressure history (`history.json`), and the
   per-scope notify dedup marks (`notify/`); written by every `dot admit`
-  gate evaluation, slot acquire/heartbeat/release, and defer notification.
-  Slots are removed by their owner's release or by stale-owner recovery; the
-  history and notify marks are small JSON files with no scheduled cleanup
+  gate evaluation, slot acquire/heartbeat/release, and defer notification,
+  and by `dot ai run` and the tooling updates through the same controller.
+  The root is the real user's (`$HOME`), never a `--home` or CODEX_HOME
+  override, so one repository has one slot per user. Slots are removed by
+  their owner's release or by stale-owner recovery; the history and notify
+  marks are small JSON files with no scheduled cleanup
 - `~/Library/Logs/dot/watchdog.log` — the watchdog JSON-lines event log
   (`dot watchdog log` tails it), plus the reaper unit's launchd
   stdout/stderr logs beside it

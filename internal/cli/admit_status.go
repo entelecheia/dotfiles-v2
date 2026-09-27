@@ -20,8 +20,9 @@ func newAdmitStatusCmd() *cobra.Command {
 (scope, class, owner, pid, cwd, since), the host-pressure evidence with
 per-probe availability, the last WindowServer watchdog evidence, and the
 hysteresis countdown when a defer episode is recovering. The evaluation is
-read-only: status never advances or resets the recovery window. Jobs not
-launched via 'dot admit' are not visible to the controller.`,
+read-only: status never advances or resets the recovery window. Jobs
+launched outside 'dot admit' and 'dot ai run' hold no lease and are caught
+only by the admit-time process scan.`,
 		Args:         cobra.NoArgs,
 		RunE:         runAdmitStatus,
 		SilenceUsage: true,
@@ -36,7 +37,11 @@ func runAdmitStatus(cmd *cobra.Command, _ []string) error {
 	asJSON, _ := cmd.Flags().GetBool("json")
 	home := homeFor(cmd)
 	runner := watchdogRunner(false)
-	store := admission.NewStore(admission.DefaultStateRoot(home), runner)
+	root, err := admission.UserStateRoot()
+	if err != nil {
+		return err
+	}
+	store := admission.NewStore(root, runner)
 	monitor := admitNewMonitor(runner, home)
 	snap := monitor.SnapshotPressure(ctx)
 	now := time.Now()
@@ -113,7 +118,11 @@ func runAdmitStatus(cmd *cobra.Command, _ []string) error {
 		p.Line("  none")
 	}
 	for _, l := range owners {
-		p.Line("  %s [%s] %s pid %d since %s", l.Scope, l.Class, l.Owner, l.PID, l.AcquiredAt.Format(time.RFC3339))
+		line := fmt.Sprintf("  %s [%s] %s pid %d since %s", l.Scope, l.Class, l.Owner, l.PID, l.AcquiredAt.Format(time.RFC3339))
+		if l.Session != "" {
+			line += " (" + l.Session + ")" // e.g. a `dot ai run` job's purpose
+		}
+		p.Line("%s", line)
 		p.Line("    cwd %s", l.CWD)
 	}
 	p.Blank()

@@ -335,23 +335,12 @@ prevail and every command still requires independent authorization.
 
 ### Resource-Safe Maintenance
 
-Participating heavyweight jobs share one admission slot per repository across
-its sessions, worktrees and runtime profiles. The canonical Git common
-directory identifies a repository, so its worktrees cannot bypass that slot.
-Different repositories may run in parallel while host pressure permits.
-Global tool installation/update uses a separate shared maintenance slot,
-independent of the caller's repository, to protect shared installation paths. Use `dot ai run [--project <checkout>] -- COMMAND` for
-builds or other heavy developer jobs; the default wait is bounded to six
-minutes and can be set with `--wait`. Admission requires five minutes of
-healthy observations and defers on pressure, unknown telemetry or existing
-heavy work in the same scope or with unknown ownership. Known work in another
-repository does not consume this repository's slot. Host health/recovery checks remain shared across
-scopes. This is cooperative protection for participating commands, not
-proof that every process on the machine is controlled. It does not kill other
-sessions or restart system/security/memory services.
+Builds, full test runs and tool updates go through the resource admission
+controller described in [Resource admission](#resource-admission-dot-admit):
+`dot ai run`, the selected-tooling updates and the scheduled update below
+hold the same slots as `dot admit`.
 
 ```bash
-CARGO_BUILD_JOBS=2 dot ai run --project . --wait 6m -- cargo test -- --test-threads=2
 dot ai update schedule status --json
 dot ai update schedule enable
 dot ai update schedule disable
@@ -601,15 +590,21 @@ secrets:
 
 ## Resource admission (`dot admit`)
 
-`dot admit` is the repository-scoped admission controller for heavy work (builds, full test runs, indexing, bulk copies, dependency updates): at most one heavy job per project repo at a time — shared across all its worktrees, branches, and agent sessions — while different repos run in parallel. A host-pressure gate defers new work on memory pressure warning/critical, verifiable thermal pressure, CPU idle below 15% or load1 at the CPU count sustained 60s, or a recent WindowServer watchdog termination; recovery requires five continuous minutes of normal telemetry. Missing or failed telemetry always defers — the gate never reports a machine it cannot measure as healthy.
+One controller admits heavy work (builds, full test runs, indexing, bulk copies, dependency and tool updates): at most one heavy job per project repo at a time, shared across all its worktrees, branches, agent sessions and runtime profiles, while different repos run in parallel. Global tool installs and updates share one host-wide maintenance slot instead. Two entry points use the same slots, pressure history and state:
+
+- `dot admit -- COMMAND` defers immediately (exit 75) unless `--wait` is given; `--class maintenance` takes the maintenance slot.
+- `dot ai run [--project <checkout>] -- COMMAND` waits up to `--wait` (default 6 minutes, at most 10) and runs the command with `CARGO_BUILD_JOBS=2`, `RUST_TEST_THREADS=2` and `GOMAXPROCS=2`. The selected-tooling updates (`dot ai update`) and `dot ai update schedule enable` take the maintenance slot the same way.
+
+A host-pressure gate defers new work on memory pressure warning/critical, a serious or critical macOS thermal state, CPU idle below 15% or load1 at the CPU count sustained 60s, or a recent WindowServer watchdog termination; after such an episode, recovery requires five continuous minutes of normal telemetry. Missing or failed telemetry always defers: the gate never reports a machine it cannot measure as healthy. Before taking a slot, both entry points also scan the process table for heavy work that holds no slot (builds, tests, installs, bulk copies, or anything at 100% CPU) and defer when it runs in the same repository or its repository is unknown. The scan is a bounded heuristic, not proof that every process on the machine is controlled; the controller never kills other sessions or restarts system services.
 
 ```bash
-dot admit -- make test                          # one heavy slot per repo
-dot admit --class maintenance -- brew upgrade   # the single host-wide maintenance slot
-dot admit status                                # owners, pressure evidence, hysteresis countdown
+dot admit -- make test                                 # one heavy slot per repo
+dot admit --class maintenance -- brew upgrade          # the single host-wide maintenance slot
+CARGO_BUILD_JOBS=2 dot ai run --project . --wait 6m -- cargo test -- --test-threads=2
+dot admit status                                       # owners, pressure evidence, hysteresis countdown
 ```
 
-On defer the exit code is 75 (`EX_TEMPFAIL`) and `--json` prints the machine-readable outcome (`scope`, `owner`, `reason`, `retry_after`). Leases carry pid + start time and a heartbeat, so a crashed owner's slot is reclaimed safely; jobs not launched via `dot admit` are not visible to the controller. Thresholds mirror the workspace resource policy; state lives in `~/.local/state/dot/admission/`.
+On defer `dot admit` exits 75 (`EX_TEMPFAIL`) and `--json` prints the machine-readable outcome (`scope`, `owner`, `reason`, `retry_after`). Leases carry pid + start time and a heartbeat, so a crashed owner's slot is reclaimed safely, and a job launched inside an admitted job runs in its parent's slot. Thresholds mirror the workspace resource policy. State lives in the real user's `~/.local/state/dot/admission/`; `--home` does not partition it.
 
 ---
 

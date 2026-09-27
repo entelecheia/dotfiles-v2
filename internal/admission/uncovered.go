@@ -1,0 +1,294 @@
+package admission
+
+// Uncovered heavy work: builds, tests, installs and bulk copies that run
+// without holding a slot. The controller cannot see them through its leases,
+// so a bounded process-table scan attributes each to a repository and defers
+// when one runs in the caller's repository, or when its ownership is unknown
+// (moved from internal/resourceguard, #162).
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// HeavyJob is one heavyweight process found outside admission.
+type HeavyJob struct {
+	PID         int    `json:"pid"`
+	ParentPID   int    `json:"parent_pid"`
+	Name        string `json:"name"`
+	Directory   string `json:"directory,omitempty"`
+	Repository  string `json:"repository,omitempty"`
+	Maintenance bool   `json:"maintenance,omitempty"`
+}
+
+// Describe renders a job for a defer reason.
+func (j HeavyJob) Describe() string {
+	return fmt.Sprintf("%s(pid=%d,parent=%d,repo=%s)", j.Name, j.PID, j.ParentPID, j.Repository)
+}
+
+// FindUncovered lists heavy work that blocks a slot for projectDir: work in
+// the same repository, maintenance-shaped work for the maintenance class,
+// and any work whose repository is unknown. The caller's own ancestors and
+// direct children are never counted. A failed scan is an error; callers
+// defer on it rather than assume the host is quiet.
+func FindUncovered(ctx context.Context, projectDir string, maintenance bool) ([]string, error) {
+	jobs, err := scanHeavyJobs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	project := ""
+	if !maintenance {
+		project, _ = repositoryIdentity(projectDir)
+	}
+	return filterUncovered(jobs, project, maintenance), nil
+}
+
+func filterUncovered(jobs []HeavyJob, project string, maintenance bool) []string {
+	var out []string
+	for _, j := range jobs {
+		if j.Repository == "" || (!maintenance && j.Repository == project) || (maintenance && j.Maintenance) {
+			out = append(out, j.Describe())
+		}
+	}
+	return out
+}
+
+// cappedBuffer bounds probe output even if a provider emits more than asked.
+type cappedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.Len()+len(p) > b.limit {
+		return 0, fmt.Errorf("probe output exceeds %d bytes", b.limit)
+	}
+	return b.Buffer.Write(p)
+}
+
+func boundedOutput(ctx context.Context, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	c := osexec.CommandContext(ctx, name, args...)
+	var b cappedBuffer
+	b.limit = 2 << 20
+	c.Stdout = &b
+	c.Stderr = &b
+	err := c.Run()
+	return b.String(), err
+}
+
+type processRow struct {
+	pid, ppid  int
+	name, args string
+	cpu        float64
+}
+
+func scanHeavyJobs(ctx context.Context) ([]HeavyJob, error) {
+	out, err := boundedOutput(ctx, "/bin/ps", "-axo", "pid=,ppid=,%cpu=,comm=,args=")
+	if err != nil {
+		return nil, fmt.Errorf("process inventory: %w", err)
+	}
+	var rows []processRow
+	parents := map[int]int{}
+	scan := bufio.NewScanner(strings.NewReader(out))
+	scan.Buffer(make([]byte, 4096), 1<<20)
+	for scan.Scan() {
+		f := strings.Fields(scan.Text())
+		if len(f) < 4 {
+			continue
+		}
+		pid, e := strconv.Atoi(f[0])
+		if e != nil {
+			continue
+		}
+		ppid, e := strconv.Atoi(f[1])
+		if e != nil {
+			continue
+		}
+		cpu, _ := strconv.ParseFloat(f[2], 64)
+		r := processRow{pid: pid, ppid: ppid, cpu: cpu, name: filepath.Base(f[3]), args: strings.Join(f[4:], " ")}
+		rows = append(rows, r)
+		parents[pid] = ppid
+	}
+	if err := scan.Err(); err != nil {
+		return nil, err
+	}
+	ancestors := map[int]bool{}
+	for p := os.Getpid(); p > 0 && !ancestors[p]; p = parents[p] {
+		ancestors[p] = true
+	}
+	var found []HeavyJob
+	for _, r := range rows {
+		if ancestors[r.pid] || r.ppid == os.Getpid() {
+			continue
+		}
+		if heavyweight(r.name, r.args) || r.cpu >= 100 {
+			found = append(found, HeavyJob{PID: r.pid, ParentPID: r.ppid, Name: r.name, Maintenance: containsWord(r.args, "install", "update", "upgrade", "sync", "ci")})
+			if len(found) > 20 {
+				return nil, fmt.Errorf("heavy process inventory exceeds 20 jobs; ownership cannot be established safely")
+			}
+		}
+	}
+	return resolveJobDirectories(ctx, found), nil
+}
+
+func heavyweight(name, args string) bool {
+	switch name {
+	case "rustc", "xcodebuild", "clang", "clang++", "cc1", "cc1plus", "ld", "ld64", "swift-frontend", "ninja", "make", "cmake":
+		return true
+	case "cargo":
+		return containsWord(args, "build", "test", "check", "clippy", "install")
+	case "go":
+		return containsWord(args, "build", "test", "install", "generate")
+	case "npm", "pnpm", "yarn", "bun", "uv", "pip", "pip3", "brew":
+		return containsWord(args, "install", "update", "upgrade", "sync", "build", "test", "ci")
+	case "cp", "rsync":
+		return strings.Contains(args, "target") || strings.Contains(args, "node_modules") || strings.Contains(args, " -r") || strings.Contains(args, " -R") || strings.Contains(args, " -a") || strings.Contains(args, " -cR")
+	case "node", "python", "python3":
+		return containsWord(args, "vitest", "jest", "playwright", "pytest", "install", "upgrade", "embedding") || strings.Contains(args, "embedding")
+	}
+	return strings.HasPrefix(name, "maru_lib-") || strings.HasPrefix(name, "rustdoc")
+}
+
+func containsWord(s string, words ...string) bool {
+	for _, field := range strings.Fields(s) {
+		for _, word := range words {
+			if field == word || filepath.Base(field) == word {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolveJobDirectories(ctx context.Context, jobs []HeavyJob) []HeavyJob {
+	if runtime.GOOS == "linux" {
+		for i := range jobs {
+			jobs[i].Directory, _ = os.Readlink(filepath.Join("/proc", strconv.Itoa(jobs[i].PID), "cwd"))
+		}
+	}
+	if runtime.GOOS == "darwin" && len(jobs) > 0 {
+		ids := make([]string, 0, len(jobs))
+		for _, j := range jobs {
+			ids = append(ids, strconv.Itoa(j.PID))
+		}
+		// One bounded lsof invocation for at most 20 jobs; permission failures
+		// leave ownership unknown and therefore block rather than assuming
+		// another repo.
+		out, err := boundedOutput(ctx, "/usr/sbin/lsof", "-a", "-p", strings.Join(ids, ","), "-d", "cwd", "-Fn")
+		cwd := lsofDirectories(out, err)
+		for i := range jobs {
+			jobs[i].Directory = cwd[jobs[i].PID]
+		}
+	}
+	cache := map[string]string{}
+	for i := range jobs {
+		dir := jobs[i].Directory
+		if dir == "" {
+			continue
+		}
+		repo, ok := cache[dir]
+		if !ok {
+			repo, _ = repositoryIdentity(dir)
+			cache[dir] = repo
+		}
+		jobs[i].Repository = repo
+	}
+	return jobs
+}
+
+// lsofDirectories trusts only a complete batch: a failed or timed-out run can
+// emit valid rows before failing, and every job stays unknown until one
+// complete observation.
+func lsofDirectories(out string, probeErr error) map[int]string {
+	if probeErr != nil {
+		return nil
+	}
+	cwd := map[int]string{}
+	pid := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "p") {
+			pid, _ = strconv.Atoi(line[1:])
+		}
+		if strings.HasPrefix(line, "n") && pid > 0 && filepath.IsAbs(line[1:]) {
+			cwd[pid] = line[1:]
+		}
+	}
+	return cwd
+}
+
+// repositoryIdentity resolves dir to its repository's common Git directory
+// with bounded filesystem reads, never Git subprocesses, so every worktree of
+// one repository has the same identity.
+func repositoryIdentity(dir string) (string, error) {
+	current, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	current, err = filepath.EvalSymlinks(current)
+	if err != nil {
+		return "", err
+	}
+	for depth := 0; depth < 64; depth++ {
+		gitPath := filepath.Join(current, ".git")
+		info, err := os.Stat(gitPath)
+		if err == nil {
+			if !info.IsDir() {
+				raw, e := readGitPointer(gitPath)
+				if e != nil {
+					return "", e
+				}
+				line := strings.TrimSpace(string(raw))
+				if !strings.HasPrefix(line, "gitdir: ") {
+					return "", fmt.Errorf("invalid Git indirection at %s", gitPath)
+				}
+				gitPath = strings.TrimSpace(strings.TrimPrefix(line, "gitdir: "))
+				if !filepath.IsAbs(gitPath) {
+					gitPath = filepath.Join(current, gitPath)
+				}
+			}
+			if raw, e := readGitPointer(filepath.Join(gitPath, "commondir")); e == nil {
+				common := strings.TrimSpace(string(raw))
+				if !filepath.IsAbs(common) {
+					common = filepath.Join(gitPath, common)
+				}
+				gitPath = common
+			} else if !os.IsNotExist(e) {
+				return "", e
+			}
+			return filepath.EvalSymlinks(gitPath)
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return "", fmt.Errorf("repository ownership unknown for %s", dir)
+}
+
+// readGitPointer reads a Git indirection file: a single short path, never
+// bulk data.
+func readGitPointer(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 8192 {
+		return nil, fmt.Errorf("invalid oversized Git pointer %s", path)
+	}
+	return os.ReadFile(path)
+}
