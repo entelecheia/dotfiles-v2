@@ -250,6 +250,14 @@ tool):
 - `~/.codex/config.toml` — the `tui.status_line` setting, patched by
   `dot ai hud apply`; the write is an atomic rename because Codex
   rewrites this file continuously. No other key is touched.
+- `<workspace repo>/.git/index` and the repo's `HEAD` ref — moved
+  together by `dot peer git realign --apply` through git's lockfile
+  protocol (compare-and-swap `update-ref`, fast-forward only onto a
+  strict descendant, the old value recorded in the reflog for undo).
+  The worktree is never written by git; preview (`dot peer git status`,
+  default `realign`, `--dry-run`) writes nothing; linked worktrees and
+  locked, staged, conflicting or in-progress repositories are never
+  touched.
 
 ## dotfiles-v2 Must Not Write Directly
 

@@ -131,6 +131,7 @@ func goldenCases() []goldenCase {
 		{surface: "peer home-paths tracked get", args: []string{"peer", "home-paths", "tracked", "get", "--json"}, fixture: goldenSyncFixture},
 		{surface: "peer home-paths tracked set", args: []string{"peer", "home-paths", "tracked", "set", "--json"}, stdin: ".claude/projects/-x-y/memory\n", fixture: goldenSyncFixture},
 		{surface: "peer status", args: []string{"peer", "status", "--json"}, fixture: goldenSyncFixture},
+		{surface: "peer git status", args: []string{"peer", "git", "status", "--json"}, fixture: goldenPeerGitFixture},
 		{surface: "sync configure", args: []string{"sync", "configure", "--json", "--yes"}, fixture: goldenSyncFixture},
 		{surface: "sync filters get", args: []string{"sync", "filters", "get", "include", "--json"}, fixture: goldenSyncFixture},
 		{surface: "sync filters set", args: []string{"sync", "filters", "set", "exclude", "--json"}, stdin: "*.tmp\nbuild/\n", fixture: goldenSyncFixture},
@@ -152,6 +153,24 @@ func goldenSyncFixture(t *testing.T) (home, root string) {
 		writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", profile, "config.yaml"), storeCfg)
 	}
 	return f.home, f.local
+}
+
+// goldenPeerGitFixture gives `peer git status` a deterministic non-git
+// workspace: a git that always fails makes the root report "not a git
+// repository", and PATH lives under HOME so the resolved absolute git path
+// normalizes to @HOME@ like every other path in the document.
+func goldenPeerGitFixture(t *testing.T) (home, root string) {
+	t.Helper()
+	home, root = goldenSyncFixture(t)
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	return home, root
 }
 
 // goldenAIFixture reuses newOnestopFixture (onestop_cli_test.go:20), which

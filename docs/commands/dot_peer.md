@@ -65,6 +65,7 @@ dot peer [flags]
 * [dot](dot.md)	 - User environment & workspace management tool
 * [dot peer diff](dot_peer_diff.md)	 - List paths where this machine and the peer disagree
 * [dot peer doctor](dot_peer_doctor.md)	 - Check that a peer sync would work before running one
+* [dot peer git](dot_peer_git.md)	 - Realign HEAD and index with the files peer sync delivered
 * [dot peer home-paths](dot_peer_home-paths.md)	 - Read or replace the peer host-path allowlist
 * [dot peer init](dot_peer_init.md)	 - Create the peer profile pointing at another machine
 * [dot peer setup](dot_peer_setup.md)	 - Install or remove the periodic peer sync job
