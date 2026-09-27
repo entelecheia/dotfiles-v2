@@ -91,3 +91,10 @@ func assertNotRunning(t *testing.T, pid int) {
 		t.Fatalf("background child %d remains running: %s", pid, out)
 	}
 }
+
+func TestLimitsReplaceOnlyScopedVariables(t *testing.T) {
+	got := limitedEnvironment([]string{"HOME=/h", "GOMAXPROCS=99", "CARGO_BUILD_JOBS=9", "RUST_TEST_THREADS=8"})
+	if len(got) != 4 || got[0] != "HOME=/h" {
+		t.Fatalf("%v", got)
+	}
+}

@@ -51,7 +51,21 @@ func admitSandbox(t *testing.T) (home, workdir string) {
 	t.Setenv(admission.NestedEnv, "")
 	t.Setenv(admission.OwnerEnv, "test-owner@test-host")
 	t.Chdir(workdir)
+	stubAdmitUncovered(t, nil)
 	return home, workdir
+}
+
+// stubAdmitUncovered replaces the process-table scan with a fixed inventory.
+func stubAdmitUncovered(t *testing.T, jobs []string) {
+	t.Helper()
+	stubAdmitScan(t, jobs, nil)
+}
+
+func stubAdmitScan(t *testing.T, jobs []string, err error) {
+	t.Helper()
+	old := admitFindUncovered
+	admitFindUncovered = func(context.Context, string, bool, []int) ([]string, error) { return jobs, err }
+	t.Cleanup(func() { admitFindUncovered = old })
 }
 
 func fallbackScopeFor(t *testing.T, dir string) string {
@@ -266,6 +280,7 @@ func goldenAdmitBase(t *testing.T, snap admission.PressureSnapshot) (home, root 
 	t.Setenv(admission.OwnerEnv, "golden-owner@golden-host")
 	t.Setenv(admission.SessionEnv, "golden-session")
 	stubAdmitMonitorAt(t, snap, goldenAdmitClock)
+	stubAdmitUncovered(t, nil)
 	repo := filepath.Join(root, "repo")
 	runner := exec.NewRunner(false, slog.Default())
 	if _, err := runner.Run(context.Background(), "git", "init", repo); err != nil {
@@ -351,5 +366,127 @@ func TestAdmitStatusThermalRow(t *testing.T) {
 	out, _, _ = runDotForTest("admit", "status")
 	if !regexp.MustCompile(`Thermal:\s+\(unavailable\)`).MatchString(out) || strings.Contains(out, "nominal") {
 		t.Errorf("unavailable thermal probe must print (unavailable):\n%s", out)
+	}
+}
+
+// AC6 (CLI side): heavy work that holds no slot defers `dot admit` (#162).
+func TestAdmitDefersOnUncoveredWork(t *testing.T) {
+	admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	stubAdmitUncovered(t, []string{"cargo(pid=77,parent=1,repo=)"})
+	out, _, err := runDotForTest("admit", "--json", "--wait", "0", "--", "true")
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitDeferred {
+		t.Fatalf("err = %v, want ExitCodeError %d", err, ExitDeferred)
+	}
+	if !strings.Contains(out, "uncovered heavyweight work: cargo(pid=77") {
+		t.Errorf("out = %q, want the uncovered job as the reason", out)
+	}
+}
+
+// AC7: --home does not open a second slot; the slot lives under the real
+// user's state root (#162).
+func TestAdmitSlotIgnoresHomeFlag(t *testing.T) {
+	home, workdir := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	slot, _, err := store.Acquire(context.Background(), fallbackScopeFor(t, workdir), admission.ClassHeavy, admission.Lease{
+		Owner: "builder@mac-mini", PID: 4242, PIDStart: "Sun Sep 27 11:00:00 2026", CWD: workdir,
+	})
+	if err != nil || slot == nil {
+		t.Fatalf("seeding the slot = %v, %v", slot, err)
+	}
+	defer func() { _ = slot.Release() }()
+	out, _, err := runDotForTest("--home", t.TempDir(), "admit", "--json", "--wait", "0", "--", "true")
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitDeferred || !strings.Contains(out, "builder@mac-mini") {
+		t.Fatalf("an alternate --home bypassed the slot: err=%v out=%q", err, out)
+	}
+}
+
+// AC4: a `dot ai run` lease shows in `dot admit status` with its purpose.
+func TestAdmitStatusShowsLeaseSession(t *testing.T) {
+	home, workdir := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	slot, _, err := store.Acquire(context.Background(), fallbackScopeFor(t, workdir), admission.ClassHeavy, admission.Lease{
+		Owner: "yj@mac", Session: "manual heavyweight command", PID: 4242, PIDStart: "Sun Sep 27 11:00:00 2026", CWD: workdir,
+	})
+	if err != nil || slot == nil {
+		t.Fatalf("seeding the slot = %v, %v", slot, err)
+	}
+	defer func() { _ = slot.Release() }()
+	out, _, _ := runDotForTest("admit", "status")
+	if !strings.Contains(out, "yj@mac pid 4242") || !strings.Contains(out, "(manual heavyweight command)") {
+		t.Errorf("status does not list the lease with its purpose:\n%s", out)
+	}
+}
+
+// A busy slot reports its owner even when the holder's heavy work is on the
+// process table: the scan runs only once the slot is held (#162).
+func TestAdmitBusySlotReportsOwnerNotUncovered(t *testing.T) {
+	home, workdir := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	stubAdmitUncovered(t, []string{"cargo(pid=88,parent=4242,repo=)"})
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	slot, _, err := store.Acquire(context.Background(), fallbackScopeFor(t, workdir), admission.ClassHeavy, admission.Lease{
+		Owner: "builder@mac-mini", PID: 4242, PIDStart: "Sun Sep 27 11:00:00 2026", CWD: workdir,
+	})
+	if err != nil || slot == nil {
+		t.Fatalf("seeding the slot = %v, %v", slot, err)
+	}
+	defer func() { _ = slot.Release() }()
+	out, _, err := runDotForTest("admit", "--json", "--wait", "0", "--", "true")
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || !strings.Contains(out, "builder@mac-mini") || strings.Contains(out, "uncovered") {
+		t.Fatalf("err=%v out=%q; want a slot-busy defer naming the owner", err, out)
+	}
+}
+
+// A failed process scan defers with its cause and frees the slot it took.
+func TestAdmitDefersOnScanError(t *testing.T) {
+	home, workdir := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	stubAdmitScan(t, nil, errors.New("ps timed out"))
+	out, _, err := runDotForTest("admit", "--json", "--wait", "0", "--", "true")
+	var exitErr *ExitCodeError
+	if !errors.As(err, &exitErr) || exitErr.Code != ExitDeferred || !strings.Contains(out, "heavy-work inventory unavailable: ps timed out") {
+		t.Fatalf("err=%v out=%q; want a defer naming the scan failure", err, out)
+	}
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	if slot, _, err := store.Acquire(context.Background(), fallbackScopeFor(t, workdir), admission.ClassHeavy, admission.Lease{Owner: "x", PID: 4242, PIDStart: "x"}); err != nil || slot == nil {
+		t.Fatalf("slot leaked after a scan-error defer: %v, %v", slot, err)
+	} else {
+		_ = slot.Release()
+	}
+}
+
+// dot admit hands the live leases' PIDs to the scan, so another slot's work is
+// not counted as uncovered.
+func TestAdmitPassesLeasesToScan(t *testing.T) {
+	home, _ := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	other, _, err := store.Acquire(context.Background(), admission.MaintenanceScope, admission.ClassMaintenance, admission.Lease{Owner: "tooling@mac", PID: 4242, PIDStart: "x"})
+	if err != nil || other == nil {
+		t.Fatalf("seeding = %v, %v", other, err)
+	}
+	defer func() { _ = other.Release() }()
+	var got []int
+	old := admitFindUncovered
+	admitFindUncovered = func(_ context.Context, _ string, _ bool, leased []int) ([]string, error) {
+		got = leased
+		return nil, nil
+	}
+	t.Cleanup(func() { admitFindUncovered = old })
+	if _, _, err := runDotForTest("admit", "--wait", "0", "--", "true"); err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	found := false
+	for _, pid := range got {
+		found = found || pid == 4242
+	}
+	if !found {
+		t.Fatalf("scan got leased PIDs %v, want the maintenance holder 4242", got)
 	}
 }

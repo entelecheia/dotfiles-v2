@@ -38,18 +38,11 @@ func TestAIRunProjectBindsAdmissionAndChildDirectory(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	want, err := resourceguard.ResolveScope(resourceguard.Options{ProjectDir: repo})
-	if err != nil {
-		t.Fatal(err)
-	}
 	released := false
 	c := newAIRunCmdWithAdmission(func(_ context.Context, opts resourceguard.Options, _ time.Duration) (func(), error) {
-		got, err := resourceguard.ResolveScope(opts)
-		if err != nil {
-			return nil, err
-		}
-		if got.Key != want.Key {
-			t.Fatalf("scope=%+v want=%+v", got, want)
+		// The slot is keyed from ProjectDir by internal/admission (scope tests there).
+		if opts.ProjectDir != repo {
+			t.Fatalf("admission ProjectDir = %q, want %q", opts.ProjectDir, repo)
 		}
 		return func() { released = true }, nil
 	})

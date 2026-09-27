@@ -1,6 +1,6 @@
 ## dot ai run
 
-Admit one repository heavyweight command after healthy recovery
+Run one repository heavyweight command under the admission controller
 
 ### Synopsis
 
@@ -18,8 +18,8 @@ dot ai run [--wait 6m] -- COMMAND [ARGS...] [flags]
 
 ```
   -h, --help             help for run
-      --project string   Git checkout whose worktrees share the slot (defaults to current directory)
-      --wait duration    Bounded time to collect healthy recovery samples (0 fails promptly) (default 6m0s)
+      --project string   Checkout whose worktrees share the slot; a non-Git directory gets its own slot (defaults to current directory)
+      --wait duration    Bounded time to wait for the slot and a healthy host (0 fails promptly) (default 6m0s)
 ```
 
 ### Options inherited from parent commands

@@ -8,64 +8,19 @@ import (
 	"os"
 	osexec "os/exec"
 	"os/signal"
-	"os/user"
-	"strconv"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/admission"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/watchdog"
+	"github.com/spf13/cobra"
 )
 
 // The run side of `dot admit`: lease identity, process launch, heartbeat,
 // signal forwarding. The gate and slot acquisition live in admit_cmd.go.
-
-// buildSelfLease fills the process-identity fields of the lease this run
-// would hold. PIDStart is normalized exactly the way the watchdog compares
-// it, so a later stale-owner probe matches this incarnation. It fails
-// closed: without a verified start time the lease's identity is
-// unverifiable, and an unverifiable lease could later be reclaimed from a
-// live owner — so no lease is better than a guess.
-func buildSelfLease(ctx context.Context, runner *exec.Runner, cwd string) (admission.Lease, error) {
-	owner := os.Getenv(admission.OwnerEnv)
-	if owner == "" {
-		username := "unknown"
-		if u, err := user.Current(); err == nil {
-			username = u.Username
-		}
-		host, _ := os.Hostname()
-		owner = username + "@" + host
-	}
-	started, err := psStartTime(ctx, runner, os.Getpid())
-	if err != nil {
-		return admission.Lease{}, fmt.Errorf("cannot verify this process's start time (%v); refusing to acquire a slot with an unverifiable identity", err)
-	}
-	pgid, _ := syscall.Getpgid(os.Getpid())
-	return admission.Lease{
-		Owner:    owner,
-		Session:  os.Getenv(admission.SessionEnv),
-		PID:      os.Getpid(),
-		PIDStart: started,
-		PGID:     pgid,
-		CWD:      cwd,
-	}, nil
-}
-
-// psStartTime reads one process's lstart, normalized the way
-// watchdog.ProcessStartMatches compares it. An empty result is an error:
-// it would record an unverifiable identity.
-func psStartTime(ctx context.Context, runner *exec.Runner, pid int) (string, error) {
-	res, err := runner.RunQuery(ctx, "ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
-	if err != nil {
-		return "", err
-	}
-	started := strings.Join(strings.Fields(res.Stdout), " ")
-	if started == "" {
-		return "", fmt.Errorf("ps returned no start time for pid %d", pid)
-	}
-	return started, nil
-}
 
 // runAdmittedChild executes the wrapped command with stdio and signal
 // forwarding, a heartbeat goroutine while a slot is held, and the nested-run
@@ -92,7 +47,7 @@ func runAdmittedChild(ctx context.Context, p *Printer, runner *exec.Runner, args
 		return fmt.Errorf("starting %q: %w", strings.Join(args, " "), err)
 	}
 	if slot != nil {
-		started, err := psStartTime(ctx, runner, child.Process.Pid)
+		started, err := admission.ProcessStart(ctx, runner, child.Process.Pid)
 		if err == nil {
 			err = slot.UpdateIdentity(child.Process.Pid, started)
 		}
@@ -181,4 +136,56 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+// deferExit prints the defer outcome (JSON when asked) and returns the
+// EX_TEMPFAIL error main turns into exit 75.
+func deferExit(p *Printer, scope, class, owner string, d admission.Decision, asJSON bool) error {
+	reason := strings.Join(d.Reasons, "; ")
+	outcome := admission.DeferOutcome{
+		Outcome:           "deferred",
+		Scope:             scope,
+		Class:             class,
+		Owner:             owner,
+		Reason:            reason,
+		RetryAfterSeconds: int64(d.RetryAfter / time.Second),
+	}
+	if asJSON {
+		data, err := json.MarshalIndent(outcome, "", "  ")
+		if err != nil {
+			return err
+		}
+		p.Line("%s", data)
+	} else {
+		p.Warn("admission deferred (scope %s, class %s)", scope, class)
+		p.KV("Reason", reason)
+		if owner != "" {
+			p.KV("Owner", owner)
+		}
+		p.KV("Retry after", d.RetryAfter.Round(time.Second).String())
+	}
+	return &ExitCodeError{Code: ExitDeferred, Err: fmt.Errorf("admission deferred: %s", reason)}
+}
+
+// notifyDefer sends at most one alert per defer episode per scope through
+// the watchdog notifier. The claim is atomic (O_EXCL per-episode file), so
+// concurrent defer handlers cannot duplicate the alert; a failed send
+// releases the claim so the next defer retries. Best-effort: a host
+// without watchdog configuration simply gets no alert.
+func notifyDefer(ctx context.Context, cmd *cobra.Command, store *admission.Store, scope, class string, d admission.Decision) {
+	claimed, claimPath, err := store.ClaimNotify(scope, class, d.Next.DeferSince)
+	if err != nil || !claimed {
+		return
+	}
+	mgr := watchdog.NewManager(watchdogRunner(false), homeFor(cmd))
+	wcfg, err := loadWatchdogSnapshot(mgr)
+	if err != nil {
+		_ = os.Remove(claimPath)
+		return
+	}
+	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), watchdogRunner(false), runtime.GOOS)
+	msg := fmt.Sprintf("heavy job deferred for %s: %s", scope, strings.Join(d.Reasons, "; "))
+	if err := notifier.Notify(ctx, "warn", msg); err != nil {
+		_ = os.Remove(claimPath)
+	}
 }

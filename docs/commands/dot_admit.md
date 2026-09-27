@@ -15,9 +15,11 @@ run in parallel. --class maintenance takes the single host-wide maintenance
 slot instead. On defer the exit code is 75 (EX_TEMPFAIL) with a
 machine-readable outcome on stdout when --json is set. When a command runs,
 its own stdout is the payload and the --json completion record goes to
-stderr, so the exit code is the machine-readable result. Jobs launched
-without 'dot admit' are not visible to the controller. Use '--' before
-commands that collide with subcommand names.
+stderr, so the exit code is the machine-readable result. 'dot ai run' and
+the tooling updates share these slots. Heavy work launched outside both
+holds no lease; a bounded process-table scan defers when such work runs in
+this repo or its repo is unknown. Use '--' before commands that collide with
+subcommand names.
 
 ```
 dot admit [--class heavy|maintenance] [--wait 30m] [--json] -- <command> [args...] [flags]

@@ -2,10 +2,8 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -13,7 +11,6 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/admission"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
-	"github.com/entelecheia/dotfiles-v2/internal/watchdog"
 )
 
 // ExitDeferred is EX_TEMPFAIL: the admission gate or the slot wait deferred
@@ -39,6 +36,10 @@ var admitNewMonitor = func(runner *exec.Runner, home string) *admission.Monitor 
 	return &admission.Monitor{Runner: runner, Home: home}
 }
 
+// admitFindUncovered is the seam for the heavy-work scan: tests substitute a
+// fixed inventory instead of the real process table.
+var admitFindUncovered = admission.FindUncovered
+
 func newAdmitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "admit [--class heavy|maintenance] [--wait 30m] [--json] -- <command> [args...]",
@@ -54,9 +55,11 @@ run in parallel. --class maintenance takes the single host-wide maintenance
 slot instead. On defer the exit code is 75 (EX_TEMPFAIL) with a
 machine-readable outcome on stdout when --json is set. When a command runs,
 its own stdout is the payload and the --json completion record goes to
-stderr, so the exit code is the machine-readable result. Jobs launched
-without 'dot admit' are not visible to the controller. Use '--' before
-commands that collide with subcommand names.`,
+stderr, so the exit code is the machine-readable result. 'dot ai run' and
+the tooling updates share these slots. Heavy work launched outside both
+holds no lease; a bounded process-table scan defers when such work runs in
+this repo or its repo is unknown. Use '--' before commands that collide with
+subcommand names.`,
 		Args:         cobra.MinimumNArgs(1),
 		RunE:         runAdmit,
 		SilenceUsage: true,
@@ -86,7 +89,11 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	store := admission.NewStore(admission.DefaultStateRoot(home), runner)
+	root, err := admission.UserStateRoot()
+	if err != nil {
+		return err
+	}
+	store := admission.NewStore(root, runner)
 	scope, err := admission.ResolveScope(ctx, runner, cwd)
 	if err != nil {
 		return err
@@ -111,8 +118,7 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 		notifyDefer(ctx, cmd, store, effective, class, decision)
 		return deferExit(p, effective, class, "", decision, asJSON)
 	}
-
-	lease, err := buildSelfLease(ctx, runner, cwd)
+	lease, err := admission.SelfLease(ctx, runner, cwd)
 	if err != nil {
 		return err
 	}
@@ -157,57 +163,19 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Heavy work that holds no slot is invisible to the leases. The scan runs
+	// with the slot held, so the job that owned it is never mistaken for
+	// uncovered work, and it sees anything that started while we waited. A
+	// failed scan or work in this repository (or of unknown ownership) defers;
+	// the deferred Release above frees the slot.
+	if jobs, uerr := admitFindUncovered(ctx, cwd, class == admission.ClassMaintenance, admission.LeasedPIDs(store)); uerr != nil || len(jobs) > 0 {
+		reason := "uncovered heavyweight work: " + strings.Join(jobs, ", ")
+		if uerr != nil {
+			reason = "heavy-work inventory unavailable: " + uerr.Error()
+		}
+		d := admission.Decision{Admit: false, Reasons: []string{reason}, RetryAfter: 30 * time.Second}
+		return deferExit(p, effective, class, "", d, asJSON)
+	}
+
 	return runAdmittedChild(ctx, p, runner, args, effective, class, slot, asJSON)
-}
-
-// deferExit prints the defer outcome (JSON when asked) and returns the
-// EX_TEMPFAIL error main turns into exit 75.
-func deferExit(p *Printer, scope, class, owner string, d admission.Decision, asJSON bool) error {
-	reason := strings.Join(d.Reasons, "; ")
-	outcome := admission.DeferOutcome{
-		Outcome:           "deferred",
-		Scope:             scope,
-		Class:             class,
-		Owner:             owner,
-		Reason:            reason,
-		RetryAfterSeconds: int64(d.RetryAfter / time.Second),
-	}
-	if asJSON {
-		data, err := json.MarshalIndent(outcome, "", "  ")
-		if err != nil {
-			return err
-		}
-		p.Line("%s", data)
-	} else {
-		p.Warn("admission deferred (scope %s, class %s)", scope, class)
-		p.KV("Reason", reason)
-		if owner != "" {
-			p.KV("Owner", owner)
-		}
-		p.KV("Retry after", d.RetryAfter.Round(time.Second).String())
-	}
-	return &ExitCodeError{Code: ExitDeferred, Err: fmt.Errorf("admission deferred: %s", reason)}
-}
-
-// notifyDefer sends at most one alert per defer episode per scope through
-// the watchdog notifier. The claim is atomic (O_EXCL per-episode file), so
-// concurrent defer handlers cannot duplicate the alert; a failed send
-// releases the claim so the next defer retries. Best-effort: a host
-// without watchdog configuration simply gets no alert.
-func notifyDefer(ctx context.Context, cmd *cobra.Command, store *admission.Store, scope, class string, d admission.Decision) {
-	claimed, claimPath, err := store.ClaimNotify(scope, class, d.Next.DeferSince)
-	if err != nil || !claimed {
-		return
-	}
-	mgr := watchdog.NewManager(watchdogRunner(false), homeFor(cmd))
-	wcfg, err := loadWatchdogSnapshot(mgr)
-	if err != nil {
-		_ = os.Remove(claimPath)
-		return
-	}
-	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), watchdogRunner(false), runtime.GOOS)
-	msg := fmt.Sprintf("heavy job deferred for %s: %s", scope, strings.Join(d.Reasons, "; "))
-	if err := notifier.Notify(ctx, "warn", msg); err != nil {
-		_ = os.Remove(claimPath)
-	}
 }

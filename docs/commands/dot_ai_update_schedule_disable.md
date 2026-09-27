@@ -11,7 +11,7 @@ dot ai update schedule disable [flags]
 ```
   -h, --help            help for disable
       --json            Emit scheduler status as JSON
-      --wait duration   Maximum healthy-recovery sampling time when enabling (default 6m0s)
+      --wait duration   Maximum time to wait for the maintenance slot and host recovery when enabling (at most 10m) (default 6m0s)
 ```
 
 ### Options inherited from parent commands

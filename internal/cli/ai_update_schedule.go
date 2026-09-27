@@ -18,7 +18,7 @@ func newAIUpdateScheduleCmd() *cobra.Command {
 		action := action
 		c := &cobra.Command{Use: action, Short: action + " the weekly AI update LaunchAgent", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return runAIUpdateSchedule(cmd, action) }}
 		c.Flags().Bool("json", false, "Emit scheduler status as JSON")
-		c.Flags().Duration("wait", 6*time.Minute, "Maximum healthy-recovery sampling time when enabling")
+		c.Flags().Duration("wait", 6*time.Minute, "Maximum time to wait for the maintenance slot and host recovery when enabling (at most 10m)")
 		cmd.AddCommand(c)
 	}
 	return cmd
@@ -46,8 +46,9 @@ func runAIUpdateSchedule(cmd *cobra.Command, action string) error {
 		if state.Modules.AI.Tooling == nil || len(state.Modules.AI.Tooling.Agents) == 0 {
 			return fmt.Errorf("configure selected agents with dot ai setup before enabling maintenance")
 		}
-		// Registration does not bypass admission: establish genuine healthy history
-		// first, then release the slot before launchd can perform its startup check.
+		// Registration does not bypass admission: take the maintenance slot on a
+		// healthy host first, then release it before launchd can perform its
+		// startup check.
 		if !dryRun {
 			wait, _ := cmd.Flags().GetDuration("wait")
 			if wait <= 0 || wait > 10*time.Minute {
