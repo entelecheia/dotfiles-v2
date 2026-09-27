@@ -38,10 +38,11 @@ func (j HeavyJob) Describe() string {
 // FindUncovered lists heavy work that blocks a slot for projectDir: work in
 // the same repository, maintenance-shaped work for the maintenance class,
 // and any work whose repository is unknown. The caller's own ancestors and
-// direct children are never counted. A failed scan is an error; callers
+// direct children, and the process trees of the leased PIDs (jobs that hold a
+// slot), are never counted. A failed scan is an error; callers
 // defer on it rather than assume the host is quiet.
-func FindUncovered(ctx context.Context, projectDir string, maintenance bool) ([]string, error) {
-	jobs, err := scanHeavyJobs(ctx)
+func FindUncovered(ctx context.Context, projectDir string, maintenance bool, leased []int) ([]string, error) {
+	jobs, err := scanHeavyJobs(ctx, leased)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +79,9 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 func boundedOutput(ctx context.Context, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	c := osexec.CommandContext(ctx, name, args...)
+	// Callers pass only the constants /bin/ps and /usr/sbin/lsof, with fixed
+	// flags and integer PIDs; no user input reaches the command.
+	c := osexec.CommandContext(ctx, name, args...) // nosemgrep: go.lang.security.audit.dangerous-exec-command
 	var b cappedBuffer
 	b.limit = 2 << 20
 	c.Stdout = &b
@@ -93,7 +96,7 @@ type processRow struct {
 	cpu        float64
 }
 
-func scanHeavyJobs(ctx context.Context) ([]HeavyJob, error) {
+func scanHeavyJobs(ctx context.Context, leased []int) ([]HeavyJob, error) {
 	out, err := boundedOutput(ctx, "/bin/ps", "-axo", "pid=,ppid=,%cpu=,args=")
 	if err != nil {
 		return nil, fmt.Errorf("process inventory: %w", err)
@@ -102,13 +105,38 @@ func scanHeavyJobs(ctx context.Context) ([]HeavyJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	found, err := unownedHeavyJobs(rows, parents, os.Getpid(), leased)
+	if err != nil {
+		return nil, err
+	}
+	return resolveJobDirectories(ctx, found), nil
+}
+
+// unownedHeavyJobs picks the heavyweight rows that no admission owner
+// accounts for: not self's ancestors or direct children, and not inside the
+// process tree of a leased PID.
+func unownedHeavyJobs(rows []processRow, parents map[int]int, self int, leased []int) ([]HeavyJob, error) {
 	ancestors := map[int]bool{}
-	for p := os.Getpid(); p > 0 && !ancestors[p]; p = parents[p] {
+	for p := self; p > 0 && !ancestors[p]; p = parents[p] {
 		ancestors[p] = true
+	}
+	owned := map[int]bool{}
+	for _, pid := range leased {
+		if pid > 0 {
+			owned[pid] = true
+		}
+	}
+	underLease := func(pid int) bool {
+		for p, depth := pid, 0; p > 0 && depth < 64; p, depth = parents[p], depth+1 {
+			if owned[p] {
+				return true
+			}
+		}
+		return false
 	}
 	var found []HeavyJob
 	for _, r := range rows {
-		if ancestors[r.pid] || r.ppid == os.Getpid() {
+		if ancestors[r.pid] || r.ppid == self || underLease(r.pid) {
 			continue
 		}
 		if heavyweight(r.name, r.args) || r.cpu >= 100 {
@@ -118,7 +146,21 @@ func scanHeavyJobs(ctx context.Context) ([]HeavyJob, error) {
 			}
 		}
 	}
-	return resolveJobDirectories(ctx, found), nil
+	return found, nil
+}
+
+// LeasedPIDs lists the PIDs of the store's leases, for FindUncovered. A read
+// error excludes nothing, which errs toward deferring.
+func LeasedPIDs(store *Store) []int {
+	leases, err := store.ListLeases()
+	if err != nil {
+		return nil
+	}
+	pids := make([]int, 0, len(leases))
+	for _, l := range leases {
+		pids = append(pids, l.PID)
+	}
+	return pids
 }
 
 // parseProcessTable reads `ps -axo pid=,ppid=,%cpu=,args=` output. The name

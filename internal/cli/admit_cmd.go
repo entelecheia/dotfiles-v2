@@ -168,7 +168,7 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 	// uncovered work, and it sees anything that started while we waited. A
 	// failed scan or work in this repository (or of unknown ownership) defers;
 	// the deferred Release above frees the slot.
-	if jobs, uerr := admitFindUncovered(ctx, cwd, class == admission.ClassMaintenance); uerr != nil || len(jobs) > 0 {
+	if jobs, uerr := admitFindUncovered(ctx, cwd, class == admission.ClassMaintenance, admission.LeasedPIDs(store)); uerr != nil || len(jobs) > 0 {
 		reason := "uncovered heavyweight work: " + strings.Join(jobs, ", ")
 		if uerr != nil {
 			reason = "heavy-work inventory unavailable: " + uerr.Error()

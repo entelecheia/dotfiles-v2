@@ -64,7 +64,7 @@ func stubAdmitUncovered(t *testing.T, jobs []string) {
 func stubAdmitScan(t *testing.T, jobs []string, err error) {
 	t.Helper()
 	old := admitFindUncovered
-	admitFindUncovered = func(context.Context, string, bool) ([]string, error) { return jobs, err }
+	admitFindUncovered = func(context.Context, string, bool, []int) ([]string, error) { return jobs, err }
 	t.Cleanup(func() { admitFindUncovered = old })
 }
 
@@ -458,5 +458,35 @@ func TestAdmitDefersOnScanError(t *testing.T) {
 		t.Fatalf("slot leaked after a scan-error defer: %v, %v", slot, err)
 	} else {
 		_ = slot.Release()
+	}
+}
+
+// dot admit hands the live leases' PIDs to the scan, so another slot's work is
+// not counted as uncovered.
+func TestAdmitPassesLeasesToScan(t *testing.T) {
+	home, _ := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	other, _, err := store.Acquire(context.Background(), admission.MaintenanceScope, admission.ClassMaintenance, admission.Lease{Owner: "tooling@mac", PID: 4242, PIDStart: "x"})
+	if err != nil || other == nil {
+		t.Fatalf("seeding = %v, %v", other, err)
+	}
+	defer func() { _ = other.Release() }()
+	var got []int
+	old := admitFindUncovered
+	admitFindUncovered = func(_ context.Context, _ string, _ bool, leased []int) ([]string, error) {
+		got = leased
+		return nil, nil
+	}
+	t.Cleanup(func() { admitFindUncovered = old })
+	if _, _, err := runDotForTest("admit", "--wait", "0", "--", "true"); err != nil {
+		t.Fatalf("admit: %v", err)
+	}
+	found := false
+	for _, pid := range got {
+		found = found || pid == 4242
+	}
+	if !found {
+		t.Fatalf("scan got leased PIDs %v, want the maintenance holder 4242", got)
 	}
 }

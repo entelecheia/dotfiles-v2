@@ -110,3 +110,28 @@ func TestParseProcessTableNamesFromArgv0(t *testing.T) {
 		}
 	}
 }
+
+// Heavy work inside a leased process tree is owned by that slot; only work
+// no owner accounts for is uncovered.
+func TestUnownedHeavyJobsSkipsLeasedTrees(t *testing.T) {
+	rows, parents, err := parseProcessTable("" +
+		"  100     1   0.5 /opt/homebrew/bin/dot ai update\n" + // leased supervisor
+		"  101   100  50.0 /usr/local/bin/npm install -g x\n" + // its child: owned
+		"  102   101  90.0 /usr/local/bin/node install.js install\n" + // grandchild: owned
+		"  200     1  40.0 /opt/homebrew/bin/go test ./...\n" + // nobody's: uncovered
+		"  300     1   1.0 /bin/zsh\n" + // self's parent
+		"  301   300  80.0 /usr/bin/make -j2\n") // self's own child
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := unownedHeavyJobs(rows, parents, 300, []int{100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].PID != 200 {
+		t.Fatalf("unowned jobs = %+v, want only pid 200", jobs)
+	}
+	if all, _ := unownedHeavyJobs(rows, parents, 300, nil); len(all) != 3 {
+		t.Fatalf("without leases = %+v, want pids 101, 102 and 200", all)
+	}
+}

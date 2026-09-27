@@ -24,6 +24,12 @@ func healthySnapshot() admission.PressureSnapshot {
 // fixed scope and an empty process table.
 func testAdapter(t *testing.T, snap *admission.PressureSnapshot, uncovered *[]string) (*adapter, *admission.Store) {
 	t.Helper()
+	var none error
+	return testAdapterScan(t, snap, uncovered, &none)
+}
+
+func testAdapterScan(t *testing.T, snap *admission.PressureSnapshot, uncovered *[]string, scanErr *error) (*adapter, *admission.Store) {
+	t.Helper()
 	t.Setenv(admission.NestedEnv, "")
 	root := t.TempDir()
 	a := &adapter{
@@ -31,7 +37,7 @@ func testAdapter(t *testing.T, snap *admission.PressureSnapshot, uncovered *[]st
 		monitor: func() *admission.Monitor {
 			return &admission.Monitor{GOOS: "darwin", SnapshotFunc: func(context.Context, *admission.Monitor) admission.PressureSnapshot { return *snap }}
 		},
-		uncovered: func(context.Context, string, bool) ([]string, error) { return *uncovered, nil },
+		uncovered: func(context.Context, string, bool, []int) ([]string, error) { return *uncovered, *scanErr },
 		lease: func(_ context.Context, _ *exec.Runner, dir string) (admission.Lease, error) {
 			return admission.Lease{Owner: "adapter@test", PID: os.Getpid(), PIDStart: "Mon Sep 28 01:00:00 2026", CWD: dir}, nil
 		},
@@ -198,5 +204,70 @@ func TestWaitAcquireStopsAtDeadline(t *testing.T) {
 	_, err := a.waitAcquire(context.Background(), Options{ProjectDir: t.TempDir()}, 50*time.Millisecond)
 	if !deferred(err) || !strings.Contains(err.Error(), "wait ended") || time.Since(start) > 5*time.Second {
 		t.Fatalf("wait = %v after %v", err, time.Since(start))
+	}
+}
+
+// A failed scan defers with its cause and frees the slot it took.
+func TestAdapterDefersOnScanError(t *testing.T) {
+	snap, none, scanErr := healthySnapshot(), []string(nil), errors.New("ps timed out")
+	a, store := testAdapterScan(t, &snap, &none, &scanErr)
+	if _, err := a.acquire(context.Background(), Options{ProjectDir: t.TempDir()}); !deferred(err) || !strings.Contains(err.Error(), "heavy-work inventory unavailable: ps timed out") {
+		t.Fatalf("scan error = %v, want a deferral naming it", err)
+	}
+	if got, _, err := store.Acquire(context.Background(), "repo-a", admission.ClassHeavy, admission.Lease{Owner: "x", PID: 4242, PIDStart: "x"}); err != nil || got == nil {
+		t.Fatalf("slot leaked after a scan-error defer: %v, %v", got, err)
+	} else {
+		_ = got.Release()
+	}
+}
+
+// A wait that ends while the gate runs is a deferral, not an error from the
+// identity probe that follows.
+func TestAdapterWaitEndingDuringGateDefers(t *testing.T) {
+	snap, none := healthySnapshot(), []string(nil)
+	a, _ := testAdapter(t, &snap, &none)
+	ctx, cancel := context.WithCancel(context.Background())
+	a.monitor = func() *admission.Monitor {
+		return &admission.Monitor{GOOS: "darwin", SnapshotFunc: func(context.Context, *admission.Monitor) admission.PressureSnapshot {
+			cancel() // the caller's wait ends mid-gate
+			return snap
+		}}
+	}
+	a.lease = func(ctx context.Context, _ *exec.Runner, _ string) (admission.Lease, error) {
+		if ctx.Err() != nil {
+			return admission.Lease{}, errors.New("cannot verify this process's start time")
+		}
+		return admission.Lease{Owner: "adapter@test", PID: os.Getpid(), PIDStart: "x"}, nil
+	}
+	if _, err := a.acquire(ctx, Options{ProjectDir: t.TempDir()}); !deferred(err) || !strings.Contains(err.Error(), "wait ended") {
+		t.Fatalf("mid-gate wait end = %v, want a deferral", err)
+	}
+}
+
+// The adapter hands the live leases' PIDs to the scan.
+func TestAdapterPassesLeasesToScan(t *testing.T) {
+	snap, none := healthySnapshot(), []string(nil)
+	a, store := testAdapter(t, &snap, &none)
+	held, _, err := store.Acquire(context.Background(), admission.MaintenanceScope, admission.ClassMaintenance, admission.Lease{Owner: "tooling@mac", PID: 4242, PIDStart: "x"})
+	if err != nil || held == nil {
+		t.Fatalf("seeding = %v, %v", held, err)
+	}
+	defer func() { _ = held.Release() }()
+	var got []int
+	a.uncovered = func(_ context.Context, _ string, _ bool, leased []int) ([]string, error) {
+		got = leased
+		return nil, nil
+	}
+	release, err := a.acquire(context.Background(), Options{ProjectDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	found := false
+	for _, pid := range got {
+		found = found || pid == 4242
+	}
+	if !found {
+		t.Fatalf("scan got leased PIDs %v, want 4242", got)
 	}
 }

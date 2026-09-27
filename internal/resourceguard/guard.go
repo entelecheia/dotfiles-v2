@@ -40,7 +40,7 @@ type adapter struct {
 	root      func() (string, error)
 	runner    *exec.Runner
 	monitor   func() *admission.Monitor
-	uncovered func(ctx context.Context, dir string, maintenance bool) ([]string, error)
+	uncovered func(ctx context.Context, dir string, maintenance bool, leased []int) ([]string, error)
 	lease     func(ctx context.Context, runner *exec.Runner, dir string) (admission.Lease, error)
 	resolve   func(ctx context.Context, runner *exec.Runner, dir string) (string, error)
 	heartbeat time.Duration
@@ -130,11 +130,16 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 		return nil, err
 	}
 	store := admission.NewStore(root, a.runner)
-	// The probes are bounded on their own; a caller cancelling mid-probe must
+	// The probes are bounded on their own; a caller canceling mid-probe must
 	// not record failed telemetry into the shared history.
 	d, err := store.Gate(context.WithoutCancel(ctx), a.monitor(), admission.DefaultThresholds())
 	if err != nil {
 		return nil, err
+	}
+	if ctx.Err() != nil {
+		// The wait ended during the gate; report it as a deferral, not as a
+		// later identity-probe failure.
+		return nil, &DeferredError{Reason: "wait ended: " + ctx.Err().Error()}
 	}
 	if !d.Admit {
 		return nil, &DeferredError{Reason: strings.Join(d.Reasons, "; ")}
@@ -159,7 +164,7 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 	}
 	// Scan with the slot held, so the job that owned it is never mistaken for
 	// uncovered work; release it again on defer.
-	jobs, err := a.uncovered(ctx, dir, class == admission.ClassMaintenance)
+	jobs, err := a.uncovered(ctx, dir, class == admission.ClassMaintenance, admission.LeasedPIDs(store))
 	if err != nil || len(jobs) > 0 {
 		_ = slot.Release()
 		if err != nil {
