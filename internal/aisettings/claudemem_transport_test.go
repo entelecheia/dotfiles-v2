@@ -310,8 +310,11 @@ func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
 	}
 	req, _ := json.Marshal(serveRequest{Bundle: bundle})
 
+	// HOME points at a trap worker: a regression to os.UserHomeDir() inside
+	// ServeOp would kick it.
+	trap, trapHits := workerHome(t)
+	t.Setenv("HOME", trap)
 	home, hits := workerHome(t)
-	_, otherHits := workerHome(t)
 	dst := newTestSyncDB(t)
 	var out bytes.Buffer
 	if err := ServeOp(context.Background(), dst.Path, home, "import", bytes.NewReader(req), &out); err != nil {
@@ -320,8 +323,8 @@ func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
 	if !strings.Contains(out.String(), `"result"`) {
 		t.Fatalf("import response = %s", out.String())
 	}
-	if *hits != 1 || *otherHits != 0 {
-		t.Fatalf("kicks: given home = %d, other home = %d; want 1, 0", *hits, *otherHits)
+	if *hits != 1 || *trapHits != 0 {
+		t.Fatalf("kicks: given home = %d, process HOME = %d; want 1, 0", *hits, *trapHits)
 	}
 
 	// An empty home skips the kick entirely.
@@ -335,7 +338,7 @@ func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
 	if err := ServeOp(context.Background(), dst.Path, "", "import", bytes.NewReader(req2), &out); err != nil {
 		t.Fatal(err)
 	}
-	if *hits != 0 {
-		t.Fatalf("empty home kicked %d times", *hits)
+	if *hits != 0 || *trapHits != 0 {
+		t.Fatalf("empty home kicked: given home = %d, process HOME = %d; want 0, 0", *hits, *trapHits)
 	}
 }
