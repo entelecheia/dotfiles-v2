@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
@@ -135,6 +136,13 @@ func (sl *Slot) Lease() Lease { return sl.lease }
 // passed AND the owning process incarnation is verifiably gone; an
 // unverifiable identity (ps failure) is busy, mirroring the watchdog rule
 // that an unverifiable identity answers on the safe side.
+//
+// The reclaim itself is serialized by a per-slot reclaim lock: without it
+// two waiters could both judge the same lease stale, and the second one's
+// RemoveAll would delete the first one's freshly written lease, admitting
+// two holders. The lock is a leaf in the lock order — it is only ever taken
+// by a waiter that holds NO slot — so no deadlock is possible by
+// construction.
 func (s *Store) Acquire(ctx context.Context, scope, class string, lease Lease) (*Slot, *Lease, error) {
 	if err := os.MkdirAll(filepath.Join(s.Root, "slots"), 0o755); err != nil {
 		return nil, nil, fmt.Errorf("creating slots dir: %w", err)
@@ -165,11 +173,137 @@ func (s *Store) Acquire(ctx context.Context, scope, class string, lease Lease) (
 		if !stale {
 			return nil, holder, nil
 		}
-		if err := os.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, fmt.Errorf("reclaiming stale slot %s: %w", dir, err)
+		slot, busy, rerr := s.reclaimAndAcquire(ctx, dir, holder, lease, scope, class)
+		if rerr != nil {
+			return nil, nil, rerr
+		}
+		if slot != nil {
+			return slot, nil, nil
+		}
+		if busy {
+			// Lost the reclaim race, or the slot stopped being stale under
+			// the lock: report the current holder.
+			if current, rerr := readLease(dir); rerr == nil {
+				return nil, &current, nil
+			}
+			return nil, holder, nil
 		}
 	}
 	return nil, nil, fmt.Errorf("slot %s changed hands while acquiring; retry", dir)
+}
+
+// reclaimStaleAfter bounds a reclaim lock left behind by a reclaimer that
+// died mid-reclaim. A reclaim runs in well under a second, so a minute-old
+// lock cannot belong to a live one.
+const reclaimStaleAfter = time.Minute
+
+// reclaimAndAcquire performs the guarded stale reclaim end to end: take the
+// slot's reclaim lock, re-verify staleness under it, remove the stale slot,
+// and acquire it for ourselves with a fresh lease — all before releasing the
+// lock, so a second reclaimer can never interleave its RemoveAll with the
+// winner's fresh lease. busy=true means the slot is (or became) someone
+// else's; the caller reports the holder.
+func (s *Store) reclaimAndAcquire(ctx context.Context, dir string, judged *Lease, lease Lease, scope, class string) (*Slot, bool, error) {
+	lockPath := dir + ".reclaim"
+	locked := false
+	for attempt := 0; attempt < 2; attempt++ {
+		err := os.Mkdir(lockPath, 0o755)
+		if err == nil {
+			locked = true
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, false, fmt.Errorf("taking reclaim lock %s: %w", lockPath, err)
+		}
+		info, statErr := os.Lstat(lockPath)
+		if statErr != nil {
+			if errors.Is(statErr, fs.ErrNotExist) {
+				continue
+			}
+			return nil, false, statErr
+		}
+		if s.now().Sub(info.ModTime()) <= reclaimStaleAfter {
+			return nil, true, nil // another reclaimer is working; the slot is busy
+		}
+		if err := os.Remove(lockPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, false, fmt.Errorf("reclaiming stale reclaim lock %s: %w", lockPath, err)
+		}
+	}
+	if !locked {
+		return nil, true, nil
+	}
+	release := func() { _ = os.Remove(lockPath) }
+	stillStale, err := s.reverifyStale(ctx, dir, judged)
+	if err != nil || !stillStale {
+		release()
+		return nil, true, err
+	}
+	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		release()
+		return nil, false, fmt.Errorf("reclaiming stale slot %s: %w", dir, err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		release()
+		if errors.Is(err, fs.ErrExist) {
+			return nil, true, nil // released naturally between RemoveAll and mkdir
+		}
+		return nil, false, fmt.Errorf("re-acquiring reclaimed slot %s: %w", dir, err)
+	}
+	now := s.now()
+	lease.Scope = scope
+	lease.Class = class
+	lease.AcquiredAt = now
+	lease.HeartbeatAt = now
+	lease.Deadline = now.Add(s.HeartbeatStaleAfter())
+	if err := writeLease(dir, lease); err != nil {
+		release()
+		_ = os.RemoveAll(dir)
+		return nil, false, err
+	}
+	release()
+	return &Slot{store: s, dir: dir, lease: lease}, false, nil
+}
+
+// reverifyStale re-checks, under the reclaim lock, that the slot is still
+// stale in exactly the way the caller judged: same lease identity, deadline
+// still expired, owner incarnation still verifiably gone. Any change — a
+// fresh heartbeat, a reclaimed-and-re-acquired slot, a live owner — aborts
+// the reclaim. A nil judged means the caller's judgment was "corrupt lease,
+// aged directory"; that judgment stands only while the lease is still
+// unreadable and the directory still past the stale bound.
+func (s *Store) reverifyStale(ctx context.Context, dir string, judged *Lease) (bool, error) {
+	current, err := readLease(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil // someone else's reclaim beat us; their slot now
+		}
+		if judged != nil {
+			return false, fmt.Errorf("re-reading lease under reclaim lock: %w", err)
+		}
+		info, serr := os.Stat(dir)
+		if serr != nil {
+			if errors.Is(serr, fs.ErrNotExist) {
+				return false, nil
+			}
+			return false, serr
+		}
+		return s.now().Sub(info.ModTime()) > s.HeartbeatStaleAfter(), nil
+	}
+	if judged == nil {
+		return false, nil // a corrupt lease became readable: changed hands
+	}
+	if current.PID != judged.PID || !current.AcquiredAt.Equal(judged.AcquiredAt) ||
+		!current.HeartbeatAt.Equal(judged.HeartbeatAt) {
+		return false, nil // changed underneath us; no longer our judgment to act on
+	}
+	if s.now().Before(current.Deadline) {
+		return false, nil // heartbeat refreshed since we judged
+	}
+	match, merr := watchdog.ProcessStartMatches(ctx, s.Runner, current.PID, current.PIDStart)
+	if merr != nil || match {
+		return false, nil // unverifiable or alive: never reclaim on doubt
+	}
+	return true, nil
 }
 
 // slotHolder reads the existing lease and reports whether it is stale enough
@@ -222,6 +356,28 @@ func (sl *Slot) Heartbeat() error {
 	if !sameLease(current, sl.lease) {
 		return fmt.Errorf("heartbeat lost slot %s: slot changed hands", sl.dir)
 	}
+	sl.lease.HeartbeatAt = sl.store.now()
+	sl.lease.Deadline = sl.lease.HeartbeatAt.Add(sl.store.HeartbeatStaleAfter())
+	return writeLease(sl.dir, sl.lease)
+}
+
+// UpdateIdentity rewires the lease to a different process incarnation —
+// concretely, the child workload the wrapper just started. Without this the
+// lease would track the wrapper: a SIGKILLed wrapper would let the lease
+// expire and be reclaimed while the orphaned child keeps running in its own
+// process group, admitting a second heavy job next to it. The sameLease
+// guard still applies: the rewrite is refused once the slot changed hands.
+func (sl *Slot) UpdateIdentity(pid int, pidStart string) error {
+	current, err := readLease(sl.dir)
+	if err != nil {
+		return fmt.Errorf("identity update lost slot %s: %w", sl.dir, err)
+	}
+	if !sameLease(current, sl.lease) {
+		return fmt.Errorf("identity update lost slot %s: slot changed hands", sl.dir)
+	}
+	sl.lease.PID = pid
+	sl.lease.PIDStart = pidStart
+	sl.lease.PGID = pid // the child leads its own process group (Setpgid)
 	sl.lease.HeartbeatAt = sl.store.now()
 	sl.lease.Deadline = sl.lease.HeartbeatAt.Add(sl.store.HeartbeatStaleAfter())
 	return writeLease(sl.dir, sl.lease)
@@ -331,7 +487,7 @@ func SaveHistory(path string, h History) error {
 // a half-updated history. The evaluation clock comes from the monitor when
 // it carries one, matching the fixture seams.
 func (s *Store) Gate(ctx context.Context, m *Monitor, th Thresholds) (Decision, error) {
-	release, busy, err := acquireHistoryLock(s.Root)
+	release, touch, busy, err := acquireHistoryLock(s.Root)
 	if err != nil {
 		return Decision{}, fmt.Errorf("locking history: %w", err)
 	}
@@ -351,80 +507,112 @@ func (s *Store) Gate(ctx context.Context, m *Monitor, th Thresholds) (Decision, 
 	if m.Now != nil {
 		now = m.Now()
 	}
-	d := EvaluatePressure(m.SnapshotPressure(ctx), th, hist, now)
+	snap := m.SnapshotPressure(ctx)
+	// The snapshot can run for most of a minute on a loaded host (probe
+	// timeouts); refresh the lock so a concurrent invocation never reads
+	// this live evaluation as abandoned.
+	touch()
+	d := EvaluatePressure(snap, th, hist, now)
 	if err := SaveHistory(s.HistoryPath(), d.Next); err != nil {
 		return Decision{}, err
 	}
 	return d, nil
 }
 
+// historyLockStaleAfter bounds a history lock left behind by a gate
+// evaluation that died mid-pass. A Darwin evaluation runs up to seven
+// sequential probes with 10s timeouts plus the DiagnosticReports scan
+// (~80s worst case), so the bound must clear that comfortably; Gate also
+// touches the lock after the snapshot returns, so a long-but-live
+// evaluation never looks abandoned.
+const historyLockStaleAfter = 3 * time.Minute
+
 // acquireHistoryLock serializes the load-evaluate-save cycle on
 // history.json between concurrent `dot admit` invocations, mirroring the
 // watchdog pass lock: a lock older than the bound belongs to a dead pass.
-func acquireHistoryLock(root string) (release func(), busy bool, err error) {
+// The returned touch callback refreshes the lock mtime; long evaluations
+// call it to prove they are alive.
+func acquireHistoryLock(root string) (release func(), touch func(), busy bool, err error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	lockPath := filepath.Join(root, "history.lock")
 	for attempt := 0; attempt < 2; attempt++ {
 		err := os.Mkdir(lockPath, 0o755)
 		if err == nil {
-			return func() { _ = os.Remove(lockPath) }, false, nil
+			return func() { _ = os.Remove(lockPath) },
+				func() { now := time.Now(); _ = os.Chtimes(lockPath, now, now) },
+				false, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 		info, statErr := os.Lstat(lockPath)
 		if statErr != nil {
 			if errors.Is(statErr, fs.ErrNotExist) {
 				continue
 			}
-			return nil, false, statErr
+			return nil, nil, false, statErr
 		}
-		if time.Since(info.ModTime()) <= time.Minute {
-			return nil, true, nil
+		if time.Since(info.ModTime()) <= historyLockStaleAfter {
+			return nil, nil, true, nil
 		}
 		if err := os.Remove(lockPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 	}
-	return nil, true, nil
+	return nil, nil, true, nil
 }
 
-// notifyMarkPath records the defer episode a scope was last notified for.
-func (s *Store) notifyMarkPath(scope, class string) string {
+// ClaimNotify atomically claims the right to send the alert for one defer
+// episode: the mark file's NAME carries the episode, and creation is
+// O_CREATE|O_EXCL, so two concurrent defer handlers for the same episode
+// cannot both win — exactly one notification per defer episode per scope.
+// The returned path lets the caller release a claim whose notification
+// failed (remove it, and the next defer retries). A new episode has a new
+// name, so it claims independently; older marks for the same scope are
+// removed best-effort once the new claim lands.
+func (s *Store) ClaimNotify(scope, class string, episode time.Time) (claimed bool, path string, err error) {
+	if episode.IsZero() {
+		episode = s.now()
+	}
+	dir := filepath.Join(s.Root, "notify")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, "", err
+	}
 	sum := sha256.Sum256([]byte(scope))
-	return filepath.Join(s.Root, "notify", fmt.Sprintf("%s-%s.json", class, hex.EncodeToString(sum[:])[:16]))
-}
-
-// ShouldNotify reports whether a defer in this episode (identified by its
-// DeferSince) still needs an alert: at most one notification per defer
-// episode per scope.
-func (s *Store) ShouldNotify(scope, class string, episode time.Time) bool {
-	data, err := os.ReadFile(s.notifyMarkPath(scope, class))
-	if err != nil {
-		return true
-	}
-	var mark struct {
-		Episode time.Time `json:"episode"`
-	}
-	if json.Unmarshal(data, &mark) != nil {
-		return true
-	}
-	return !mark.Episode.Equal(episode)
-}
-
-// MarkNotified records that this episode's alert was sent.
-func (s *Store) MarkNotified(scope, class string, episode time.Time) error {
-	path := s.notifyMarkPath(scope, class)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
+	prefix := fmt.Sprintf("%s-%s-", class, hex.EncodeToString(sum[:])[:16])
+	path = filepath.Join(dir, fmt.Sprintf("%s%d.json", prefix, episode.Unix()))
 	data, err := json.Marshal(map[string]time.Time{"episode": episode})
 	if err != nil {
-		return err
+		return false, "", err
 	}
-	return os.WriteFile(path, data, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return false, path, nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	if _, werr := f.Write(data); werr != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return false, "", werr
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return false, "", err
+	}
+	// Best-effort sweep of older episode marks for this scope+class; the
+	// current claim's file must survive.
+	if entries, rerr := os.ReadDir(dir); rerr == nil {
+		for _, e := range entries {
+			if e.Name() != filepath.Base(path) && strings.HasPrefix(e.Name(), prefix) {
+				_ = os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	return true, path, nil
 }
 
 // ListLeases returns the lease of every slot currently on disk. Bounded by

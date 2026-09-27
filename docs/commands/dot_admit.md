@@ -13,9 +13,11 @@ continuous minutes of normal telemetry. One heavy slot is held per project
 repo (shared across its worktrees, branches, and sessions); different repos
 run in parallel. --class maintenance takes the single host-wide maintenance
 slot instead. On defer the exit code is 75 (EX_TEMPFAIL) with a
-machine-readable outcome when --json is set. Jobs launched without
-'dot admit' are not visible to the controller. Use '--' before commands that
-collide with subcommand names.
+machine-readable outcome on stdout when --json is set. When a command runs,
+its own stdout is the payload and the --json completion record goes to
+stderr, so the exit code is the machine-readable result. Jobs launched
+without 'dot admit' are not visible to the controller. Use '--' before
+commands that collide with subcommand names.
 
 ```
 dot admit [--class heavy|maintenance] [--wait 30m] [--json] -- <command> [args...] [flags]

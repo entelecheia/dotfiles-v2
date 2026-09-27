@@ -3,16 +3,10 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	osexec "os/exec"
-	"os/signal"
-	"os/user"
 	"runtime"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -58,9 +52,11 @@ continuous minutes of normal telemetry. One heavy slot is held per project
 repo (shared across its worktrees, branches, and sessions); different repos
 run in parallel. --class maintenance takes the single host-wide maintenance
 slot instead. On defer the exit code is 75 (EX_TEMPFAIL) with a
-machine-readable outcome when --json is set. Jobs launched without
-'dot admit' are not visible to the controller. Use '--' before commands that
-collide with subcommand names.`,
+machine-readable outcome on stdout when --json is set. When a command runs,
+its own stdout is the payload and the --json completion record goes to
+stderr, so the exit code is the machine-readable result. Jobs launched
+without 'dot admit' are not visible to the controller. Use '--' before
+commands that collide with subcommand names.`,
 		Args:         cobra.MinimumNArgs(1),
 		RunE:         runAdmit,
 		SilenceUsage: true,
@@ -103,7 +99,7 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 	// A child of an admitted job for the same scope and class runs without
 	// re-acquiring the slot its parent already holds.
 	if admission.NestedScope(os.Getenv(admission.NestedEnv), effective, class) {
-		return runAdmittedChild(p, args, effective, class, nil, asJSON)
+		return runAdmittedChild(ctx, p, runner, args, effective, class, nil, asJSON)
 	}
 
 	monitor := admitNewMonitor(runner, home)
@@ -116,7 +112,10 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 		return deferExit(p, effective, class, "", decision, asJSON)
 	}
 
-	lease := buildSelfLease(ctx, runner, cwd)
+	lease, err := buildSelfLease(ctx, runner, cwd)
+	if err != nil {
+		return err
+	}
 	deadline := time.Now().Add(wait)
 	backoff := 2 * time.Second
 	var slot *admission.Slot
@@ -158,35 +157,7 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return runAdmittedChild(p, args, effective, class, slot, asJSON)
-}
-
-// buildSelfLease fills the process-identity fields of the lease this run
-// would hold. PIDStart is normalized exactly the way the watchdog compares
-// it, so a later stale-owner probe matches this incarnation.
-func buildSelfLease(ctx context.Context, runner *exec.Runner, cwd string) admission.Lease {
-	owner := os.Getenv(admission.OwnerEnv)
-	if owner == "" {
-		username := "unknown"
-		if u, err := user.Current(); err == nil {
-			username = u.Username
-		}
-		host, _ := os.Hostname()
-		owner = username + "@" + host
-	}
-	started := ""
-	if res, err := runner.RunQuery(ctx, "ps", "-o", "lstart=", "-p", strconv.Itoa(os.Getpid())); err == nil {
-		started = strings.Join(strings.Fields(res.Stdout), " ")
-	}
-	pgid, _ := syscall.Getpgid(os.Getpid())
-	return admission.Lease{
-		Owner:    owner,
-		Session:  os.Getenv(admission.SessionEnv),
-		PID:      os.Getpid(),
-		PIDStart: started,
-		PGID:     pgid,
-		CWD:      cwd,
-	}
+	return runAdmittedChild(ctx, p, runner, args, effective, class, slot, asJSON)
 }
 
 // deferExit prints the defer outcome (JSON when asked) and returns the
@@ -219,112 +190,24 @@ func deferExit(p *Printer, scope, class, owner string, d admission.Decision, asJ
 }
 
 // notifyDefer sends at most one alert per defer episode per scope through
-// the watchdog notifier. Best-effort: a host without watchdog configuration
-// simply gets no alert, and a failed send is not marked, so the next defer
-// retries.
+// the watchdog notifier. The claim is atomic (O_EXCL per-episode file), so
+// concurrent defer handlers cannot duplicate the alert; a failed send
+// releases the claim so the next defer retries. Best-effort: a host
+// without watchdog configuration simply gets no alert.
 func notifyDefer(ctx context.Context, cmd *cobra.Command, store *admission.Store, scope, class string, d admission.Decision) {
-	episode := d.Next.DeferSince
-	if !store.ShouldNotify(scope, class, episode) {
+	claimed, claimPath, err := store.ClaimNotify(scope, class, d.Next.DeferSince)
+	if err != nil || !claimed {
 		return
 	}
 	mgr := watchdog.NewManager(watchdogRunner(false), homeFor(cmd))
 	wcfg, err := loadWatchdogSnapshot(mgr)
 	if err != nil {
+		_ = os.Remove(claimPath)
 		return
 	}
 	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), watchdogRunner(false), runtime.GOOS)
 	msg := fmt.Sprintf("heavy job deferred for %s: %s", scope, strings.Join(d.Reasons, "; "))
-	if err := notifier.Notify(ctx, "warn", msg); err == nil {
-		_ = store.MarkNotified(scope, class, episode)
+	if err := notifier.Notify(ctx, "warn", msg); err != nil {
+		_ = os.Remove(claimPath)
 	}
-}
-
-// runAdmittedChild executes the wrapped command with stdio and signal
-// forwarding, a heartbeat goroutine while a slot is held, and the nested-run
-// marker in the environment. The child's exit code becomes dot's.
-func runAdmittedChild(p *Printer, args []string, scope, class string, slot *admission.Slot, asJSON bool) error {
-	child := osexec.Command(args[0], args[1:]...) // #nosec G204 -- the command is the user's own invocation
-	child.Stdin = os.Stdin
-	child.Stdout = os.Stdout
-	child.Stderr = os.Stderr
-	child.Env = append(os.Environ(), admission.NestedEnv+"="+admission.NestedEnvValue(scope, class))
-	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := child.Start(); err != nil {
-		return fmt.Errorf("starting %q: %w", strings.Join(args, " "), err)
-	}
-
-	stopHB := make(chan struct{})
-	if slot != nil {
-		go func() {
-			ticker := time.NewTicker(admission.DefaultHeartbeatInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					// A failed heartbeat (slot lost) only shows up in the
-					// next probe; the child keeps running either way.
-					_ = slot.Heartbeat()
-				case <-stopHB:
-					return
-				}
-			}
-		}()
-	}
-	defer close(stopHB)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigCh)
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		for {
-			select {
-			case sig := <-sigCh:
-				if s, ok := sig.(syscall.Signal); ok && child.Process != nil {
-					if pgid, err := syscall.Getpgid(child.Process.Pid); err == nil {
-						_ = syscall.Kill(-pgid, s)
-					}
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	waitErr := child.Wait()
-	exitCode := 0
-	if waitErr != nil {
-		exitCode = 1
-		var exitErr *osexec.ExitError
-		if errors.As(waitErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-				exitCode = 128 + int(ws.Signal())
-			}
-		}
-	}
-	if asJSON {
-		data, err := json.MarshalIndent(map[string]any{
-			"outcome":   "completed",
-			"scope":     scope,
-			"class":     class,
-			"exit_code": exitCode,
-		}, "", "  ")
-		if err != nil {
-			return err
-		}
-		p.Line("%s", data)
-	}
-	if exitCode != 0 {
-		return &ExitCodeError{Code: exitCode, Err: fmt.Errorf("command exited with status %d", exitCode)}
-	}
-	return nil
-}
-
-func minDuration(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }

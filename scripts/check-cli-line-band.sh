@@ -28,6 +28,7 @@ files=(
   "internal/cli/watchdog_monit.go"
   "internal/cli/watchdog_beszel.go"
   "internal/cli/admit_cmd.go"
+  "internal/cli/admit_run.go"
   "internal/cli/ai_memory_sync_cmd.go"
   "internal/cli/ai_memory_sync_status.go"
 )

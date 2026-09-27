@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -78,8 +80,11 @@ func TestAdmitNestedSkipsAcquire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nested admit = %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, `"outcome": "completed"`) {
-		t.Errorf("out = %q, want a completed outcome", out)
+	if !strings.Contains(errOut, `"outcome": "completed"`) {
+		t.Errorf("stderr = %q, want the completed outcome (stdout stays the payload)", errOut)
+	}
+	if strings.Contains(out, "outcome") {
+		t.Errorf("stdout = %q, want no JSON mixed into the payload stream", out)
 	}
 }
 
@@ -132,8 +137,11 @@ func TestAdmitSuccessRunsCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admit = %v\nstderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, `"outcome": "completed"`) || !strings.Contains(out, `"exit_code": 0`) {
-		t.Errorf("out = %q, want a completed outcome", out)
+	if !strings.Contains(errOut, `"outcome": "completed"`) || !strings.Contains(errOut, `"exit_code": 0`) {
+		t.Errorf("stderr = %q, want the completed outcome", errOut)
+	}
+	if strings.Contains(out, "outcome") {
+		t.Errorf("stdout = %q, want no JSON mixed into the payload stream", out)
 	}
 	// The slot must be released after the run.
 	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
@@ -144,6 +152,91 @@ func TestAdmitSuccessRunsCommand(t *testing.T) {
 	if len(owners) != 0 {
 		t.Errorf("owners after the run = %v, want the slot released", owners)
 	}
+}
+
+// TestAdmitRefusesUnverifiableIdentity: when the ps start-time probe fails,
+// the wrapper must not acquire a slot at all — a lease with an empty
+// PIDStart could later be reclaimed from a live owner.
+func TestAdmitRefusesUnverifiableIdentity(t *testing.T) {
+	home, _ := admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	// An empty PATH makes the ps probe fail; the fallback scope needs no
+	// git either, and the child never starts.
+	t.Setenv("PATH", t.TempDir())
+	_, _, err := runDotForTest("admit", "--json", "--wait", "0", "--", "true")
+	if err == nil || !strings.Contains(err.Error(), "unverifiable identity") {
+		t.Fatalf("err = %v, want the unverifiable-identity refusal", err)
+	}
+	var exitErr *ExitCodeError
+	if errors.As(err, &exitErr) {
+		t.Errorf("err = %v, want a hard error, not a defer", err)
+	}
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	owners, lerr := store.ListLeases()
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if len(owners) != 0 {
+		t.Errorf("owners = %v, want no slot acquired with an unverifiable identity", owners)
+	}
+}
+
+// TestAdmitLeaseBindsChildIdentity: while the wrapped command runs, the
+// lease on disk names the CHILD, not the wrapper — a wrapper SIGKILL must
+// not free the slot under a live workload.
+func TestAdmitLeaseBindsChildIdentity(t *testing.T) {
+	admitSandbox(t)
+	stubAdmitMonitor(t, healthyAdmitSnapshot())
+	capture := filepath.Join(t.TempDir(), "slots-copy")
+	// The rewire lands right after child.Start, concurrently with the
+	// child's own start: poll until the lease names someone other than the
+	// wrapper ($PPID) before copying.
+	script := `for i in $(seq 1 100); do
+  pid=$(grep -h -o '"pid": [0-9]*' "$HOME/.local/state/dot/admission/slots"/*/lease.json 2>/dev/null | grep -o '[0-9]*')
+  if [ -n "$pid" ] && [ "$pid" != "$PPID" ]; then break; fi
+  sleep 0.05
+done
+cp -R "$HOME/.local/state/dot/admission/slots" "$1"`
+	_, _, err := runDotForTest("admit", "--wait", "0", "--", "sh", "-c", script, "sh", capture)
+	if err != nil {
+		t.Fatalf("admit = %v", err)
+	}
+	leases := findLeaseFiles(t, capture)
+	if len(leases) != 1 {
+		t.Fatalf("captured lease files = %v, want exactly 1", leases)
+	}
+	data, err := os.ReadFile(leases[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lease admission.Lease
+	if err := json.Unmarshal(data, &lease); err != nil {
+		t.Fatal(err)
+	}
+	if lease.PID == 0 || lease.PID == os.Getpid() {
+		t.Errorf("lease pid = %d, want the child's pid, not the wrapper's %d", lease.PID, os.Getpid())
+	}
+	if lease.PIDStart == "" {
+		t.Error("lease pid_start empty after the child identity rewire")
+	}
+}
+
+func findLeaseFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			candidate := filepath.Join(root, e.Name(), "lease.json")
+			if _, err := os.Stat(candidate); err == nil {
+				out = append(out, candidate)
+			}
+		}
+	}
+	return out
 }
 
 // --- JSON golden fixtures (GUARD-04 matrix) ---

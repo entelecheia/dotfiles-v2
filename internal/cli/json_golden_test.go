@@ -85,7 +85,10 @@ type goldenCase struct {
 	// wantExit expects an *ExitCodeError with this code instead of a nil
 	// error (the admission defer contract: JSON on stdout, exit 75).
 	wantExit int
-	fixture  func(t *testing.T) (home, root string)
+	// useErr reads the document from stderr instead of stdout (the
+	// admission completion record: child stdout stays the payload).
+	useErr  bool
+	fixture func(t *testing.T) (home, root string)
 }
 
 func (tc goldenCase) goldenPath() string {
@@ -102,7 +105,7 @@ func (tc goldenCase) goldenPath() string {
 // (internal/config/detector_test.go:26).
 func goldenCases() []goldenCase {
 	return []goldenCase{
-		{surface: "admit", args: []string{"admit", "--json", "--wait", "0", "--", "true"}, fixture: goldenAdmitFixture},
+		{surface: "admit", args: []string{"admit", "--json", "--wait", "0", "--", "true"}, useErr: true, fixture: goldenAdmitFixture},
 		{surface: "admit", variant: "deferred", args: []string{"admit", "--json", "--wait", "0", "--", "true"}, wantExit: ExitDeferred, fixture: goldenAdmitDeferFixture},
 		{surface: "admit status", args: []string{"admit", "status", "--json"}, fixture: goldenAdmitStatusFixture},
 		{surface: "ai policy inspect", args: []string{"ai", "policy", "inspect", "--json"}, fixture: goldenAIPolicyFixture},
@@ -281,7 +284,11 @@ func TestJSONGoldens(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("%s: %v\nstderr=%s", strings.Join(tc.args, " "), err, errOut)
 			}
-			got := normalizeGolden(out, home, root)
+			raw := out
+			if tc.useErr {
+				raw = errOut
+			}
+			got := normalizeGolden(raw, home, root)
 
 			if *goldenUpdate {
 				assertNonDegenerateGolden(t, tc.surface, got)

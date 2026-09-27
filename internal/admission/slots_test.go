@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -284,20 +285,45 @@ func TestHistoryRoundTripAndGate(t *testing.T) {
 	}
 }
 
-func TestNotifyDedup(t *testing.T) {
+// TestClaimNotifyConcurrent pins the atomic claim: any number of
+// concurrent defer handlers for the same episode produce exactly one
+// notification winner.
+func TestClaimNotifyConcurrent(t *testing.T) {
 	store := testStore(t)
 	episode := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
-	if !store.ShouldNotify("/repo/a/.git", ClassHeavy, episode) {
-		t.Error("first defer of the episode must notify")
+	const contenders = 16
+	results := make(chan bool, contenders)
+	var wg sync.WaitGroup
+	for i := 0; i < contenders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			claimed, _, err := store.ClaimNotify("/repo/a/.git", ClassHeavy, episode)
+			if err != nil {
+				t.Errorf("ClaimNotify: %v", err)
+				results <- false
+				return
+			}
+			results <- claimed
+		}()
 	}
-	if err := store.MarkNotified("/repo/a/.git", ClassHeavy, episode); err != nil {
-		t.Fatal(err)
+	wg.Wait()
+	close(results)
+	winners := 0
+	for claimed := range results {
+		if claimed {
+			winners++
+		}
 	}
-	if store.ShouldNotify("/repo/a/.git", ClassHeavy, episode) {
-		t.Error("second defer of the same episode must not notify")
+	if winners != 1 {
+		t.Errorf("winners = %d, want exactly 1", winners)
 	}
-	if !store.ShouldNotify("/repo/a/.git", ClassHeavy, episode.Add(time.Hour)) {
-		t.Error("a new episode must notify again")
+	// The same episode stays claimed; a new episode claims independently.
+	if claimed, _, err := store.ClaimNotify("/repo/a/.git", ClassHeavy, episode); err != nil || claimed {
+		t.Errorf("re-claim of the same episode = %v, %v; want false", claimed, err)
+	}
+	if claimed, _, err := store.ClaimNotify("/repo/a/.git", ClassHeavy, episode.Add(time.Hour)); err != nil || !claimed {
+		t.Errorf("new episode claim = %v, %v; want true", claimed, err)
 	}
 }
 
@@ -324,5 +350,254 @@ func TestListLeases(t *testing.T) {
 	}
 	if !classes[ClassHeavy] || !classes[ClassMaintenance] {
 		t.Errorf("classes = %v, want heavy and maintenance", classes)
+	}
+}
+
+// TestConcurrentReclaimExactlyOneWinner: two waiters judging the same
+// dead-owner slot stale must not both end up holding it. The reclaim lock
+// serializes them; the loser reports busy.
+func TestConcurrentReclaimExactlyOneWinner(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	dead := deadPIDLease(t, store)
+	dir := store.slotDir("/repo/a/.git", ClassHeavy)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLease(dir, dead); err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		slot   *Slot
+		holder *Lease
+		err    error
+	}
+	results := make(chan outcome, 2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			slot, holder, err := store.Acquire(ctx, "/repo/a/.git", ClassHeavy,
+				Lease{Owner: "contender", PID: 100 + i, PIDStart: "Sun Sep 27 10:00:00 2026"})
+			results <- outcome{slot, holder, err}
+		}(i)
+	}
+	var slots, busy int
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("Acquire: %v", r.err)
+		}
+		if r.slot != nil {
+			slots++
+		} else if r.holder != nil {
+			busy++
+		}
+	}
+	if slots != 1 || busy != 1 {
+		t.Errorf("slots = %d, busy = %d; want exactly one winner and one busy", slots, busy)
+	}
+	// The surviving lease belongs to the winner; the stale one is gone.
+	current, err := readLease(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Owner != "contender" {
+		t.Errorf("lease owner = %q, want the winning contender", current.Owner)
+	}
+	// And the reclaim lock was released.
+	if _, err := os.Lstat(dir + ".reclaim"); !os.IsNotExist(err) {
+		t.Error("reclaim lock left behind")
+	}
+}
+
+// TestReverifyStaleAbortsOnFreshLease: the re-verification under the
+// reclaim lock must stop a reclaim when the judged-stale lease changed
+// underneath — here, replaced by a fresh live one between judgment and lock.
+func TestReverifyStaleAbortsOnFreshLease(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	dead := deadPIDLease(t, store)
+	dir := store.slotDir("/repo/a/.git", ClassHeavy)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeLease(dir, dead); err != nil {
+		t.Fatal(err)
+	}
+	// The lease is judged stale, then a live owner's fresh lease lands
+	// before the reclaim lock is taken.
+	live := selfLease(t, store)
+	live.HeartbeatAt = store.now()
+	live.Deadline = store.now().Add(time.Minute)
+	if err := writeLease(dir, live); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := store.reverifyStale(ctx, dir, &dead)
+	if err != nil || stale {
+		t.Errorf("reverifyStale = %v, %v; want false (lease changed)", stale, err)
+	}
+	// The fresh lease must be untouched.
+	current, err := readLease(dir)
+	if err != nil || current.PID != live.PID {
+		t.Errorf("lease after aborted reclaim = %+v, %v; want the fresh one", current, err)
+	}
+}
+
+// TestUpdateIdentityBindsChild: after the wrapper rewires the lease to the
+// child workload, the lease carries the child's identity, and a stale-owner
+// probe against the (live) child reports busy — an orphaned workload keeps
+// its slot.
+func TestUpdateIdentityBindsChild(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	lease := selfLease(t, store)
+	slot, _, err := store.Acquire(ctx, "/repo/a/.git", ClassHeavy, lease)
+	if err != nil || slot == nil {
+		t.Fatalf("acquire = %v, %v", slot, err)
+	}
+	child := osexec.Command("sleep", "30")
+	if err := child.Start(); err != nil {
+		t.Skip("cannot spawn a child process")
+	}
+	defer func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	}()
+	childStart, err := psStartOf(t, store, child.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := slot.UpdateIdentity(child.Process.Pid, childStart); err != nil {
+		t.Fatalf("UpdateIdentity: %v", err)
+	}
+	current, err := readLease(store.slotDir("/repo/a/.git", ClassHeavy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.PID != child.Process.Pid || current.PIDStart != childStart {
+		t.Errorf("lease identity = pid %d start %q, want child %d %q",
+			current.PID, current.PIDStart, child.Process.Pid, childStart)
+	}
+	// Expire the heartbeat on disk: the probe must still report busy
+	// because the child incarnation is alive.
+	current.HeartbeatAt = store.now().Add(-2 * store.HeartbeatStaleAfter())
+	current.Deadline = current.HeartbeatAt
+	if err := writeLease(store.slotDir("/repo/a/.git", ClassHeavy), current); err != nil {
+		t.Fatal(err)
+	}
+	// Slot's in-memory lease no longer matches the expired one on disk, so
+	// go through a fresh contender's judgment instead.
+	got, holder, err := store.Acquire(ctx, "/repo/a/.git", ClassHeavy, Lease{Owner: "new@host", PID: 7})
+	if err != nil || got != nil || holder == nil {
+		t.Errorf("expired lease with live child = %v, %v, %v; want busy", got, holder, err)
+	}
+}
+
+// psStartOf reads a process's lstart the way the stale probe will compare it.
+func psStartOf(t *testing.T, store *Store, pid int) (string, error) {
+	t.Helper()
+	res, err := store.Runner.RunQuery(context.Background(), "ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	if err != nil {
+		return "", err
+	}
+	started := strings.Join(strings.Fields(res.Stdout), " ")
+	if started == "" {
+		t.Skip("ps lstart unavailable")
+	}
+	return started, nil
+}
+
+// TestHistoryLockBoundAndTouch pins the stale bound (3 minutes, above the
+// ~80s worst-case Darwin probe time) and the touch callback that keeps a
+// long-but-live evaluation looking alive.
+func TestHistoryLockBoundAndTouch(t *testing.T) {
+	if historyLockStaleAfter != 3*time.Minute {
+		t.Errorf("historyLockStaleAfter = %v, want 3m", historyLockStaleAfter)
+	}
+	root := t.TempDir()
+	release, touch, busy, err := acquireHistoryLock(root)
+	if err != nil || busy {
+		t.Fatalf("acquire = %v, %v", busy, err)
+	}
+	lockPath := filepath.Join(root, "history.lock")
+	// Age the lock by two minutes: still inside the bound, still busy for
+	// a second acquirer.
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	_, _, busy, err = acquireHistoryLock(root)
+	if err != nil || !busy {
+		t.Errorf("2m-old lock = busy %v, %v; want busy", busy, err)
+	}
+	// Touch refreshes it to now.
+	touch()
+	info, err := os.Lstat(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(info.ModTime()) > 10*time.Second {
+		t.Errorf("lock mtime after touch = %v old", time.Since(info.ModTime()))
+	}
+	release()
+	// A lock aged past the bound is reclaimed.
+	release2, _, busy, err := acquireHistoryLock(root)
+	if err != nil || busy {
+		t.Fatalf("re-acquire after release = %v, %v", busy, err)
+	}
+	older := time.Now().Add(-(historyLockStaleAfter + time.Minute))
+	if err := os.Chtimes(lockPath, older, older); err != nil {
+		t.Fatal(err)
+	}
+	release2()
+	release3, _, busy, err := acquireHistoryLock(root)
+	if err != nil || busy {
+		t.Errorf("past-bound lock = busy %v, %v; want reclaimed", busy, err)
+	}
+	release3()
+}
+
+// TestGateHoldsLockDuringSnapshot: the lock exists while the snapshot seam
+// runs and is gone after Gate returns; a concurrent Gate during the
+// snapshot defers instead of interleaving history.
+func TestGateHoldsLockDuringSnapshot(t *testing.T) {
+	store := testStore(t)
+	lockPath := filepath.Join(store.Root, "history.lock")
+	fixed := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	inSnapshot := make(chan struct{})
+	unblock := make(chan struct{})
+	monitor := &Monitor{
+		GOOS: "linux",
+		Now:  func() time.Time { return fixed },
+		SnapshotFunc: func(context.Context, *Monitor) PressureSnapshot {
+			if _, err := os.Lstat(lockPath); err != nil {
+				t.Errorf("history lock missing during snapshot: %v", err)
+			}
+			close(inSnapshot)
+			<-unblock
+			return PressureSnapshot{Platform: "linux", MemoryLevel: MemoryNormal, MemoryAvailable: true, Load1: 1, NumCPU: 8, LoadAvailable: true}
+		},
+	}
+	done := make(chan Decision, 1)
+	go func() {
+		d, err := store.Gate(context.Background(), monitor, DefaultThresholds())
+		if err != nil {
+			t.Errorf("Gate: %v", err)
+		}
+		done <- d
+	}()
+	<-inSnapshot
+	second, err := store.Gate(context.Background(), monitor, DefaultThresholds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(unblock)
+	if second.Admit {
+		t.Error("concurrent Gate admitted while the lock was held")
+	}
+	if d := <-done; !d.Admit {
+		t.Errorf("first Gate deferred: %v", d.Reasons)
+	}
+	if _, err := os.Lstat(lockPath); !os.IsNotExist(err) {
+		t.Error("history lock left behind after Gate")
 	}
 }
