@@ -229,6 +229,78 @@ is additive: no implicit retarget, foreign-skill replacement or unselected
 removal. Missing capabilities defer sharing. Generic skill source updates and
 unrelated plugins are not part of dot's automatic updater.
 
+### Adaptive Work Policies
+
+`modules.ai.policy` describes validated operating choices separately from agent
+installation. It is opt-in: inspection produces an unvalidated seed, never an
+inferred subscription entitlement or a claim that an installed model is optimal.
+The six workloads are `routine`, `implementation`, `deep-analysis`,
+`independent-review`, `documents-teaching`, and `visual-production`.
+
+```bash
+dot ai policy inspect --json
+dot --config /path/to/policy.yaml ai policy resolve --task 'Review this change' --project . --json
+dot --config /path/to/policy.yaml ai policy diff --json
+dot --config /path/to/policy.yaml ai policy apply --persist
+dot ai policy status --json
+dot ai session start --task 'Implement the approved issue' --project .
+dot ai session start --input /path/to/trusted-turns.jsonl --project .
+dot ai policy rollback --dry-run
+```
+
+See [the policy configuration example](docs/examples/ai-policy.yaml) and
+[the implementation/evidence contract](docs/specs/2026-09-27-adaptive-ai-policy.md).
+`--config` is authoritative, including omission of a policy block; saved state
+cannot silently restore it. `--persist` saves the selected policy only after
+usable overlays are applied. Enabled policies also participate in `dot
+apply/check/diff`. User-state schema version 3 prevents older binaries from
+silently rewriting away the policy.
+
+Automatic review is distinct from YOLO bypass. Managed launches currently
+support verified Claude 2.1.283 and Codex 0.157.1 adapters. Other agents are
+inspected and report unsupported or unavailable review capabilities. A version
+change requires revalidation, never fallback to unconditional approval.
+Subscription targets require native subscription authentication and reject
+detected API/provider overrides. DGX launch remains deferred until an adapter
+verifies its endpoint and authentication binding; a billing label alone cannot
+enable it. Neither token counts nor a configured model prove account entitlement.
+
+Apply writes only owned launch overlays, preserving native base settings,
+MCP identities, hooks and credentials. Claude consumes an additional settings
+file; Codex consumes a separate native profile. The active `CODEX_HOME` is
+honored, and explicit `--home` isolates inspection/overlays; foreign-home native
+launch is refused. Existing inline Codex profiles are reported as legacy, not
+rewritten. `rollback` removes unchanged owned overlays and leaves the desired
+policy definition intact; it neither alters a running session nor disables
+explicit policy resolution. Unmanaged native and Orca sessions retain their
+own configuration and are not silently taken over.
+
+Within managed launches, registered claude-mem and Obsidian lookup/record tools
+have explicit no-confirmation grants. These include note creation, patches,
+frontmatter/tags and memory recording, while adding no deletion/move permissions.
+Vault writes remain MCP-only. The same typed grants travel through resolution,
+native profiles, session changes and Maru invocation mapping. Unrelated tool
+approval rules and native MCP identities are preserved.
+
+`session start --input` accepts a trusted supervisor's JSONL stream, not model
+output as control commands. Each turn has `task` and optional `workload`.
+After the first turn, `checkpoint` carries `summary`, repository-relative
+`files`, `verification`, `pending`, and `completed_effects`. Cross-provider
+handoffs also require `scope` and a nonempty completed-effects ledger (use
+`["none"]` when appropriate). Pending or denied actions block continuation.
+Native Claude/Codex sessions resume within the same provider; cross-provider
+continuation starts a new session with the curated checkpoint and artifact
+hashes. It is reported as checkpoint handoff, not native resume. At most two
+configuration changes occur per task; `--fixed`, explicit `--agent`, or a turn's
+`user_override` freezes automatic selection. A failed process is never retried
+because it may already have completed an external action.
+
+Policy inspection, resolution, diff and status do not write files. Strict
+`--dry-run` also skips native version/help probes; use `policy diff` without
+that flag for an inspected overlay preview. Session receipts omit prompts and
+model output; curated checkpoints remain private machine-local state. Heavy
+commands still require `dot ai run` admission, not a session-long build slot.
+
 ### Shared Development Context
 
 Selected agents share curated development information through project artifacts

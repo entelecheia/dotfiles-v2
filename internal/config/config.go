@@ -243,6 +243,7 @@ func (c WatchdogNotifyConfig) IsZero() bool {
 
 // AIConfig configures AI helper files plus optional agents and skills SSOT deployment.
 type AIConfig struct {
+	Policy     *AIPolicyConfig  `yaml:"policy,omitempty" json:"policy,omitempty"`
 	Tooling    *AIToolingConfig `yaml:"tooling,omitempty"`
 	Enabled    bool             `yaml:"enabled"`
 	AgentsSSOT bool             `yaml:"agents_ssot,omitempty"`

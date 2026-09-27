@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "operation": "diff",
+  "dry_run": false,
+  "policy": {
+    "enabled": true,
+    "revision": "fixture-1",
+    "targets": [
+      {
+        "id": "codex-balanced",
+        "agent": "codex",
+        "model": "gpt-policy-test",
+        "billing": "subscription",
+        "workloads": [
+          "routine",
+          "implementation",
+          "deep-analysis",
+          "independent-review",
+          "documents-teaching",
+          "visual-production"
+        ],
+        "capabilities": [
+          "text",
+          "code",
+          "shell",
+          "auto-review"
+        ],
+        "validated": true,
+        "version": "0.157.1",
+        "priority": 0
+      }
+    ],
+    "max_switches": 2
+  },
+  "inventory": [
+    {
+      "home_mode": "native-default",
+      "subscription_verified": false,
+      "subscription_conflict": false,
+      "agent": "claude",
+      "version": "",
+      "executable": "",
+      "home": "@HOME@/.claude",
+      "available": false,
+      "auto_review": false,
+      "capabilities": [],
+      "constraints": [
+        "executable not installed"
+      ]
+    },
+    {
+      "home_mode": "native-default",
+      "subscription_verified": true,
+      "subscription_conflict": false,
+      "agent": "codex",
+      "version": "0.157.1",
+      "executable": "@HOME@/bin/codex",
+      "home": "@HOME@/.codex",
+      "available": true,
+      "auto_review": true,
+      "capabilities": [
+        "text",
+        "code",
+        "shell",
+        "auto-review"
+      ],
+      "constraints": [
+        "account entitlement and selected model require explicit target validation"
+      ]
+    },
+    {
+      "home_mode": "native-default",
+      "subscription_verified": false,
+      "subscription_conflict": false,
+      "agent": "grok",
+      "version": "",
+      "executable": "",
+      "home": "@HOME@/.grok",
+      "available": false,
+      "auto_review": false,
+      "capabilities": [],
+      "constraints": [
+        "executable not installed"
+      ]
+    },
+    {
+      "home_mode": "native-default",
+      "subscription_verified": false,
+      "subscription_conflict": false,
+      "agent": "kimi",
+      "version": "",
+      "executable": "",
+      "home": "@HOME@/.kimi-code",
+      "available": false,
+      "auto_review": false,
+      "capabilities": [],
+      "constraints": [
+        "executable not installed"
+      ]
+    },
+    {
+      "home_mode": "native-default",
+      "subscription_verified": false,
+      "subscription_conflict": false,
+      "agent": "opencode",
+      "version": "",
+      "executable": "",
+      "home": "@HOME@/.config/opencode",
+      "available": false,
+      "auto_review": false,
+      "capabilities": [],
+      "constraints": [
+        "executable not installed"
+      ]
+    },
+    {
+      "home_mode": "native-default",
+      "subscription_verified": false,
+      "subscription_conflict": false,
+      "agent": "qwen",
+      "version": "",
+      "executable": "",
+      "home": "@HOME@/.qwen",
+      "available": false,
+      "auto_review": false,
+      "capabilities": [],
+      "constraints": [
+        "executable not installed"
+      ]
+    },
+    {
+      "home_mode": "native-default",
+      "subscription_verified": false,
+      "subscription_conflict": false,
+      "agent": "kiro",
+      "version": "",
+      "executable": "",
+      "home": "@HOME@/.kiro",
+      "available": false,
+      "auto_review": false,
+      "capabilities": [],
+      "constraints": [
+        "executable not installed"
+      ]
+    },
+    {
+      "home_mode": "native-default",
+      "subscription_verified": false,
+      "subscription_conflict": false,
+      "agent": "pi",
+      "version": "",
+      "executable": "",
+      "home": "@HOME@/.pi",
+      "available": false,
+      "auto_review": false,
+      "capabilities": [],
+      "constraints": [
+        "executable not installed"
+      ]
+    }
+  ],
+  "changes": [
+    {
+      "target_id": "codex-balanced",
+      "agent": "codex",
+      "path": "@HOME@/.codex/dot-policy-dd5661b337fad076c1795e73.config.toml",
+      "status": "create",
+      "launch_args": [
+        "--profile",
+        "dot-policy-dd5661b337fad076c1795e73"
+      ],
+      "constraint": "native base settings remain unmanaged; use dot ai session start",
+      "base_managed": false
+    }
+  ],
+  "constraints": [
+    "Native base settings are not owned; policy overlays govern controlled launches only."
+  ]
+}

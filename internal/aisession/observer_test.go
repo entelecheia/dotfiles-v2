@@ -1,0 +1,55 @@
+package aisession
+
+import (
+	"testing"
+)
+
+func TestCodexMissingNoteResultAllowsCompletedWrite(t *testing.T) {
+	events := []string{
+		`{"type":"thread.started","thread_id":"native-canary"}`,
+		`{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"obsidian","tool":"read_note","arguments":{"path":"new-note.md"},"result":{"content":[{"type":"text","text":"File not found: new-note.md"}],"structured_content":null},"error":null,"status":"failed"}}`,
+		`{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"obsidian","tool":"write_note","arguments":{"path":"new-note.md"},"result":{"content":[{"type":"text","text":"Created note"}],"structured_content":null},"error":null,"status":"completed"}}`,
+		`{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"POLICY_RECORD_OK"}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}`,
+	}
+	observer := newObserver("codex", nil)
+	for _, event := range events {
+		_, _ = observer.Write([]byte(event + "\n"))
+	}
+	if err := observer.finish(); err != nil {
+		t.Fatal(err)
+	}
+	if !observer.completed || observer.denied || observer.session != "native-canary" {
+		t.Fatalf("unexpected observer: %+v", observer)
+	}
+}
+
+func TestCodexMCPApplicationErrorsRemainNarrow(t *testing.T) {
+	cases := []struct {
+		name, server, tool, result, nativeError string
+		blocked                                 bool
+	}{
+		{"missing vault note", "obsidian", "read_note", `{"content":[{"type":"text","text":"File not found"}]}`, `null`, false},
+		{"memory search application result", "mcp-search", "search", `{"content":[]}`, `null`, false},
+		{"plugin memory lookup", "plugin_claude-mem_mcp-search", "get_observations", `{"content":[]}`, `null`, false},
+		{"native read denial", "obsidian", "read_note", `null`, `{"message":"permission denied"}`, true},
+		{"native error wins over result", "obsidian", "read_note", `{"content":[]}`, `{"message":"permission denied"}`, true},
+		{"missing result", "obsidian", "read_note", `null`, `null`, true},
+		{"malformed result envelope", "obsidian", "read_note", `{}`, `null`, true},
+		{"failed note write", "obsidian", "write_note", `{"content":[{"type":"text","text":"File not found"}]}`, `null`, true},
+		{"failed patch", "obsidian", "patch_note", `{"content":[]}`, `null`, true},
+		{"failed memory record", "mcp-search", "observation_add", `{"content":[]}`, `null`, true},
+		{"unknown server", "other", "read_note", `{"content":[]}`, `null`, true},
+		{"unknown tool", "obsidian", "delete_note", `{"content":[]}`, `null`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := `{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"` + tc.server + `","tool":"` + tc.tool + `","result":` + tc.result + `,"error":` + tc.nativeError + `,"status":"failed"}}`
+			observer := newObserver("codex", nil)
+			_, _ = observer.Write([]byte(event + "\n" + `{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}`))
+			if err := observer.finish(); (err != nil) != tc.blocked {
+				t.Fatalf("blocked=%t error=%v", tc.blocked, err)
+			}
+		})
+	}
+}
