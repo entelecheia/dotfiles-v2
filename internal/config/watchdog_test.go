@@ -40,6 +40,8 @@ watchdog:
   beszel:
     enabled: false
     hub_url: ""
+    listen: ":45876"
+    env_path: "~/.config/beszel/agent.env"
   notify:
     macos: true
     ntfy_url: "https://ntfy.example/dot"
@@ -85,6 +87,16 @@ watchdog:
 	}
 	if w.Beszel.Enabled || w.Beszel.HubURL != "" {
 		t.Errorf("beszel = %#v", w.Beszel)
+	}
+	if w.Beszel.Listen != ":45876" || w.Beszel.EnvPath != "~/.config/beszel/agent.env" {
+		t.Errorf("beszel listen/env_path = %#v", w.Beszel)
+	}
+	var zeroBeszel WatchdogBeszelConfig
+	if !zeroBeszel.IsZero() {
+		t.Error("zero beszel config must report IsZero")
+	}
+	if (WatchdogBeszelConfig{Listen: ":1"}).IsZero() || (WatchdogBeszelConfig{EnvPath: "/tmp/x"}).IsZero() {
+		t.Error("listen/env_path must defeat IsZero")
 	}
 	if !w.Notify.MacOS || w.Notify.NtfyURL != "https://ntfy.example/dot" {
 		t.Errorf("notify = %#v", w.Notify)

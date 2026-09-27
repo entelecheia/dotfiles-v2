@@ -94,6 +94,12 @@ func Entries(state *config.UserState, home string) ([]Entry, error) {
 			Plain:   filepath.Join(home, ".config", "shell", "90-secrets.sh"),
 			DirPerm: 0o755,
 		},
+		{
+			Label:   "Beszel agent env",
+			AgeName: "beszel-agent.env.age",
+			Plain:   filepath.Join(home, ".config", "beszel", "agent.env"),
+			DirPerm: 0o700,
+		},
 	}, nil
 }
 

@@ -2,12 +2,37 @@ package watchdog
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
 // ReapLabel is the launchd label of the user LaunchAgent that runs the
 // reaper on the configured interval.
 const ReapLabel = "com.dotfiles.watchdog.reap"
+
+// xmlEscaper makes a value safe inside a plist XML <string>. Quotes and
+// newlines never reach it — validPlistPath rejects those first — but an &
+// or angle bracket in a path must not corrupt the document.
+var xmlEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+	"'", "&apos;",
+)
+
+func xmlEscape(s string) string { return xmlEscaper.Replace(s) }
+
+// validPlistPath rejects what neither a plist XML string nor the shell
+// command line inside one can carry: a double quote or a line break. Same
+// rule as monit's validMonitPath, kept as the shared package-level form so
+// new renderers do not grow per-unit copies.
+func validPlistPath(path string) error {
+	if strings.ContainsAny(path, "\"\n\r") {
+		return fmt.Errorf("path %q contains a double quote or newline, which a plist string cannot carry", path)
+	}
+	return nil
+}
 
 // WarpLabel is the launchd label of the root LaunchDaemon that runs the
 // WARP heal pass (a daemon restart needs the system domain).

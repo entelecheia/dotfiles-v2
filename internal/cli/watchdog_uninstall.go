@@ -13,17 +13,20 @@ import (
 )
 
 // dot watchdog uninstall — removes the reaper agent, the monit supervision
-// agent, and the root daemons, with interactive-only gates for every
-// root-owned or destructive step.
+// agent, the Beszel agent plist, and the root daemons, with interactive-only
+// gates for every root-owned or destructive step. The secrets-managed Beszel
+// env file is never removed.
 
 func newWatchdogUninstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove the watchdog reaper agent, WARP heal daemon, and monit supervision (macOS)",
+		Short: "Remove the watchdog reaper agent, WARP heal daemon, monit supervision, and Beszel agent plist (macOS)",
 		Long: `Unload and remove the reaper LaunchAgent, the monit agent and monitrc,
-and, when installed, the root WARP heal LaunchDaemon. Restoring the power
-settings saved by setup --headless, removing the root Screen Sharing heal
-helper and its sudoers grant, and removing the state directory and logs are
+the Beszel agent LaunchAgent, and, when installed, the root WARP heal
+LaunchDaemon. The secrets-managed Beszel env file
+(~/.config/beszel/agent.env) is never removed. Restoring the power settings
+saved by setup --headless, removing the root Screen Sharing heal helper and
+its sudoers grant, and removing the state directory and logs are
 interactive-only prompts that default to No; --yes never auto-confirms them.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,6 +59,7 @@ func runWatchdogUninstallForGOOS(cmd *cobra.Command, _ []string, goos string) er
 		if mgr.Runner.FileExists(mgr.MonitPlistPath()) || mgr.Runner.FileExists(mgr.MonitrcPath()) {
 			p.Line("[dry-run] would unload and remove %s and %s", mgr.MonitPlistPath(), mgr.MonitrcPath())
 		}
+		beszelUninstallDryRunNote(p, mgr)
 		if mgr.Runner.FileExists(watchdog.ScreenSharingHealPath) || mgr.Runner.FileExists(watchdog.ScreenSharingSudoersPath) {
 			p.Line("[dry-run] would offer to remove %s and %s", watchdog.ScreenSharingHealPath, watchdog.ScreenSharingSudoersPath)
 		}
@@ -78,6 +82,9 @@ func runWatchdogUninstallForGOOS(cmd *cobra.Command, _ []string, goos string) er
 		p.Line("Removed WARP heal daemon.")
 	}
 	if err := removeMonitStep(p, mgr); err != nil {
+		return err
+	}
+	if err := removeBeszelStep(p, mgr); err != nil {
 		return err
 	}
 	if err := removeScreenSharingHealStep(p, mgr, yes); err != nil {

@@ -1,13 +1,15 @@
 ## dot watchdog uninstall
 
-Remove the watchdog reaper agent, WARP heal daemon, and monit supervision (macOS)
+Remove the watchdog reaper agent, WARP heal daemon, monit supervision, and Beszel agent plist (macOS)
 
 ### Synopsis
 
 Unload and remove the reaper LaunchAgent, the monit agent and monitrc,
-and, when installed, the root WARP heal LaunchDaemon. Restoring the power
-settings saved by setup --headless, removing the root Screen Sharing heal
-helper and its sudoers grant, and removing the state directory and logs are
+the Beszel agent LaunchAgent, and, when installed, the root WARP heal
+LaunchDaemon. The secrets-managed Beszel env file
+(~/.config/beszel/agent.env) is never removed. Restoring the power settings
+saved by setup --headless, removing the root Screen Sharing heal helper and
+its sudoers grant, and removing the state directory and logs are
 interactive-only prompts that default to No; --yes never auto-confirms them.
 
 ```

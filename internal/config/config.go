@@ -215,15 +215,19 @@ func (c WatchdogMonitConfig) IsZero() bool {
 		c.CPUSystemThreshold == 0 && c.Cycles == 0 && c.ScreenSharing == nil
 }
 
-// WatchdogBeszelConfig configures Beszel monitoring (later phase; schema only).
+// WatchdogBeszelConfig configures the Beszel external-monitoring agent
+// (phase P4). The hub KEY/TOKEN never live here: they stay in the
+// secrets-managed env file named by EnvPath.
 type WatchdogBeszelConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	HubURL  string `yaml:"hub_url,omitempty"`
+	Listen  string `yaml:"listen,omitempty"`   // agent listen address, default ":45876"
+	EnvPath string `yaml:"env_path,omitempty"` // default ~/.config/beszel/agent.env
 }
 
 // IsZero lets yaml.v3 omit an unset beszel block.
 func (c WatchdogBeszelConfig) IsZero() bool {
-	return !c.Enabled && c.HubURL == ""
+	return !c.Enabled && c.HubURL == "" && c.Listen == "" && c.EnvPath == ""
 }
 
 // WatchdogNotifyConfig configures external alert fan-out.

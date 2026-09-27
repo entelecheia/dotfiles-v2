@@ -1,12 +1,14 @@
 ## dot watchdog setup
 
-Install the watchdog reaper agent, WARP heal daemon, monit supervision, and optional power hardening (macOS)
+Install the watchdog reaper agent, WARP heal daemon, monit supervision, Beszel agent, and optional power hardening (macOS)
 
 ### Synopsis
 
 Install the watchdog on this Mac: the user-domain reaper LaunchAgent,
-plus the root WARP heal LaunchDaemon when watchdog.warp is enabled and the
-monit supervision agent when watchdog.monit is enabled.
+plus the root WARP heal LaunchDaemon when watchdog.warp is enabled, the
+monit supervision agent when watchdog.monit is enabled, and the Beszel
+external-monitoring agent when watchdog.beszel is enabled (a missing
+hub_url or secrets-managed env file skips that step with a warning).
 --headless additionally applies power hardening (pmset sleep 0 on charger,
 autorestart, womp, restartfreeze on) after saving the prior values for
 uninstall-time restore; it requires watchdog.power.headless: true.
