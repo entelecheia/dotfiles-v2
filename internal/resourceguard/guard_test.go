@@ -244,6 +244,23 @@ func TestAdapterWaitEndingDuringGateDefers(t *testing.T) {
 	}
 }
 
+// Pressure found by a gate that outlives the wait stays the reason given.
+func TestAdapterWaitEndKeepsPressureReason(t *testing.T) {
+	snap, none := healthySnapshot(), []string(nil)
+	snap.MemoryLevel = admission.MemoryCritical
+	a, _ := testAdapter(t, &snap, &none)
+	ctx, cancel := context.WithCancel(context.Background())
+	a.monitor = func() *admission.Monitor {
+		return &admission.Monitor{GOOS: "darwin", SnapshotFunc: func(context.Context, *admission.Monitor) admission.PressureSnapshot {
+			cancel()
+			return snap
+		}}
+	}
+	if _, err := a.acquire(ctx, Options{ProjectDir: t.TempDir()}); !deferred(err) || !strings.Contains(err.Error(), "memory pressure critical") {
+		t.Fatalf("mid-gate wait end under pressure = %v, want the pressure reason", err)
+	}
+}
+
 // The adapter hands the live leases' PIDs to the scan.
 func TestAdapterPassesLeasesToScan(t *testing.T) {
 	snap, none := healthySnapshot(), []string(nil)

@@ -96,8 +96,13 @@ type processRow struct {
 	cpu        float64
 }
 
+// processTable is the scan's `ps` read; tests replace it.
+var processTable = func(ctx context.Context) (string, error) {
+	return boundedOutput(ctx, "/bin/ps", "-axo", "pid=,ppid=,%cpu=,args=")
+}
+
 func scanHeavyJobs(ctx context.Context, leased []int) ([]HeavyJob, error) {
-	out, err := boundedOutput(ctx, "/bin/ps", "-axo", "pid=,ppid=,%cpu=,args=")
+	out, err := processTable(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("process inventory: %w", err)
 	}
@@ -149,16 +154,21 @@ func unownedHeavyJobs(rows []processRow, parents map[int]int, self int, leased [
 	return found, nil
 }
 
-// LeasedPIDs lists the PIDs of the store's leases, for FindUncovered. A read
-// error excludes nothing, which errs toward deferring.
+// LeasedPIDs lists the PIDs of the store's live leases, for FindUncovered.
+// A lease past its deadline is left out: its holder may be gone and its PID
+// reused, and treating that PID's tree as owned would hide uncovered work. A
+// read error excludes nothing, which errs toward deferring.
 func LeasedPIDs(store *Store) []int {
 	leases, err := store.ListLeases()
 	if err != nil {
 		return nil
 	}
+	now := store.now()
 	pids := make([]int, 0, len(leases))
 	for _, l := range leases {
-		pids = append(pids, l.PID)
+		if now.Before(l.Deadline) {
+			pids = append(pids, l.PID)
+		}
 	}
 	return pids
 }

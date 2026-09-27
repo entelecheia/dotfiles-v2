@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func fixtureRepository(t *testing.T) string {
@@ -133,5 +135,41 @@ func TestUnownedHeavyJobsSkipsLeasedTrees(t *testing.T) {
 	}
 	if all, _ := unownedHeavyJobs(rows, parents, 300, nil); len(all) != 3 {
 		t.Fatalf("without leases = %+v, want pids 101, 102 and 200", all)
+	}
+}
+
+// FindUncovered hands the leased PIDs through to the process-table scan.
+// The fake PIDs exist nowhere, so every job's repository is unknown.
+func TestFindUncoveredExcludesLeasedTrees(t *testing.T) {
+	orig := processTable
+	t.Cleanup(func() { processTable = orig })
+	processTable = func(context.Context) (string, error) {
+		return "" +
+			"2000000100          1   0.5 /opt/homebrew/bin/dot ai update\n" +
+			"2000000101 2000000100  50.0 /usr/local/bin/npm install -g x\n" +
+			"2000000200          1  40.0 /opt/homebrew/bin/go test ./...\n", nil
+	}
+	got, err := FindUncovered(context.Background(), fixtureRepository(t), false, []int{2000000100})
+	if err != nil || len(got) != 1 || !strings.Contains(got[0], "pid=2000000200") {
+		t.Fatalf("uncovered = %v, %v; want only pid 2000000200", got, err)
+	}
+}
+
+// An expired lease no longer vouches for its PID's process tree.
+func TestLeasedPIDsSkipsExpiredLeases(t *testing.T) {
+	now := time.Date(2026, 9, 28, 3, 0, 0, 0, time.UTC)
+	store := NewStore(t.TempDir(), nil)
+	store.Now = func() time.Time { return now }
+	for scope, pid := range map[string]int{"repo-old": 11, "repo-new": 22} {
+		slot, _, err := store.Acquire(context.Background(), scope, ClassHeavy, Lease{Owner: "t@mac", PID: pid, PIDStart: "x"})
+		if err != nil || slot == nil {
+			t.Fatalf("seeding %s = %v, %v", scope, slot, err)
+		}
+		if scope == "repo-old" {
+			now = now.Add(2 * store.HeartbeatStaleAfter())
+		}
+	}
+	if got := LeasedPIDs(store); len(got) != 1 || got[0] != 22 {
+		t.Fatalf("LeasedPIDs = %v, want only the live lease 22", got)
 	}
 }

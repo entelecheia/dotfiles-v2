@@ -136,13 +136,13 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	if !d.Admit {
+		return nil, &DeferredError{Reason: strings.Join(d.Reasons, "; ")}
+	}
 	if ctx.Err() != nil {
 		// The wait ended during the gate; report it as a deferral, not as a
 		// later identity-probe failure.
 		return nil, &DeferredError{Reason: "wait ended: " + ctx.Err().Error()}
-	}
-	if !d.Admit {
-		return nil, &DeferredError{Reason: strings.Join(d.Reasons, "; ")}
 	}
 	lease, err := a.lease(ctx, a.runner, dir)
 	if err != nil {

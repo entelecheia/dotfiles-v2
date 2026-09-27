@@ -18,7 +18,7 @@ func newAIUpdateScheduleCmd() *cobra.Command {
 		action := action
 		c := &cobra.Command{Use: action, Short: action + " the weekly AI update LaunchAgent", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return runAIUpdateSchedule(cmd, action) }}
 		c.Flags().Bool("json", false, "Emit scheduler status as JSON")
-		c.Flags().Duration("wait", 6*time.Minute, "Maximum healthy-recovery sampling time when enabling")
+		c.Flags().Duration("wait", 6*time.Minute, "Maximum time to wait for the maintenance slot and host recovery when enabling (at most 10m)")
 		cmd.AddCommand(c)
 	}
 	return cmd
