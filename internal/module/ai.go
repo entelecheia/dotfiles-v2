@@ -54,6 +54,15 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			Command:     fmt.Sprintf("rm %q", legacyCopilot),
 		})
 	}
+	// Cursor was dropped from the agents registry; the same rule applies to
+	// its retired fan-out target as to Copilot's above.
+	retiredCursor := filepath.Join(rc.HomeDir, ".cursor", "AGENTS.md")
+	if aisettings.IsManagedAgentsFile(retiredCursor) {
+		changes = append(changes, Change{
+			Description: fmt.Sprintf("remove legacy %s", retiredCursor),
+			Command:     fmt.Sprintf("rm %q", retiredCursor),
+		})
+	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)
 		manager.Out = rc.out()
@@ -134,6 +143,13 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 			return nil, fmt.Errorf("removing legacy %s: %w", legacyCopilot, err)
 		}
 		messages = append(messages, fmt.Sprintf("removed legacy %s", legacyCopilot))
+	}
+	retiredCursor := filepath.Join(rc.HomeDir, ".cursor", "AGENTS.md")
+	if aisettings.IsManagedAgentsFile(retiredCursor) {
+		if err := rc.Runner.Remove(retiredCursor); err != nil {
+			return nil, fmt.Errorf("removing legacy %s: %w", retiredCursor, err)
+		}
+		messages = append(messages, fmt.Sprintf("removed legacy %s", retiredCursor))
 	}
 	if rc.Config.Modules.AI.AgentsSSOT {
 		manager := aisettings.NewAgentsManager(rc.Runner, rc.HomeDir)

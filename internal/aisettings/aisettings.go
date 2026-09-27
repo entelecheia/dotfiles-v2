@@ -1303,6 +1303,12 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 		// Copilot CLI moved its instructions file out of ~/.config.
 		".config/github-copilot/AGENTS.md": ".copilot/copilot-instructions.md",
 	}
+	// Retired inventory entries have no current target: old snapshots still
+	// list them, so they are recognized and skipped rather than rejected as
+	// unknown.
+	retiredSources := map[string]bool{
+		".cursor/AGENTS.md": true,
+	}
 	seenSource := map[string]bool{}
 	seenTarget := map[string]bool{}
 	validated := make([]validatedRestoreEntry, 0, len(manifest.Entries))
@@ -1314,6 +1320,9 @@ func validatedRestoreEntries(root string, includeAuth bool) ([]validatedRestoreE
 			return nil, fmt.Errorf("duplicate archive manifest entry %q", summary.Path)
 		}
 		seenSource[summary.Path] = true
+		if retiredSources[summary.Path] {
+			continue
+		}
 		target, ok := known[summary.Path]
 		legacy := false
 		if mapped, isLegacy := legacySources[summary.Path]; isLegacy {
