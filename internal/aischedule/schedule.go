@@ -61,9 +61,7 @@ type Manager struct {
 
 func New(home string, dryRun bool) *Manager {
 	exe, _ := os.Executable()
-	if real, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = real
-	}
+	exe = stableExecutable(exe, os.Getenv("PATH"))
 	u, _ := user.Current()
 	current := ""
 	if u != nil {
@@ -75,6 +73,26 @@ func New(home string, dryRun bool) *Manager {
 		return exec.CommandContext(ctx, name, args...).Run()
 	}}
 }
+
+// Keep an installed entry point whose symlink follows package upgrades.
+func stableExecutable(executable, path string) string {
+	real, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		return executable
+	}
+	for _, dir := range filepath.SplitList(path) {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		candidate := filepath.Join(dir, filepath.Base(executable))
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err == nil && resolved == real && !strings.Contains(candidate, "/Cellar/") && !strings.Contains(candidate, "/Caskroom/") && !strings.Contains(candidate, "fnm_multishells") {
+			return candidate
+		}
+	}
+	return executable
+}
+
 func stateDir(home string) string  { return filepath.Join(home, ".local", "share", "dotfiles", "ai") }
 func StatePath(home string) string { return filepath.Join(stateDir(home), "update-schedule.json") }
 func (m *Manager) PlistPath() string {
@@ -155,11 +173,26 @@ func (m *Manager) Enable(ctx context.Context) (Status, error) {
 	if err := m.checkDomain(); err != nil {
 		return Status{}, err
 	}
+	if m.DryRun {
+		return m.enable(ctx)
+	}
+	var status Status
+	err := withStateLock(m.Home, func() error {
+		var err error
+		status, err = m.enable(ctx)
+		return err
+	})
+	return status, err
+}
+func (m *Manager) enable(ctx context.Context) (Status, error) {
+	if err := m.checkDomain(); err != nil {
+		return Status{}, err
+	}
 	if !filepath.IsAbs(m.Executable) {
 		return Status{}, fmt.Errorf("absolute installed dot executable required")
 	}
-	if strings.Contains(m.Executable, "fnm_multishells") {
-		return Status{}, fmt.Errorf("temporary executable path is not schedulable")
+	if strings.Contains(m.Executable, "fnm_multishells") || strings.Contains(m.Executable, "/Cellar/") || strings.Contains(m.Executable, "/Caskroom/") {
+		return Status{}, fmt.Errorf("temporary or versioned executable path is not schedulable; use a stable installed entry point")
 	}
 	s, err := load(m.Home)
 	if err != nil {
@@ -200,6 +233,21 @@ func (m *Manager) Enable(ctx context.Context) (Status, error) {
 	return m.Status(ctx)
 }
 func (m *Manager) Disable(ctx context.Context) (Status, error) {
+	if err := m.checkDomain(); err != nil {
+		return Status{}, err
+	}
+	if m.DryRun {
+		return m.disable(ctx)
+	}
+	var status Status
+	err := withStateLock(m.Home, func() error {
+		var err error
+		status, err = m.disable(ctx)
+		return err
+	})
+	return status, err
+}
+func (m *Manager) disable(ctx context.Context) (Status, error) {
 	if err := m.checkDomain(); err != nil {
 		return Status{}, err
 	}

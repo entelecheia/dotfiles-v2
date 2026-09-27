@@ -331,15 +331,18 @@ func newClaudeMemManagerFromCmd(cmd *cobra.Command) (*aisettings.ClaudeMemManage
 	}
 	mgr := aisettings.NewClaudeMemManager(home, dotPath, "")
 	selection := func() ([]string, error) {
-		state, e := loadStateForCmd(cmd)
+		selected, e := effectiveToolingForCmd(cmd)
 		if e != nil {
 			return nil, e
 		}
-		if state.Modules.AI.Tooling == nil {
+		if selected == nil {
+			if path, _ := cmd.Flags().GetString("config"); path != "" {
+				return []string{}, nil
+			}
 			return nil, nil
 		}
-		agents := make([]string, len(state.Modules.AI.Tooling.Agents))
-		copy(agents, state.Modules.AI.Tooling.Agents)
+		agents := make([]string, len(selected.Agents))
+		copy(agents, selected.Agents)
 		return agents, nil
 	}
 	mgr.SelectedAgents, err = selection()
