@@ -79,7 +79,7 @@ func runAdmitStatus(cmd *cobra.Command, _ []string) error {
 	p.Section("Pressure evidence")
 	p.KV("Memory", probeRow(snap.MemoryAvailable, snap.MemoryLevel))
 	if snap.Platform == "darwin" {
-		p.KV("Thermal", probeRow(snap.ThermalAvailable, fmt.Sprintf("cpu speed limit %d%%", snap.ThermalCPULimit)))
+		p.KV("Thermal", probeRow(snap.ThermalAvailable, admission.ThermalStateName(snap.ThermalState)))
 		p.KV("CPU idle", probeRow(snap.IdleAvailable, fmt.Sprintf("%.0f%%", snap.IdlePct)))
 		if snap.WSScanOK {
 			ws := "none"

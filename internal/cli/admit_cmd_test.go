@@ -23,7 +23,6 @@ func healthyAdmitSnapshot() admission.PressureSnapshot {
 		MemoryLevel:      admission.MemoryNormal,
 		MemoryAvailable:  true,
 		MemoryFreePct:    55,
-		ThermalCPULimit:  100,
 		ThermalAvailable: true,
 		Load1:            2,
 		NumCPU:           10,

@@ -52,7 +52,6 @@ func TestBuildBundleJSON_Golden(t *testing.T) {
 		MemoryLevel:      MemoryNormal,
 		MemoryAvailable:  true,
 		MemoryFreePct:    55,
-		ThermalCPULimit:  100,
 		ThermalAvailable: true,
 		Load1:            3.2,
 		NumCPU:           10,

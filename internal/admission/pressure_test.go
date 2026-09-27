@@ -38,19 +38,16 @@ func TestParseMemoryFreePct(t *testing.T) {
 	}
 }
 
-func TestParseThermalLimit(t *testing.T) {
-	log := "CPU_Speed_Limit \t = 100 \nCPU_Sched_Limit \t = 100 \nCPU_Available_CPUs \t = 10 \n"
-	limit, ok := ParseThermalLimit(log)
-	if !ok || limit != 100 {
-		t.Errorf("ParseThermalLimit = %d, %v; want 100, true", limit, ok)
+func TestParseThermalState(t *testing.T) {
+	for out, want := range map[string]int{"0\n": 0, "1\n": 1, " 2 ": 2, "3": 3} {
+		if got, ok := ParseThermalState(out); !ok || got != want {
+			t.Errorf("ParseThermalState(%q) = %d, %v; want %d, true", out, got, ok, want)
+		}
 	}
-	repeated := "CPU_Speed_Limit \t = 100 \nCPU_Speed_Limit \t = 65 \n"
-	limit, ok = ParseThermalLimit(repeated)
-	if !ok || limit != 65 {
-		t.Errorf("ParseThermalLimit repeated = %d, %v; want last sample 65, true", limit, ok)
-	}
-	if _, ok := ParseThermalLimit("Note: No thermal warning level has been recorded\n"); ok {
-		t.Error("expected miss when no CPU_Speed_Limit line exists")
+	for _, out := range []string{"", "4", "-1", "nominal", "Note: No thermal warning level has been recorded\n"} {
+		if _, ok := ParseThermalState(out); ok {
+			t.Errorf("ParseThermalState(%q) accepted invalid output", out)
+		}
 	}
 }
 
@@ -139,7 +136,6 @@ func healthyDarwin() PressureSnapshot {
 		MemoryLevel:      MemoryNormal,
 		MemoryAvailable:  true,
 		MemoryFreePct:    55,
-		ThermalCPULimit:  100,
 		ThermalAvailable: true,
 		Load1:            3.0,
 		NumCPU:           10,
@@ -182,10 +178,17 @@ func TestEvaluateMemoryWarnAndCritical(t *testing.T) {
 
 func TestEvaluateThermalPressure(t *testing.T) {
 	snap := healthyDarwin()
-	snap.ThermalCPULimit = 65
-	d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
-	if d.Admit || !strings.Contains(evalDeferReasons(d), "thermal") {
-		t.Errorf("thermal pressure = %+v, want defer with thermal reason", d)
+	for _, state := range []int{ThermalSerious, ThermalCritical} {
+		snap.ThermalState = state
+		d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
+		if d.Admit || !strings.Contains(evalDeferReasons(d), "thermal pressure (state "+ThermalStateName(state)+")") {
+			t.Errorf("thermal state %d = %+v, want defer with thermal reason", state, d)
+		}
+	}
+	// Fair is not pressure: it must not block admission on its own.
+	snap.ThermalState = ThermalFair
+	if d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0); strings.Contains(evalDeferReasons(d), "thermal") {
+		t.Errorf("thermal state fair produced a thermal defer: %+v", d)
 	}
 }
 
