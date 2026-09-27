@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -336,17 +337,19 @@ func goldenAdmitStatusFixture(t *testing.T) (home, root string) {
 func TestAdmitStatusThermalRow(t *testing.T) {
 	admitSandbox(t)
 	snap := healthyAdmitSnapshot()
-	snap.ThermalState = admission.ThermalSerious
+	// Fair does not defer, so the name can only come from the Thermal row,
+	// not from a defer-reason bullet.
+	snap.ThermalState = admission.ThermalFair
 	stubAdmitMonitor(t, snap)
 	out, _, _ := runDotForTest("admit", "status")
-	if !strings.Contains(out, "serious") {
-		t.Errorf("status output lacks the thermal state name:\n%s", out)
+	if !regexp.MustCompile(`Thermal:\s+fair`).MatchString(out) {
+		t.Errorf("Thermal row does not name the state:\n%s", out)
 	}
 	snap.ThermalAvailable = false
 	snap.ThermalState = -1
 	stubAdmitMonitor(t, snap)
 	out, _, _ = runDotForTest("admit", "status")
-	if !strings.Contains(out, "(unavailable)") || strings.Contains(out, "nominal") {
+	if !regexp.MustCompile(`Thermal:\s+\(unavailable\)`).MatchString(out) || strings.Contains(out, "nominal") {
 		t.Errorf("unavailable thermal probe must print (unavailable):\n%s", out)
 	}
 }

@@ -183,11 +183,14 @@ func TestEvaluateMemoryWarnAndCritical(t *testing.T) {
 
 func TestEvaluateThermalPressure(t *testing.T) {
 	snap := healthyDarwin()
-	for _, state := range []int{ThermalSerious, ThermalCritical} {
+	for state, reason := range map[int]string{
+		ThermalSerious:  "thermal pressure (state serious)",
+		ThermalCritical: "thermal pressure (state critical)",
+	} {
 		snap.ThermalState = state
 		d := EvaluatePressure(snap, DefaultThresholds(), History{}, evalT0)
-		if d.Admit || !strings.Contains(evalDeferReasons(d), "thermal pressure (state "+ThermalStateName(state)+")") {
-			t.Errorf("thermal state %d = %+v, want defer with thermal reason", state, d)
+		if d.Admit || !strings.Contains(evalDeferReasons(d), reason) {
+			t.Errorf("thermal state %d = %+v, want defer with %q", state, d, reason)
 		}
 	}
 	// Fair is not pressure: it must not block admission on its own.
@@ -367,12 +370,16 @@ func TestSnapshotDarwinThermalProbe(t *testing.T) {
 		wantState    int
 		wantOK       bool
 	}{
-		{"serious", "2", ThermalSerious, true},
-		{"garbled", "nominal", -1, false},
+		{"serious", "echo 2", ThermalSerious, true},
+		{"garbled", "echo nominal", -1, false},
+		// A failed probe must stay unavailable even if it printed a digit.
+		{"failed", "echo 0; exit 1", -1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
-			script := "#!/bin/sh\n[ \"$1 $2 $3\" = \"-l JavaScript -e\" ] || exit 2\necho " + tc.output + "\n"
+			// Builtins only: PATH holds just this stub.
+			script := "#!/bin/sh\n[ \"$#\" -eq 4 ] || exit 2\n[ \"$1 $2 $3\" = \"-l JavaScript -e\" ] || exit 2\n" +
+				"case \"$4\" in *'NSProcessInfo.processInfo.thermalState'*) ;; *) exit 2;; esac\n" + tc.output + "\n"
 			if err := os.WriteFile(filepath.Join(bin, "osascript"), []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -383,5 +390,13 @@ func TestSnapshotDarwinThermalProbe(t *testing.T) {
 				t.Errorf("thermal = %d, available %v; want %d, %v", snap.ThermalState, snap.ThermalAvailable, tc.wantState, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestThermalStateName(t *testing.T) {
+	for state, want := range map[int]string{-1: "unknown", 0: "nominal", 1: "fair", 2: "serious", 3: "critical", 4: "unknown"} {
+		if got := ThermalStateName(state); got != want {
+			t.Errorf("ThermalStateName(%d) = %q, want %q", state, got, want)
+		}
 	}
 }
