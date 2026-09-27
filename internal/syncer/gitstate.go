@@ -112,6 +112,11 @@ func runGitState(ctx context.Context, root string, repos []string, apply bool) (
 	if err != nil {
 		return nil, fmt.Errorf("git not found on PATH: %w", err)
 	}
+	// LookPath may return a relative path when PATH carries a relative
+	// entry; every invocation must resolve to the same absolute binary.
+	if gitPath, err = filepath.Abs(gitPath); err != nil {
+		return nil, fmt.Errorf("resolving git path: %w", err)
+	}
 	run := &gitStateRun{git: gitPath}
 	if len(repos) > 0 {
 		run.restrict = map[string]bool{}
@@ -273,6 +278,25 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 	}
 	rep.HeadDiffs = headDiffs
 	if headDiffs == 0 {
+		// HEAD's tree matching does not end the search: a strict descendant
+		// with the same tree (empty commits, a net-unchanged sequence, or the
+		// parent gitlink) would otherwise leave HEAD behind forever. Moving
+		// is fast-forward onto a descendant, so no commit is ever dropped.
+		if cands, cerr := r.candidates(ctx, abs, head, gitlink); cerr == nil {
+			rep.Candidates = len(cands)
+			for _, cand := range cands {
+				diffs, derr := r.contentDiffs(ctx, abs, gitdir, cand)
+				if derr != nil {
+					break
+				}
+				if diffs == 0 {
+					rep.Status = GitRepoRealignable
+					rep.Target = cand
+					rep.TargetDiffs = 0
+					return
+				}
+			}
+		}
 		rep.Status = GitRepoAligned
 		return
 	}
@@ -327,7 +351,9 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 	}
 	// Unmerged before the operation markers: a real merge or cherry-pick
 	// conflict sets both, and the unmerged entries are the actionable part.
-	if out, err := r.read(ctx, abs, "ls-files", "-u"); err == nil && strings.TrimSpace(out) != "" {
+	if out, err := r.read(ctx, abs, "ls-files", "-u"); err != nil {
+		return "cannot inspect index entries: " + shortErr(err)
+	} else if strings.TrimSpace(out) != "" {
 		return "unmerged index entries"
 	}
 	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"} {
@@ -340,8 +366,12 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 			return "operation in progress (" + dir + ")"
 		}
 	}
-	if code, err := r.run(ctx, abs, nil, true, "diff", "--cached", "--quiet"); err == nil && code == 1 {
-		return "staged changes"
+	if _, err := r.read(ctx, abs, "diff", "--cached", "--quiet"); err != nil {
+		var exitErr *gitExitError
+		if errors.As(err, &exitErr) && exitErr.code == 1 {
+			return "staged changes"
+		}
+		return "cannot inspect staged state: " + shortErr(err)
 	}
 	return ""
 }
@@ -517,11 +547,16 @@ func (r *gitStateRun) realign(ctx context.Context, abs, gitdir string, rep *GitR
 		return
 	}
 	if err := os.Rename(lockPath, index); err != nil {
-		// HEAD already moved; the index rename failing leaves the repo
-		// consistent (index regenerated from the new HEAD) but must be loud.
-		rep.PreviousHead = rep.Head
-		rep.Status = GitRepoRealigned
-		rep.Reason = "HEAD moved; index rename failed: " + shortErr(err)
+		// HEAD already moved; roll it back so the repo is left exactly as
+		// found, and never report a realign that did not complete.
+		if _, rbErr := r.runOutput(ctx, abs, nil, false, "update-ref", "-m", "dot peer realign rollback", "HEAD", rep.Head); rbErr != nil {
+			rep.PreviousHead = rep.Head
+			rep.Status = GitRepoUnresolvable
+			rep.Reason = "index rename failed and HEAD rollback failed (HEAD is " + rep.Target + "; recover manually with git update-ref HEAD " + rep.Head + "): " + shortErr(err)
+			return
+		}
+		_ = os.Remove(lockPath)
+		unresolvable("index rename failed after HEAD moved; HEAD rolled back: " + shortErr(err))
 		return
 	}
 	rep.PreviousHead = rep.Head

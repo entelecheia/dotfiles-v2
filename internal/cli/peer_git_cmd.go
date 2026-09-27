@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"strconv"
 
@@ -94,7 +93,7 @@ func newPeerGitStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			res, err := syncer.PeerGitStatus(context.Background(), root, args)
+			res, err := syncer.PeerGitStatus(c.Context(), root, args)
 			if err != nil {
 				return err
 			}
@@ -142,7 +141,7 @@ func newPeerGitRealignCmd() *cobra.Command {
 			// either peer store (#99, #103).
 			dryRun, _ := c.Flags().GetBool("dry-run")
 			apply = apply && !dryRun
-			res, err := syncer.PeerGitRealign(context.Background(), root, args, apply)
+			res, err := syncer.PeerGitRealign(c.Context(), root, args, apply)
 			if err != nil {
 				return err
 			}

@@ -84,8 +84,12 @@ real index:
 
 The best candidate is the strict descendant of HEAD with the fewest tracked
 differences, ties broken in candidate order (gitlink first, then the chain
-nearest HEAD first). A repo whose worktree already matches HEAD is `aligned`.
-A repo with a candidate whose diff count is at most HEAD's is `realignable`
+nearest HEAD first). A repo whose worktree already matches HEAD is `aligned`,
+unless a strict descendant carries the same tree (empty commits, a
+net-unchanged sequence, or the parent gitlink): then the repo is
+`realignable` to that descendant, because HEAD would otherwise stay behind
+forever. A repo with a candidate whose diff count is at most HEAD's is
+`realignable`
 (a tie is accepted so a parent whose only drift is a child's gitlink still
 moves and the child's own realign then reads the parent's new HEAD). Anything
 else is `no-match`. All read commands run with `--no-optional-locks`.
@@ -111,7 +115,10 @@ Realign uses git's lockfile protocol, per repo, in parent-first order:
    write it into the lock.
 3. `git update-ref -m "dot peer realign" HEAD <new> <old>` — compare-and-swap;
    a failure removes the lock and leaves HEAD and the index untouched.
-4. Rename the lock over `index`.
+4. Rename the lock over `index`. If the rename fails after HEAD moved, HEAD
+   is rolled back with `update-ref -m "dot peer realign rollback" HEAD <old>`
+   and the lock is removed; the repo is reported `unresolvable`, never
+   `realigned`, so a partial realign cannot be misreported.
 
 The worktree is never written by git; uncommitted modifications survive as
 modifications against the new HEAD. Staged selections do not survive, which is

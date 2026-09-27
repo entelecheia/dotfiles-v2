@@ -479,3 +479,40 @@ func TestPeerGit_RepoRestriction(t *testing.T) {
 		t.Fatal("unknown repo argument did not error before an applied realign")
 	}
 }
+
+// A strict descendant whose tree equals HEAD's (an empty commit, or a
+// sequence whose net tree is unchanged) must still be offered: HEAD
+// otherwise stays behind forever even though the files already match.
+func TestPeerGitRealign_SameTreeDescendant(t *testing.T) {
+	tmp := t.TempDir()
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	c1 := gitStateCommitFile(t, origin, "file.txt", "v1\n", "c1")
+	gitStateRun_(t, origin, "commit", "-q", "--allow-empty", "-m", "empty")
+	c2 := gitStateHead(t, origin)
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "clone", "-q", origin, ws)
+	gitStateRun_(t, ws, "reset", "--hard", "-q", c1)
+
+	res, err := PeerGitStatus(context.Background(), ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := gitStateReport(t, res, ".")
+	if rep.Status != GitRepoRealignable || rep.Target != c2 {
+		t.Fatalf("status = %q target = %q, want realignable -> same-tree descendant %q", rep.Status, rep.Target, c2)
+	}
+
+	res, err = PeerGitRealign(context.Background(), ws, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep = gitStateReport(t, res, ".")
+	if rep.Status != GitRepoRealigned {
+		t.Fatalf("status = %q (%s), want realigned", rep.Status, rep.Reason)
+	}
+	if got := gitStateHead(t, ws); got != c2 {
+		t.Fatalf("HEAD = %q, want %q", got, c2)
+	}
+}
