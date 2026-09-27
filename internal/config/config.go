@@ -194,13 +194,26 @@ type WatchdogPowerConfig struct {
 // IsZero lets yaml.v3 omit an unset power block.
 func (c WatchdogPowerConfig) IsZero() bool { return !c.Headless }
 
-// WatchdogMonitConfig configures monit supervision (later phase; schema only).
+// WatchdogMonitConfig configures monit service-health supervision (phase P3):
+// system load/CPU alerting and the Screen Sharing heal.
 type WatchdogMonitConfig struct {
 	Enabled bool `yaml:"enabled"`
+	// Load1Threshold alerts when loadavg(5min) exceeds it; unset means the
+	// host's logical CPU count (resolved at setup time).
+	Load1Threshold     float64 `yaml:"load1_threshold,omitempty"`
+	CPUUserThreshold   float64 `yaml:"cpu_user_threshold,omitempty"`   // percent; default 90
+	CPUSystemThreshold float64 `yaml:"cpu_system_threshold,omitempty"` // percent; default 50
+	Cycles             int     `yaml:"cycles,omitempty"`               // consecutive failed cycles before acting; default 3
+	// ScreenSharing is a pointer so an explicit `false` survives the true
+	// default: unset means the Screen Sharing heal check is rendered.
+	ScreenSharing *bool `yaml:"screensharing,omitempty"`
 }
 
 // IsZero lets yaml.v3 omit an unset monit block.
-func (c WatchdogMonitConfig) IsZero() bool { return !c.Enabled }
+func (c WatchdogMonitConfig) IsZero() bool {
+	return !c.Enabled && c.Load1Threshold == 0 && c.CPUUserThreshold == 0 &&
+		c.CPUSystemThreshold == 0 && c.Cycles == 0 && c.ScreenSharing == nil
+}
 
 // WatchdogBeszelConfig configures Beszel monitoring (later phase; schema only).
 type WatchdogBeszelConfig struct {

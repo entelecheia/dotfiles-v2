@@ -22,8 +22,8 @@ func newWatchdogCmd() *cobra.Command {
 		Use:   "watchdog",
 		Short: "Reap runaway processes and alert on host health",
 		Long: `Watchdog guards this host against runaway orphaned processes (reaper),
-with connectivity heal, power hardening, and external monitors landing in
-later phases. The reaper runs from a user LaunchAgent installed by
+with WARP connectivity heal, monit service-health supervision, and optional
+headless power hardening. The reaper runs from a user LaunchAgent installed by
 'dot watchdog setup'; it is disabled by default and opted in per host via
 the watchdog section of the profile config.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {

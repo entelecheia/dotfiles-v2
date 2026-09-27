@@ -5,8 +5,8 @@ Reap runaway processes and alert on host health
 ### Synopsis
 
 Watchdog guards this host against runaway orphaned processes (reaper),
-with connectivity heal, power hardening, and external monitors landing in
-later phases. The reaper runs from a user LaunchAgent installed by
+with WARP connectivity heal, monit service-health supervision, and optional
+headless power hardening. The reaper runs from a user LaunchAgent installed by
 'dot watchdog setup'; it is disabled by default and opted in per host via
 the watchdog section of the profile config.
 
@@ -37,8 +37,8 @@ dot watchdog [flags]
 * [dot watchdog log](dot_watchdog_log.md)	 - Tail the watchdog JSON-lines event log
 * [dot watchdog notify](dot_watchdog_notify.md)	 - Send a watchdog alert (macOS notification and/or ntfy)
 * [dot watchdog reap](dot_watchdog_reap.md)	 - Run one reaper pass (the LaunchAgent invokes this)
-* [dot watchdog setup](dot_watchdog_setup.md)	 - Install the watchdog reaper agent, WARP heal daemon, and optional power hardening (macOS)
+* [dot watchdog setup](dot_watchdog_setup.md)	 - Install the watchdog reaper agent, WARP heal daemon, monit supervision, and optional power hardening (macOS)
 * [dot watchdog status](dot_watchdog_status.md)	 - Show watchdog config, LaunchAgent, and sample state
-* [dot watchdog uninstall](dot_watchdog_uninstall.md)	 - Remove the watchdog reaper agent and WARP heal daemon (macOS)
+* [dot watchdog uninstall](dot_watchdog_uninstall.md)	 - Remove the watchdog reaper agent, WARP heal daemon, and monit supervision (macOS)
 * [dot watchdog warp](dot_watchdog_warp.md)	 - Run one WARP self-heal pass (the root daemon invokes this)
 
