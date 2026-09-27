@@ -1,22 +1,23 @@
-## dot watchdog uninstall
+## dot watchdog warp
 
-Remove the watchdog reaper agent and WARP heal daemon (macOS)
+Run one WARP self-heal pass (the root daemon invokes this)
 
 ### Synopsis
 
-Unload and remove the reaper LaunchAgent and, when installed, the root
-WARP heal LaunchDaemon. Restoring the power settings saved by setup
---headless and removing the state directory and logs are interactive-only
-prompts that default to No; --yes never auto-confirms them.
+Probe WARP health (warp-cli Connected AND an interface address in
+100.96.0.0/12), fold it into the consecutive-failure state, and act: after
+fail_threshold consecutive failures, warp-cli disconnect/connect, up to 3
+attempts; then launchctl kickstart -k the WARP daemon, rate-limited to one
+restart per 30 minutes. Every action is logged and notified.
 
 ```
-dot watchdog uninstall [flags]
+dot watchdog warp [flags]
 ```
 
 ### Options
 
 ```
-  -h, --help   help for uninstall
+  -h, --help   help for warp
 ```
 
 ### Options inherited from parent commands

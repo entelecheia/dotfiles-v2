@@ -20,13 +20,20 @@ import (
 // dot watchdog setup / status / notify / log / uninstall.
 
 func newWatchdogSetupCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "setup",
-		Short:        "Install the watchdog reaper LaunchAgent (macOS)",
+	cmd := &cobra.Command{
+		Use:   "setup",
+		Short: "Install the watchdog reaper agent, WARP heal daemon, and optional power hardening (macOS)",
+		Long: `Install the watchdog on this Mac: the user-domain reaper LaunchAgent,
+plus the root WARP heal LaunchDaemon when watchdog.warp is enabled.
+--headless additionally applies power hardening (pmset sleep 0 on charger,
+autorestart, womp, restartfreeze on) after saving the prior values for
+uninstall-time restore; it requires watchdog.power.headless: true.`,
 		Args:         cobra.NoArgs,
 		RunE:         func(cmd *cobra.Command, args []string) error { return runWatchdogSetupForGOOS(cmd, args, runtime.GOOS) },
 		SilenceUsage: true,
 	}
+	cmd.Flags().Bool("headless", false, "apply headless power hardening (requires watchdog.power.headless: true)")
+	return cmd
 }
 
 func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error {
@@ -39,6 +46,7 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 	p := printerFrom(cmd)
 	yes, _ := cmd.Flags().GetBool("yes")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	headless, _ := cmd.Flags().GetBool("headless")
 
 	wcfg, err := loadWatchdogConfig(cmd)
 	if err != nil {
@@ -46,6 +54,9 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 	}
 	if !wcfg.Enabled {
 		return fmt.Errorf("watchdog is disabled in the active profile; set watchdog.enabled: true or pass --config with a host config that enables it")
+	}
+	if headless && !wcfg.Power.Headless {
+		return fmt.Errorf("--headless requires watchdog.power.headless: true in the active profile")
 	}
 	settings, err := watchdog.ResolveReaper(wcfg.Reaper)
 	if err != nil {
@@ -56,6 +67,12 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 	p.KV("Mode", settings.Mode)
 	p.KV("Interval", settings.Interval.String())
 	p.KV("CPU threshold", fmt.Sprintf("%.0f%% for %s", settings.CPUThreshold, settings.Sustain))
+	if wcfg.Warp.Enabled {
+		p.KV("WARP heal", "every "+watchdog.ResolveWarp(wcfg.Warp).Interval.String())
+	}
+	if headless {
+		p.KV("Power", "headless hardening")
+	}
 	ok, err := ui.Confirm("Install the reaper LaunchAgent "+watchdog.ReapLabel+"?", yes)
 	if err != nil {
 		return err
@@ -72,6 +89,12 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 	if dryRun {
 		p.Line("[dry-run] would write %s", mgr.SnapshotPath())
 		p.Line("[dry-run] would install and load %s (every %s)", mgr.PlistPath(), settings.Interval)
+		if wcfg.Warp.Enabled {
+			p.Line("[dry-run] would install the root WARP heal daemon %s", mgr.WarpPlistPath())
+		}
+		if headless {
+			p.Line("[dry-run] would save prior power values to %s, then apply headless power settings", mgr.PowerStatePath())
+		}
 		return nil
 	}
 	dotPath, err := osexec.LookPath("dot")
@@ -84,6 +107,16 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 	}
 	if err := mgr.Install(context.Background(), dotPath, settings.Interval, snapshot); err != nil {
 		return err
+	}
+	if wcfg.Warp.Enabled {
+		if err := setupWarpDaemonStep(p, mgr, wcfg, dotPath, yes); err != nil {
+			return err
+		}
+	}
+	if headless {
+		if err := applyPowerStep(p, mgr, yes); err != nil {
+			return err
+		}
 	}
 	p.Success("✓ dot watchdog setup complete (mode: %s)", settings.Mode)
 	p.Line("Check with: dot watchdog status · Logs: dot watchdog log")
@@ -104,8 +137,10 @@ func runWatchdogStatus(cmd *cobra.Command, _ []string) error {
 	p := printerFrom(cmd)
 	mgr := watchdog.NewManager(watchdogRunner(false), homeFor(cmd))
 	p.Header("dot watchdog status")
+	var wcfgPtr *config.WatchdogConfig
 	switch wcfg, err := loadWatchdogSnapshot(mgr); {
 	case err == nil:
+		wcfgPtr = &wcfg
 		settings, rerr := watchdog.ResolveReaper(wcfg.Reaper)
 		if rerr != nil {
 			return rerr
@@ -132,6 +167,7 @@ func runWatchdogStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Tracked processes", strconv.Itoa(len(samples)))
 	}
 	p.KV("Log", filePresence(mgr.LogPath()))
+	printWarpStatusRows(p, mgr, wcfgPtr)
 	return nil
 }
 
@@ -210,10 +246,11 @@ func runWatchdogLog(cmd *cobra.Command, args []string) error {
 func newWatchdogUninstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove the watchdog reaper LaunchAgent (macOS)",
-		Long: `Unload and remove the reaper LaunchAgent. Removing the state directory
-and the log is an interactive-only prompt that defaults to No; --yes never
-auto-confirms it.`,
+		Short: "Remove the watchdog reaper agent and WARP heal daemon (macOS)",
+		Long: `Unload and remove the reaper LaunchAgent and, when installed, the root
+WARP heal LaunchDaemon. Restoring the power settings saved by setup
+--headless and removing the state directory and logs are interactive-only
+prompts that default to No; --yes never auto-confirms them.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWatchdogUninstallForGOOS(cmd, args, runtime.GOOS)
@@ -239,12 +276,30 @@ func runWatchdogUninstallForGOOS(cmd *cobra.Command, _ []string, goos string) er
 	mgr := watchdog.NewManager(watchdogRunner(dryRun), home)
 	if dryRun {
 		p.Line("[dry-run] would unload and remove %s", mgr.PlistPath())
+		if mgr.Runner.FileExists(mgr.WarpPlistPath()) {
+			p.Line("[dry-run] would boot out and remove %s", mgr.WarpPlistPath())
+		}
+		if _, exists, _ := watchdog.LoadPowerState(mgr.PowerStatePath()); exists {
+			p.Line("[dry-run] would offer to restore the power settings in %s", mgr.PowerStatePath())
+		}
 		return nil
 	}
 	if err := mgr.Uninstall(context.Background()); err != nil {
 		return err
 	}
 	p.Line("Removed LaunchAgent plist (if present).")
+	if mgr.Runner.FileExists(mgr.WarpPlistPath()) {
+		if err := mgr.Runner.RunInteractive(context.Background(), "sudo", "-v"); err != nil {
+			return fmt.Errorf("sudo is required to remove the system-domain daemon: %w", err)
+		}
+		if err := mgr.UninstallWarp(context.Background()); err != nil {
+			return err
+		}
+		p.Line("Removed WARP heal daemon.")
+	}
+	if err := restorePowerStep(p, mgr, yes); err != nil {
+		return err
+	}
 	removeState, err := ui.ConfirmBool(
 		fmt.Sprintf("Remove watchdog state and logs (%s, %s)?", mgr.StateDir(), mgr.LogPath()), false, yes)
 	if err != nil {

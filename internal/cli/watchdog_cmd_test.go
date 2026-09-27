@@ -180,6 +180,7 @@ func watchdogFlagCmd(t *testing.T, args []string) *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().Bool("yes", false, "")
 	cmd.Flags().Bool("dry-run", false, "")
+	cmd.Flags().Bool("headless", false, "")
 	cmd.Flags().String("profile", "", "")
 	cmd.Flags().String("config", "", "")
 	cmd.Flags().String("home", "", "")

@@ -51,3 +51,20 @@ func TestResolveReaper_KeepsExplicitValues(t *testing.T) {
 		t.Errorf("match/allow not carried: %#v", s)
 	}
 }
+
+func TestResolveWarp_Defaults(t *testing.T) {
+	s := ResolveWarp(config.WatchdogWarpConfig{})
+	if s.Interval != DefaultWarpInterval || s.FailThreshold != DefaultWarpFailThreshold {
+		t.Errorf("defaults = %#v, want 120s/2", s)
+	}
+}
+
+func TestResolveWarp_KeepsExplicitValues(t *testing.T) {
+	s := ResolveWarp(config.WatchdogWarpConfig{
+		Interval:      config.Duration(60 * time.Second),
+		FailThreshold: 4,
+	})
+	if s.Interval != 60*time.Second || s.FailThreshold != 4 {
+		t.Errorf("explicit values lost: %#v", s)
+	}
+}

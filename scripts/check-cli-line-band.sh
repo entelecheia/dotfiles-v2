@@ -24,6 +24,7 @@ files=(
   "internal/cli/sync_cmd.go"
   "internal/cli/watchdog_cmd.go"
   "internal/cli/watchdog_setup.go"
+  "internal/cli/watchdog_warp.go"
 )
 
 if [[ ${#files[@]} -eq 0 ]]; then
