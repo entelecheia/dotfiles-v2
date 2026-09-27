@@ -1,0 +1,7 @@
+{
+  "outcome": "deferred",
+  "scope": "@ROOT@/repo/.git",
+  "class": "heavy",
+  "reason": "memory pressure critical",
+  "retry_after": 30
+}

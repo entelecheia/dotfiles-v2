@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -78,19 +79,35 @@ func jsonCommandSurfaces(t *testing.T) []string {
 // which sandbox, and which golden file holds the expected document.
 type goldenCase struct {
 	surface string // space-joined command path, matching jsonCommandSurfaces
+	variant string // distinguishes multiple cases on one surface (admit deferred)
 	args    []string
 	stdin   string
+	// wantExit expects an *ExitCodeError with this code instead of a nil
+	// error (the admission defer contract: JSON on stdout, exit 75).
+	wantExit int
+	// useErr reads the document from stderr instead of stdout (the
+	// admission completion record: child stdout stays the payload).
+	useErr  bool
 	fixture func(t *testing.T) (home, root string)
 }
 
 func (tc goldenCase) goldenPath() string {
-	return filepath.Join(goldenDir, strings.ReplaceAll(tc.surface, " ", "-")+".json")
+	name := strings.ReplaceAll(tc.surface, " ", "-")
+	if tc.variant != "" {
+		name += "-" + tc.variant
+	}
+	return filepath.Join(goldenDir, name+".json")
 }
 
-// goldenCases covers all 13 surfaces. Loop variable is tc, per the repo's
-// table-driven convention (internal/config/detector_test.go:26).
+// goldenCases covers every --json surface the cobra walk finds; the matrix
+// completeness test below is what keeps this list exhaustive. Loop variable
+// is tc, per the repo's table-driven convention
+// (internal/config/detector_test.go:26).
 func goldenCases() []goldenCase {
 	return []goldenCase{
+		{surface: "admit", args: []string{"admit", "--json", "--wait", "0", "--", "true"}, useErr: true, fixture: goldenAdmitFixture},
+		{surface: "admit", variant: "deferred", args: []string{"admit", "--json", "--wait", "0", "--", "true"}, wantExit: ExitDeferred, fixture: goldenAdmitDeferFixture},
+		{surface: "admit status", args: []string{"admit", "status", "--json"}, fixture: goldenAdmitStatusFixture},
 		{surface: "ai policy inspect", args: []string{"ai", "policy", "inspect", "--json"}, fixture: goldenAIPolicyFixture},
 		{surface: "ai policy resolve", args: []string{"ai", "policy", "resolve", "--task", "status", "--project", "@ROOT@", "--json"}, fixture: goldenAIPolicyFixture},
 		{surface: "ai policy diff", args: []string{"ai", "policy", "diff", "--json"}, fixture: goldenAIPolicyFixture},
@@ -236,7 +253,19 @@ func TestJSONGoldenMatrixIsComplete(t *testing.T) {
 // XDG_* via t.Setenv, which a parallel test may not do.
 func TestJSONGoldens(t *testing.T) {
 	for _, tc := range goldenCases() {
-		t.Run(tc.surface, func(t *testing.T) {
+		name := tc.surface
+		if tc.variant != "" {
+			name += "/" + tc.variant
+		}
+		t.Run(name, func(t *testing.T) {
+			// Resolve the golden path BEFORE the fixture runs: admission
+			// fixtures chdir into their sandbox repo, and a relative golden
+			// path would then read/write inside the sandbox instead of
+			// testdata/golden.
+			path, err := filepath.Abs(tc.goldenPath())
+			if err != nil {
+				t.Fatal(err)
+			}
 			home, root := tc.fixture(t)
 			// Fixture directory arguments keep runtime policy inspection out of
 			// the developer's project settings without changing the process cwd.
@@ -247,15 +276,23 @@ func TestJSONGoldens(t *testing.T) {
 				}
 			}
 			out, errOut, err := runGoldenSurface(tc)
-			if err != nil {
+			if tc.wantExit != 0 {
+				var exitErr *ExitCodeError
+				if !errors.As(err, &exitErr) || exitErr.Code != tc.wantExit {
+					t.Fatalf("%s: err = %v, want exit code %d\nstderr=%s", strings.Join(tc.args, " "), err, tc.wantExit, errOut)
+				}
+			} else if err != nil {
 				t.Fatalf("%s: %v\nstderr=%s", strings.Join(tc.args, " "), err, errOut)
 			}
-			got := normalizeGolden(out, home, root)
+			raw := out
+			if tc.useErr {
+				raw = errOut
+			}
+			got := normalizeGolden(raw, home, root)
 
-			path := tc.goldenPath()
 			if *goldenUpdate {
 				assertNonDegenerateGolden(t, tc.surface, got)
-				if err := os.MkdirAll(goldenDir, 0o755); err != nil {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(path, []byte(got), 0o644); err != nil {

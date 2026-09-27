@@ -214,6 +214,14 @@ tool):
   init/backup/restore cover it like the SSH key and shell secrets. Watchdog
   setup only probes its presence — it never reads, renders, or removes the
   file — and the beszel plist sources it at agent start
+- `~/.local/state/dot/admission/` — the resource-admission controller state:
+  the slot directories (`slots/`, one per repo plus the shared maintenance
+  slot, each holding a `lease.json` with the owner pid/start, heartbeat and
+  deadline), the cross-invocation pressure history (`history.json`), and the
+  per-scope notify dedup marks (`notify/`); written by every `dot admit`
+  gate evaluation, slot acquire/heartbeat/release, and defer notification.
+  Slots are removed by their owner's release or by stale-owner recovery; the
+  history and notify marks are small JSON files with no scheduled cleanup
 - `~/Library/Logs/dot/watchdog.log` — the watchdog JSON-lines event log
   (`dot watchdog log` tails it), plus the reaper unit's launchd
   stdout/stderr logs beside it
