@@ -364,6 +364,7 @@ func (u *aiUpdater) updateClaude(ctx context.Context) []updateStep {
 	steps = append(steps, self)
 
 	steps = append(steps, u.run(ctx, "claude", "marketplace-update", "claude", "plugin", "marketplace", "update"))
+	steps = append(steps, u.claudeMemLatestStep(ctx))
 
 	pluginsBefore := u.installedPlugins()
 	if len(pluginsBefore) == 0 {
@@ -396,6 +397,44 @@ func (u *aiUpdater) updateClaude(ctx context.Context) []updateStep {
 	}
 	steps = append(steps, updateStep{Tool: "claude", Step: "plugins", Status: status, Detail: detail})
 	return steps
+}
+
+// claudeMemLatestStep keeps claude-mem itself at the latest marketplace
+// version: the generic plugin pass above updates whatever claude knows
+// about, while this one owns the cross-CLI convergence — codex cache
+// reinstall plus bun runtime — that the peer sync relies on.
+func (u *aiUpdater) claudeMemLatestStep(ctx context.Context) updateStep {
+	step := updateStep{Tool: "claude", Step: "claude-mem"}
+	mgr := aisettings.NewClaudeMemManager(u.home, "", "")
+	if mgr.InstalledClaudeMemVersion() == "" {
+		step.Status, step.Detail = stepSkipped, "claude-mem not installed"
+		return step
+	}
+	if bunPath, err := osexec.LookPath("bun"); err == nil {
+		if bunPath, err := filepath.Abs(bunPath); err == nil {
+			mgr.BunPath = bunPath
+		}
+	}
+	result, err := mgr.UpdateClaudeMemPlugin(ctx, u.runner)
+	if err != nil {
+		step.Status, step.Detail = stepFailed, firstLine(err.Error())
+		return step
+	}
+	switch {
+	case result.Updated && u.runner.DryRun:
+		step.Status = stepSkipped
+		step.Detail = fmt.Sprintf("dry-run: would update %s → %s", result.Before, result.MarketplaceVersion)
+	case result.Updated:
+		step.Status = stepUpdated
+		step.Detail = fmt.Sprintf("%s → %s", result.Before, result.After)
+	default:
+		step.Status = stepCurrent
+		step.Detail = result.After + " (current)"
+	}
+	if result.CodexCacheRefresh != "" {
+		step.Detail += "; codex cache: " + result.CodexCacheRefresh
+	}
+	return step
 }
 func (u *aiUpdater) updateCodex(ctx context.Context) []updateStep {
 	if !u.runner.CommandExists("codex") {

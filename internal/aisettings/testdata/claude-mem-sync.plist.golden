@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dotfiles.claude-mem-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>ssh -o BatchMode=yes -o ConnectTimeout=10 user@mac2 true || exit 0
+exec /Users/test/.local/bin/dot ai memory sync --peer user@mac2</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/test</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>DOT_SCHEDULED_RUN</key>
+    <string>1</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/test/.claude-mem/logs/claude-mem-sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/test/.claude-mem/logs/claude-mem-sync.log</string>
+</dict>
+</plist>

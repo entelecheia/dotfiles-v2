@@ -61,18 +61,23 @@ var pathBoundaryTable = []pathBoundaryEntry{
 	{"ClaudeMemManager.PiAgentsPath", classHomeWrite},
 	{"ClaudeMemManager.KiroMCPPath", classHomeWrite},
 	{"ClaudeMemManager.LaunchdPlistPath", classHomeWrite},
+	{"ClaudeMemManager.MarketplaceCheckoutPath", classHomeWrite},
+	{"ClaudeMemManager.SyncLaunchdPlistPath", classHomeWrite},
+	{"ClaudeMemManager.SyncLogPath", classHomeWrite},
 	{"ClaudeMemManager.TranscriptConfigPath", classHomeWrite},
 	{"ClaudeMemManager.codexConfigPath", classReadOnly},
 	{"ClaudeMemManager.TranscriptStatePath", classHomeWrite},
 	{"CoauthorGuardManager.SSOTPath", classHomeWrite},
 	{"CoauthorGuardManager.gitConfigPath", classHomeWrite},
 	{"CoauthorGuardManager.hookPath", classHomeWrite},
+	{"DefaultSyncDBPath", classHomeWrite},
 	{"Engine.LatestPointerPath", classCallerRooted},
 	{"Engine.VersionPath", classCallerRooted},
 	{"Engine.copyMaterializedPath", classTransform},
 	{"HUDManager.claudeScriptPath", classHomeWrite},
 	{"HUDManager.codexConfigPath", classHomeWrite},
 	{"SkillsManager.DefaultMaruSSOTPath", classReadOnly},
+	{"SyncStatePath", classHomeWrite},
 	{"canonicalPath", classTransform},
 	{"canonicalSkillPath", classTransform},
 	{"normalizeGitPath", classTransform},
@@ -104,6 +109,8 @@ var allowedBoundaryRoots = []string{
 	"~/.config/git/hooks/commit-msg",
 	"~/.claude-mem",
 	"~/Library/LaunchAgents/com.dotfiles.claude-mem-bridge.plist",
+	"~/Library/LaunchAgents/com.dotfiles.claude-mem-sync.plist",
+	"~/.claude/plugins/marketplaces/thedotmack",
 	"~/.kimi-code/mcp.json",
 	"~/.qwen/settings.json",
 	"~/.kiro/settings/mcp.json",
@@ -311,6 +318,12 @@ func resolveHomeWrite(t *testing.T, name, home string) string {
 		return (&ClaudeMemManager{HomeDir: home}).KiroMCPPath()
 	case "ClaudeMemManager.LaunchdPlistPath":
 		return (&ClaudeMemManager{HomeDir: home}).LaunchdPlistPath()
+	case "ClaudeMemManager.MarketplaceCheckoutPath":
+		return (&ClaudeMemManager{HomeDir: home}).MarketplaceCheckoutPath()
+	case "ClaudeMemManager.SyncLaunchdPlistPath":
+		return (&ClaudeMemManager{HomeDir: home}).SyncLaunchdPlistPath()
+	case "ClaudeMemManager.SyncLogPath":
+		return (&ClaudeMemManager{HomeDir: home}).SyncLogPath()
 	case "ClaudeMemManager.TranscriptConfigPath":
 		return (&ClaudeMemManager{HomeDir: home}).TranscriptConfigPath()
 	case "ClaudeMemManager.TranscriptStatePath":
@@ -321,10 +334,14 @@ func resolveHomeWrite(t *testing.T, name, home string) string {
 		return (&CoauthorGuardManager{HomeDir: home}).gitConfigPath()
 	case "CoauthorGuardManager.hookPath":
 		return (&CoauthorGuardManager{HomeDir: home}).hookPath()
+	case "DefaultSyncDBPath":
+		return DefaultSyncDBPath(home)
 	case "HUDManager.claudeScriptPath":
 		return (&HUDManager{HomeDir: home}).claudeScriptPath()
 	case "HUDManager.codexConfigPath":
 		return (&HUDManager{HomeDir: home}).codexConfigPath()
+	case "SyncStatePath":
+		return SyncStatePath(home)
 	default:
 		t.Fatalf("no home-write invocation for %s; extend resolveHomeWrite", name)
 		return ""
