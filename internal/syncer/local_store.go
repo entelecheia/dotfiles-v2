@@ -36,6 +36,8 @@ const (
 	localBaselineName      = "baseline.manifest"
 	localImportsName       = "imports.manifest"
 	localTombstonesName    = "tombstones.log"
+	localWorktreesName     = "worktrees.txt"
+	localWorktreesDynName  = "worktrees.dyn.conf"
 	localLogDirRel         = "log"
 	localLogFileName       = "sync.log"
 	legacyLogFileName      = "gdrive-sync.log"
@@ -190,6 +192,7 @@ type LocalPaths struct {
 	BaselineFile      string
 	ImportsFile       string
 	TombstonesFile    string
+	WorktreesFile     string // sticky linked-worktree exclude list (peer profile)
 	LogDir            string
 	LogFile           string
 	WorkspaceRoot     string // the local sync tree itself (parent of .dotfiles)
@@ -322,6 +325,7 @@ func resolveLocalPaths(localPath, profile string, legacyFallback bool) *LocalPat
 		BaselineFile:      filepath.Join(store, localBaselineName),
 		ImportsFile:       filepath.Join(store, localImportsName),
 		TombstonesFile:    filepath.Join(store, localTombstonesName),
+		WorktreesFile:     filepath.Join(store, localWorktreesName),
 		LogDir:            logDir,
 		LogFile:           logFile,
 		WorkspaceRoot:     root,

@@ -397,6 +397,9 @@ func PeerFilterArgs(cfg *Config, rf runtimeFilters) []string {
 	}
 	args := append([]string{}, alwaysExcludeArgs()...)
 	args = append(args, peerVolatileExcludeArgs(cfg)...)
+	if rf.WorktreesDyn != "" {
+		args = append(args, "--exclude-from="+rf.WorktreesDyn)
+	}
 	args = append(args, secretsFilterArgs(cfg.AllowPatterns)...)
 	for _, f := range []string{cfg.ExcludesFile, cfg.IgnoreFile} {
 		if f != "" {

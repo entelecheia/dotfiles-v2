@@ -400,6 +400,23 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 		return nil, err
 	}
 	cfg.RemoteRsyncPath = rp
+
+	// The plan must apply the same sticky worktree exclude a real run would,
+	// or the displayed divergence disagrees with the transaction that follows
+	// it. The fetch is best-effort: a diff stays useful when the remote
+	// status cannot be read, and the stored ∪ local union still covers every
+	// worktree any earlier complete run has seen. `peer diff` is always a
+	// preview, so the union is never persisted here.
+	var remoteWorktrees []string
+	if wt, err := fetchRemotePeerWorktrees(ctx, opts.Probe, cfg); err == nil {
+		remoteWorktrees = wt
+	}
+	worktrees, err := MergePeerWorktrees(cfg, remoteWorktrees, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.WorktreeExcludes = worktrees
+
 	release, err := AcquireLockForRun(cfg.LockDir, true)
 	if err != nil {
 		return nil, fmt.Errorf("another sync is already running: %w", err)
@@ -469,9 +486,21 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		return nil, err
 	}
 	cfg.RemoteRsyncPath = rp
-	if err := checkRemotePeerOwner(ctx, probe, cfg); err != nil {
+	remoteStatus, err := checkRemotePeerOwner(ctx, probe, cfg)
+	if err != nil {
 		return nil, err
 	}
+
+	// The linked-worktree exclude is a sticky union of the stored list, local
+	// detection and the remote's report (#135): both machines must apply the
+	// identical set to the local walk, the remote inventory and every
+	// transfer, or a rule only one side applies becomes a propagated delete.
+	// A real run persists the union; a preview changes nothing in the store.
+	worktrees, err := MergePeerWorktrees(cfg, remoteStatus.Worktrees, !dryRun)
+	if err != nil {
+		return nil, err
+	}
+	cfg.WorktreeExcludes = worktrees
 
 	if !dryRun {
 		// Normalize opted-in NFD names before tombstones, inventory, plans,
@@ -739,7 +768,7 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if err := CheckSSH(ctx, opts.Probe, cfg.Target.Host); err != nil {
 		return nil, fmt.Errorf("checking peer coordinator before scheduler setup: %w", err)
 	}
-	if err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
+	if _, err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
 		return nil, err
 	}
 	// Mirror the off-arm above. The write below bypasses the runner entirely

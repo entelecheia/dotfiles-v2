@@ -71,14 +71,14 @@ func TestValidateRemotePeerStatusRequiresSameCoordinatorAndPair(t *testing.T) {
 		Target:    Target{Kind: TargetSSH, Host: "peer", Path: "/Users/test/work"},
 	}
 	raw := `{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"workspacePath":"/Users/test/work","owner":"coordinator","target":{"path":"/Users/test/work"}}}`
-	if err := validateRemotePeerStatus(cfg, raw); err != nil {
+	if _, err := parseRemotePeerStatus(cfg, raw); err != nil {
 		t.Fatalf("matching remote status rejected: %v", err)
 	}
 	for _, bad := range []string{
 		`{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"workspacePath":"/Users/test/work","owner":"other","target":{"path":"/Users/test/work"}}}`,
 		`{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"workspacePath":"/wrong","owner":"coordinator","target":{"path":"/Users/test/work"}}}`,
 	} {
-		if err := validateRemotePeerStatus(cfg, bad); err == nil {
+		if _, err := parseRemotePeerStatus(cfg, bad); err == nil {
 			t.Fatalf("unsafe remote status accepted: %s", bad)
 		}
 	}

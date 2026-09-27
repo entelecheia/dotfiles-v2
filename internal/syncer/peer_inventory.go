@@ -78,9 +78,14 @@ exec "$dot_bin" sync names normalize --profile=peer --yes`
 // document the coordinator check reads. The full document is assembled by the
 // cli encoder (D-12); decoding only the coordinator fields keeps the engine
 // off that type. Unknown fields are ignored, as they were before the move.
+//
+// Worktrees is optional: a remote on a previous release omits it, decoding
+// yields nil, and the run falls back to the stored ∪ local union. The schema
+// version stays 1; new fields are additive only.
 type remotePeerStatus struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	Kind          string `json:"kind"`
+	SchemaVersion int      `json:"schemaVersion"`
+	Kind          string   `json:"kind"`
+	Worktrees     []string `json:"worktrees"`
 	Profile       struct {
 		Configured    bool   `json:"configured"`
 		Owner         string `json:"owner"`
@@ -94,32 +99,57 @@ type remotePeerStatus struct {
 // checkRemotePeerOwner makes the single-coordinator invariant bilateral. A
 // local owner guard alone is insufficient: two independently initialized Macs
 // can each name themselves and both scheduled jobs would pass their own guard.
-func checkRemotePeerOwner(ctx context.Context, runner *exec.Runner, cfg *Config) error {
+// The validated document is returned so the run can reuse what it carries
+// (the remote's linked-worktree list) without a second ssh round trip.
+func checkRemotePeerOwner(ctx context.Context, runner *exec.Runner, cfg *Config) (*remotePeerStatus, error) {
 	if cfg == nil || !cfg.Target.IsSSH() {
-		return fmt.Errorf("peer coordinator check: target is not SSH")
+		return nil, fmt.Errorf("peer coordinator check: target is not SSH")
 	}
 	if strings.TrimSpace(cfg.Owner) == "" {
-		return fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+		return nil, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
 	}
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand)
 	if err != nil {
-		return fmt.Errorf("peer coordinator check: reading remote peer status: %w", err)
+		return nil, fmt.Errorf("peer coordinator check: reading remote peer status: %w", err)
 	}
-	return validateRemotePeerStatus(cfg, res.Stdout)
+	status, err := parseRemotePeerStatus(cfg, res.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	return status, nil
 }
 
-func validateRemotePeerStatus(cfg *Config, raw string) error {
+// fetchRemotePeerWorktrees reads the remote's linked-worktree list from the
+// same status document, without the coordinator validation: `peer diff` runs
+// it on machines where the owner check is not its business. A remote on a
+// previous release answers with no worktrees field and the list is empty.
+func fetchRemotePeerWorktrees(ctx context.Context, runner *exec.Runner, cfg *Config) ([]string, error) {
+	if cfg == nil || !cfg.Target.IsSSH() {
+		return nil, fmt.Errorf("peer worktrees: target is not SSH")
+	}
+	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand)
+	if err != nil {
+		return nil, fmt.Errorf("peer worktrees: reading remote peer status: %w", err)
+	}
+	var status remotePeerStatus
+	if err := json.Unmarshal([]byte(res.Stdout), &status); err != nil {
+		return nil, fmt.Errorf("peer worktrees: invalid remote status JSON: %w", err)
+	}
+	return status.Worktrees, nil
+}
+
+func parseRemotePeerStatus(cfg *Config, raw string) (*remotePeerStatus, error) {
 	var status remotePeerStatus
 	if err := json.Unmarshal([]byte(raw), &status); err != nil {
-		return fmt.Errorf("peer coordinator check: invalid remote status JSON: %w", err)
+		return nil, fmt.Errorf("peer coordinator check: invalid remote status JSON: %w", err)
 	}
 	if status.SchemaVersion != PeerStatusSchemaVersion || status.Kind != "peer" || !status.Profile.Configured {
-		return fmt.Errorf("peer coordinator check: remote peer profile is not configured with the supported schema")
+		return nil, fmt.Errorf("peer coordinator check: remote peer profile is not configured with the supported schema")
 	}
 	wantOwner := NormalizeHostname(cfg.Owner)
 	gotOwner := NormalizeHostname(status.Profile.Owner)
 	if wantOwner == "" || gotOwner != wantOwner {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
 			cfg.Owner, status.Profile.Owner, cfg.Owner)
 	}
@@ -128,11 +158,11 @@ func validateRemotePeerStatus(cfg *Config, raw string) error {
 	remoteTarget := filepath.Clean(status.Profile.Target.Path)
 	wantRemoteTarget := filepath.Clean(strings.TrimRight(cfg.LocalPath, "/"))
 	if remoteWorkspace != wantRemoteWorkspace || remoteTarget != wantRemoteTarget {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"peer coordinator check: remote profile does not point back to this workspace (remote workspace %q target %q; expected %q -> %q)",
 			status.Profile.WorkspacePath, status.Profile.Target.Path, wantRemoteWorkspace, wantRemoteTarget)
 	}
-	return nil
+	return &status, nil
 }
 
 func normalizeRemotePeerNames(ctx context.Context, runner *exec.Runner, cfg *Config) error {
