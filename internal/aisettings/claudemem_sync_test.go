@@ -158,6 +158,13 @@ func TestSyncRoundTrip(t *testing.T) {
 	if len(bundle.Observations) != 1 || len(bundle.Summaries) != 1 || len(bundle.Sessions) != 1 {
 		t.Fatalf("bundle = %d obs %d sums %d sessions", len(bundle.Observations), len(bundle.Summaries), len(bundle.Sessions))
 	}
+	// The skip set must not cross the wire at all (id is receiver-assigned,
+	// the rest is sender-local bookkeeping).
+	for _, col := range []string{"id", "synced_at", "origin_device_id", "origin_local_id", "sync_rev", "relevance_count", "worker_port"} {
+		if _, ok := bundle.Observations[0][col]; ok {
+			t.Errorf("bundle carries skip column %q", col)
+		}
+	}
 	res, err := receiver.Import(bundle)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
@@ -445,5 +452,17 @@ func TestKickWorkerRestart(t *testing.T) {
 	}
 	if err := KickWorkerRestart(context.Background(), home, &http.Client{Timeout: time.Second}); err != nil {
 		t.Fatalf("dead worker must skip silently: %v", err)
+	}
+}
+
+// Read-only opens must not create a missing database: a status probe that
+// conjures an empty claude-mem.db would pass for a real (empty) store.
+func TestOpenSyncDBReadOnly_MissingFileErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent.db")
+	if _, err := OpenSyncDBReadOnly(path); err == nil {
+		t.Fatal("read-only open of a missing DB must error")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("read-only open created the file: %v", err)
 	}
 }

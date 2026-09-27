@@ -81,9 +81,11 @@ tool):
   (`cross-cli-transcript-watch.json`,
   `cross-cli-transcript-watch-state.json`) and the bridge log directory,
   written by `dot ai memory install`; also the claude-mem database itself
-  (`claude-mem.db`, written by `dot ai memory sync --serve import` when a
-  peer pushes), the peer-sync bookkeeping (`sync-state.json`), and the
-  scheduled sync log (`logs/claude-mem-sync.log`)
+  (`claude-mem.db`: `dot ai memory sync pull` and bidirectional `sync`
+  import peer rows into it locally, and `dot ai memory sync --serve
+  import` does the same when a peer pushes), the peer-sync bookkeeping
+  (`sync-state.json`), and the scheduled sync log
+  (`logs/claude-mem-sync.log`)
 - `~/Library/LaunchAgents/com.dotfiles.claude-mem-bridge.plist` — the
   user LaunchAgent that keeps the claude-mem bridge alive, written and
   bootstrapped by `dot ai memory install` (macOS only)

@@ -89,7 +89,22 @@ type SyncDB struct {
 // WAL writes never fail a read outright. Journal mode is deliberately left
 // alone: the worker owns it, and busy_timeout covers the contention.
 func OpenSyncDB(path string) (*SyncDB, error) {
+	return openSyncDB(path, "")
+}
+
+// OpenSyncDBReadOnly opens the store for the read paths (status, serve
+// max/export/count). SQLite's default mode creates a missing file, which
+// would make a status probe conjure an empty claude-mem.db that later
+// passes for a real (empty) store.
+func OpenSyncDBReadOnly(path string) (*SyncDB, error) {
+	return openSyncDB(path, "ro")
+}
+
+func openSyncDB(path, mode string) (*SyncDB, error) {
 	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", path)
+	if mode != "" {
+		dsn += "&mode=" + mode
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
@@ -182,6 +197,9 @@ func (d *SyncDB) Export(cutoffs map[string]string, onlySessions bool) (*Bundle, 
 	var err error
 	if onlySessions {
 		b.Sessions, err = d.selectRows("SELECT * FROM sdk_sessions")
+		if err == nil {
+			stripSkipColumns(b.Sessions)
+		}
 		return b, err
 	}
 	obsWhere, obsArgs := cutoffWhere(cutoffs["observations"])
@@ -203,7 +221,22 @@ func (d *SyncDB) Export(cutoffs map[string]string, onlySessions bool) (*Bundle, 
 	if b.Sessions, err = d.selectRows(sessionSQL, sessionArgs...); err != nil {
 		return nil, err
 	}
+	// The skip set must not cross the wire either: id is receiver-assigned
+	// and the rest are this machine's own sync metadata, worker binding, and
+	// usage counters. The import-side intersection stays as the second line
+	// of defense for bundles from older exporters.
+	for _, rows := range [][]map[string]any{b.Observations, b.Summaries, b.Sessions} {
+		stripSkipColumns(rows)
+	}
 	return b, nil
+}
+
+func stripSkipColumns(rows []map[string]any) {
+	for _, row := range rows {
+		for col := range syncSkipColumns {
+			delete(row, col)
+		}
+	}
 }
 
 // cutoffWhere renders the WHERE clause for one table's cutoff ("" → no

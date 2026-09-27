@@ -48,7 +48,10 @@ func (m *ClaudeMemManager) MarketplacePluginVersion() (string, error) {
 }
 
 // InstalledClaudeMemVersion is the version Claude Code records for the
-// active claude-mem install ("" when not recorded).
+// active claude-mem install from the thedotmack marketplace, preferring the
+// user-scoped install the updater owns ("" when not recorded). Map
+// iteration order must not pick a project-scoped or foreign-marketplace
+// record: the update path always targets claude-mem@thedotmack.
 func (m *ClaudeMemManager) InstalledClaudeMemVersion() string {
 	raw, err := os.ReadFile(filepath.Join(m.HomeDir, ".claude", "plugins", "installed_plugins.json"))
 	if err != nil {
@@ -56,16 +59,21 @@ func (m *ClaudeMemManager) InstalledClaudeMemVersion() string {
 	}
 	var doc struct {
 		Plugins map[string][]struct {
+			Scope   string `json:"scope"`
 			Version string `json:"version"`
 		} `json:"plugins"`
 	}
 	if json.Unmarshal(raw, &doc) != nil {
 		return ""
 	}
-	for key, installs := range doc.Plugins {
-		if strings.HasPrefix(key, "claude-mem@") && len(installs) > 0 {
-			return installs[0].Version
+	installs := doc.Plugins["claude-mem@"+ClaudeMemMarketplace]
+	for _, in := range installs {
+		if in.Scope == "user" {
+			return in.Version
 		}
+	}
+	if len(installs) > 0 {
+		return installs[0].Version
 	}
 	return ""
 }
@@ -131,7 +139,12 @@ func (m *ClaudeMemManager) UpdateClaudeMemPlugin(ctx context.Context, runner *ex
 		switch {
 		case runner.DryRun:
 			result.CodexCacheRefresh = "dry-run: would reinstall and bun-install " + cache
-		case result.Updated && runner.CommandExists("codex"):
+		case result.Updated && !runner.CommandExists("codex"):
+			// Visibility, not silence: the cache now runs the OLD plugin code
+			// while Claude Code runs the new one, and the same-version rule
+			// the peer sync relies on is broken until codex is back.
+			result.CodexCacheRefresh = "STALE: plugin updated but codex CLI not in PATH; refresh later with: " + claudeMemReinstallCommand
+		case result.Updated:
 			if _, err := runner.Run(ctx, "codex", "plugin", "remove", "claude-mem", "--marketplace", "claude-mem-local"); err != nil {
 				return result, fmt.Errorf("codex plugin remove claude-mem: %w", err)
 			}

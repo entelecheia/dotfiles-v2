@@ -106,5 +106,14 @@ func (m *ClaudeMemManager) InstallSyncAgent(ctx context.Context, peer string) er
 	if out, err := osexec.CommandContext(ctx, "launchctl", "bootstrap", domain, m.SyncLaunchdPlistPath()).CombinedOutput(); err != nil {
 		return fmt.Errorf("bootstrap claude-mem sync agent: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+	// Record the install so `dot ai memory status` knows the peer before the
+	// first successful run; an existing record (a real sync) is never
+	// overwritten.
+	statePath := SyncStatePath(m.HomeDir)
+	if peers, err := LoadSyncState(statePath); err == nil {
+		if _, ok := peers[peer]; !ok {
+			_ = SaveSyncState(statePath, peer, SyncStateEntry{LastResult: "agent installed, never run"})
+		}
+	}
 	return nil
 }

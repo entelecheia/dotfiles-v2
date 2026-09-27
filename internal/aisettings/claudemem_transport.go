@@ -156,9 +156,17 @@ func shellQuote(s string) string {
 
 // ServeOp handles one --serve invocation against the local database: read
 // the request, run the op, write the response. It is the remote end of
-// SSHTransport and never prints anything but the response envelope.
+// SSHTransport and never prints anything but the response envelope. Read
+// ops open the store read-only so a probe can never create an empty
+// claude-mem.db; import is the only writer.
 func ServeOp(ctx context.Context, dbPath, op string, stdin io.Reader, stdout io.Writer) error {
-	db, err := OpenSyncDB(dbPath)
+	var db *SyncDB
+	var err error
+	if op == "import" {
+		db, err = OpenSyncDB(dbPath)
+	} else {
+		db, err = OpenSyncDBReadOnly(dbPath)
+	}
 	if err != nil {
 		return writeServeResponse(stdout, serveResponse{Error: err.Error()})
 	}
@@ -193,8 +201,14 @@ func ServeOp(ctx context.Context, dbPath, op string, stdin io.Reader, stdout io.
 			break
 		}
 		// Backfill kick on the importing side whenever content rows landed.
+		// Settings live in the user's ~/.claude-mem regardless of any custom
+		// --remote-db path, so prefer the user home over the db's grandparent.
 		if resp.Result.Obs+resp.Result.Sums > 0 {
-			_ = KickWorkerRestart(ctx, filepath.Dir(filepath.Dir(dbPath)), nil)
+			home, herr := os.UserHomeDir()
+			if herr != nil {
+				home = filepath.Dir(filepath.Dir(dbPath))
+			}
+			_ = KickWorkerRestart(ctx, home, nil)
 		}
 	case "count":
 		if resp.Counts, err = db.Counts(); err != nil {
@@ -295,12 +309,15 @@ func RunMemorySync(ctx context.Context, local *SyncDB, t SyncTransport, peer Syn
 		}
 	}
 
+	// Final counts are best-effort: a peer that drops after the import must
+	// not turn a completed sync into a reported failure (the rows landed;
+	// the counts are the status row's convenience, not the result).
 	var err error
 	if report.LocalCounts, err = local.Counts(); err != nil {
-		return nil, err
+		report.LocalCounts = nil
 	}
 	if report.PeerCounts, err = t.Counts(ctx, peer); err != nil {
-		return nil, err
+		report.PeerCounts = nil
 	}
 	return report, nil
 }
@@ -337,7 +354,9 @@ func LoadSyncState(path string) (map[string]SyncStateEntry, error) {
 	return doc.Peers, nil
 }
 
-// SaveSyncState records one peer's run, preserving the others.
+// SaveSyncState records one peer's run, preserving the others. The write is
+// atomic so a concurrent scheduled/manual run can lose at most a last-run
+// record — never leave a half-written file for `dot ai memory status`.
 func SaveSyncState(path, peer string, entry SyncStateEntry) error {
 	peers, err := LoadSyncState(path)
 	if err != nil {
@@ -354,7 +373,7 @@ func SaveSyncState(path, peer string, entry SyncStateEntry) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o644)
+	return atomicWriteFile(path, raw, 0o644)
 }
 
 // Summarize renders a one-line last-result for the status row.

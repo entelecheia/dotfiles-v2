@@ -78,6 +78,26 @@ func TestMarketplaceAndInstalledVersions(t *testing.T) {
 	}
 }
 
+// The installed-version lookup must not drift to a foreign marketplace or a
+// project-scoped record: the updater owns claude-mem@thedotmack, user scope.
+func TestInstalledClaudeMemVersion_ExactKeyAndUserScope(t *testing.T) {
+	home := t.TempDir()
+	doc := `{"version":2,"plugins":{` +
+		`"claude-mem@other-market":[{"scope":"user","version":"99.0.0"}],` +
+		`"claude-mem@thedotmack":[{"scope":"project","version":"1.0.0"},{"scope":"user","version":"13.25.3"}]` +
+		`}}`
+	if err := os.MkdirAll(filepath.Join(home, ".claude", "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewClaudeMemManager(home, "", "")
+	if got := mgr.InstalledClaudeMemVersion(); got != "13.25.3" {
+		t.Errorf("installed = %q, want the thedotmack user-scoped 13.25.3", got)
+	}
+}
+
 func TestUpdateClaudeMemPlugin_AlreadyCurrent(t *testing.T) {
 	home := seedUpdateHome(t, "13.28.0", "13.28.0")
 	mgr := NewClaudeMemManager(home, "", "")

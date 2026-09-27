@@ -4,18 +4,20 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
-	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 // dot ai memory sync — cross-machine claude-mem replication over ssh.
+// Status, dry-run preview, and count rendering live in
+// ai_memory_sync_status.go.
 
 func newAIMemorySyncCmd() *cobra.Command {
 	c := &cobra.Command{
@@ -136,151 +138,6 @@ func runAIMemorySync(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func printMemorySyncDryRun(cmd *cobra.Command, db *aisettings.SyncDB, peer aisettings.SyncPeer, opts aisettings.SyncOptions) error {
-	p := printerFrom(cmd)
-	t := &aisettings.SSHTransport{}
-	maxes, err := t.Max(cmd.Context(), peer)
-	if err != nil {
-		return err
-	}
-	cutoffs, err := memorySyncCutoffsForPreview(maxes, opts)
-	if err != nil {
-		return err
-	}
-	bundle, err := db.Export(cutoffs, opts.OnlySessions)
-	if err != nil {
-		return err
-	}
-	p.Header("claude-mem sync (dry run)")
-	p.KV("Peer", peer.Target)
-	if cutoffs == nil {
-		p.KV("Cutoff", "(full export)")
-	} else {
-		for _, table := range []string{"observations", "session_summaries"} {
-			p.KV("Cutoff "+table, cutoffs[table])
-		}
-	}
-	p.Line("  would offer: %d observations, %d summaries, %d sessions", len(bundle.Observations), len(bundle.Summaries), len(bundle.Sessions))
-	return nil
-}
-
-func memorySyncCutoffsForPreview(maxes map[string]string, opts aisettings.SyncOptions) (map[string]string, error) {
-	if opts.Full || opts.OnlySessions {
-		return nil, nil
-	}
-	out := map[string]string{}
-	for _, table := range []string{"observations", "session_summaries"} {
-		cutoff, err := aisettings.CutoffFor(maxes[table], time.Now())
-		if err != nil {
-			return nil, err
-		}
-		out[table] = cutoff
-	}
-	return out, nil
-}
-
-// printMemorySyncStatus renders both the `sync status` action and the
-// "peer sync" section of `dot ai memory status`.
-func printMemorySyncStatus(p *Printer, cmd *cobra.Command, home string, peer aisettings.SyncPeer) error {
-	p.Header("claude-mem peer sync")
-	mgr, err := newClaudeMemManagerFromCmd(cmd)
-	if err != nil {
-		return err
-	}
-	if _, statErr := os.Stat(mgr.SyncLaunchdPlistPath()); statErr == nil {
-		p.KV("Agent", mgr.SyncLaunchdPlistPath())
-	} else {
-		p.KV("Agent", "not installed — run: dot ai memory install --peer "+peer.Target)
-	}
-	p.KV("Peer", peer.Target)
-	if peers, err := aisettings.LoadSyncState(aisettings.SyncStatePath(home)); err == nil {
-		if entry, ok := peers[peer.Target]; ok {
-			p.KV("Last run", entry.LastRun.Local().Format("2006-01-02 15:04:05"))
-			p.KV("Last result", entry.LastResult)
-		} else {
-			p.KV("Last run", "(never)")
-		}
-	}
-	db, err := aisettings.OpenSyncDB(aisettings.DefaultSyncDBPath(home))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	local, err := db.Counts()
-	if err != nil {
-		return err
-	}
-	printMemorySyncCounts(p, "Local", local)
-	counts, err := (&aisettings.SSHTransport{}).Counts(cmd.Context(), peer)
-	if err != nil {
-		p.KV("Peer counts", "unreachable: "+err.Error())
-		return nil
-	}
-	printMemorySyncCounts(p, "Peer", counts)
-	return nil
-}
-
-// printMemorySyncStatusSection renders the compact "Peer sync" section of
-// `dot ai memory status`: agent, peer, last run/result, both sides' counts.
-func printMemorySyncStatusSection(p *Printer, cmd *cobra.Command, mgr *aisettings.ClaudeMemManager) {
-	p.Section("Peer sync")
-	hint := ui.StyleHint.Render(ui.MarkPartial)
-	if _, err := os.Stat(mgr.SyncLaunchdPlistPath()); err != nil {
-		p.Bullet(hint, "sync agent not installed — run: dot ai memory install --peer <target>")
-	} else {
-		p.Bullet(ui.StyleSuccess.Render(ui.MarkPresent), "sync agent installed (hourly)")
-	}
-	home := mgr.HomeDir
-	target := ""
-	if bs, err := syncer.Bootstrap(syncer.BootstrapOptions{Profile: PeerProfile, Home: homeOverrideFrom(cmd), ReadOnly: true}); err == nil && bs.Config.Target.IsSSH() {
-		target = bs.Config.Target.Host
-	}
-	if target == "" {
-		if recorded := memorySyncPeersFromState(home); len(recorded) > 0 {
-			target = recorded[0]
-		}
-	}
-	if target == "" {
-		p.Bullet(hint, "no peer configured (dot peer init or --peer)")
-		return
-	}
-	peers, _ := aisettings.LoadSyncState(aisettings.SyncStatePath(home))
-	line := "peer " + target
-	if entry, ok := peers[target]; ok {
-		line += " · last run " + entry.LastRun.Local().Format("2006-01-02 15:04") + " · " + entry.LastResult
-	} else {
-		line += " · never synced"
-	}
-	p.Bullet(hint, line)
-	db, err := aisettings.OpenSyncDB(aisettings.DefaultSyncDBPath(home))
-	if err != nil {
-		return
-	}
-	defer db.Close()
-	if local, err := db.Counts(); err == nil {
-		p.Bullet(hint, syncCountsLine("local", local))
-	}
-	counts, err := (&aisettings.SSHTransport{}).Counts(cmd.Context(), aisettings.SyncPeer{Target: target})
-	if err != nil {
-		p.Bullet(hint, "peer counts unreachable")
-		return
-	}
-	p.Bullet(hint, syncCountsLine("peer", counts))
-}
-
-func syncCountsLine(label string, c *aisettings.TableCounts) string {
-	return fmt.Sprintf("%s: obs %d · sums %d · sessions %d · obs-without-session %d",
-		label, c.Obs, c.Sums, c.Sessions, c.ObsWithoutSession)
-}
-
-func printMemorySyncCounts(p *Printer, label string, c *aisettings.TableCounts) {
-	if c == nil {
-		return
-	}
-	p.KV(label, fmt.Sprintf("obs %d · sums %d · sessions %d · obs-without-session %d",
-		c.Obs, c.Sums, c.Sessions, c.ObsWithoutSession))
-}
-
 func logSkippedColumns(p *Printer, report *aisettings.SyncReport) {
 	seen := map[string]bool{}
 	for _, res := range []*aisettings.ImportResult{report.Pushed, report.Pulled} {
@@ -310,8 +167,29 @@ func memorySyncPeer(cmd *cobra.Command) (aisettings.SyncPeer, error) {
 		}
 		target = bs.Config.Target.Host
 	}
+	if err := validateSyncPeerTarget(target); err != nil {
+		return aisettings.SyncPeer{}, err
+	}
 	remoteDB, _ := cmd.Flags().GetString("remote-db")
 	return aisettings.SyncPeer{Target: target, RemoteDB: remoteDB}, nil
+}
+
+// validateSyncPeerTarget rejects targets that ssh would read as its own
+// options or that break the remote command line: the value goes straight to
+// `ssh <target>` and a leading '-' can become a ProxyCommand injection.
+func validateSyncPeerTarget(target string) error {
+	if target == "" {
+		return fmt.Errorf("sync peer target is empty")
+	}
+	if strings.HasPrefix(target, "-") {
+		return fmt.Errorf("sync peer target %q must not start with '-' (ssh would parse it as an option)", target)
+	}
+	for _, r := range target {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return fmt.Errorf("sync peer target %q must not contain whitespace or control characters", target)
+		}
+	}
+	return nil
 }
 
 func memorySyncDBPath(cmd *cobra.Command) string {
@@ -319,21 +197,6 @@ func memorySyncDBPath(cmd *cobra.Command) string {
 		return remote
 	}
 	return aisettings.DefaultSyncDBPath(homeFor(cmd))
-}
-
-// memorySyncPeersFromState lists recorded peers for the status section when
-// no dot peer target is configured.
-func memorySyncPeersFromState(home string) []string {
-	peers, err := aisettings.LoadSyncState(aisettings.SyncStatePath(home))
-	if err != nil || len(peers) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(peers))
-	for peer := range peers {
-		out = append(out, peer)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // aisettingsProbeRunner is the always-live probe runner for reachability

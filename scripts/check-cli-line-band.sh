@@ -26,6 +26,7 @@ files=(
   "internal/cli/watchdog_setup.go"
   "internal/cli/watchdog_warp.go"
   "internal/cli/ai_memory_sync_cmd.go"
+  "internal/cli/ai_memory_sync_status.go"
 )
 
 if [[ ${#files[@]} -eq 0 ]]; then
