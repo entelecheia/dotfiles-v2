@@ -336,8 +336,17 @@ func TestPeerGit_SkipConditions(t *testing.T) {
 				gitStateCommitFile(t, repo, "file.txt", "main\n", "main")
 				cmd := exec.Command("git", "merge", "--no-commit", "side")
 				cmd.Dir = repo
-				cmd.Env = os.Environ()
+				// Identity, like gitStateRun_: hosts without a global git
+				// identity (CI) refuse even a --no-commit merge, which would
+				// silently leave a clean repo instead of the conflict fixture.
+				cmd.Env = append(os.Environ(),
+					"GIT_AUTHOR_NAME=dot-test", "GIT_AUTHOR_EMAIL=dot-test@example.invalid",
+					"GIT_COMMITTER_NAME=dot-test", "GIT_COMMITTER_EMAIL=dot-test@example.invalid",
+				)
 				_ = cmd.Run() // the conflict is the fixture
+				if out := gitStateRun_(t, repo, "ls-files", "-u"); strings.TrimSpace(out) == "" {
+					t.Fatal("merge did not produce the conflict fixture")
+				}
 			},
 			wantReason: "unmerged index entries",
 		},
