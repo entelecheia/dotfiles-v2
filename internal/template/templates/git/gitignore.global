@@ -102,6 +102,7 @@ htmlcov/
 ################################
 .agenthub/
 .qwen/
+.firecrawl/
 node_modules/
 
 # Claude #

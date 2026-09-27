@@ -15,7 +15,7 @@ func TestRender_StaticGitIgnore(t *testing.T) {
 
 	content := string(out)
 	// git/gitignore.global is a static file; check known entries
-	for _, entry := range []string{".DS_Store", ".env*", "!.envrc", "node_modules/"} {
+	for _, entry := range []string{".DS_Store", ".env*", "!.envrc", "node_modules/", ".firecrawl/"} {
 		if !strings.Contains(content, entry) {
 			t.Errorf("Render git/gitignore.global: expected %q in output", entry)
 		}
