@@ -19,17 +19,19 @@ func evalSettings() ReaperSettings {
 	}
 }
 
-func runawayProc(pid int, cpu float64, etime time.Duration) Process {
-	return Process{PID: pid, PPID: 1, CPU: cpu, Etime: etime, Args: "/tmp/ahub-recovery-cli-x/bun run"}
+const runawayStart = "Thu Sep 24 10:15:30 2026"
+
+func runawayProc(pid int, cpu float64, started string) Process {
+	return Process{PID: pid, PPID: 1, CPU: cpu, Started: started, Args: "/tmp/ahub-recovery-cli-x/bun run"}
 }
 
 func TestEvaluate_FirstSightingIsNotACandidate(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	cands, next := Evaluate([]Process{runawayProc(100, 95, 40*time.Minute)}, Samples{}, evalSettings(), now, os.ExpandEnv)
+	cands, next := Evaluate([]Process{runawayProc(100, 95, runawayStart)}, Samples{}, evalSettings(), now, os.ExpandEnv)
 	if len(cands) != 0 {
 		t.Fatalf("first over-threshold sighting must not be a candidate: %#v", cands)
 	}
-	key := runawayProc(100, 95, 40*time.Minute).StartKey(now)
+	key := runawayProc(100, 95, runawayStart).StartKey()
 	if next[key].OverSince != now {
 		t.Fatalf("OverSince = %v, want %v (streak starts at first sighting)", next[key].OverSince, now)
 	}
@@ -38,17 +40,16 @@ func TestEvaluate_FirstSightingIsNotACandidate(t *testing.T) {
 func TestEvaluate_SustainedAcrossRunsBecomesACandidate(t *testing.T) {
 	s := evalSettings()
 	start := time.Unix(1_800_000_000, 0)
-	// Run 1: the process has already burned 29 minutes of CPU elsewhere.
-	_, next := Evaluate([]Process{runawayProc(100, 95, 29*time.Minute)}, Samples{}, s, start, os.ExpandEnv)
-	// Run 2, one interval later: still over threshold, streak now 5m old — not yet.
+	_, next := Evaluate([]Process{runawayProc(100, 95, runawayStart)}, Samples{}, s, start, os.ExpandEnv)
+	// One interval later: still over threshold, streak now 5m old — not yet.
 	later := start.Add(5 * time.Minute)
-	cands, next := Evaluate([]Process{runawayProc(100, 95, 34*time.Minute)}, next, s, later, os.ExpandEnv)
+	cands, next := Evaluate([]Process{runawayProc(100, 95, runawayStart)}, next, s, later, os.ExpandEnv)
 	if len(cands) != 0 {
 		t.Fatalf("streak under sustain must not be a candidate: %#v", cands)
 	}
-	// Run 3: streak at 30 minutes — exactly the boundary counts (>= sustain).
+	// Streak at 30 minutes — exactly the boundary counts (>= sustain).
 	end := start.Add(30 * time.Minute)
-	cands, _ = Evaluate([]Process{runawayProc(100, 95, 59*time.Minute)}, next, s, end, os.ExpandEnv)
+	cands, _ = Evaluate([]Process{runawayProc(100, 95, runawayStart)}, next, s, end, os.ExpandEnv)
 	if len(cands) != 1 || cands[0].Process.PID != 100 {
 		t.Fatalf("sustained process must be a candidate at the boundary: %#v", cands)
 	}
@@ -56,8 +57,8 @@ func TestEvaluate_SustainedAcrossRunsBecomesACandidate(t *testing.T) {
 
 func TestEvaluate_ThresholdBoundary(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	at := runawayProc(100, 50.0, time.Hour)
-	below := runawayProc(101, 49.9, time.Hour)
+	at := runawayProc(100, 50.0, runawayStart)
+	below := runawayProc(101, 49.9, runawayStart)
 	cands, next := Evaluate([]Process{at, below}, Samples{}, evalSettings(), now, os.ExpandEnv)
 	if len(cands) != 0 {
 		t.Fatalf("no history yet, want no candidates: %#v", cands)
@@ -70,20 +71,20 @@ func TestEvaluate_ThresholdBoundary(t *testing.T) {
 func TestEvaluate_BelowThresholdResetsTheStreak(t *testing.T) {
 	s := evalSettings()
 	start := time.Unix(1_800_000_000, 0)
-	_, next := Evaluate([]Process{runawayProc(100, 95, time.Hour)}, Samples{}, s, start, os.ExpandEnv)
+	_, next := Evaluate([]Process{runawayProc(100, 95, runawayStart)}, Samples{}, s, start, os.ExpandEnv)
 	dip := start.Add(5 * time.Minute)
-	calm := runawayProc(100, 3.0, time.Hour+5*time.Minute)
+	calm := runawayProc(100, 3.0, runawayStart)
 	_, next = Evaluate([]Process{calm}, next, s, dip, os.ExpandEnv)
 	if len(next) != 0 {
 		t.Fatalf("a below-threshold sample must clear the streak, got %#v", next)
 	}
 	// Back over threshold: the streak restarts from zero.
 	back := dip.Add(5 * time.Minute)
-	cands, next := Evaluate([]Process{runawayProc(100, 95, time.Hour+10*time.Minute)}, next, s, back, os.ExpandEnv)
+	cands, next := Evaluate([]Process{runawayProc(100, 95, runawayStart)}, next, s, back, os.ExpandEnv)
 	if len(cands) != 0 {
 		t.Fatalf("restarted streak must not be a candidate immediately: %#v", cands)
 	}
-	key := runawayProc(100, 95, time.Hour+10*time.Minute).StartKey(back)
+	key := runawayProc(100, 95, runawayStart).StartKey()
 	if next[key].OverSince != back {
 		t.Fatalf("OverSince = %v, want streak restarted at %v", next[key].OverSince, back)
 	}
@@ -93,20 +94,20 @@ func TestEvaluate_PIDReuseKeepsSeparateHistories(t *testing.T) {
 	s := evalSettings()
 	now := time.Unix(1_800_000_000, 0)
 	// Old incarnation sampled earlier with an established streak.
-	old := runawayProc(100, 95, 35*time.Minute)
-	prev := Samples{old.StartKey(now): {OverSince: now.Add(-31 * time.Minute), LastSeen: now.Add(-time.Minute)}}
-	// The PID was reused: same pid, process only a minute old. It must not
-	// inherit the dead incarnation's streak.
-	fresh := runawayProc(100, 95, time.Minute)
+	old := runawayProc(100, 95, runawayStart)
+	prev := Samples{old.StartKey(): {OverSince: now.Add(-31 * time.Minute), LastSeen: now.Add(-time.Minute)}}
+	// The PID was reused: same pid, a new incarnation. It must not inherit
+	// the dead one's streak.
+	fresh := runawayProc(100, 95, "Sun Sep 27 08:00:00 2026")
 	cands, next := Evaluate([]Process{fresh}, prev, s, now, os.ExpandEnv)
 	if len(cands) != 0 {
 		t.Fatalf("PID reuse must not inherit the old streak: %#v", cands)
 	}
-	if next[fresh.StartKey(now)].OverSince != now {
+	if next[fresh.StartKey()].OverSince != now {
 		t.Fatal("fresh incarnation must start its own streak")
 	}
 	// And the old incarnation, absent from this run, is pruned.
-	if _, ok := next[old.StartKey(now)]; ok {
+	if _, ok := next[old.StartKey()]; ok {
 		t.Fatal("stale incarnation must be pruned")
 	}
 }
@@ -126,6 +127,7 @@ type fakeKiller struct {
 	dieOn   string // "term" makes Term flip alive false; anything else needs Kill
 	signals []string
 	termErr error
+	killErr error
 }
 
 func (f *fakeKiller) Alive(int) bool { return f.alive }
@@ -140,6 +142,9 @@ func (f *fakeKiller) Term(int) error {
 	return nil
 }
 func (f *fakeKiller) Kill(int) error {
+	if f.killErr != nil {
+		return f.killErr
+	}
 	f.signals = append(f.signals, "kill")
 	f.alive = false
 	return nil
@@ -147,9 +152,11 @@ func (f *fakeKiller) Kill(int) error {
 
 func noSleep(time.Duration) {}
 
+func sameProcess() bool { return true }
+
 func TestEnforce_TermIgnoredEscalatesToKill(t *testing.T) {
 	k := &fakeKiller{alive: true, dieOn: "never"} // the incident shape: SIGTERM ignored
-	action, err := Enforce(k, 100, 10*time.Second, noSleep)
+	action, err := Enforce(k, 100, 10*time.Second, noSleep, sameProcess)
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
@@ -163,7 +170,7 @@ func TestEnforce_TermIgnoredEscalatesToKill(t *testing.T) {
 
 func TestEnforce_TermSuffices(t *testing.T) {
 	k := &fakeKiller{alive: true, dieOn: "term"}
-	action, err := Enforce(k, 100, 10*time.Second, noSleep)
+	action, err := Enforce(k, 100, 10*time.Second, noSleep, sameProcess)
 	if err != nil {
 		t.Fatalf("Enforce: %v", err)
 	}
@@ -177,7 +184,7 @@ func TestEnforce_TermSuffices(t *testing.T) {
 
 func TestEnforce_AlreadyGone(t *testing.T) {
 	k := &fakeKiller{alive: false}
-	action, err := Enforce(k, 100, 10*time.Second, noSleep)
+	action, err := Enforce(k, 100, 10*time.Second, noSleep, sameProcess)
 	if err != nil || action != KillAlreadyGone {
 		t.Fatalf("action = %q err = %v, want %q", action, err, KillAlreadyGone)
 	}
@@ -188,8 +195,36 @@ func TestEnforce_AlreadyGone(t *testing.T) {
 
 func TestEnforce_TermErrorPropagates(t *testing.T) {
 	k := &fakeKiller{alive: true, termErr: errors.New("operation not permitted")}
-	if _, err := Enforce(k, 100, 10*time.Second, noSleep); err == nil {
+	if _, err := Enforce(k, 100, 10*time.Second, noSleep, sameProcess); err == nil {
 		t.Fatal("a term failure must surface")
+	}
+}
+
+// ESRCH is not os.IsNotExist, but it means the same thing here: the candidate
+// died between the liveness probe and the signal.
+func TestEnforce_ESRCHIsAlreadyGone(t *testing.T) {
+	k := &fakeKiller{alive: true, termErr: syscall.ESRCH}
+	action, err := Enforce(k, 100, 10*time.Second, noSleep, sameProcess)
+	if err != nil || action != KillAlreadyGone {
+		t.Fatalf("term ESRCH = %q, %v; want %q", action, err, KillAlreadyGone)
+	}
+	k2 := &fakeKiller{alive: true, dieOn: "never", killErr: syscall.ESRCH}
+	action, err = Enforce(k2, 100, 10*time.Second, noSleep, sameProcess)
+	if err != nil || action != KillAlreadyGone {
+		t.Fatalf("kill ESRCH = %q, %v; want %q", action, err, KillAlreadyGone)
+	}
+}
+
+// PID reuse during the grace window: the candidate died, a new process took
+// its pid, and the SIGKILL belongs to the dead one.
+func TestEnforce_PIDReuseDuringGraceSparesReplacement(t *testing.T) {
+	k := &fakeKiller{alive: true, dieOn: "never"}
+	action, err := Enforce(k, 100, 10*time.Second, noSleep, func() bool { return false })
+	if err != nil || action != KillAlreadyGone {
+		t.Fatalf("action = %q err = %v, want %q", action, err, KillAlreadyGone)
+	}
+	if len(k.signals) != 1 || k.signals[0] != "term" {
+		t.Fatalf("SIGKILL must not reach a recycled pid: %v", k.signals)
 	}
 }
 

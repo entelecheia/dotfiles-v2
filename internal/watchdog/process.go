@@ -1,31 +1,45 @@
 package watchdog
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 // PSArgs is the column set the reaper samples, kept in one place so the
-// parser and the caller can never drift apart.
-const PSArgs = "pid,ppid,pcpu,etime,args"
+// parser and the caller can never drift apart. lstart (not etime) anchors
+// process identity: etime is truncated to whole seconds, so a start time
+// derived from now-etime jitters by a second or two between runs and the
+// same live process would keep starting new sustain streaks.
+const PSArgs = "pid,ppid,pcpu,lstart,args"
 
-// Process is one row of `ps -Ao pid,ppid,pcpu,etime,args`.
+// lstartLayout is the fixed English ctime-style layout ps prints for lstart
+// on both macOS and Linux.
+const lstartLayout = "Mon Jan 2 15:04:05 2006"
+
+// lstartTokens is how many whitespace-separated fields an lstart value
+// occupies in ps output ("Wed Sep 24 10:15:30 2026").
+const lstartTokens = 5
+
+// Process is one row of `ps -Ao pid,ppid,pcpu,lstart,args`.
 type Process struct {
-	PID   int
-	PPID  int
-	CPU   float64
-	Etime time.Duration // how long the process has been running
-	Args  string        // full command line
+	PID     int
+	PPID    int
+	CPU     float64
+	Started string // normalized lstart text; identifies the incarnation
+	Args    string // full command line
 }
 
 // StartKey identifies a process incarnation: the PID alone collides after
-// PID reuse, so the derived start time (now - etime) disambiguates. Two runs
-// of the same live process derive the same start second because etime has
-// one-second resolution.
-func (p Process) StartKey(now time.Time) string {
-	return fmt.Sprintf("%d@%d", p.PID, now.Add(-p.Etime).Unix())
+// PID reuse, so the exact start time disambiguates. lstart is stable across
+// runs, so one live process keeps one key for its whole life.
+func (p Process) StartKey() string {
+	return fmt.Sprintf("%d@%s", p.PID, p.Started)
 }
 
 // Executable returns the first token of the command line.
@@ -37,7 +51,7 @@ func (p Process) Executable() string {
 	return fields[0]
 }
 
-// ParsePS parses `ps -Ao pid,ppid,pcpu,etime,args` output, header included.
+// ParsePS parses `ps -Ao pid,ppid,pcpu,lstart,args` output, header included.
 func ParsePS(output string) ([]Process, error) {
 	var procs []Process
 	for i, line := range strings.Split(output, "\n") {
@@ -59,8 +73,8 @@ func ParsePS(output string) ([]Process, error) {
 
 func parsePSLine(line string) (Process, error) {
 	fields := strings.Fields(line)
-	if len(fields) < 5 {
-		return Process{}, fmt.Errorf("expected at least 5 columns, got %d: %q", len(fields), line)
+	if len(fields) < 3+lstartTokens+1 {
+		return Process{}, fmt.Errorf("expected at least %d columns, got %d: %q", 3+lstartTokens+1, len(fields), line)
 	}
 	pid, err := strconv.Atoi(fields[0])
 	if err != nil {
@@ -74,50 +88,37 @@ func parsePSLine(line string) (Process, error) {
 	if err != nil {
 		return Process{}, fmt.Errorf("bad pcpu %q", fields[2])
 	}
-	etime, err := ParseEtime(fields[3])
-	if err != nil {
-		return Process{}, err
+	started := strings.Join(fields[3:3+lstartTokens], " ")
+	if _, err := time.Parse(lstartLayout, started); err != nil {
+		return Process{}, fmt.Errorf("bad lstart %q", started)
 	}
 	return Process{
-		PID:   pid,
-		PPID:  ppid,
-		CPU:   cpu,
-		Etime: etime,
-		Args:  strings.Join(fields[4:], " "),
+		PID:     pid,
+		PPID:    ppid,
+		CPU:     cpu,
+		Started: started,
+		Args:    strings.Join(fields[3+lstartTokens:], " "),
 	}, nil
 }
 
-// ParseEtime parses ps ELAPSED values: mm:ss, hh:mm:ss, or dd-hh:mm:ss.
-func ParseEtime(s string) (time.Duration, error) {
-	var days int64
-	if before, after, found := strings.Cut(s, "-"); found {
-		d, err := strconv.ParseInt(before, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("bad etime %q", s)
+// ProcessStartMatches reports whether pid currently exists AND still is the
+// incarnation started identifies. The reaper revalidates this before a
+// SIGKILL: if the candidate died during the grace window and its PID was
+// recycled, the kill belongs to the dead process, not the replacement.
+func ProcessStartMatches(ctx context.Context, runner *exec.Runner, pid int, started string) (bool, error) {
+	res, err := runner.RunQuery(ctx, "ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	if res != nil {
+		if got := strings.Join(strings.Fields(res.Stdout), " "); got != "" {
+			return got == started, nil
 		}
-		days = d
-		s = after
 	}
-	parts := strings.Split(s, ":")
-	if len(parts) < 2 || len(parts) > 3 {
-		return 0, fmt.Errorf("bad etime %q", s)
-	}
-	nums := make([]int64, len(parts))
-	for i, part := range parts {
-		n, err := strconv.ParseInt(part, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("bad etime %q", s)
+	if err != nil {
+		// ps exits 1 when the pid is gone: that is "no match", not a failure.
+		var cmdErr *exec.CmdError
+		if errors.As(err, &cmdErr) && cmdErr.ExitCode == 1 {
+			return false, nil
 		}
-		nums[i] = n
+		return false, err
 	}
-	var hours, minutes, seconds int64
-	if len(nums) == 3 {
-		hours, minutes, seconds = nums[0], nums[1], nums[2]
-	} else {
-		minutes, seconds = nums[0], nums[1]
-	}
-	return time.Duration(days)*24*time.Hour +
-		time.Duration(hours)*time.Hour +
-		time.Duration(minutes)*time.Minute +
-		time.Duration(seconds)*time.Second, nil
+	return false, nil
 }

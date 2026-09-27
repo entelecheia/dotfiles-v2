@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -59,6 +60,7 @@ kill grace, then SIGKILLs.`,
 func runWatchdogReap(cmd *cobra.Command, _ []string) error {
 	ctx := context.Background()
 	scheduled := os.Getenv(watchdog.ScheduledRunEnv) == "1"
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	runner := watchdogRunner(false)
 	mgr := watchdog.NewManager(runner, homeFor(cmd))
 	wcfg, err := loadWatchdogSnapshot(mgr)
@@ -68,6 +70,25 @@ func runWatchdogReap(cmd *cobra.Command, _ []string) error {
 	settings, err := watchdog.ResolveReaper(wcfg.Reaper)
 	if err != nil {
 		return err
+	}
+	// The inherited --dry-run flag must beat an enforce-mode snapshot: a
+	// manual `reap --dry-run` reports what would happen and writes nothing —
+	// no samples, no lock (the lock only protects the samples write).
+	if dryRun {
+		settings.Mode = watchdog.ModeDryRun
+	}
+	if !dryRun {
+		release, busy, err := watchdog.AcquireReapLock(mgr.StateDir())
+		if err != nil {
+			return err
+		}
+		if busy {
+			// Another pass holds the lock; the next interval retries. Record
+			// the skip so `dot watchdog log` explains the gap, and exit 0.
+			_ = watchdog.AppendEvent(mgr.LogPath(), watchdog.Event{Level: "info", Event: "skip", Msg: "another reap pass holds the lock"})
+			return nil
+		}
+		defer release()
 	}
 	out, err := runner.RunQuery(ctx, "ps", "-Ao", watchdog.PSArgs)
 	if err != nil {
@@ -83,12 +104,14 @@ func runWatchdogReap(cmd *cobra.Command, _ []string) error {
 	}
 	now := time.Now()
 	candidates, next := watchdog.Evaluate(procs, prev, settings, now, os.ExpandEnv)
-	if err := watchdog.SaveSamples(mgr.SamplesPath(), next); err != nil {
-		return err
+	if !dryRun {
+		if err := watchdog.SaveSamples(mgr.SamplesPath(), next); err != nil {
+			return err
+		}
 	}
 	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), runner, runtime.GOOS)
 	for _, c := range candidates {
-		action, aerr := actOnCandidate(settings, c, now, mgr.LogPath(), notifier)
+		action, aerr := actOnCandidate(ctx, settings, c, now, mgr, runner, notifier)
 		if aerr != nil {
 			return aerr
 		}
@@ -102,7 +125,7 @@ func runWatchdogReap(cmd *cobra.Command, _ []string) error {
 
 // actOnCandidate records the candidate and applies the mode's action. The
 // log write comes first in both modes, so even a failed kill leaves a record.
-func actOnCandidate(settings watchdog.ReaperSettings, c watchdog.Candidate, now time.Time, logPath string, notifier *watchdog.Notifier) (string, error) {
+func actOnCandidate(ctx context.Context, settings watchdog.ReaperSettings, c watchdog.Candidate, now time.Time, mgr *watchdog.Manager, runner *exec.Runner, notifier *watchdog.Notifier) (string, error) {
 	event := watchdog.Event{
 		Time:  now,
 		Event: "candidate",
@@ -114,27 +137,33 @@ func actOnCandidate(settings watchdog.ReaperSettings, c watchdog.Candidate, now 
 	if settings.Mode == watchdog.ModeDryRun {
 		event.Level = "warn"
 		event.Action = watchdog.ModeDryRun
-		if err := watchdog.AppendEvent(logPath, event); err != nil {
+		if err := watchdog.AppendEvent(mgr.LogPath(), event); err != nil {
 			return "", err
 		}
 		msg := fmt.Sprintf("runaway process pid %d at %.0f%% CPU since %s (dry-run, not killed)", c.Process.PID, c.Process.CPU, c.OverSince.Format(time.RFC3339))
-		if err := notifier.Notify(context.Background(), "warn", msg); err != nil {
+		if err := notifier.Notify(ctx, "warn", msg); err != nil {
 			return "", err
 		}
 		return "[dry-run] would kill", nil
 	}
 	event.Level = "critical"
-	if err := watchdog.AppendEvent(logPath, event); err != nil {
+	if err := watchdog.AppendEvent(mgr.LogPath(), event); err != nil {
 		return "", err
 	}
-	outcome, err := watchdog.Enforce(watchdog.SystemKiller{}, c.Process.PID, settings.KillGrace, time.Sleep)
+	sameProcess := func() bool {
+		// An unverifiable identity answers false: skipping the SIGKILL is the
+		// safe side, and the candidate is retried on the next pass.
+		ok, err := watchdog.ProcessStartMatches(ctx, runner, c.Process.PID, c.Process.Started)
+		return err == nil && ok
+	}
+	outcome, err := watchdog.Enforce(watchdog.SystemKiller{}, c.Process.PID, settings.KillGrace, time.Sleep, sameProcess)
 	if err != nil {
-		_ = watchdog.AppendEvent(logPath, watchdog.Event{Time: now, Level: "critical", Event: "error", PID: c.Process.PID, Msg: err.Error()})
+		_ = watchdog.AppendEvent(mgr.LogPath(), watchdog.Event{Time: now, Level: "critical", Event: "error", PID: c.Process.PID, Msg: err.Error()})
 		return "", err
 	}
-	_ = watchdog.AppendEvent(logPath, watchdog.Event{Time: now, Level: "critical", Event: "reap", PID: c.Process.PID, CPU: c.Process.CPU, Args: c.Process.Args, Action: outcome})
+	_ = watchdog.AppendEvent(mgr.LogPath(), watchdog.Event{Time: now, Level: "critical", Event: "reap", PID: c.Process.PID, CPU: c.Process.CPU, Args: c.Process.Args, Action: outcome})
 	msg := fmt.Sprintf("reaped runaway process pid %d at %.0f%% CPU (%s)", c.Process.PID, c.Process.CPU, outcome)
-	if err := notifier.Notify(context.Background(), "critical", msg); err != nil {
+	if err := notifier.Notify(ctx, "critical", msg); err != nil {
 		return "", err
 	}
 	return "killed (" + outcome + ")", nil
@@ -159,16 +188,24 @@ func loadWatchdogConfig(cmd *cobra.Command) (config.WatchdogConfig, error) {
 	return cfg.Watchdog, nil
 }
 
+// ErrNoWatchdogSnapshot marks the "setup never ran" case distinctly from a
+// snapshot that exists but cannot be read or parsed: the first is a missing
+// install, the second is a damaged scheduled configuration and must surface.
+var ErrNoWatchdogSnapshot = errors.New("no watchdog config snapshot")
+
 // loadWatchdogSnapshot reads the resolved config the setup wrote for the
 // scheduled reaper, with an actionable error when setup never ran.
 func loadWatchdogSnapshot(mgr *watchdog.Manager) (config.WatchdogConfig, error) {
 	data, err := os.ReadFile(mgr.SnapshotPath())
+	if os.IsNotExist(err) {
+		return config.WatchdogConfig{}, fmt.Errorf("%w at %s; run `dot watchdog setup` first", ErrNoWatchdogSnapshot, mgr.SnapshotPath())
+	}
 	if err != nil {
-		return config.WatchdogConfig{}, fmt.Errorf("no watchdog config snapshot at %s; run `dot watchdog setup` first", mgr.SnapshotPath())
+		return config.WatchdogConfig{}, fmt.Errorf("reading watchdog snapshot %s: %w", mgr.SnapshotPath(), err)
 	}
 	var wcfg config.WatchdogConfig
 	if err := yaml.Unmarshal(data, &wcfg); err != nil {
-		return config.WatchdogConfig{}, fmt.Errorf("parsing watchdog snapshot %s: %w", mgr.SnapshotPath(), err)
+		return config.WatchdogConfig{}, fmt.Errorf("parsing watchdog snapshot %s: %w (corrupt; rerun `dot watchdog setup`)", mgr.SnapshotPath(), err)
 	}
 	return wcfg, nil
 }

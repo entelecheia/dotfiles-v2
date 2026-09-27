@@ -75,6 +75,19 @@ func TestMatchCandidate_ArgsSubstring(t *testing.T) {
 	}
 }
 
+// Regression: macOS TMPDIR ends in a slash, so an expanded "$TMPDIR/**"
+// contains "//" — the path rule must still match (the args rule masked this
+// in every other fixture).
+func TestMatchCandidate_TrailingSlashTMPDIRPathRule(t *testing.T) {
+	s := testSettings()
+	s.Args = nil                  // isolate the path rule
+	expand := expandWithTMPDIR(t) // TMPDIR=/var/folders/ab/xyz/T/ (trailing slash, as on macOS)
+	p := Process{PID: 1, PPID: 1, Args: "/var/folders/ab/xyz/T/recovery-cli-9Xk2/bun"}
+	if ok, reason := MatchCandidate(p, s, expand); !ok {
+		t.Fatalf("path rule must match under a trailing-slash TMPDIR (reason: %s)", reason)
+	}
+}
+
 func TestMatchCandidate_AllowlistWins(t *testing.T) {
 	s := testSettings()
 	expand := expandWithTMPDIR(t)

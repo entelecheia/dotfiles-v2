@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -103,7 +104,8 @@ func runWatchdogStatus(cmd *cobra.Command, _ []string) error {
 	p := printerFrom(cmd)
 	mgr := watchdog.NewManager(watchdogRunner(false), homeFor(cmd))
 	p.Header("dot watchdog status")
-	if wcfg, err := loadWatchdogSnapshot(mgr); err == nil {
+	switch wcfg, err := loadWatchdogSnapshot(mgr); {
+	case err == nil:
 		settings, rerr := watchdog.ResolveReaper(wcfg.Reaper)
 		if rerr != nil {
 			return rerr
@@ -112,8 +114,12 @@ func runWatchdogStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Enabled", "yes")
 		p.KV("Mode", settings.Mode)
 		p.KV("CPU threshold", fmt.Sprintf("%.0f%% sustained %s", settings.CPUThreshold, settings.Sustain))
-	} else {
+	case errors.Is(err, ErrNoWatchdogSnapshot):
 		p.KV("Config", "no snapshot — run `dot watchdog setup`")
+	default:
+		// A snapshot that exists but cannot be read or parsed is a damaged
+		// scheduled configuration; it must not masquerade as "not installed".
+		p.KV("Config", "unreadable: "+err.Error())
 	}
 	if runtime.GOOS == "darwin" {
 		st := mgr.Probe(context.Background())
@@ -142,14 +148,20 @@ func newWatchdogNotifyCmd() *cobra.Command {
 func runWatchdogNotify(cmd *cobra.Command, args []string) error {
 	mgr := watchdog.NewManager(watchdogRunner(false), homeFor(cmd))
 	var ncfg config.WatchdogNotifyConfig
-	if wcfg, err := loadWatchdogSnapshot(mgr); err == nil {
+	switch wcfg, err := loadWatchdogSnapshot(mgr); {
+	case err == nil:
 		ncfg = wcfg.Notify
-	} else {
+	case errors.Is(err, ErrNoWatchdogSnapshot):
+		// Only a genuinely missing install falls back to the live profile
+		// config; a damaged snapshot fails instead of notifying from stale
+		// profile values the scheduled reaper no longer matches.
 		wcfg, err := loadWatchdogConfig(cmd)
 		if err != nil {
 			return err
 		}
 		ncfg = wcfg.Notify
+	default:
+		return err
 	}
 	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(ncfg), watchdogRunner(false), runtime.GOOS)
 	if err := notifier.Notify(cmd.Context(), args[0], args[1]); err != nil {

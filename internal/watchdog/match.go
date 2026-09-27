@@ -24,7 +24,9 @@ func MatchCandidate(p Process, s ReaperSettings, expandEnv func(string) string) 
 		if pattern == "" {
 			continue
 		}
-		if globMatch(expandEnv(pattern), exe) {
+		// path.Clean because macOS TMPDIR ends in a slash: an expanded
+		// "$TMPDIR/**" would otherwise contain a "//" no name can match.
+		if globMatch(path.Clean(expandEnv(pattern)), exe) {
 			return true, "path matches " + pattern
 		}
 	}

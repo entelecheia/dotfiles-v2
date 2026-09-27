@@ -1,8 +1,8 @@
 package watchdog
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"syscall"
 	"time"
 )
@@ -35,7 +35,7 @@ func Evaluate(procs []Process, prev Samples, s ReaperSettings, now time.Time, ex
 		if !match {
 			continue
 		}
-		key := p.StartKey(now)
+		key := p.StartKey()
 		if p.CPU < s.CPUThreshold {
 			continue // streak broken; dropping the key resets it
 		}
@@ -104,13 +104,16 @@ func signalErr(err error, pid int, sig string) error {
 
 // Enforce kills one candidate: SIGTERM, a grace wait, then SIGKILL if it
 // ignored the term (the incident runaways did). sleep is injectable so tests
-// do not wait out the grace period.
-func Enforce(k Killer, pid int, grace time.Duration, sleep func(time.Duration)) (string, error) {
+// do not wait out the grace period. sameProcess revalidates the pid's
+// identity after the grace wait (see ProcessStartMatches): when the
+// candidate died and its PID was recycled during the window, the SIGKILL
+// belongs to the dead process and the run reports already-gone instead.
+func Enforce(k Killer, pid int, grace time.Duration, sleep func(time.Duration), sameProcess func() bool) (string, error) {
 	if !k.Alive(pid) {
 		return KillAlreadyGone, nil
 	}
 	if err := k.Term(pid); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, syscall.ESRCH) {
 			return KillAlreadyGone, nil
 		}
 		return "", err
@@ -119,7 +122,13 @@ func Enforce(k Killer, pid int, grace time.Duration, sleep func(time.Duration)) 
 	if !k.Alive(pid) {
 		return KillSIGTERM, nil
 	}
+	if sameProcess != nil && !sameProcess() {
+		return KillAlreadyGone, nil
+	}
 	if err := k.Kill(pid); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return KillAlreadyGone, nil
+		}
 		return "", err
 	}
 	return KillSIGKILL, nil

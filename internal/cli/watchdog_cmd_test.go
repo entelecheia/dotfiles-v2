@@ -41,15 +41,17 @@ reaper:
 	}
 
 	samplesPath := filepath.Join(home, ".local", "state", "dot", "watchdog", "samples.json")
-	data, err := os.ReadFile(samplesPath)
-	if err != nil {
+	if _, err := os.Stat(samplesPath); err != nil {
 		t.Fatalf("samples.json not persisted: %v", err)
 	}
-	// A first sighting is never a candidate, so nothing may be logged as killed.
-	if strings.Contains(string(data), "over_since") {
-		logPath := filepath.Join(home, "Library", "Logs", "dot", "watchdog.log")
-		if logData, err := os.ReadFile(logPath); err == nil && strings.Contains(string(logData), `"event":"reap"`) {
-			t.Fatalf("dry-run pass logged a kill:\n%s", logData)
+	// A first sighting is never a candidate, so the log may not even exist;
+	// when it does, it must contain neither a candidate nor a reap record.
+	logPath := filepath.Join(home, "Library", "Logs", "dot", "watchdog.log")
+	if logData, err := os.ReadFile(logPath); err == nil {
+		for _, bad := range []string{`"event":"candidate"`, `"event":"reap"`} {
+			if strings.Contains(string(logData), bad) {
+				t.Fatalf("first-sighting dry-run logged %s:\n%s", bad, logData)
+			}
 		}
 	}
 }
@@ -71,6 +73,40 @@ func TestWatchdogReap_MissingSnapshotIsActionable(t *testing.T) {
 	_, _, err := runDotForTest("--home", t.TempDir(), "watchdog", "reap")
 	if err == nil || !strings.Contains(err.Error(), "dot watchdog setup") {
 		t.Fatalf("missing snapshot error must point at setup, got: %v", err)
+	}
+}
+
+// An enforce-mode snapshot must not kill — or write anything — when the
+// operator passes --dry-run: the flag forces dry-run mode for that pass.
+func TestWatchdogReap_DryRunFlagOverridesEnforceSnapshot(t *testing.T) {
+	home := t.TempDir()
+	seedWatchdogSnapshot(t, home, "enabled: true\nreaper:\n  mode: enforce\n")
+	if _, _, err := runDotForTest("--home", home, "watchdog", "reap", "--dry-run"); err != nil {
+		t.Fatalf("reap --dry-run: %v", err)
+	}
+	stateDir := filepath.Join(home, ".local", "state", "dot", "watchdog")
+	if _, err := os.Stat(filepath.Join(stateDir, "samples.json")); !os.IsNotExist(err) {
+		t.Fatalf("--dry-run persisted samples: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "reap.lock")); !os.IsNotExist(err) {
+		t.Fatalf("--dry-run touched the reap lock: %v", err)
+	}
+}
+
+// A snapshot that exists but cannot be parsed is a damaged scheduled
+// configuration: status must say so instead of claiming "no snapshot".
+func TestWatchdogStatus_CorruptSnapshotSurfaces(t *testing.T) {
+	home := t.TempDir()
+	seedWatchdogSnapshot(t, home, "reaper: [broken")
+	out, _, err := runDotForTest("--home", home, "watchdog", "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(out, "unreadable") {
+		t.Fatalf("status must surface the corrupt snapshot: %q", out)
+	}
+	if strings.Contains(out, "no snapshot") {
+		t.Fatalf("corrupt snapshot masqueraded as missing: %q", out)
 	}
 }
 
