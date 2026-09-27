@@ -270,7 +270,7 @@ the scheduled peer sync runs this check before every sync.`,
 				return err
 			}
 			p := printerFrom(cmd)
-			result, err := mgr.UpdateClaudeMemPlugin(cmd.Context(), memorySyncRunner(dryRun))
+			result, err := mgr.UpdateClaudeMemPlugin(cmd.Context(), memorySyncRunner(dryRun), false)
 			if err != nil {
 				return err
 			}

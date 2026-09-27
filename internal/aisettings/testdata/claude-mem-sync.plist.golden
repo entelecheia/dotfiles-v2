@@ -8,8 +8,8 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>ssh -o BatchMode=yes -o ConnectTimeout=10 user@mac2 true || exit 0
-exec /Users/test/.local/bin/dot ai memory sync --peer user@mac2</string>
+    <string>ssh -o BatchMode=yes -o ConnectTimeout=10 &#39;user@mac2&#39; true || exit 0
+exec &#39;/Users/test/.local/bin/dot&#39; ai memory sync --peer &#39;user@mac2&#39;</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

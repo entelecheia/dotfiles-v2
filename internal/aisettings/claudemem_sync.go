@@ -170,39 +170,65 @@ func CutoffFor(receiverMax string, now time.Time) (string, error) {
 	return cutoff.UTC().Format(syncTimeFormat), nil
 }
 
-// Export is the serve `export` op. cutoff is a created_at lower bound
-// (exclusive); "" exports everything. Sessions ride along when they are
-// newer than the cutoff OR back an exported observation/summary.
-// onlySessions is the sessions-mode pass: every session, no content rows.
-func (d *SyncDB) Export(cutoff string, onlySessions bool) (*Bundle, error) {
-	b := &Bundle{Cutoff: cutoff}
+// Export is the serve `export` op. cutoffs is a per-table created_at lower
+// bound (exclusive); a missing/empty table entry exports that whole table.
+// Per-table cutoffs matter: when one table races ahead of the other, a
+// single shared cutoff would silently strand the lagging table's gap rows.
+// Sessions ride along when they are newer than the oldest cutoff OR back an
+// exported observation/summary. onlySessions is the sessions-mode pass:
+// every session, no content rows.
+func (d *SyncDB) Export(cutoffs map[string]string, onlySessions bool) (*Bundle, error) {
+	b := &Bundle{Cutoff: oldestCutoff(cutoffs)}
 	var err error
 	if onlySessions {
 		b.Sessions, err = d.selectRows("SELECT * FROM sdk_sessions")
 		return b, err
 	}
-	where, args := "", []any{}
-	if cutoff != "" {
-		where, args = " WHERE created_at > ?", []any{cutoff}
-	}
-	if b.Observations, err = d.selectRows("SELECT * FROM observations"+where, args...); err != nil {
+	obsWhere, obsArgs := cutoffWhere(cutoffs["observations"])
+	if b.Observations, err = d.selectRows("SELECT * FROM observations"+obsWhere, obsArgs...); err != nil {
 		return nil, err
 	}
-	if b.Summaries, err = d.selectRows("SELECT * FROM session_summaries"+where, args...); err != nil {
+	sumWhere, sumArgs := cutoffWhere(cutoffs["session_summaries"])
+	if b.Summaries, err = d.selectRows("SELECT * FROM session_summaries"+sumWhere, sumArgs...); err != nil {
 		return nil, err
 	}
 	sessionSQL := `SELECT * FROM sdk_sessions WHERE memory_session_id IN (
-		SELECT memory_session_id FROM observations` + where + `
-		UNION SELECT memory_session_id FROM session_summaries` + where + `)`
-	sessionArgs := append(append([]any{}, args...), args...)
-	if cutoff != "" {
+		SELECT memory_session_id FROM observations` + obsWhere + `
+		UNION SELECT memory_session_id FROM session_summaries` + sumWhere + `)`
+	sessionArgs := append(append([]any{}, obsArgs...), sumArgs...)
+	if oldest := oldestCutoff(cutoffs); oldest != "" {
 		sessionSQL += " OR started_at > ?"
-		sessionArgs = append(sessionArgs, cutoff)
+		sessionArgs = append(sessionArgs, oldest)
 	}
 	if b.Sessions, err = d.selectRows(sessionSQL, sessionArgs...); err != nil {
 		return nil, err
 	}
 	return b, nil
+}
+
+// cutoffWhere renders the WHERE clause for one table's cutoff ("" → no
+// clause, whole table).
+func cutoffWhere(cutoff string) (string, []any) {
+	if cutoff == "" {
+		return "", nil
+	}
+	return " WHERE created_at > ?", []any{cutoff}
+}
+
+// oldestCutoff is the earliest bound in play: sessions older than every
+// content cutoff are still offered when they back nothing, since started_at
+// newer than the oldest cutoff keeps them on the wire.
+func oldestCutoff(cutoffs map[string]string) string {
+	oldest := ""
+	for _, c := range cutoffs {
+		if c == "" {
+			return "" // a full table export makes session age checks pointless
+		}
+		if oldest == "" || c < oldest {
+			oldest = c
+		}
+	}
+	return oldest
 }
 
 // selectRows runs a query and returns every row as a column→value map.

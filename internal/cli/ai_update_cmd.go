@@ -415,7 +415,7 @@ func (u *aiUpdater) claudeMemLatestStep(ctx context.Context) updateStep {
 			mgr.BunPath = bunPath
 		}
 	}
-	result, err := mgr.UpdateClaudeMemPlugin(ctx, u.runner)
+	result, err := mgr.UpdateClaudeMemPlugin(ctx, u.runner, false)
 	if err != nil {
 		step.Status, step.Detail = stepFailed, firstLine(err.Error())
 		return step

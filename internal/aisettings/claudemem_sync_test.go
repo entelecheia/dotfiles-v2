@@ -151,7 +151,7 @@ func TestSyncRoundTrip(t *testing.T) {
 		'claude', 'agent-7', '{"k":"v"}', 'hash-1', 'haiku', 12345, 'macbook', 42, 9)`)
 	seedSummary(t, sender, "mem-1", "2026-09-20T10:02:00.000Z", "req-1")
 
-	bundle, err := sender.Export("", false)
+	bundle, err := sender.Export(nil, false)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestSyncSchemaSkew(t *testing.T) {
 	execIns(t, sender, `INSERT INTO observations (memory_session_id, project, type, title, created_at, created_at_epoch, metadata, agent_type)
 		VALUES ('m1', 'proj', 'discovery', 'T1', '2026-09-20T10:01:00.000Z', 0, '{"k":"v"}', 'claude')`)
 
-	bundle, err := sender.Export("", false)
+	bundle, err := sender.Export(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestSyncAttributionRepair(t *testing.T) {
 		VALUES ('m1', 'proj', 'discovery', 'T1', '2026-09-20T10:01:00.000Z', 0,
 		'kimi', 'agent-9', '{"m":1}', 'hash-9', 'k2')`)
 
-	bundle, err := sender.Export("", false)
+	bundle, err := sender.Export(nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestExportCutoff(t *testing.T) {
 	seedSummary(t, db, "m-old", "2026-09-01T02:00:00.000Z", "old-req")
 	seedSummary(t, db, "m-new", "2026-09-25T02:00:00.000Z", "new-req")
 
-	bundle, err := db.Export("2026-09-20T00:00:00.000Z", false)
+	bundle, err := db.Export(map[string]string{"observations": "2026-09-20T00:00:00.000Z", "session_summaries": "2026-09-20T00:00:00.000Z"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestExportCutoff(t *testing.T) {
 
 	// An old session IS included when an exported (overlapping) row backs it.
 	seedObs(t, db, "m-old", "2026-09-26T01:00:00.000Z", "overlap")
-	bundle, err = db.Export("2026-09-20T00:00:00.000Z", false)
+	bundle, err = db.Export(map[string]string{"observations": "2026-09-20T00:00:00.000Z", "session_summaries": "2026-09-20T00:00:00.000Z"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,13 +315,40 @@ func TestExportCutoff(t *testing.T) {
 }
 
 // TestExportOnlySessions is the sessions-mode pass: all sessions, nothing else.
+// Per-table cutoffs: when one table races ahead, a shared cutoff would
+// strand the lagging table's gap rows (the receiver's overlap only reaches
+// 7 days behind ITS OWN newest row per table).
+func TestExportPerTableCutoffs(t *testing.T) {
+	db := newTestSyncDB(t)
+	seedSession(t, db, "c1", "m1", "2026-09-01T00:00:00.000Z")
+	seedObs(t, db, "m1", "2026-09-25T01:00:00.000Z", "obs-new")
+	seedObs(t, db, "m1", "2026-09-10T01:00:00.000Z", "obs-old")
+	seedSummary(t, db, "m1", "2026-01-01T00:00:00.000Z", "sum-old")
+
+	// Observations are exported against a September cutoff while summaries
+	// use their own January one: the ancient summary must still be offered.
+	bundle, err := db.Export(map[string]string{
+		"observations":      "2026-09-20T00:00:00.000Z",
+		"session_summaries": "2025-12-25T00:00:00.000Z",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Observations) != 1 || rowString(bundle.Observations[0], "title") != "obs-new" {
+		t.Fatalf("obs = %v", bundle.Observations)
+	}
+	if len(bundle.Summaries) != 1 || rowString(bundle.Summaries[0], "request") != "sum-old" {
+		t.Fatalf("the lagging table's rows must not be stranded: %v", bundle.Summaries)
+	}
+}
+
 func TestExportOnlySessions(t *testing.T) {
 	db := newTestSyncDB(t)
 	seedSession(t, db, "c1", "m1", "2026-09-01T00:00:00.000Z")
 	seedSession(t, db, "c2", "m2", "2026-09-25T00:00:00.000Z")
 	seedObs(t, db, "m1", "2026-09-26T01:00:00.000Z", "x")
 
-	bundle, err := db.Export("", true)
+	bundle, err := db.Export(nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

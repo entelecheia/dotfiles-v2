@@ -21,16 +21,16 @@ import (
 // SyncTransport carries the four serve ops.
 type SyncTransport interface {
 	Max(ctx context.Context, peer SyncPeer) (map[string]string, error)
-	Export(ctx context.Context, peer SyncPeer, cutoff string, onlySessions bool) (*Bundle, error)
+	Export(ctx context.Context, peer SyncPeer, cutoffs map[string]string, onlySessions bool) (*Bundle, error)
 	Import(ctx context.Context, peer SyncPeer, b *Bundle) (*ImportResult, error)
 	Counts(ctx context.Context, peer SyncPeer) (*TableCounts, error)
 }
 
 // serveRequest is the stdin payload for every op; each op reads what it needs.
 type serveRequest struct {
-	Cutoff       string  `json:"cutoff,omitempty"`
-	OnlySessions bool    `json:"only_sessions,omitempty"`
-	Bundle       *Bundle `json:"bundle,omitempty"`
+	Cutoffs      map[string]string `json:"cutoffs,omitempty"`
+	OnlySessions bool              `json:"only_sessions,omitempty"`
+	Bundle       *Bundle           `json:"bundle,omitempty"`
 }
 
 // serveResponse is the stdout payload; Error is set on failure.
@@ -92,8 +92,8 @@ func (t *SSHTransport) Max(ctx context.Context, peer SyncPeer) (map[string]strin
 }
 
 // Export implements SyncTransport.
-func (t *SSHTransport) Export(ctx context.Context, peer SyncPeer, cutoff string, onlySessions bool) (*Bundle, error) {
-	resp, err := t.call(ctx, peer, "export", serveRequest{Cutoff: cutoff, OnlySessions: onlySessions})
+func (t *SSHTransport) Export(ctx context.Context, peer SyncPeer, cutoffs map[string]string, onlySessions bool) (*Bundle, error) {
+	resp, err := t.call(ctx, peer, "export", serveRequest{Cutoffs: cutoffs, OnlySessions: onlySessions})
 	if err != nil {
 		return nil, err
 	}
@@ -128,10 +128,16 @@ func (t *SSHTransport) Counts(ctx context.Context, peer SyncPeer) (*TableCounts,
 }
 
 // sshServe is the production SSHRunner: BatchMode so a missing key fails
-// fast instead of hanging a scheduled run on a password prompt.
+// fast instead of hanging a scheduled run on a password prompt. The peer's
+// sshd hands non-interactive shells a minimal PATH that covers neither
+// ~/.local/bin nor the brew prefixes, so the remote command prefixes them —
+// the peer really does need nothing but the dot binary on disk.
 func sshServe(ctx context.Context, target string, serveArgs []string, stdin []byte) ([]byte, error) {
-	args := append([]string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, "dot"}, serveArgs...)
-	cmd := osexec.CommandContext(ctx, "ssh", args...)
+	remote := `PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" dot`
+	for _, arg := range serveArgs {
+		remote += " " + shellQuote(arg)
+	}
+	cmd := osexec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", target, remote)
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -140,6 +146,12 @@ func sshServe(ctx context.Context, target string, serveArgs []string, stdin []by
 		return nil, fmt.Errorf("%w: %s", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 	return stdout.Bytes(), nil
+}
+
+// shellQuote single-quotes one shell word. The serve args are constants
+// except --remote-db, which comes from the operator's sync config.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ServeOp handles one --serve invocation against the local database: read
@@ -168,7 +180,7 @@ func ServeOp(ctx context.Context, dbPath, op string, stdin io.Reader, stdout io.
 			resp.Error = err.Error()
 		}
 	case "export":
-		if resp.Bundle, err = db.Export(req.Cutoff, req.OnlySessions); err != nil {
+		if resp.Bundle, err = db.Export(req.Cutoffs, req.OnlySessions); err != nil {
 			resp.Error = err.Error()
 		}
 	case "import":
@@ -214,18 +226,24 @@ type SyncReport struct {
 	PeerCounts  *TableCounts  `json:"peer_counts,omitempty"`
 }
 
-// receiverCutoff reduces the max-op answer to one export cutoff.
-func receiverCutoff(maxes map[string]string, full bool, now time.Time) (string, error) {
+// receiverCutoffs reduces the max-op answer to per-table export cutoffs.
+// Cutoffs are per table by design: with a single shared cutoff, a table
+// that stops advancing for longer than the overlap window would strand
+// every gap row the receiver is missing (dedupe can only absorb rows the
+// wire actually offers).
+func receiverCutoffs(maxes map[string]string, full bool, now time.Time) (map[string]string, error) {
 	if full {
-		return "", nil
+		return nil, nil
 	}
-	max := ""
+	out := map[string]string{}
 	for _, table := range []string{"observations", "session_summaries"} {
-		if maxes[table] > max {
-			max = maxes[table]
+		cutoff, err := CutoffFor(maxes[table], now)
+		if err != nil {
+			return nil, err
 		}
+		out[table] = cutoff
 	}
-	return CutoffFor(max, now)
+	return out, nil
 }
 
 // RunMemorySync executes one sync: push (local → peer), pull (peer →
@@ -247,11 +265,11 @@ func RunMemorySync(ctx context.Context, local *SyncDB, t SyncTransport, peer Syn
 		if err != nil {
 			return nil, err
 		}
-		cutoff, err := receiverCutoff(maxes, opts.Full || opts.OnlySessions, now)
+		cutoffs, err := receiverCutoffs(maxes, opts.Full || opts.OnlySessions, now)
 		if err != nil {
 			return nil, err
 		}
-		bundle, err := local.Export(cutoff, opts.OnlySessions)
+		bundle, err := local.Export(cutoffs, opts.OnlySessions)
 		if err != nil {
 			return nil, err
 		}
@@ -264,11 +282,11 @@ func RunMemorySync(ctx context.Context, local *SyncDB, t SyncTransport, peer Syn
 		if err != nil {
 			return nil, err
 		}
-		cutoff, err := receiverCutoff(maxes, opts.Full || opts.OnlySessions, now)
+		cutoffs, err := receiverCutoffs(maxes, opts.Full || opts.OnlySessions, now)
 		if err != nil {
 			return nil, err
 		}
-		bundle, err := t.Export(ctx, peer, cutoff, opts.OnlySessions)
+		bundle, err := t.Export(ctx, peer, cutoffs, opts.OnlySessions)
 		if err != nil {
 			return nil, err
 		}

@@ -40,7 +40,7 @@ func (m *ClaudeMemManager) SyncLogPath() string {
 // the same policy to its own in-process probe.
 func RenderSyncAgentPlist(dotPath, peer, homeDir, logPath string) string {
 	script := fmt.Sprintf("ssh -o BatchMode=yes -o ConnectTimeout=10 %s true || exit 0\nexec %s ai memory sync --peer %s",
-		peer, dotPath, peer)
+		shellQuote(peer), shellQuote(dotPath), shellQuote(peer))
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

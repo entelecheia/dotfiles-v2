@@ -88,7 +88,7 @@ func runAIMemorySync(cmd *cobra.Command, args []string) error {
 		mgr, merr := newClaudeMemManagerFromCmd(cmd)
 		if merr == nil {
 			runner := memorySyncRunner(dryRun)
-			if _, uerr := mgr.UpdateClaudeMemPlugin(cmd.Context(), runner); uerr != nil {
+			if _, uerr := mgr.UpdateClaudeMemPlugin(cmd.Context(), runner, scheduled); uerr != nil {
 				p.Warn("claude-mem update check failed (continuing with sync): %v", uerr)
 			}
 		}
@@ -143,36 +143,40 @@ func printMemorySyncDryRun(cmd *cobra.Command, db *aisettings.SyncDB, peer aiset
 	if err != nil {
 		return err
 	}
-	cutoff, err := memorySyncCutoffForPreview(maxes, opts)
+	cutoffs, err := memorySyncCutoffsForPreview(maxes, opts)
 	if err != nil {
 		return err
 	}
-	bundle, err := db.Export(cutoff, opts.OnlySessions)
+	bundle, err := db.Export(cutoffs, opts.OnlySessions)
 	if err != nil {
 		return err
 	}
 	p.Header("claude-mem sync (dry run)")
 	p.KV("Peer", peer.Target)
-	if cutoff == "" {
+	if cutoffs == nil {
 		p.KV("Cutoff", "(full export)")
 	} else {
-		p.KV("Cutoff", cutoff)
+		for _, table := range []string{"observations", "session_summaries"} {
+			p.KV("Cutoff "+table, cutoffs[table])
+		}
 	}
 	p.Line("  would offer: %d observations, %d summaries, %d sessions", len(bundle.Observations), len(bundle.Summaries), len(bundle.Sessions))
 	return nil
 }
 
-func memorySyncCutoffForPreview(maxes map[string]string, opts aisettings.SyncOptions) (string, error) {
-	max := ""
-	for _, table := range []string{"observations", "session_summaries"} {
-		if maxes[table] > max {
-			max = maxes[table]
-		}
-	}
+func memorySyncCutoffsForPreview(maxes map[string]string, opts aisettings.SyncOptions) (map[string]string, error) {
 	if opts.Full || opts.OnlySessions {
-		return "", nil
+		return nil, nil
 	}
-	return aisettings.CutoffFor(max, time.Now())
+	out := map[string]string{}
+	for _, table := range []string{"observations", "session_summaries"} {
+		cutoff, err := aisettings.CutoffFor(maxes[table], time.Now())
+		if err != nil {
+			return nil, err
+		}
+		out[table] = cutoff
+	}
+	return out, nil
 }
 
 // printMemorySyncStatus renders both the `sync status` action and the

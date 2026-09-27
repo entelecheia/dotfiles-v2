@@ -17,8 +17,8 @@ type fakeTransport struct {
 func (f *fakeTransport) Max(context.Context, SyncPeer) (map[string]string, error) {
 	return f.db.MaxCreatedAt()
 }
-func (f *fakeTransport) Export(_ context.Context, _ SyncPeer, cutoff string, onlySessions bool) (*Bundle, error) {
-	return f.db.Export(cutoff, onlySessions)
+func (f *fakeTransport) Export(_ context.Context, _ SyncPeer, cutoffs map[string]string, onlySessions bool) (*Bundle, error) {
+	return f.db.Export(cutoffs, onlySessions)
 }
 func (f *fakeTransport) Import(_ context.Context, _ SyncPeer, b *Bundle) (*ImportResult, error) {
 	return f.db.Import(b)
@@ -150,7 +150,7 @@ func TestSSHTransportOverServe(t *testing.T) {
 	if maxes["observations"] == "" {
 		t.Fatalf("maxes = %v", maxes)
 	}
-	bundle, err := transport.Export(context.Background(), peer, "", false)
+	bundle, err := transport.Export(context.Background(), peer, nil, false)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -213,6 +213,27 @@ func TestServeOp_UnknownOpAndBadDB(t *testing.T) {
 func filepath_join(t *testing.T) string {
 	t.Helper()
 	return newTestSyncDB(t).Path
+}
+
+func TestReceiverCutoffs_ArePerTable(t *testing.T) {
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	maxes := map[string]string{
+		"observations":      "2026-09-27T00:00:00.000Z",
+		"session_summaries": "2026-01-01T00:00:00.000Z",
+	}
+	cutoffs, err := receiverCutoffs(maxes, false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cutoffs["observations"] != "2026-09-20T00:00:00.000Z" {
+		t.Errorf("observations cutoff = %q", cutoffs["observations"])
+	}
+	if cutoffs["session_summaries"] != "2025-12-25T00:00:00.000Z" {
+		t.Errorf("summaries cutoff = %q — a shared cutoff would strand this table", cutoffs["session_summaries"])
+	}
+	if full, err := receiverCutoffs(maxes, true, now); err != nil || full != nil {
+		t.Errorf("--full must disable cutoffs: %v %v", full, err)
+	}
 }
 
 func TestSyncState_RoundTrip(t *testing.T) {

@@ -88,7 +88,9 @@ func RefreshClaudeMemMarketplace(ctx context.Context, runner *exec.Runner, check
 // UpdateClaudeMemPlugin runs one keep-latest pass. Idempotent: an install
 // already at the marketplace version only refreshes the checkout and the
 // codex cache runtime. runner.DryRun probes but changes nothing.
-func (m *ClaudeMemManager) UpdateClaudeMemPlugin(ctx context.Context, runner *exec.Runner) (*ClaudeMemUpdateResult, error) {
+// nonInteractive passes -y to `claude plugin update`, which refuses to run
+// otherwise when stdin/stdout is not a TTY (the scheduled sync run).
+func (m *ClaudeMemManager) UpdateClaudeMemPlugin(ctx context.Context, runner *exec.Runner, nonInteractive bool) (*ClaudeMemUpdateResult, error) {
 	result := &ClaudeMemUpdateResult{Before: m.InstalledClaudeMemVersion()}
 	if err := RefreshClaudeMemMarketplace(ctx, runner, m.MarketplaceCheckoutPath()); err != nil {
 		return nil, err
@@ -106,7 +108,11 @@ func (m *ClaudeMemManager) UpdateClaudeMemPlugin(ctx context.Context, runner *ex
 		if runner.DryRun {
 			result.After = result.Before
 		} else {
-			if _, err := runner.Run(ctx, "claude", "plugin", "update", "claude-mem@"+ClaudeMemMarketplace, "-s", "user"); err != nil {
+			args := []string{"plugin", "update", "claude-mem@" + ClaudeMemMarketplace, "-s", "user"}
+			if nonInteractive {
+				args = append(args, "-y")
+			}
+			if _, err := runner.Run(ctx, "claude", args...); err != nil {
 				return nil, fmt.Errorf("claude plugin update claude-mem@%s: %w", ClaudeMemMarketplace, err)
 			}
 			result.After = m.InstalledClaudeMemVersion()

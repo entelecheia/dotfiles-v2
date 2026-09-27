@@ -81,7 +81,7 @@ func TestMarketplaceAndInstalledVersions(t *testing.T) {
 func TestUpdateClaudeMemPlugin_AlreadyCurrent(t *testing.T) {
 	home := seedUpdateHome(t, "13.28.0", "13.28.0")
 	mgr := NewClaudeMemManager(home, "", "")
-	result, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner())
+	result, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner(), false)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestUpdateClaudeMemPlugin_AlreadyCurrent(t *testing.T) {
 func TestUpdateClaudeMemPlugin_BehindUpdates(t *testing.T) {
 	home := seedUpdateHome(t, "13.28.0", "13.25.3")
 	mgr := NewClaudeMemManager(home, "", "")
-	result, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner())
+	result, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner(), false)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestUpdateClaudeMemPlugin_BehindUpdates(t *testing.T) {
 func TestUpdateClaudeMemPlugin_InstalledNewerIsNotDowngrade(t *testing.T) {
 	home := seedUpdateHome(t, "13.25.3", "13.28.0")
 	mgr := NewClaudeMemManager(home, "", "")
-	result, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner())
+	result, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner(), false)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestUpdateClaudeMemPlugin_InstalledNewerIsNotDowngrade(t *testing.T) {
 func TestUpdateClaudeMemPlugin_NotInstalled(t *testing.T) {
 	home := seedUpdateHome(t, "13.28.0", "")
 	mgr := NewClaudeMemManager(home, "", "")
-	if _, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner()); err == nil {
+	if _, err := mgr.UpdateClaudeMemPlugin(context.Background(), dryRunner(), false); err == nil {
 		t.Fatal("an uninstalled plugin must error with an install hint")
 	}
 }
@@ -153,14 +153,23 @@ func TestRenderSyncAgentPlist_Contract(t *testing.T) {
 	plist := RenderSyncAgentPlist("/usr/local/bin/dot", "user@mac2", "/home/u", "/home/u/.claude-mem/logs/claude-mem-sync.log")
 	for _, want := range []string{
 		ClaudeMemSyncLaunchdLabel,
-		"ssh -o BatchMode=yes -o ConnectTimeout=10 user@mac2 true || exit 0",
-		"exec /usr/local/bin/dot ai memory sync --peer user@mac2",
+		"ssh -o BatchMode=yes -o ConnectTimeout=10 &#39;user@mac2&#39; true || exit 0",
+		"exec &#39;/usr/local/bin/dot&#39; ai memory sync --peer &#39;user@mac2&#39;",
 		"<key>DOT_SCHEDULED_RUN</key>",
 		"<integer>3600</integer>",
 	} {
 		if !strings.Contains(plist, want) {
 			t.Errorf("sync plist missing %q", want)
 		}
+	}
+}
+
+// The peer and dot path land inside a /bin/sh -c script: they must be
+// shell-quoted so a hostile or space-bearing value cannot break out.
+func TestRenderSyncAgentPlist_ShellQuotesTheScript(t *testing.T) {
+	plist := RenderSyncAgentPlist("/usr/local/bin/dot", "user@mac2;touch /tmp/pwned", "/home/u", "/tmp/log")
+	if !strings.Contains(plist, "&#39;user@mac2;touch /tmp/pwned&#39;") {
+		t.Errorf("peer is not single-quoted in the agent script:\n%s", plist)
 	}
 }
 
