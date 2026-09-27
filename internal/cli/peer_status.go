@@ -95,9 +95,14 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	}
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	if jsonOutput {
-		// Detection is filesystem-only and read-only; a walk error must not
-		// take the whole status document down with it.
-		worktrees, _ := syncer.DetectLinkedWorktrees(st.LocalPath)
+		// The status document feeds the remote side's sticky worktree union.
+		// A detection failure must fail closed: an under-reported list lets
+		// the peer sync a real worktree as regular files (the #135 husk
+		// class), so refuse rather than emit an incomplete document.
+		worktrees, err := syncer.DetectLinkedWorktrees(st.LocalPath)
+		if err != nil {
+			return fmt.Errorf("linked-worktree detection failed; refusing to report an incomplete worktree list: %w", err)
+		}
 		encoder := json.NewEncoder(cmd.OutOrStdout())
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(peerStatusJSON{

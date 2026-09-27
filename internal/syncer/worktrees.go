@@ -26,12 +26,18 @@ import (
 
 // DetectLinkedWorktrees walks root and returns the sorted workspace-relative
 // paths of every linked-worktree root. Detected worktrees are not descended
-// into (their content is not scanned), and .git directories are pruned.
+// into (their content is not scanned), and .git directories are pruned. A
+// root that does not exist yields an empty list — there is nothing to scan
+// and nothing to sync; an unreadable subtree inside an existing root is an
+// error, so callers can fail closed instead of trusting an incomplete list.
 func DetectLinkedWorktrees(root string) ([]string, error) {
 	root = strings.TrimRight(root, "/")
 	var found []string
 	err := filepath.WalkDir(root, func(abs string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			if abs == root && os.IsNotExist(walkErr) {
+				return nil
+			}
 			return walkErr
 		}
 		if !d.IsDir() || abs == root {
@@ -151,6 +157,12 @@ func MergePeerWorktrees(cfg *Config, remote []string, persist bool) ([]string, e
 		return nil, err
 	}
 	for _, rel := range detected {
+		// A local worktree whose path cannot be represented exactly in the
+		// line-oriented store and rsync filter must stop the run, loudly:
+		// silently dropping it would sync the worktree as regular files.
+		if err := validateTombstoneRel(rel); err != nil || strings.ContainsAny(rel, "\r\n") {
+			return nil, fmt.Errorf("local linked worktree path %q cannot be represented in the peer worktree store; rename it and realign the store by hand", rel)
+		}
 		seen[rel] = true
 	}
 	for _, rel := range remote {
@@ -186,8 +198,12 @@ func MaterializeWorktreesDynFile(dir string, rels []string) (string, error) {
 	b.WriteString("# Linked Git worktrees are excluded from peer sync: they are branch\n")
 	b.WriteString("# checkouts whose content travels through Git.\n")
 	for _, rel := range rels {
-		fmt.Fprintf(&b, "/%s\n", rel)
-		fmt.Fprintf(&b, "/%s/\n", rel)
+		pattern, err := literalRsyncPattern(rel)
+		if err != nil {
+			return "", fmt.Errorf("writing worktree excludes: %w", err)
+		}
+		fmt.Fprintf(&b, "/%s\n", pattern)
+		fmt.Fprintf(&b, "/%s/\n", pattern)
 	}
 	if err := os.WriteFile(out, []byte(b.String()), 0o644); err != nil {
 		return "", fmt.Errorf("writing %s: %w", out, err)

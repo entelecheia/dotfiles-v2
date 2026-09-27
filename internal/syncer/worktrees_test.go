@@ -273,6 +273,10 @@ func TestPeerWorktrees_RsyncParity(t *testing.T) {
 	// A live linked worktree: detected locally.
 	makeFakeGitdir(t, filepath.Join(workspace, "dev", "repo-wt-1"), filepath.Join(workspace, "main", ".git", "worktrees", "repo-wt-1"), true)
 	write("dev/repo-wt-1/src/main.go", "package main")
+	// A live worktree whose name carries rsync wildcard syntax: detected
+	// locally, excluded through the escaped filter pattern.
+	makeFakeGitdir(t, filepath.Join(workspace, "dev", "repo-wt-[x]"), filepath.Join(workspace, "main", ".git", "worktrees", "repo-wt-[x]"), true)
+	write("dev/repo-wt-[x]/src/lib.go", "package lib")
 	// A worktree of a submodule: detected locally.
 	makeFakeGitdir(t, filepath.Join(workspace, "sub", ".worktrees", "y"), filepath.Join(workspace, "main", ".git", "modules", "sub", "worktrees", "y"), true)
 	write("sub/.worktrees/y/notes.md", "n")
@@ -285,7 +289,7 @@ func TestPeerWorktrees_RsyncParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"dev/repo-wt-1", "sub/.worktrees/y"}; !slices.Equal(detected, want) {
+	if want := []string{"dev/repo-wt-1", "dev/repo-wt-[x]", "sub/.worktrees/y"}; !slices.Equal(detected, want) {
 		t.Fatalf("detected = %v, want %v", detected, want)
 	}
 	// The husk arrives through the remote side's report.
@@ -294,7 +298,7 @@ func TestPeerWorktrees_RsyncParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.WorktreeExcludes = effective
-	excludedPrefixes := []string{"dev/repo-wt-1/", "dev/repo-wt-husk/", "sub/.worktrees/y/"}
+	excludedPrefixes := []string{"dev/repo-wt-1/", "dev/repo-wt-[x]/", "dev/repo-wt-husk/", "sub/.worktrees/y/"}
 
 	// rsync side: the transfer set the peer filters produce.
 	rf, err := PreparePeerPlanFilters(cfg, true)
@@ -420,4 +424,53 @@ func TestPeerWorktrees_RsyncParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPlanQuiet(snapshot, "worktree removed")
+}
+
+// rsync wildcard syntax in a worktree name must reach the filter file as an
+// escaped literal pattern; a line separator in the name is rejected outright
+// rather than injecting a second filter rule.
+func TestMaterializeWorktreesDynFileEscapesMetacharacters(t *testing.T) {
+	dir := t.TempDir()
+	out, err := MaterializeWorktreesDynFile(dir, []string{"dev/repo-wt-[x]", "dev/wt-*"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	for _, want := range []string{"/dev/repo-wt-\\[x]\n", "/dev/wt-\\*\n"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("filter file missing escaped pattern %q:\n%s", want, body)
+		}
+	}
+	if _, err := MaterializeWorktreesDynFile(dir, []string{"dev/bad\nname"}); err == nil {
+		t.Fatal("a line separator in a worktree name was written as a filter rule")
+	}
+}
+
+// A local worktree whose path cannot be represented exactly in the
+// line-oriented store stops the run loudly; silently dropping it would sync
+// the worktree as regular files.
+func TestMergePeerWorktreesRejectsUnrepresentableLocalPath(t *testing.T) {
+	workspace := t.TempDir()
+	gitdir := filepath.Join(workspace, "main", ".git", "worktrees", "bad")
+	if err := os.MkdirAll(gitdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte("..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wtDir := filepath.Join(workspace, "dev", "bad\rname")
+	if err := os.MkdirAll(wtDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtDir, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := newPeerWorktreeTestConfig(t, workspace)
+	if _, err := MergePeerWorktrees(cfg, nil, false); err == nil || !strings.Contains(err.Error(), "cannot be represented") {
+		t.Fatalf("err = %v, want the unrepresentable local path to stop the run", err)
+	}
 }
