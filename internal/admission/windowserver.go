@@ -27,13 +27,14 @@ const wsScanNewest = 20
 // is irrelevant to the scan.
 const wsReadLimit = 256 * 1024
 
-// ScanWindowServerWatchdog scans dir (~/Library/Logs/DiagnosticReports) for
-// WindowServer*.ips crash reports, examines the newest newestN by mtime, and
-// returns the timestamp of the newest watchdog termination found. No
-// recursion. A missing directory is an empty scan, not an error: a machine
-// with no reports directory simply has no WindowServer evidence. The bool
-// reports whether the scan completed; any read failure makes it false so the
-// gate defers instead of assuming quiet.
+// ScanWindowServerWatchdog scans one DiagnosticReports folder for WindowServer
+// watchdog evidence and returns the timestamp of the newest event. Evidence is
+// a WindowServer*.ips report recording a WATCHDOG termination (timestamped by
+// its captureTime) or a WindowServer* file whose name contains "watchdog"
+// (timestamped by mtime). Only the newest newestN candidates by mtime are
+// examined. No recursion. A missing directory is an empty scan, not an error.
+// The bool reports whether the scan completed; any read failure makes it
+// false so the gate defers instead of assuming quiet.
 func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -43,20 +44,25 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		return time.Time{}, false, err
 	}
 	type report struct {
-		path  string
-		mtime time.Time
+		path   string
+		mtime  time.Time
+		byName bool // evidence is the file name, not the content
 	}
 	var reports []report
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, "WindowServer") || !strings.HasSuffix(name, ".ips") {
+		isIPS := strings.HasSuffix(name, ".ips")
+		// Spin and other watchdog reports name the cause in the file name
+		// (WindowServer_..._userspace_watchdog_timeout.spin).
+		byName := !isIPS && strings.Contains(strings.ToLower(name), "watchdog")
+		if e.IsDir() || !strings.HasPrefix(name, "WindowServer") || (!isIPS && !byName) {
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
 			return time.Time{}, false, err
 		}
-		reports = append(reports, report{path: filepath.Join(dir, name), mtime: info.ModTime()})
+		reports = append(reports, report{path: filepath.Join(dir, name), mtime: info.ModTime(), byName: byName})
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].mtime.After(reports[j].mtime) })
 	if newestN > 0 && len(reports) > newestN {
@@ -64,6 +70,12 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 	}
 	var latest time.Time
 	for _, r := range reports {
+		if r.byName {
+			if r.mtime.After(latest) {
+				latest = r.mtime
+			}
+			continue
+		}
 		content, err := readBounded(r.path, wsReadLimit)
 		if err != nil {
 			return time.Time{}, false, err
@@ -74,6 +86,31 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		ts, ok := ParseIPSCaptureTime(content)
 		if !ok {
 			ts = r.mtime
+		}
+		if ts.After(latest) {
+			latest = ts
+		}
+	}
+	return latest, true, nil
+}
+
+// WindowServerReportDirs lists where macOS writes WindowServer diagnostics:
+// the system folder, its Retired/ subfolder (processed .ips reports move
+// there), and the user folder (#165).
+func WindowServerReportDirs(home string) []string {
+	const system = "/Library/Logs/DiagnosticReports"
+	return []string{system, filepath.Join(system, "Retired"), filepath.Join(home, "Library", "Logs", "DiagnosticReports")}
+}
+
+// ScanWindowServerDirs scans each folder with ScanWindowServerWatchdog and
+// returns the newest event across them. The scan is complete only when every
+// folder scanned completely.
+func ScanWindowServerDirs(dirs []string, newestN int) (time.Time, bool, error) {
+	var latest time.Time
+	for _, dir := range dirs {
+		ts, ok, err := ScanWindowServerWatchdog(dir, newestN)
+		if err != nil || !ok {
+			return time.Time{}, false, err
 		}
 		if ts.After(latest) {
 			latest = ts

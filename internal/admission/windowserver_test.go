@@ -111,3 +111,65 @@ func TestIsWatchdogTermination(t *testing.T) {
 		t.Error("clean fixture detected as watchdog")
 	}
 }
+
+// TestScanWindowServerWatchdogByName: spin reports carry the cause in the
+// file name, not a WATCHDOG termination block; other WindowServer reports
+// (cpu_resource.diag) are not evidence (#165).
+func TestScanWindowServerWatchdogByName(t *testing.T) {
+	dir := t.TempDir()
+	spin := time.Date(2026, 9, 27, 13, 14, 18, 0, time.UTC)
+	writeIPS(t, dir, "WindowServer_2026-09-27-131418_Mac.userspace_watchdog_timeout.spin", "not json", spin)
+	writeIPS(t, dir, "WindowServer_2026-09-27-150000_Mac.cpu_resource.diag", "not json", spin.Add(time.Hour))
+	got, ok, err := ScanWindowServerWatchdog(dir, wsScanNewest)
+	if err != nil || !ok {
+		t.Fatalf("scan = %v, %v", ok, err)
+	}
+	if !got.Equal(spin) {
+		t.Errorf("event = %v, want the spin report's mtime %v", got, spin)
+	}
+}
+
+// TestScanWindowServerDirs: the newest event across the system folder, its
+// Retired/ subfolder and a missing user folder (#165).
+func TestScanWindowServerDirs(t *testing.T) {
+	system := t.TempDir()
+	retired := filepath.Join(system, "Retired")
+	if err := os.Mkdir(retired, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeIPS(t, system, "WindowServer_2026-09-27-131418_Mac.userspace_watchdog_timeout.spin", "x", time.Date(2026, 9, 27, 4, 14, 18, 0, time.UTC))
+	writeIPS(t, retired, "WindowServer-2026-09-27-134223.ips", watchdogIPS, time.Date(2026, 9, 27, 5, 42, 23, 0, time.UTC))
+	writeIPS(t, retired, "WindowServer-2026-09-27-150000.ips", cleanIPS, time.Date(2026, 9, 27, 6, 0, 0, 0, time.UTC))
+	got, ok, err := ScanWindowServerDirs([]string{system, retired, filepath.Join(t.TempDir(), "missing")}, wsScanNewest)
+	if err != nil || !ok {
+		t.Fatalf("scan = %v, %v", ok, err)
+	}
+	want := time.Date(2026, 9, 27, 14, 42, 13, 0, time.FixedZone("", 9*3600))
+	if !got.Equal(want) {
+		t.Errorf("event = %v, want the Retired watchdog report's captureTime %v", got, want)
+	}
+}
+
+// TestScanWindowServerDirsUnreadable: an unreadable report in any folder
+// leaves the scan incomplete, so the gate defers.
+func TestScanWindowServerDirsUnreadable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads mode-000 files")
+	}
+	dir := t.TempDir()
+	writeIPS(t, dir, "WindowServer-2026-09-27-134223.ips", watchdogIPS, time.Now())
+	if err := os.Chmod(filepath.Join(dir, "WindowServer-2026-09-27-134223.ips"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := ScanWindowServerDirs([]string{t.TempDir(), dir}, wsScanNewest); ok {
+		t.Error("an unreadable report must leave the scan incomplete")
+	}
+}
+
+func TestWindowServerReportDirs(t *testing.T) {
+	got := WindowServerReportDirs("/Users/x")
+	want := []string{"/Library/Logs/DiagnosticReports", "/Library/Logs/DiagnosticReports/Retired", "/Users/x/Library/Logs/DiagnosticReports"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("dirs = %v, want %v", got, want)
+	}
+}

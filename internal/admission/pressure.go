@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -381,7 +380,7 @@ func (m *Monitor) snapshotDarwin(ctx context.Context) PressureSnapshot {
 			snap.IdleAvailable = true
 		}
 	}
-	event, ok, err := ScanWindowServerWatchdog(filepath.Join(m.Home, "Library", "Logs", "DiagnosticReports"), wsScanNewest)
+	event, ok, err := ScanWindowServerDirs(WindowServerReportDirs(m.Home), wsScanNewest)
 	if err == nil {
 		snap.WSEvent = event
 		snap.WSScanOK = ok
