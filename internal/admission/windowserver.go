@@ -17,9 +17,10 @@ import (
 // single event.
 const DefaultWSGrace = 30 * time.Minute
 
-// wsScanNewest bounds the DiagnosticReports scan to the newest few reports:
-// WindowServer storms write several .ips files, and anything older than the
-// newest handful is outside the grace window anyway.
+// wsScanNewest bounds each DiagnosticReports folder scan to the newest few
+// WindowServer candidates (.ips and watchdog-named reports): storms write
+// several, and anything older than the newest handful is outside the grace
+// window anyway.
 const wsScanNewest = 20
 
 // wsReadLimit bounds each report read. The termination block and captureTime
@@ -27,13 +28,15 @@ const wsScanNewest = 20
 // is irrelevant to the scan.
 const wsReadLimit = 256 * 1024
 
-// ScanWindowServerWatchdog scans dir (~/Library/Logs/DiagnosticReports) for
-// WindowServer*.ips crash reports, examines the newest newestN by mtime, and
-// returns the timestamp of the newest watchdog termination found. No
-// recursion. A missing directory is an empty scan, not an error: a machine
-// with no reports directory simply has no WindowServer evidence. The bool
-// reports whether the scan completed; any read failure makes it false so the
-// gate defers instead of assuming quiet.
+// ScanWindowServerWatchdog scans one DiagnosticReports folder for WindowServer
+// watchdog evidence and returns the timestamp of the newest event. Evidence is
+// a WindowServer* file whose name contains "watchdog" (timestamped by mtime),
+// or a WindowServer*.ips report recording a WATCHDOG termination (timestamped
+// by its captureTime). Only the newest newestN candidates by mtime are
+// examined. No recursion. A missing directory is an empty scan, not an error.
+// The bool reports whether the scan completed; any read failure other than a
+// report vanishing mid-scan (moved to Retired/ or purged) makes it false so
+// the gate defers instead of assuming quiet.
 func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -43,20 +46,33 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		return time.Time{}, false, err
 	}
 	type report struct {
-		path  string
-		mtime time.Time
+		path   string
+		mtime  time.Time
+		byName bool // evidence is the file name, not the content
 	}
 	var reports []report
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, "WindowServer") || !strings.HasSuffix(name, ".ips") {
+		isIPS := strings.HasSuffix(name, ".ips")
+		// Spin and other watchdog reports name the cause in the file name
+		// (WindowServer_..._userspace_watchdog_timeout.spin). A name match is
+		// evidence on its own, whatever the extension: counting it errs
+		// toward deferring.
+		byName := strings.Contains(strings.ToLower(name), "watchdog")
+		if e.IsDir() || !strings.HasPrefix(name, "WindowServer") || (!isIPS && !byName) {
 			continue
 		}
 		info, err := e.Info()
+		if os.IsNotExist(err) {
+			// The report vanished after the listing. In a top folder macOS
+			// moved it into Retired/, which the caller scans next; in Retired/
+			// it was purged, and no later scan can see it either.
+			continue
+		}
 		if err != nil {
 			return time.Time{}, false, err
 		}
-		reports = append(reports, report{path: filepath.Join(dir, name), mtime: info.ModTime()})
+		reports = append(reports, report{path: filepath.Join(dir, name), mtime: info.ModTime(), byName: byName})
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].mtime.After(reports[j].mtime) })
 	if newestN > 0 && len(reports) > newestN {
@@ -64,7 +80,16 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 	}
 	var latest time.Time
 	for _, r := range reports {
+		if r.byName {
+			if r.mtime.After(latest) {
+				latest = r.mtime
+			}
+			continue
+		}
 		content, err := readBounded(r.path, wsReadLimit)
+		if os.IsNotExist(err) {
+			continue // vanished mid-scan; see above
+		}
 		if err != nil {
 			return time.Time{}, false, err
 		}
@@ -74,6 +99,35 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		ts, ok := ParseIPSCaptureTime(content)
 		if !ok {
 			ts = r.mtime
+		}
+		if ts.After(latest) {
+			latest = ts
+		}
+	}
+	return latest, true, nil
+}
+
+// WindowServerReportDirs lists where macOS writes WindowServer diagnostics:
+// the system and user folders, each followed by its Retired/ subfolder
+// (processed .ips reports move there) (#165). Each folder precedes its
+// Retired/ so a report moved mid-scan is found there. The system folders are
+// readable only by admin accounts (_analyticsusers); elsewhere the scan stays
+// incomplete and the gate defers.
+func WindowServerReportDirs(home string) []string {
+	const system = "/Library/Logs/DiagnosticReports"
+	user := filepath.Join(home, "Library", "Logs", "DiagnosticReports")
+	return []string{system, filepath.Join(system, "Retired"), user, filepath.Join(user, "Retired")}
+}
+
+// ScanWindowServerDirs scans each folder with ScanWindowServerWatchdog and
+// returns the newest event across them. The scan is complete only when every
+// folder scanned completely.
+func ScanWindowServerDirs(dirs []string, newestN int) (time.Time, bool, error) {
+	var latest time.Time
+	for _, dir := range dirs {
+		ts, ok, err := ScanWindowServerWatchdog(dir, newestN)
+		if err != nil || !ok {
+			return time.Time{}, false, err
 		}
 		if ts.After(latest) {
 			latest = ts
