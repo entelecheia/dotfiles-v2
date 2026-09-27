@@ -63,7 +63,7 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		info, err := e.Info()
 		if os.IsNotExist(err) {
 			// macOS moved the report into Retired/ after the listing; the
-			// caller scans Retired/ after this folder, so it is still seen.
+			// caller scans each folder's Retired/ after it, so it is still seen.
 			continue
 		}
 		if err != nil {
@@ -105,14 +105,15 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 }
 
 // WindowServerReportDirs lists where macOS writes WindowServer diagnostics:
-// the system folder, its Retired/ subfolder (processed .ips reports move
-// there), and the user folder (#165). The system folder precedes Retired/ so
-// a report moved mid-scan is found in Retired/. The system folders are
+// the system and user folders, each followed by its Retired/ subfolder
+// (processed .ips reports move there) (#165). Each folder precedes its
+// Retired/ so a report moved mid-scan is found there. The system folders are
 // readable only by admin accounts (_analyticsusers); elsewhere the scan stays
 // incomplete and the gate defers.
 func WindowServerReportDirs(home string) []string {
 	const system = "/Library/Logs/DiagnosticReports"
-	return []string{system, filepath.Join(system, "Retired"), filepath.Join(home, "Library", "Logs", "DiagnosticReports")}
+	user := filepath.Join(home, "Library", "Logs", "DiagnosticReports")
+	return []string{system, filepath.Join(system, "Retired"), user, filepath.Join(user, "Retired")}
 }
 
 // ScanWindowServerDirs scans each folder with ScanWindowServerWatchdog and

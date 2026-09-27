@@ -174,7 +174,7 @@ func TestScanWindowServerDirsUnreadable(t *testing.T) {
 
 func TestWindowServerReportDirs(t *testing.T) {
 	got := WindowServerReportDirs("/Users/x")
-	want := []string{"/Library/Logs/DiagnosticReports", "/Library/Logs/DiagnosticReports/Retired", "/Users/x/Library/Logs/DiagnosticReports"}
+	want := []string{"/Library/Logs/DiagnosticReports", "/Library/Logs/DiagnosticReports/Retired", "/Users/x/Library/Logs/DiagnosticReports", "/Users/x/Library/Logs/DiagnosticReports/Retired"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("dirs = %v, want %v", got, want)
 	}
@@ -189,5 +189,22 @@ func TestScanWindowServerWatchdogNamedIPS(t *testing.T) {
 	got, ok, err := ScanWindowServerWatchdog(dir, wsScanNewest)
 	if err != nil || !ok || !got.Equal(mtime) {
 		t.Fatalf("scan = %v, %v, %v; want the named report's mtime %v", got, ok, err, mtime)
+	}
+}
+
+// TestScanWindowServerDirsUnreadableFolder: a folder that exists but cannot be
+// listed (the standard-account case for the system folders) keeps the scan
+// incomplete; it is not an empty scan.
+func TestScanWindowServerDirsUnreadableFolder(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root lists mode-000 folders")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, ok, _ := ScanWindowServerDirs([]string{t.TempDir(), dir}, wsScanNewest); ok {
+		t.Error("an unreadable folder must leave the scan incomplete")
 	}
 }
