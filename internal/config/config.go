@@ -111,6 +111,15 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	return fmt.Errorf("invalid duration node: expected a scalar like \"300s\"")
 }
 
+// MarshalYAML emits the Go duration string ("5m0s"). Without it yaml.v3
+// marshals the underlying int64 as nanoseconds, which UnmarshalYAML would
+// read back as seconds — a 10^9 round-trip skew (the watchdog setup snapshot
+// round-trips this way, and a nanosecond-read-as-second sustain window means
+// the scheduled reaper never acts).
+func (d Duration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
+}
+
 // Std returns the value as a time.Duration.
 func (d Duration) Std() time.Duration { return time.Duration(d) }
 

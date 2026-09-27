@@ -100,6 +100,33 @@ func TestDuration_DecodesStringsAndIntegers(t *testing.T) {
 	}
 }
 
+// The setup snapshot round-trips the watchdog config through yaml.Marshal +
+// Unmarshal. A duration that marshals as raw nanoseconds would decode as
+// seconds and silently disable the scheduled reaper.
+func TestDuration_MarshalRoundTrips(t *testing.T) {
+	w := WatchdogConfig{
+		Enabled: true,
+		Reaper: WatchdogReaperConfig{
+			Interval:  Duration(90 * time.Second),
+			Sustain:   Duration(45 * time.Minute),
+			KillGrace: Duration(12 * time.Second),
+		},
+	}
+	data, err := yaml.Marshal(w)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back WatchdogConfig
+	if err := yaml.Unmarshal(data, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.Reaper.Interval != w.Reaper.Interval ||
+		back.Reaper.Sustain != w.Reaper.Sustain ||
+		back.Reaper.KillGrace != w.Reaper.KillGrace {
+		t.Errorf("round trip = %#v, want %#v", back.Reaper, w.Reaper)
+	}
+}
+
 // TestWatchdog_MergeIsEnableOnly mirrors the module rule: a child profile can
 // enable the watchdog, but `enabled: false` does not strip a base's config.
 func TestWatchdog_MergeIsEnableOnly(t *testing.T) {
