@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +121,19 @@ func TestMemorySyncServe_CountMaxExportImport(t *testing.T) {
 	// present, no rows yet.
 	home2 := t.TempDir()
 	seedCLISyncDBSchemaOnly(t, home2)
+	// --home decides which worker the import kicks (#160): point home2's
+	// settings at a fake worker and expect exactly one restart request.
+	kicks := 0
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/admin/restart" {
+			kicks++
+		}
+	}))
+	defer worker.Close()
+	settings, _ := json.Marshal(map[string]string{"CLAUDE_MEM_WORKER_PORT": strings.TrimPrefix(worker.URL, "http://127.0.0.1:")})
+	if err := os.WriteFile(filepath.Join(home2, ".claude-mem", "settings.json"), settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	reqBody, _ := json.Marshal(map[string]any{"bundle": exportResp.Bundle})
 	out, _, err = runDotForTestStdin(t, string(reqBody), "--home", home2, "ai", "memory", "sync", "--serve", "import")
 	if err != nil {
@@ -132,6 +147,9 @@ func TestMemorySyncServe_CountMaxExportImport(t *testing.T) {
 	}
 	if importResp.Result.Obs != 1 || importResp.Result.Sessions != 1 {
 		t.Fatalf("import result = %#v", importResp.Result)
+	}
+	if kicks != 1 {
+		t.Fatalf("worker under --home received %d restart kicks, want 1", kicks)
 	}
 }
 

@@ -47,7 +47,7 @@ directions. --peer defaults to the configured dot peer target.`,
 func runAIMemorySync(cmd *cobra.Command, args []string) error {
 	if op, _ := cmd.Flags().GetString("serve"); op != "" {
 		dbPath := memorySyncDBPath(cmd)
-		return aisettings.ServeOp(cmd.Context(), dbPath, op, cmd.InOrStdin(), cmd.OutOrStdout())
+		return aisettings.ServeOp(cmd.Context(), dbPath, homeFor(cmd), op, cmd.InOrStdin(), cmd.OutOrStdout())
 	}
 
 	action := "sync"
