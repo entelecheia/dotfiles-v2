@@ -15,7 +15,7 @@ import (
 var updateTools = []string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "gencode", "pi", "antigravity", "ripwire", "ocr", "gsd", "claude-mem", "ponytail"}
 
 func newAIUpdateCmd() *cobra.Command {
-	c := &cobra.Command{Use: "update", Short: "Update explicitly selected agent CLIs and development tools", Long: `Update only the saved six-agent/five-addon allowlist.
+	c := &cobra.Command{Use: "update", Short: "Update explicitly selected agent CLIs and development tools", Long: `Update only the saved nine-agent/five-addon allowlist.
 
 Run 'dot ai setup' first. Native providers retain installation ownership.
 Heavy work is serialized by the host resource guard. Unavailable metadata,

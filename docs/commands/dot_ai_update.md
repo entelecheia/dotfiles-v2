@@ -4,7 +4,7 @@ Update explicitly selected agent CLIs and development tools
 
 ### Synopsis
 
-Update only the saved six-agent/five-addon allowlist.
+Update only the saved nine-agent/five-addon allowlist.
 
 Run 'dot ai setup' first. Native providers retain installation ownership.
 Heavy work is serialized by the host resource guard. Unavailable metadata,
