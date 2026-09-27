@@ -238,3 +238,83 @@ func TestFreshAndDisabledBudgetStatusDoesNotInventNextTime(t *testing.T) {
 		t.Fatalf("old receipt migration=%+v", st)
 	}
 }
+
+func TestStableExecutableFollowsPackageUpgrade(t *testing.T) {
+	prefix := t.TempDir()
+	old := filepath.Join(prefix, "Cellar", "dotfiles", "1", "bin", "dot")
+	next := filepath.Join(prefix, "Cellar", "dotfiles", "2", "bin", "dot")
+	bin := filepath.Join(prefix, "bin")
+	for _, path := range []string{old, next} {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("executable"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(bin, "dot")
+	if err := os.Symlink(old, link); err != nil {
+		t.Fatal(err)
+	}
+	chosen := stableExecutable(old, bin)
+	if chosen != link {
+		t.Fatalf("versioned path persisted: %s", chosen)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(next, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(prefix, "Cellar", "dotfiles", "1")); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := filepath.EvalSymlinks(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if real, err := filepath.EvalSymlinks(chosen); err != nil || real != expected {
+		t.Fatalf("upgrade lost executable: %s %v", real, err)
+	}
+	m := testManager(t)
+	m.Executable = old
+	if _, err := m.Enable(context.Background()); err == nil {
+		t.Fatal("accepted obsolete Cellar entry point")
+	}
+}
+
+func TestScheduleAdministrationSharesAttemptLock(t *testing.T) {
+	for _, action := range []string{"enable", "disable"} {
+		t.Run(action, func(t *testing.T) {
+			m := testManager(t)
+			original := State{Enabled: true, Attempts: 2, AttemptWindow: time.Now(), LastAttempt: time.Now(), Outcome: "running"}
+			if err := save(m.Home, original); err != nil {
+				t.Fatal(err)
+			}
+			launches := 0
+			m.Run = func(context.Context, string, ...string) error { launches++; return nil }
+			err := withStateLock(m.Home, func() error {
+				var err error
+				if action == "enable" {
+					_, err = m.Enable(context.Background())
+				} else {
+					_, err = m.Disable(context.Background())
+				}
+				if err == nil {
+					t.Fatal("administration bypassed attempt lock")
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := load(m.Home)
+			if err != nil || after.Attempts != 2 || !after.LastAttempt.Equal(original.LastAttempt) || after.Outcome != "running" || !after.Enabled || launches != 0 {
+				t.Fatalf("receipt or launch changed: %+v %v launches=%d", after, err, launches)
+			}
+		})
+	}
+}

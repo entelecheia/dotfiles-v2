@@ -489,7 +489,7 @@ func (e *Engine) gsd(ctx context.Context, s config.AIToolingConfig, op Operation
 		case e.find("npx") == "":
 			r.Status = "deferred-prerequisite"
 			r.Detail = "Node.js/npm is required"
-		case op == Ensure && version != "":
+		case op == Ensure && version != "" && s.Pins["gsd"] == "":
 			r.Status = "installed"
 			r.Detail = "update available; run dot ai update"
 		default:
@@ -597,8 +597,17 @@ func (e *Engine) gsdPi(ctx context.Context, pin string, r ItemResult, op Operati
 		r.Detail = "existing gsd binary is not an adopted GSD-pi npm installation"
 		return r
 	}
-	if op == Ensure && path != "" {
+	if op == Ensure && path != "" && pin == "" {
 		r.Status = "installed"
+		return r
+	}
+	requestedHome := e.opts.HomeDir
+	if canonical, err := filepath.EvalSymlinks(requestedHome); err == nil {
+		requestedHome = canonical
+	}
+	if e.opts.ExplicitHome && !strings.HasPrefix(filepath.Clean(prefix), filepath.Clean(requestedHome)+string(os.PathSeparator)) {
+		r.Status = "deferred-home"
+		r.Detail = "existing npm prefix belongs outside requested home; preserve it"
 		return r
 	}
 	if err := e.installBinary(ctx, "gsd-pi", target, path, provider, prefix, spec); err != nil {

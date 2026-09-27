@@ -39,7 +39,7 @@ func RunInDirectory(ctx context.Context, dir string, args []string, in io.Reader
 // its children are cleaned up. We never reap that leader before the final group
 // signal, so its PID cannot be recycled to an unrelated process group.
 // Background work started by the command is not allowed to outlive this call.
-func RunCommand(ctx context.Context, command *exec.Cmd) error {
+func RunCommand(ctx context.Context, command *exec.Cmd) (runErr error) {
 	if command.Err != nil {
 		return command.Err
 	}
@@ -88,10 +88,15 @@ done`
 	c.Stderr = command.Stderr
 	c.ExtraFiles = []*os.File{completionWrite, anchorRead}
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	restoreTTY, err := foregroundTerminal(c, command.Stdin)
+	if err != nil {
+		return err
+	}
 	c.WaitDelay = 2 * time.Second
 	if err = c.Start(); err != nil {
-		return fmt.Errorf("starting resource supervisor: %w", err)
+		return errors.Join(fmt.Errorf("starting resource supervisor: %w", err), restoreTTY())
 	}
+	defer func() { runErr = errors.Join(runErr, restoreTTY()) }()
 	_ = completionWrite.Close()
 	_ = anchorRead.Close()
 	type result struct {
