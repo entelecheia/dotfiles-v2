@@ -26,6 +26,7 @@ files=(
   "internal/cli/watchdog_setup.go"
   "internal/cli/watchdog_warp.go"
   "internal/cli/watchdog_monit.go"
+  "internal/cli/watchdog_beszel.go"
   "internal/cli/ai_memory_sync_cmd.go"
   "internal/cli/ai_memory_sync_status.go"
 )

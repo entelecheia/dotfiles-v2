@@ -22,10 +22,12 @@ import (
 func newWatchdogSetupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Install the watchdog reaper agent, WARP heal daemon, monit supervision, and optional power hardening (macOS)",
+		Short: "Install the watchdog reaper agent, WARP heal daemon, monit supervision, Beszel agent, and optional power hardening (macOS)",
 		Long: `Install the watchdog on this Mac: the user-domain reaper LaunchAgent,
-plus the root WARP heal LaunchDaemon when watchdog.warp is enabled and the
-monit supervision agent when watchdog.monit is enabled.
+plus the root WARP heal LaunchDaemon when watchdog.warp is enabled, the
+monit supervision agent when watchdog.monit is enabled, and the Beszel
+external-monitoring agent when watchdog.beszel is enabled (a missing
+hub_url or secrets-managed env file skips that step with a warning).
 --headless additionally applies power hardening (pmset sleep 0 on charger,
 autorestart, womp, restartfreeze on) after saving the prior values for
 uninstall-time restore; it requires watchdog.power.headless: true.`,
@@ -82,6 +84,9 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 		p.KV("Monit", fmt.Sprintf("load > %g, cpu user > %g%%, system > %g%%, %d cycles",
 			monitSettings.Load1Threshold, monitSettings.CPUUserThreshold, monitSettings.CPUSystemThreshold, monitSettings.Cycles))
 	}
+	if wcfg.Beszel.Enabled {
+		p.KV("Beszel agent", wcfg.Beszel.HubURL)
+	}
 	if headless {
 		p.KV("Power", "headless hardening")
 	}
@@ -110,6 +115,9 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 				p.Line("[dry-run] would install %s and the sudoers grant %s", watchdog.ScreenSharingHealPath, watchdog.ScreenSharingSudoersPath)
 			}
 		}
+		if wcfg.Beszel.Enabled {
+			p.Line("[dry-run] would ensure the beszel-agent binary and install %s", mgr.BeszelPlistPath())
+		}
 		if headless {
 			p.Line("[dry-run] would save prior power values to %s, then apply headless power settings", mgr.PowerStatePath())
 		}
@@ -133,6 +141,11 @@ func runWatchdogSetupForGOOS(cmd *cobra.Command, _ []string, goos string) error 
 	}
 	if wcfg.Monit.Enabled {
 		if err := setupMonitStep(p, mgr, wcfg, dotPath, yes); err != nil {
+			return err
+		}
+	}
+	if wcfg.Beszel.Enabled {
+		if err := setupBeszelStep(p, mgr, wcfg.Beszel, yes); err != nil {
 			return err
 		}
 	}
@@ -192,6 +205,7 @@ func runWatchdogStatus(cmd *cobra.Command, _ []string) error {
 	p.KV("Log", filePresence(mgr.LogPath()))
 	printWarpStatusRows(p, mgr, wcfgPtr)
 	printMonitStatusRows(p, mgr, wcfgPtr)
+	printBeszelStatusRows(p, mgr, wcfgPtr)
 	return nil
 }
 

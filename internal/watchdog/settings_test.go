@@ -1,6 +1,7 @@
 package watchdog
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -131,5 +132,50 @@ func TestResolveMonit_RejectsNegatives(t *testing.T) {
 		if _, err := ResolveMonit(cfg, 8); err == nil {
 			t.Errorf("%s: a negative value must be rejected", name)
 		}
+	}
+}
+
+func TestResolveBeszel_DefaultsAndHomeExpansion(t *testing.T) {
+	s, err := ResolveBeszel(config.WatchdogBeszelConfig{HubURL: "https://hub.example"}, "/home/u")
+	if err != nil {
+		t.Fatalf("ResolveBeszel: %v", err)
+	}
+	if s.Listen != DefaultBeszelListen {
+		t.Errorf("default listen = %q, want %q", s.Listen, DefaultBeszelListen)
+	}
+	if s.EnvPath != "/home/u/.config/beszel/agent.env" {
+		t.Errorf("default env path = %q, want the home-expanded default", s.EnvPath)
+	}
+	if s.HubURL != "https://hub.example" {
+		t.Errorf("hub url = %q", s.HubURL)
+	}
+}
+
+func TestResolveBeszel_RequiresHubURLAtSetup(t *testing.T) {
+	s, err := ResolveBeszel(config.WatchdogBeszelConfig{Enabled: true}, "/home/u")
+	if err == nil {
+		t.Fatal("an empty hub_url must fail validation")
+	}
+	if !strings.Contains(err.Error(), "hub_url") || !strings.Contains(err.Error(), "dot watchdog setup") {
+		t.Errorf("validation error must name hub_url and setup: %v", err)
+	}
+	// The resolved defaults still come back alongside the error so status can
+	// report the env path without a hub configured.
+	if s.EnvPath != "/home/u/.config/beszel/agent.env" {
+		t.Errorf("env path alongside the error = %q", s.EnvPath)
+	}
+}
+
+func TestResolveBeszel_KeepsExplicitValues(t *testing.T) {
+	s, err := ResolveBeszel(config.WatchdogBeszelConfig{
+		HubURL:  "https://hub.example",
+		Listen:  ":9999",
+		EnvPath: "/var/lib/beszel/agent.env",
+	}, "/home/u")
+	if err != nil {
+		t.Fatalf("ResolveBeszel: %v", err)
+	}
+	if s.Listen != ":9999" || s.EnvPath != "/var/lib/beszel/agent.env" {
+		t.Errorf("explicit values lost: %#v", s)
 	}
 }

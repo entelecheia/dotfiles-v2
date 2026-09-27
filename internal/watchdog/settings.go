@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
 )
 
 // Reaper modes.
@@ -175,6 +176,45 @@ func ResolveMonit(c config.WatchdogMonitConfig, logicalCPU int) (MonitSettings, 
 	}
 	if s.Cycles > MonitCyclesMax {
 		return MonitSettings{}, fmt.Errorf("monit cycles must be at most %d (monit's parser limit), got %d", MonitCyclesMax, s.Cycles)
+	}
+	return s, nil
+}
+
+// Defaults applied when the profile leaves a beszel knob unset: the agent
+// listens on :45876 and reads its secrets-managed env file from
+// ~/.config/beszel/agent.env.
+const (
+	DefaultBeszelListen  = ":45876"
+	DefaultBeszelEnvPath = "~/.config/beszel/agent.env"
+)
+
+// BeszelSettings is the resolved, defaults-applied form of
+// config.WatchdogBeszelConfig. EnvPath is absolute (~ expanded against the
+// home passed to ResolveBeszel).
+type BeszelSettings struct {
+	HubURL  string
+	Listen  string
+	EnvPath string
+}
+
+// ResolveBeszel applies defaults and validates hub_url, which the agent
+// cannot start without. Callers that only need the defaults (status) may
+// ignore the error: the resolved settings are returned alongside it.
+func ResolveBeszel(c config.WatchdogBeszelConfig, home string) (BeszelSettings, error) {
+	s := BeszelSettings{
+		HubURL:  c.HubURL,
+		Listen:  c.Listen,
+		EnvPath: c.EnvPath,
+	}
+	if s.Listen == "" {
+		s.Listen = DefaultBeszelListen
+	}
+	if s.EnvPath == "" {
+		s.EnvPath = DefaultBeszelEnvPath
+	}
+	s.EnvPath = fileutil.ExpandHomeFor(s.EnvPath, home)
+	if s.HubURL == "" {
+		return s, fmt.Errorf("watchdog.beszel.hub_url is required when the beszel agent is enabled; set it in the profile before running `dot watchdog setup`")
 	}
 	return s, nil
 }

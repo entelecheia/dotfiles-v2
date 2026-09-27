@@ -37,8 +37,8 @@ dot watchdog [flags]
 * [dot watchdog log](dot_watchdog_log.md)	 - Tail the watchdog JSON-lines event log
 * [dot watchdog notify](dot_watchdog_notify.md)	 - Send a watchdog alert (macOS notification and/or ntfy)
 * [dot watchdog reap](dot_watchdog_reap.md)	 - Run one reaper pass (the LaunchAgent invokes this)
-* [dot watchdog setup](dot_watchdog_setup.md)	 - Install the watchdog reaper agent, WARP heal daemon, monit supervision, and optional power hardening (macOS)
+* [dot watchdog setup](dot_watchdog_setup.md)	 - Install the watchdog reaper agent, WARP heal daemon, monit supervision, Beszel agent, and optional power hardening (macOS)
 * [dot watchdog status](dot_watchdog_status.md)	 - Show watchdog config, LaunchAgent, and sample state
-* [dot watchdog uninstall](dot_watchdog_uninstall.md)	 - Remove the watchdog reaper agent, WARP heal daemon, and monit supervision (macOS)
+* [dot watchdog uninstall](dot_watchdog_uninstall.md)	 - Remove the watchdog reaper agent, WARP heal daemon, monit supervision, and Beszel agent plist (macOS)
 * [dot watchdog warp](dot_watchdog_warp.md)	 - Run one WARP self-heal pass (the root daemon invokes this)
 

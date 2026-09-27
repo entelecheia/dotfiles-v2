@@ -624,3 +624,33 @@ func TestSSHKeyNameRejectsPathSeparators(t *testing.T) {
 		t.Errorf("sshKeyName(id_rsa) = %q, %v", name, err)
 	}
 }
+
+// The Beszel agent env file carries the hub KEY/TOKEN, so it is a
+// secrets-managed archive ↔ plaintext pair like the SSH key and shell
+// secrets — `dot secrets` init/backup/restore cover it, and watchdog setup
+// only ever probes its presence.
+func TestEntries_IncludesBeszelAgentEnv(t *testing.T) {
+	home := t.TempDir()
+	entries, err := Entries(&config.UserState{}, home)
+	if err != nil {
+		t.Fatalf("Entries: %v", err)
+	}
+	var found *Entry
+	for i := range entries {
+		if entries[i].Label == "Beszel agent env" {
+			found = &entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no beszel entry in %#v", entries)
+	}
+	if found.AgeName != "beszel-agent.env.age" {
+		t.Errorf("beszel archive name = %q", found.AgeName)
+	}
+	if want := filepath.Join(home, ".config", "beszel", "agent.env"); found.Plain != want {
+		t.Errorf("beszel plaintext = %q, want %q", found.Plain, want)
+	}
+	if found.DirPerm != 0o700 {
+		t.Errorf("beszel plaintext dir perm = %v, want 0700 (it carries the hub KEY/TOKEN)", found.DirPerm)
+	}
+}

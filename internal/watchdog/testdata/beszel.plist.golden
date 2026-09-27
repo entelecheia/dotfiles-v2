@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dotfiles.beszel-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; . "$HOME/.config/beszel/agent.env"; set +a; exec "/opt/homebrew/bin/beszel-agent"</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/test/Library/Logs/dot/beszel.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/test/Library/Logs/dot/beszel.err.log</string>
+</dict>
+</plist>

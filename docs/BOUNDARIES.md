@@ -146,6 +146,18 @@ tool):
   (`power.json`) that uninstall restores from; written by
   `dot watchdog setup`, every `dot watchdog reap`/`dot watchdog warp`
   pass, and removed only by the interactive uninstall prompt
+- `~/Library/LaunchAgents/com.dotfiles.beszel-agent.plist` — the user
+  LaunchAgent that runs the Beszel external-monitoring agent, sourcing the
+  secrets-managed env file before exec'ing the brew-installed agent binary;
+  written and loaded by `dot watchdog setup` when `watchdog.beszel` is
+  enabled, and removed (the plist only, never the env file) by
+  `dot watchdog uninstall` (macOS only)
+- `~/.config/beszel/agent.env` — the Beszel agent env file (hub
+  HUB_URL/KEY/TOKEN/LISTEN), secrets-managed: an age-encrypted archive ↔
+  plaintext pair registered in the `dot secrets` entry table, so
+  init/backup/restore cover it like the SSH key and shell secrets. Watchdog
+  setup only probes its presence — it never reads, renders, or removes the
+  file — and the beszel plist sources it at agent start
 - `~/Library/Logs/dot/watchdog.log` — the watchdog JSON-lines event log
   (`dot watchdog log` tails it), plus the reaper unit's launchd
   stdout/stderr logs beside it
