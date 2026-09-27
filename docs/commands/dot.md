@@ -58,5 +58,6 @@ dot [flags]
 * [dot update](dot_update.md)	 - Update dot binary to latest version
 * [dot usecase](dot_usecase.md)	 - Show detailed use cases and workflows
 * [dot version](dot_version.md)	 - Print version information
+* [dot watchdog](dot_watchdog.md)	 - Reap runaway processes and alert on host health
 * [dot ws](dot_ws.md)	 - Dual-workspace (work + cloud mirror) folder operations
 

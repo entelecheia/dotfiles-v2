@@ -1,5 +1,10 @@
 extends: minimal
 
+# Watchdog (runaway-process reaper, connectivity heal, power hardening) is
+# opt-in per host. See docs/BOUNDARIES.md for the files it manages.
+watchdog:
+  enabled: false
+
 modules:
   node:
     enabled: true

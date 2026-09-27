@@ -107,6 +107,12 @@ func mergeConfigs(base, overlay *Config) *Config {
 	// Modules: overlay wins per-module if explicitly set
 	merged.Modules = mergeModules(base.Modules, overlay.Modules)
 
+	// Watchdog follows the same enable-only rule as module blocks (see
+	// mergeModules): a child profile can enable/replace it, not disable it.
+	if overlay.Watchdog.Enabled {
+		merged.Watchdog = overlay.Watchdog
+	}
+
 	// Clear extends (already resolved)
 	merged.Extends = ""
 

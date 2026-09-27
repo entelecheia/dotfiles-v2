@@ -101,6 +101,8 @@ override:
     threshold: 30
   - path: ^internal/ui$ # measured 19.9442% (143/717)
     threshold: 18
+  - path: ^internal/watchdog$ # measured 78.4452% (222/283); launchctl Probe branch is present-and-unhit on Linux
+    threshold: 75
   - path: ^internal/workspace$ # measured 60.8434% (101/166)
     threshold: 59
   - path: ^internal/ws$ # measured 60.6897% (176/290)

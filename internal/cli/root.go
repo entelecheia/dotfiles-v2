@@ -73,6 +73,9 @@ Also available as 'dotfiles' for back-compat.`,
 	// Cloudflare Tunnel SSH access
 	root.AddCommand(newTunnelCmd())
 
+	// Watchdog (runaway-process reaper, alerts)
+	root.AddCommand(newWatchdogCmd())
+
 	// Claude Code safety hooks (careful + freeze)
 	root.AddCommand(newGuardCmd())
 

@@ -436,6 +436,7 @@ dotfiles-v2/
 │   │   ├── scheduler.go          # Scheduler types
 │   │   ├── scheduler_darwin.go   # macOS launchd
 │   │   └── scheduler_other.go    # Linux systemd
+│   ├── watchdog/                 # Runaway-process reaper + notifier (used by dot watchdog)
 │   ├── workspace/                # Workspace management
 │   │   ├── config.go             # Project config, YAML load/save
 │   │   ├── deploy.go             # Shell script deployer (go:embed)

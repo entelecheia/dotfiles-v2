@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,12 +15,13 @@ import (
 
 // Config is the root configuration struct, mapped from profile YAML + user state.
 type Config struct {
-	Extends       string        `yaml:"extends,omitempty"`
-	Modules       ModulesConfig `yaml:"modules"`
-	Packages      []string      `yaml:"packages"`
-	PackagesExtra []string      `yaml:"packages_extra"`
-	Casks         []string      `yaml:"casks,omitempty"`
-	CasksExtra    []string      `yaml:"casks_extra,omitempty"`
+	Extends       string         `yaml:"extends,omitempty"`
+	Modules       ModulesConfig  `yaml:"modules"`
+	Watchdog      WatchdogConfig `yaml:"watchdog,omitempty"`
+	Packages      []string       `yaml:"packages"`
+	PackagesExtra []string       `yaml:"packages_extra"`
+	Casks         []string       `yaml:"casks,omitempty"`
+	CasksExtra    []string       `yaml:"casks_extra,omitempty"`
 	// Populated from user state, not profile YAML
 	Name       string `yaml:"-"`
 	Email      string `yaml:"-"`
@@ -84,6 +87,141 @@ type MacAppsConfig struct {
 // ModuleToggle is a simple enabled/disabled toggle.
 type ModuleToggle struct {
 	Enabled bool `yaml:"enabled"`
+}
+
+// Duration is a time.Duration that YAML-decodes from Go duration strings
+// ("300s", "30m") and from plain integers (read as seconds), so profile YAML
+// stays readable. yaml.v3 would otherwise demand integer nanoseconds.
+type Duration time.Duration
+
+// UnmarshalYAML decodes a duration string or an integer count of seconds.
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		if i, err := strconv.ParseInt(value.Value, 10, 64); err == nil {
+			*d = Duration(time.Duration(i) * time.Second)
+			return nil
+		}
+		parsed, err := time.ParseDuration(value.Value)
+		if err != nil {
+			return fmt.Errorf("invalid duration %q: %w", value.Value, err)
+		}
+		*d = Duration(parsed)
+		return nil
+	}
+	return fmt.Errorf("invalid duration node: expected a scalar like \"300s\"")
+}
+
+// MarshalYAML emits the Go duration string ("5m0s"). Without it yaml.v3
+// marshals the underlying int64 as nanoseconds, which UnmarshalYAML would
+// read back as seconds — a 10^9 round-trip skew (the watchdog setup snapshot
+// round-trips this way, and a nanosecond-read-as-second sustain window means
+// the scheduled reaper never acts).
+func (d Duration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
+}
+
+// Std returns the value as a time.Duration.
+func (d Duration) Std() time.Duration { return time.Duration(d) }
+
+// IsZero lets yaml.v3 omit an unset duration from rendered output.
+func (d Duration) IsZero() bool { return d == 0 }
+
+// WatchdogConfig configures the watchdog: runaway-process reaping (P1),
+// connectivity heal, power hardening, and external monitors (later phases).
+// The full profile ships it disabled; hosts opt in explicitly.
+type WatchdogConfig struct {
+	Enabled bool                 `yaml:"enabled"`
+	Reaper  WatchdogReaperConfig `yaml:"reaper,omitempty"`
+	Warp    WatchdogWarpConfig   `yaml:"warp,omitempty"`
+	Power   WatchdogPowerConfig  `yaml:"power,omitempty"`
+	Monit   WatchdogMonitConfig  `yaml:"monit,omitempty"`
+	Beszel  WatchdogBeszelConfig `yaml:"beszel,omitempty"`
+	Notify  WatchdogNotifyConfig `yaml:"notify,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset watchdog block from rendered output.
+func (c WatchdogConfig) IsZero() bool {
+	return !c.Enabled && c.Reaper.IsZero() && c.Warp.IsZero() &&
+		c.Power.IsZero() && c.Monit.IsZero() && c.Beszel.IsZero() && c.Notify.IsZero()
+}
+
+// WatchdogReaperConfig configures the runaway-process reaper.
+type WatchdogReaperConfig struct {
+	Mode         string              `yaml:"mode,omitempty"` // dry-run (default) | enforce
+	Interval     Duration            `yaml:"interval,omitempty"`
+	CPUThreshold float64             `yaml:"cpu_threshold,omitempty"` // percent, per process
+	Sustain      Duration            `yaml:"sustain,omitempty"`
+	Match        WatchdogMatchConfig `yaml:"match,omitempty"`
+	Allow        []string            `yaml:"allow,omitempty"`
+	KillGrace    Duration            `yaml:"kill_grace,omitempty"` // SIGTERM → wait → SIGKILL
+}
+
+// IsZero lets yaml.v3 omit an unset reaper block.
+func (c WatchdogReaperConfig) IsZero() bool {
+	return c.Mode == "" && c.Interval.IsZero() && c.CPUThreshold == 0 &&
+		c.Sustain.IsZero() && c.Match.IsZero() && len(c.Allow) == 0 && c.KillGrace.IsZero()
+}
+
+// WatchdogMatchConfig selects which processes the reaper considers.
+type WatchdogMatchConfig struct {
+	OrphanOnly bool     `yaml:"orphan_only,omitempty"` // PPID == 1
+	Paths      []string `yaml:"paths,omitempty"`       // globs against the executable path; $VARS expanded
+	Args       []string `yaml:"args,omitempty"`        // substrings of the full command line
+}
+
+// IsZero lets yaml.v3 omit an unset match block.
+func (c WatchdogMatchConfig) IsZero() bool {
+	return !c.OrphanOnly && len(c.Paths) == 0 && len(c.Args) == 0
+}
+
+// WatchdogWarpConfig configures Cloudflare WARP self-heal (phase P2; schema only).
+type WatchdogWarpConfig struct {
+	Enabled       bool     `yaml:"enabled"`
+	Interval      Duration `yaml:"interval,omitempty"`
+	FailThreshold int      `yaml:"fail_threshold,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset warp block.
+func (c WatchdogWarpConfig) IsZero() bool {
+	return !c.Enabled && c.Interval.IsZero() && c.FailThreshold == 0
+}
+
+// WatchdogPowerConfig configures headless power hardening (later phase; schema only).
+type WatchdogPowerConfig struct {
+	Headless bool `yaml:"headless,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset power block.
+func (c WatchdogPowerConfig) IsZero() bool { return !c.Headless }
+
+// WatchdogMonitConfig configures monit supervision (later phase; schema only).
+type WatchdogMonitConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// IsZero lets yaml.v3 omit an unset monit block.
+func (c WatchdogMonitConfig) IsZero() bool { return !c.Enabled }
+
+// WatchdogBeszelConfig configures Beszel monitoring (later phase; schema only).
+type WatchdogBeszelConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	HubURL  string `yaml:"hub_url,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset beszel block.
+func (c WatchdogBeszelConfig) IsZero() bool {
+	return !c.Enabled && c.HubURL == ""
+}
+
+// WatchdogNotifyConfig configures external alert fan-out.
+type WatchdogNotifyConfig struct {
+	MacOS   bool   `yaml:"macos,omitempty"`    // osascript desktop notification
+	NtfyURL string `yaml:"ntfy_url,omitempty"` // ntfy topic URL; empty skips the POST
+}
+
+// IsZero lets yaml.v3 omit an unset notify block.
+func (c WatchdogNotifyConfig) IsZero() bool {
+	return !c.MacOS && c.NtfyURL == ""
 }
 
 // AIConfig configures AI helper files plus optional agents and skills SSOT deployment.
