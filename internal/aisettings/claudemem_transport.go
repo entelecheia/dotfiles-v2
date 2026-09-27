@@ -158,8 +158,10 @@ func shellQuote(s string) string {
 // the request, run the op, write the response. It is the remote end of
 // SSHTransport and never prints anything but the response envelope. Read
 // ops open the store read-only so a probe can never create an empty
-// claude-mem.db; import is the only writer.
-func ServeOp(ctx context.Context, dbPath, op string, stdin io.Reader, stdout io.Writer) error {
+// claude-mem.db; import is the only writer. home is the caller's home
+// directory; an import that lands rows kicks the worker configured under
+// it, and an empty home skips the kick.
+func ServeOp(ctx context.Context, dbPath, home, op string, stdin io.Reader, stdout io.Writer) error {
 	var db *SyncDB
 	var err error
 	if op == "import" {
@@ -201,13 +203,9 @@ func ServeOp(ctx context.Context, dbPath, op string, stdin io.Reader, stdout io.
 			break
 		}
 		// Backfill kick on the importing side whenever content rows landed.
-		// Settings live in the user's ~/.claude-mem regardless of any custom
-		// --remote-db path, so prefer the user home over the db's grandparent.
-		if resp.Result.Obs+resp.Result.Sums > 0 {
-			home, herr := os.UserHomeDir()
-			if herr != nil {
-				home = filepath.Dir(filepath.Dir(dbPath))
-			}
+		// Settings live under the caller's home regardless of any custom
+		// --remote-db path.
+		if home != "" && resp.Result.Obs+resp.Result.Sums > 0 {
 			_ = KickWorkerRestart(ctx, home, nil)
 		}
 	case "count":

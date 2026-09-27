@@ -3,6 +3,11 @@ package aisettings
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,13 +135,17 @@ func TestSSHTransportOverServe(t *testing.T) {
 	seedSession(t, remote, "c1", "m1", "2026-09-20T10:00:00.000Z")
 	seedObs(t, remote, "m1", "2026-09-20T10:01:00.000Z", "x")
 
+	t.Setenv("HOME", t.TempDir()) // a regression to os.UserHomeDir() must not reach the real worker
 	var lastArgs []string
+	// This test's import dedupes to zero rows, so the kick branch is not
+	// reached; the settings-free temp home keeps it local if that changes.
+	home := t.TempDir()
 	transport := &SSHTransport{Run: func(ctx context.Context, target string, serveArgs []string, stdin []byte) ([]byte, error) {
 		lastArgs = serveArgs
 		// serveArgs: ai memory sync --serve <op> [--remote-db <path>]
 		op := serveArgs[4]
 		var out bytes.Buffer
-		if err := ServeOp(ctx, remote.Path, op, bytes.NewReader(stdin), &out); err != nil {
+		if err := ServeOp(ctx, remote.Path, home, op, bytes.NewReader(stdin), &out); err != nil {
 			return nil, err
 		}
 		return out.Bytes(), nil
@@ -191,14 +200,14 @@ func TestSSHTransportOverServe(t *testing.T) {
 
 func TestServeOp_UnknownOpAndBadDB(t *testing.T) {
 	var out bytes.Buffer
-	if err := ServeOp(context.Background(), filepath_join(t), "frobulate", strings.NewReader("{}"), &out); err != nil {
+	if err := ServeOp(context.Background(), filepath_join(t), "", "frobulate", strings.NewReader("{}"), &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "unknown serve op") {
 		t.Fatalf("response = %s", out.String())
 	}
 	out.Reset()
-	if err := ServeOp(context.Background(), "/nonexistent/dir/db.sqlite", "count", strings.NewReader("{}"), &out); err != nil {
+	if err := ServeOp(context.Background(), "/nonexistent/dir/db.sqlite", "", "count", strings.NewReader("{}"), &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "error") {
@@ -265,5 +274,90 @@ func TestSyncReportSummarize(t *testing.T) {
 	}
 	if got := (&SyncReport{}).Summarize(); got != "no rows transferred" {
 		t.Errorf("empty Summarize = %q", got)
+	}
+}
+
+// workerHome returns a home whose claude-mem settings point at a fake worker,
+// and a counter of the restart kicks that worker received.
+func workerHome(t *testing.T) (string, *int) {
+	t.Helper()
+	return workerHomeAt(t, t.TempDir())
+}
+
+// workerHomeAt writes fake-worker claude-mem settings under home.
+func workerHomeAt(t *testing.T, home string) (string, *int) {
+	t.Helper()
+	hits := new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/admin/restart" {
+			*hits++
+		}
+	}))
+	t.Cleanup(srv.Close)
+	memDir := filepath.Join(home, ".claude-mem")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
+	settings, _ := json.Marshal(map[string]string{"CLAUDE_MEM_WORKER_PORT": port})
+	if err := os.WriteFile(filepath.Join(memDir, "settings.json"), settings, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return home, hits
+}
+
+// TestServeOp_ImportKicksOnlyTheGivenHome: an import that lands rows kicks
+// the worker configured under the passed home and no other (#160).
+func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
+	src := newTestSyncDB(t)
+	seedSession(t, src, "c1", "m1", "2026-09-20T10:00:00.000Z")
+	seedObs(t, src, "m1", "2026-09-20T10:01:00.000Z", "x")
+	bundle, err := src.Export(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := json.Marshal(serveRequest{Bundle: bundle})
+
+	// HOME points at a trap worker: a regression to os.UserHomeDir() inside
+	// ServeOp would kick it.
+	trap, trapHits := workerHome(t)
+	t.Setenv("HOME", trap)
+	home, hits := workerHome(t)
+	dst := newTestSyncDB(t)
+	var out bytes.Buffer
+	if err := ServeOp(context.Background(), dst.Path, home, "import", bytes.NewReader(req), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"result"`) {
+		t.Fatalf("import response = %s", out.String())
+	}
+	if *hits != 1 || *trapHits != 0 {
+		t.Fatalf("kicks: given home = %d, process HOME = %d; want 1, 0", *hits, *trapHits)
+	}
+
+	// An empty home skips the kick entirely: neither the process HOME nor the
+	// DB's grandparent (the fallback removed for #160) may be kicked.
+	_, grandHits := workerHomeAt(t, filepath.Dir(filepath.Dir(dst.Path)))
+	*hits = 0
+	src2 := newTestSyncDB(t)
+	seedSession(t, src2, "c2", "m2", "2026-09-21T10:00:00.000Z")
+	seedObs(t, src2, "m2", "2026-09-21T10:01:00.000Z", "y")
+	bundle2, err := src2.Export(nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req2, _ := json.Marshal(serveRequest{Bundle: bundle2})
+	out.Reset()
+	if err := ServeOp(context.Background(), dst.Path, "", "import", bytes.NewReader(req2), &out); err != nil {
+		t.Fatal(err)
+	}
+	// The kick branch is only reached when rows land; without this the
+	// no-kick assertion below could pass vacuously.
+	var resp2 serveResponse
+	if err := json.Unmarshal(out.Bytes(), &resp2); err != nil || resp2.Result == nil || resp2.Result.Obs != 1 {
+		t.Fatalf("second import must land one observation: %s", out.String())
+	}
+	if *hits != 0 || *trapHits != 0 || *grandHits != 0 {
+		t.Fatalf("empty home kicked: given home = %d, process HOME = %d, DB grandparent = %d; want 0, 0, 0", *hits, *trapHits, *grandHits)
 	}
 }
