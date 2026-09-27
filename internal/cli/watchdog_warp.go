@@ -61,6 +61,18 @@ func runWatchdogWarpForGOOS(cmd *cobra.Command, _ []string, goos string) error {
 		return fmt.Errorf("probing interfaces: %w", err)
 	}
 	healthy := watchdog.WarpHealthy(statusOut.Stdout, ifconfigOut.Stdout)
+	if !dryRun {
+		release, busy, err := watchdog.AcquireWarpLock(mgr.StateDir())
+		if err != nil {
+			return err
+		}
+		if busy {
+			// Another pass holds the lock; the next interval retries.
+			_ = watchdog.AppendEvent(mgr.LogPath(), watchdog.Event{Level: "info", Event: "skip", Msg: "another warp pass holds the lock"})
+			return nil
+		}
+		defer release()
+	}
 	state, err := watchdog.LoadWarpState(mgr.WarpStatePath())
 	if err != nil {
 		return err

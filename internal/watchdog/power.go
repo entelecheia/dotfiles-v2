@@ -47,10 +47,13 @@ func CapturePower(pmsetG, restartFreezeOut string) (PowerState, error) {
 }
 
 // pmsetValue extracts one value from `pmset -g` output (" sleep               0").
+// Annotated values keep their first field: pmset prints
+// "sleep 0 (sleep prevented by powerd)" when something blocks sleep, and the
+// parenthetical must not make the value unreadable.
 func pmsetValue(pmsetG, key string) (string, error) {
 	for _, line := range strings.Split(pmsetG, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == key {
+		if len(fields) >= 2 && fields[0] == key {
 			return fields[1], nil
 		}
 	}

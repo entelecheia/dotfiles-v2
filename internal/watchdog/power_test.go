@@ -46,6 +46,23 @@ func TestCapturePower_RestartFreezeOn(t *testing.T) {
 	}
 }
 
+// pmset annotates a value when something blocks it
+// ("sleep 0 (sleep prevented by powerd)"); the annotation must not make the
+// value unreadable.
+func TestCapturePower_AnnotatedValues(t *testing.T) {
+	annotated := ` sleep                0 (sleep prevented by powerd)
+ autorestart          1
+ womp                 1
+`
+	st, err := CapturePower(annotated, "Restart After Freeze: On")
+	if err != nil {
+		t.Fatalf("CapturePower with annotated sleep: %v", err)
+	}
+	if st.Sleep != "0" || st.AutoRestart != "1" || st.Womp != "1" {
+		t.Fatalf("CapturePower = %#v", st)
+	}
+}
+
 func TestCapturePower_MissingKeysError(t *testing.T) {
 	if _, err := CapturePower(" sleep 1\n", "Restart After Freeze: Off"); err == nil {
 		t.Fatal("missing autorestart/womp must error")
