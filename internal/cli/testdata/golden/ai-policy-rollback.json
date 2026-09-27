@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "operation": "rollback",
+  "dry_run": true,
+  "policy": null,
+  "inventory": [],
+  "changes": [],
+  "constraints": [
+    "Native base settings are not owned; policy overlays govern controlled launches only."
+  ]
+}

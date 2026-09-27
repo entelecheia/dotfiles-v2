@@ -1,0 +1,28 @@
+# Review and validate the model, entitlement, capabilities and exact runtime
+# version before setting enabled/validated. No provider credentials belong here.
+modules:
+  ai:
+    enabled: true
+    policy:
+      enabled: false
+      revision: "work-v1"
+      max_switches: 2
+      targets:
+        - id: codex-subscription
+          agent: codex
+          version: "0.157.1"
+          model: gpt-6-astra
+          billing: subscription
+          validated: false
+          priority: 10
+          workloads: [routine, implementation, deep-analysis, independent-review]
+          capabilities: [text, code, shell, auto-review]
+        - id: claude-subscription
+          agent: claude
+          version: "2.1.283"
+          model: opus
+          billing: subscription
+          validated: false
+          priority: 10
+          workloads: [routine, implementation, deep-analysis, independent-review, documents-teaching, visual-production]
+          capabilities: [text, code, shell, auto-review]

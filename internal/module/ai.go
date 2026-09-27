@@ -2,12 +2,14 @@ package module
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 	"github.com/entelecheia/dotfiles-v2/internal/aitooling"
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
 
 // AIModule manages AI CLI/config helper shell configs and Claude settings.
@@ -45,6 +47,9 @@ func (m *AIModule) managedFiles(rc *RunContext) []templatedFile {
 }
 
 func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
+	if err := config.ValidateAIPolicy(rc.Config.Modules.AI.Policy); err != nil {
+		return nil, err
+	}
 	changes, err := checkTemplatedFiles(rc, m.managedFiles(rc))
 	if err != nil {
 		return nil, err
@@ -146,10 +151,18 @@ func (m *AIModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, err
 			}
 		}
 	}
+	policyChanges, err := checkModulePolicy(ctx, rc)
+	if err != nil {
+		return nil, err
+	}
+	changes = append(changes, policyChanges...)
 	return &CheckResult{Satisfied: len(changes) == 0, Changes: changes}, nil
 }
 
 func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
+	if err := config.ValidateAIPolicy(rc.Config.Modules.AI.Policy); err != nil {
+		return nil, err
+	}
 	var messages []string
 	var toolingErr error
 	if selection := rc.Config.Modules.AI.Tooling; selection != nil {
@@ -267,7 +280,9 @@ func (m *AIModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, err
 		}
 	}
 
-	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, toolingErr
+	policyMessages, policyErr := applyModulePolicy(ctx, rc)
+	messages = append(messages, policyMessages...)
+	return &ApplyResult{Changed: len(messages) > 0, Messages: messages}, errors.Join(toolingErr, policyErr)
 }
 
 func newModuleToolingEngine(rc *RunContext) *aitooling.Engine {

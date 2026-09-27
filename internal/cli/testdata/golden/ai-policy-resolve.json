@@ -1,0 +1,37 @@
+{
+  "home_mode": "native-default",
+  "knowledge_approvals": [],
+  "billing_verified": true,
+  "billing": "subscription",
+  "schema_version": 1,
+  "policy_revision": "fixture-1",
+  "target_id": "codex-balanced",
+  "version": "0.157.1",
+  "workload": "routine",
+  "agent": "codex",
+  "model": "gpt-policy-test",
+  "effort": "medium",
+  "executable": "@HOME@/bin/codex",
+  "home": "@HOME@/.codex",
+  "permission_intent": "auto-review",
+  "permission_mechanism": "native-auto-review",
+  "launch_args": [
+    "--approve-for-me",
+    "--model",
+    "gpt-policy-test",
+    "-c",
+    "model_reasoning_effort=\"medium\""
+  ],
+  "eligible": true,
+  "reason": "highest-priority validated target for routine",
+  "constraints": [
+    "account entitlement and selected model require explicit target validation"
+  ],
+  "capabilities": [
+    "text",
+    "code",
+    "shell",
+    "auto-review"
+  ],
+  "continuity": "checkpoint-handoff"
+}

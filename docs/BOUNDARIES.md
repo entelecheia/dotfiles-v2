@@ -57,6 +57,26 @@ existing globally discoverable skills from unselected agents.
 
 Dot-owned state trees:
 
+- `~/.local/share/dotfiles/ai/policy/`: private owned Claude launch overlays,
+  preference ownership receipts and mutation locks. Only the overlay's
+  `permissions.defaultMode`, exact knowledge-tool `permissions.allow`, model
+  and effort fields are generated; native
+  `~/.claude/settings.json` retains its original ownership limits. Apply and
+  rollback refuse foreign edits and symlink paths. These are machine-local
+  derivatives of portable `modules.ai.policy`, not shared policy sources.
+- `$CODEX_HOME/dot-policy-*.config.toml` (or `~/.codex/` without an override):
+  dedicated generated native profiles containing model, effort, approval,
+  sandbox settings and per-tool approval leaves for registered Obsidian and
+  claude-mem bindings. They do not register servers or copy command/URL/auth
+  definitions. Only files recorded in the local policy ownership receipt
+  may be replaced or removed. Existing `config.toml`, legacy inline profiles,
+  MCP server definitions and authentication stay untouched. Explicit `--home`
+  ignores ambient profile locations.
+- `~/.local/share/dotfiles/ai/sessions/`: private session receipts and curated
+  checkpoints. Receipts contain no raw prompts or model output. Native session
+  history remains agent-owned. A managed process may write its normal native
+  session history; dot never copies it between providers or machines.
+
 - `~/.config/dotfiles/agents`: the shared agents instruction SSOT
   (`AGENTS.md`), written by `dot ai agents init|pull|author|edit` (edit
   scaffolds a missing SSOT), by `dot apply` (scaffolds it on a fresh

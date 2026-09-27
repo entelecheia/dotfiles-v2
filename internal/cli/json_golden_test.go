@@ -91,6 +91,12 @@ func (tc goldenCase) goldenPath() string {
 // table-driven convention (internal/config/detector_test.go:26).
 func goldenCases() []goldenCase {
 	return []goldenCase{
+		{surface: "ai policy inspect", args: []string{"ai", "policy", "inspect", "--json"}, fixture: goldenAIPolicyFixture},
+		{surface: "ai policy resolve", args: []string{"ai", "policy", "resolve", "--task", "status", "--project", "@ROOT@", "--json"}, fixture: goldenAIPolicyFixture},
+		{surface: "ai policy diff", args: []string{"ai", "policy", "diff", "--json"}, fixture: goldenAIPolicyFixture},
+		{surface: "ai policy status", args: []string{"ai", "policy", "status", "--json"}, fixture: goldenAIPolicyFixture},
+		{surface: "ai policy apply", args: []string{"ai", "policy", "apply", "--json", "--dry-run"}, fixture: goldenAIPolicyFixture},
+		{surface: "ai policy rollback", args: []string{"ai", "policy", "rollback", "--json", "--dry-run"}, fixture: goldenAIPolicyFixture},
 		{surface: "ai handoff show", args: []string{"ai", "handoff", "show", "--json"}, fixture: goldenAIHandoffFixture},
 		{surface: "ai tools list", args: []string{"ai", "tools", "list", "--json"}, fixture: goldenAIFixture},
 		{surface: "ai tools apply", args: []string{"ai", "tools", "apply", "--json", "--dry-run"}, fixture: goldenAIEmptySelectionFixture},
@@ -232,6 +238,14 @@ func TestJSONGoldens(t *testing.T) {
 	for _, tc := range goldenCases() {
 		t.Run(tc.surface, func(t *testing.T) {
 			home, root := tc.fixture(t)
+			// Fixture directory arguments keep runtime policy inspection out of
+			// the developer's project settings without changing the process cwd.
+			tc.args = append([]string{}, tc.args...)
+			for i, arg := range tc.args {
+				if arg == "@ROOT@" {
+					tc.args[i] = root
+				}
+			}
 			out, errOut, err := runGoldenSurface(tc)
 			if err != nil {
 				t.Fatalf("%s: %v\nstderr=%s", strings.Join(tc.args, " "), err, errOut)

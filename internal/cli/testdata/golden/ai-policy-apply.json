@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "operation": "apply",
+  "dry_run": true,
+  "policy": {
+    "enabled": true,
+    "revision": "fixture-1",
+    "targets": [
+      {
+        "id": "codex-balanced",
+        "agent": "codex",
+        "model": "gpt-policy-test",
+        "billing": "subscription",
+        "workloads": [
+          "routine",
+          "implementation",
+          "deep-analysis",
+          "independent-review",
+          "documents-teaching",
+          "visual-production"
+        ],
+        "capabilities": [
+          "text",
+          "code",
+          "shell",
+          "auto-review"
+        ],
+        "validated": true,
+        "version": "0.157.1",
+        "priority": 0
+      }
+    ],
+    "max_switches": 2
+  },
+  "inventory": [],
+  "changes": [],
+  "constraints": [
+    "Native base settings are not owned; policy overlays govern controlled launches only.",
+    "Strict dry run skips native probes and writes; use policy diff for an inspected overlay preview."
+  ]
+}

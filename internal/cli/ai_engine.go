@@ -128,14 +128,17 @@ func effectiveToolingForCmd(cmd *cobra.Command) (*config.AIToolingConfig, error)
 // blocks stop legacy fanout without enabling an omitted/disabled AI module.
 func applyStateWithToolingAuthority(cfg *config.Config, state *config.UserState, explicit bool) {
 	selected := cfg.Modules.AI.Tooling.Clone()
+	policy := cfg.Modules.AI.Policy.Clone()
+	hasPolicy := policy != nil && policy.Enabled
 	enabled := cfg.Modules.AI.Enabled
 	hasSelection := selected != nil
 	config.ApplyStateToConfig(cfg, state)
 	if explicit {
+		cfg.Modules.AI.Policy = policy
 		if selected == nil {
 			selected = &config.AIToolingConfig{Agents: []string{}}
 		}
 		cfg.Modules.AI.Tooling = selected
-		cfg.Modules.AI.Enabled = enabled || hasSelection
+		cfg.Modules.AI.Enabled = enabled || hasSelection || hasPolicy
 	}
 }

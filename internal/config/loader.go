@@ -121,6 +121,7 @@ func mergeConfigs(base, overlay *Config) *Config {
 
 func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	m := base
+	m.AI.Policy = base.AI.Policy.Clone()
 	// Profile overlays are enable-only for module blocks: a child profile can
 	// replace an enabled module config, but `enabled: false` does not disable a
 	// module inherited from the base. Current built-in profiles rely on this
@@ -149,10 +150,11 @@ func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	if overlay.Workspace.Enabled {
 		m.Workspace = overlay.Workspace
 	}
-	if overlay.AI.Enabled || overlay.AI.Tooling != nil {
+	if overlay.AI.Enabled || overlay.AI.Tooling != nil || overlay.AI.Policy != nil {
 		m.AI = overlay.AI
 		m.AI.Tooling = overlay.AI.Tooling.Clone()
-		if m.AI.Tooling != nil {
+		m.AI.Policy = overlay.AI.Policy.Clone()
+		if m.AI.Tooling != nil || m.AI.Policy != nil {
 			m.AI.Enabled = true
 		}
 	}

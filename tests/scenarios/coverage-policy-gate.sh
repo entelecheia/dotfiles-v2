@@ -140,10 +140,10 @@ echo "--- baseline ---"
 copy_inputs
 run_gate
 expect_green "committed policy is green"
-if printf '%s' "$GATE_OUT" | grep -Fq '30 package(s), 28 override(s), 2 exclusion(s)'; then
-  pass "baseline reports the 30/28/2 partition"
+if printf '%s' "$GATE_OUT" | grep -Fq '32 package(s), 30 override(s), 2 exclusion(s)'; then
+  pass "baseline reports the 32/30/2 partition"
 else
-  fail "baseline did not report the 30/28/2 partition\n$GATE_OUT"
+  fail "baseline did not report the 32/30/2 partition\n$GATE_OUT"
 fi
 
 echo "--- workflow trigger mutation ---"

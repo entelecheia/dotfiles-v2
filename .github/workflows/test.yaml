@@ -4,7 +4,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    # Also validate stacked feature PRs before their prerequisite reaches main.
     paths:
       - "cmd/**"
       - "internal/**"
