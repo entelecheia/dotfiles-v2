@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "mirror",
   "profile": "sync",
   "configured": true,
@@ -31,6 +31,7 @@
   "lastPushAt": null,
   "lastIntakeAt": null,
   "conflictCount": 0,
+  "unsupportedNameCount": 0,
   "logPath": "@ROOT@/.dotfiles/sync/log/sync.log",
   "includePath": "@ROOT@/.dotfiles/sync/include.txt",
   "excludePath": "@ROOT@/.dotfiles/sync/exclude.txt",

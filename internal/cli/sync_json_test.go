@@ -51,7 +51,7 @@ func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
 		LaunchdPlist: filepath.Join(root, "com.dotfiles.sync.plist"),
 	}}
 	document := buildSyncStatusJSON(cfg, status, scheduler)
-	if document.SchemaVersion != 2 || document.Kind != "mirror" || !document.Configured {
+	if document.SchemaVersion != syncStatusSchemaVersion || document.Kind != "mirror" || !document.Configured {
 		t.Fatalf("unexpected status document: %+v", document)
 	}
 	if len(document.Jobs) != 2 || document.Jobs[0].IntervalSeconds != 600 {

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "peer",
   "profile": {
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "kind": "peer-profile",
     "profile": "peer",
     "configured": true,
@@ -34,6 +34,7 @@
     "lastPushAt": null,
     "lastIntakeAt": null,
     "conflictCount": 0,
+    "unsupportedNameCount": 0,
     "logPath": "@ROOT@/.dotfiles/peer/log/sync.log",
     "includePath": "@ROOT@/.dotfiles/peer/include.txt",
     "excludePath": "@ROOT@/.dotfiles/peer/exclude.txt",

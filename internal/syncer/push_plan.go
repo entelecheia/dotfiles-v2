@@ -23,7 +23,14 @@ type PushPlan struct {
 	Deletes       []string
 	SkippedPolicy []string
 	Conflicts     []PushConflict
-	Propagation   PropagationPolicy
+	// Unsupported holds sync-set paths Dropbox/Windows cannot store (a name
+	// segment ending in a space or a period). They stay out of every transfer
+	// list above — and out of the rsync run itself — so a provider-side
+	// "(Unicode Encoding Conflict)" rename can never turn them into
+	// mirror-only conflicts. `dot sync names trim` renames the
+	// trailing-whitespace ones.
+	Unsupported []string
+	Propagation PropagationPolicy
 	// Placeholders counts mirror files whose content lives only in the
 	// provider's cloud. They are reported because a mirror that is mostly
 	// placeholders explains conflicts an operator cannot otherwise see.
@@ -85,6 +92,13 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	plan := &PushPlan{Propagation: cfg.Propagation, Placeholders: len(mirrorInv.dehydrated)}
 	rels := unionKeys(localInv.files, mirrorInv.files)
 	for _, rel := range rels {
+		if UnsupportedPathName(rel) {
+			// Never classify as create/update/delete/conflict: the transfer
+			// layer excludes the name too, so uploading it (or deleting the
+			// provider's renamed twin) is not on the table.
+			plan.Unsupported = append(plan.Unsupported, rel)
+			continue
+		}
 		localFP, localOK := localInv.files[rel]
 		mirrorFP, mirrorOK := mirrorInv.files[rel]
 		localAbs := filepath.Join(local, rel)
@@ -231,6 +245,7 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	sort.Strings(plan.Updates)
 	sort.Strings(plan.Deletes)
 	sort.Strings(plan.SkippedPolicy)
+	sort.Strings(plan.Unsupported)
 	sort.Slice(plan.Conflicts, func(i, j int) bool { return plan.Conflicts[i].RelPath < plan.Conflicts[j].RelPath })
 	return plan, nil
 }

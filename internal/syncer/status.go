@@ -28,6 +28,7 @@ type Status struct {
 	AllowCount           int // active allow.txt patterns (secrets opt-in) — warn when > 0
 	SensitiveOverrides   []SensitiveOverride
 	SubmoduleCount       int // submodules excluded from sync (they sync via Git)
+	UnsupportedNames     int // local names Dropbox/Windows cannot store — see `dot sync names trim`
 	Propagation          PropagationPolicy
 	LastPull             time.Time
 	LastPush             time.Time
@@ -134,6 +135,11 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 	// Populate manual shared entries. Errors are non-fatal; status is best-effort.
 	if shared, err := ScanShared(s.MirrorPath, cfg.SharedExcludes); err == nil {
 		s.Shared = shared
+	}
+
+	// Same best-effort rule: an unwalkable workspace must not fail status.
+	if count, err := CountUnsupportedNames(cfg); err == nil {
+		s.UnsupportedNames = count
 	}
 
 	return s, nil

@@ -385,6 +385,10 @@ func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 	// See pullArgs: the immutable peer deny layer must precede editable
 	// includes, otherwise an operator could opt a volatile tree back in.
 	args := append([]string{}, peerVolatileExcludeArgs(cfg)...)
+	// Dropbox-unsupported leaf names go before commonArgs for the same
+	// reason: an allow.txt re-include must not re-admit a name the provider
+	// would rename to "(Unicode Encoding Conflict)" on arrival.
+	args = append(args, unsupportedNameExcludeArgs(cfg)...)
 	args = append(args, commonArgs(cfg, rf)...)
 	prop := cfg.Propagation
 	if cfg.Target.IsSSH() && cfg.Profile == PeerProfile {

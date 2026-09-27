@@ -12,7 +12,10 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
-const syncStatusSchemaVersion = 2
+// syncStatusSchemaVersion advances whenever the status document gains,
+// drops, or renames a field, so a strict consumer can reject a document
+// shape it does not know. v3 adds unsupportedNameCount.
+const syncStatusSchemaVersion = 3
 
 type syncTargetJSON struct {
 	Kind string `json:"kind"`
@@ -43,37 +46,38 @@ type syncJobJSON struct {
 }
 
 type syncStatusJSON struct {
-	SchemaVersion      int                         `json:"schemaVersion"`
-	Kind               string                      `json:"kind"`
-	Profile            string                      `json:"profile"`
-	Configured         bool                        `json:"configured"`
-	WorkspacePath      string                      `json:"workspacePath"`
-	StoreDir           string                      `json:"storeDir"`
-	Target             syncTargetJSON              `json:"target"`
-	LocalExists        bool                        `json:"localExists"`
-	TargetExists       bool                        `json:"targetExists"`
-	Paused             bool                        `json:"paused"`
-	LockHeld           bool                        `json:"lockHeld"`
-	Owner              string                      `json:"owner,omitempty"`
-	CanPush            bool                        `json:"canPush"`
-	MachineNames       []string                    `json:"machineNames"`
-	FilterMode         string                      `json:"filterMode"`
-	AllowCount         int                         `json:"allowCount"`
-	SensitiveOverrides []syncSensitiveOverrideJSON `json:"sensitiveOverrides"`
-	SubmoduleCount     int                         `json:"submoduleCount"`
-	Propagation        syncPropagationJSON         `json:"propagation"`
-	MaxDelete          int                         `json:"maxDelete"`
-	RsyncVersion       string                      `json:"rsyncVersion,omitempty"`
-	LastPullAt         *string                     `json:"lastPullAt"`
-	LastPushAt         *string                     `json:"lastPushAt"`
-	LastIntakeAt       *string                     `json:"lastIntakeAt"`
-	ConflictCount      int                         `json:"conflictCount"`
-	LogPath            string                      `json:"logPath"`
-	IncludePath        string                      `json:"includePath"`
-	ExcludePath        string                      `json:"excludePath"`
-	IgnorePath         string                      `json:"ignorePath"`
-	AllowPath          string                      `json:"allowPath"`
-	Jobs               []syncJobJSON               `json:"jobs"`
+	SchemaVersion        int                         `json:"schemaVersion"`
+	Kind                 string                      `json:"kind"`
+	Profile              string                      `json:"profile"`
+	Configured           bool                        `json:"configured"`
+	WorkspacePath        string                      `json:"workspacePath"`
+	StoreDir             string                      `json:"storeDir"`
+	Target               syncTargetJSON              `json:"target"`
+	LocalExists          bool                        `json:"localExists"`
+	TargetExists         bool                        `json:"targetExists"`
+	Paused               bool                        `json:"paused"`
+	LockHeld             bool                        `json:"lockHeld"`
+	Owner                string                      `json:"owner,omitempty"`
+	CanPush              bool                        `json:"canPush"`
+	MachineNames         []string                    `json:"machineNames"`
+	FilterMode           string                      `json:"filterMode"`
+	AllowCount           int                         `json:"allowCount"`
+	SensitiveOverrides   []syncSensitiveOverrideJSON `json:"sensitiveOverrides"`
+	SubmoduleCount       int                         `json:"submoduleCount"`
+	Propagation          syncPropagationJSON         `json:"propagation"`
+	MaxDelete            int                         `json:"maxDelete"`
+	RsyncVersion         string                      `json:"rsyncVersion,omitempty"`
+	LastPullAt           *string                     `json:"lastPullAt"`
+	LastPushAt           *string                     `json:"lastPushAt"`
+	LastIntakeAt         *string                     `json:"lastIntakeAt"`
+	ConflictCount        int                         `json:"conflictCount"`
+	UnsupportedNameCount int                         `json:"unsupportedNameCount"`
+	LogPath              string                      `json:"logPath"`
+	IncludePath          string                      `json:"includePath"`
+	ExcludePath          string                      `json:"excludePath"`
+	IgnorePath           string                      `json:"ignorePath"`
+	AllowPath            string                      `json:"allowPath"`
+	Jobs                 []syncJobJSON               `json:"jobs"`
 }
 
 func timeJSON(value time.Time) *string {
@@ -153,18 +157,19 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 			Update: st.Propagation.Update,
 			Delete: st.Propagation.Delete,
 		},
-		MaxDelete:     st.MaxDelete,
-		RsyncVersion:  st.RsyncVersion,
-		LastPullAt:    timeJSON(st.LastPull),
-		LastPushAt:    timeJSON(st.LastPush),
-		LastIntakeAt:  timeJSON(st.LastIntake),
-		ConflictCount: len(st.Conflicts),
-		LogPath:       cfg.LogFile,
-		IncludePath:   st.IncludeFile,
-		ExcludePath:   st.ExcludeFile,
-		IgnorePath:    st.IgnoreFile,
-		AllowPath:     cfg.AllowFile,
-		Jobs:          jobs,
+		MaxDelete:            st.MaxDelete,
+		RsyncVersion:         st.RsyncVersion,
+		LastPullAt:           timeJSON(st.LastPull),
+		LastPushAt:           timeJSON(st.LastPush),
+		LastIntakeAt:         timeJSON(st.LastIntake),
+		ConflictCount:        len(st.Conflicts),
+		UnsupportedNameCount: st.UnsupportedNames,
+		LogPath:              cfg.LogFile,
+		IncludePath:          st.IncludeFile,
+		ExcludePath:          st.ExcludeFile,
+		IgnorePath:           st.IgnoreFile,
+		AllowPath:            cfg.AllowFile,
+		Jobs:                 jobs,
 	}
 }
 
