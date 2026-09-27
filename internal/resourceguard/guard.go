@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,9 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 		}
 		dir = wd
 	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs // the lease records it; `dot admit status` prints it
+	}
 	scope, class := "", admission.ClassHeavy
 	switch opts.ScopeKey {
 	case "":
@@ -126,19 +130,14 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 		return nil, err
 	}
 	store := admission.NewStore(root, a.runner)
-	d, err := store.Gate(ctx, a.monitor(), admission.DefaultThresholds())
+	// The probes are bounded on their own; a caller cancelling mid-probe must
+	// not record failed telemetry into the shared history.
+	d, err := store.Gate(context.WithoutCancel(ctx), a.monitor(), admission.DefaultThresholds())
 	if err != nil {
 		return nil, err
 	}
 	if !d.Admit {
 		return nil, &DeferredError{Reason: strings.Join(d.Reasons, "; ")}
-	}
-	jobs, err := a.uncovered(ctx, dir, class == admission.ClassMaintenance)
-	if err != nil {
-		return nil, &DeferredError{Reason: "heavy-work inventory unavailable: " + err.Error()}
-	}
-	if len(jobs) > 0 {
-		return nil, &DeferredError{Reason: "uncovered heavyweight work: " + strings.Join(jobs, ", ")}
 	}
 	lease, err := a.lease(ctx, a.runner, dir)
 	if err != nil {
@@ -157,6 +156,16 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 			reason += fmt.Sprintf(" (%s, pid %d)", holder.Owner, holder.PID)
 		}
 		return nil, &DeferredError{Reason: reason}
+	}
+	// Scan with the slot held, so the job that owned it is never mistaken for
+	// uncovered work; release it again on defer.
+	jobs, err := a.uncovered(ctx, dir, class == admission.ClassMaintenance)
+	if err != nil || len(jobs) > 0 {
+		_ = slot.Release()
+		if err != nil {
+			return nil, &DeferredError{Reason: "heavy-work inventory unavailable: " + err.Error()}
+		}
+		return nil, &DeferredError{Reason: "uncovered heavyweight work: " + strings.Join(jobs, ", ")}
 	}
 
 	// Children inherit the nested marker, so a `dot admit` or `dot ai run`

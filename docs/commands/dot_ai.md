@@ -48,7 +48,7 @@ they are machine state pi rebuilds itself.
 * [dot ai policy](dot_ai_policy.md)	 - Inspect, resolve and reconcile adaptive AI operating policies
 * [dot ai prune](dot_ai_prune.md)	 - Delete older AI config snapshots, keeping the newest N
 * [dot ai restore](dot_ai_restore.md)	 - Restore AI settings from a versioned snapshot
-* [dot ai run](dot_ai_run.md)	 - Admit one repository heavyweight command after healthy recovery
+* [dot ai run](dot_ai_run.md)	 - Run one repository heavyweight command under the admission controller
 * [dot ai session](dot_ai_session.md)	 - Launch controlled agents with adaptive policy and native continuation
 * [dot ai setup](dot_ai_setup.md)	 - Select agent CLIs, development add-ons, instructions and shared skills
 * [dot ai skills](dot_ai_skills.md)	 - Diagnose AI Markdown skills (read-only; the Maru app manages runtime symlinks)

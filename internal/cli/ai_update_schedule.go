@@ -46,8 +46,9 @@ func runAIUpdateSchedule(cmd *cobra.Command, action string) error {
 		if state.Modules.AI.Tooling == nil || len(state.Modules.AI.Tooling.Agents) == 0 {
 			return fmt.Errorf("configure selected agents with dot ai setup before enabling maintenance")
 		}
-		// Registration does not bypass admission: establish genuine healthy history
-		// first, then release the slot before launchd can perform its startup check.
+		// Registration does not bypass admission: take the maintenance slot on a
+		// healthy host first, then release it before launchd can perform its
+		// startup check.
 		if !dryRun {
 			wait, _ := cmd.Flags().GetDuration("wait")
 			if wait <= 0 || wait > 10*time.Minute {

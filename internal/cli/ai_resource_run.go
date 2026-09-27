@@ -21,7 +21,7 @@ func newAIRunCmd() *cobra.Command {
 }
 
 func newAIRunCmdWithAdmission(admit func(context.Context, resourceguard.Options, time.Duration) (func(), error)) *cobra.Command {
-	c := &cobra.Command{Use: "run [--wait 6m] -- COMMAND [ARGS...]", Short: "Admit one repository heavyweight command after healthy recovery", Long: `Run a command under the repository resource admission slot. Health is sampled
+	c := &cobra.Command{Use: "run [--wait 6m] -- COMMAND [ARGS...]", Short: "Run one repository heavyweight command under the admission controller", Long: `Run a command under the repository resource admission slot. Health is sampled
 without launching work; unknown telemetry or uncovered heavy jobs defer it.
 The child receives CARGO_BUILD_JOBS=2, RUST_TEST_THREADS=2, and GOMAXPROCS=2.
 Pass tool-specific flags (Go -p 2 -parallel 2; browser E2E workers=1) yourself.
@@ -46,7 +46,7 @@ Unwrapped commands are detected conservatively, not automatically controlled.`, 
 		defer release()
 		return resourceguard.RunInDirectory(ctx, project, args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 	}}
-	c.Flags().String("project", "", "Git checkout whose worktrees share the slot (defaults to current directory)")
-	c.Flags().Duration("wait", 6*time.Minute, "Bounded time to collect healthy recovery samples (0 fails promptly)")
+	c.Flags().String("project", "", "Checkout whose worktrees share the slot; a non-Git directory gets its own slot (defaults to current directory)")
+	c.Flags().Duration("wait", 6*time.Minute, "Bounded time to wait for the slot and a healthy host (0 fails promptly)")
 	return c
 }

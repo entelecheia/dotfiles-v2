@@ -114,12 +114,44 @@ func TestAdapterToolingUsesMaintenanceSlot(t *testing.T) {
 // AC6 (adapter side): heavy work outside any slot defers.
 func TestAdapterDefersOnUncoveredWork(t *testing.T) {
 	snap, jobs := healthySnapshot(), []string{"make(pid=77,parent=1,repo=/a/.git)"}
-	a, _ := testAdapter(t, &snap, &jobs)
+	a, store := testAdapter(t, &snap, &jobs)
 	if r, err := a.acquire(context.Background(), Options{ProjectDir: t.TempDir()}); !deferred(err) || !strings.Contains(err.Error(), "uncovered heavyweight work") {
 		if r != nil {
 			r()
 		}
 		t.Fatalf("uncovered work did not defer: %v", err)
+	}
+	// The defer released the slot it took for the scan.
+	if got, _, err := store.Acquire(context.Background(), "repo-a", admission.ClassHeavy, admission.Lease{Owner: "admit@test", PID: 4242, PIDStart: "x"}); err != nil || got == nil {
+		t.Fatalf("slot leaked after an uncovered-work defer: %v, %v", got, err)
+	} else {
+		_ = got.Release()
+	}
+}
+
+// A busy slot defers with its owner even when the holder's own heavy work is
+// on the process table: the scan runs only with the slot held.
+func TestAdapterBusySlotReportsOwnerNotUncovered(t *testing.T) {
+	snap, jobs := healthySnapshot(), []string{"cargo(pid=88,parent=4242,repo=/a/.git)"}
+	a, store := testAdapter(t, &snap, &jobs)
+	held, _, err := store.Acquire(context.Background(), "repo-a", admission.ClassHeavy, admission.Lease{Owner: "admit@test", PID: 4242, PIDStart: "x"})
+	if err != nil || held == nil {
+		t.Fatalf("seeding = %v, %v", held, err)
+	}
+	defer func() { _ = held.Release() }()
+	_, err = a.acquire(context.Background(), Options{ProjectDir: t.TempDir()})
+	if !deferred(err) || !strings.Contains(err.Error(), "admit@test") || strings.Contains(err.Error(), "uncovered") {
+		t.Fatalf("defer = %v, want the slot owner and no uncovered-work reason", err)
+	}
+}
+
+// The production wiring roots slots at the real user's state root.
+func TestNativeUsesUserStateRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	got, err := native().root()
+	want, werr := admission.UserStateRoot()
+	if err != nil || werr != nil || got != want {
+		t.Fatalf("native root = %q, %v; want %q, %v", got, err, want, werr)
 	}
 }
 

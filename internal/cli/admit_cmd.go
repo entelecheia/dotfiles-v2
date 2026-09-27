@@ -118,17 +118,6 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 		notifyDefer(ctx, cmd, store, effective, class, decision)
 		return deferExit(p, effective, class, "", decision, asJSON)
 	}
-	// Heavy work that holds no slot is invisible to the leases; a scan that
-	// fails or finds work in this repository (or of unknown ownership) defers.
-	if jobs, uerr := admitFindUncovered(ctx, cwd, class == admission.ClassMaintenance); uerr != nil || len(jobs) > 0 {
-		reason := "heavy-work inventory unavailable"
-		if uerr == nil {
-			reason = "uncovered heavyweight work: " + strings.Join(jobs, ", ")
-		}
-		d := admission.Decision{Admit: false, Reasons: []string{reason}, RetryAfter: 30 * time.Second}
-		return deferExit(p, effective, class, "", d, asJSON)
-	}
-
 	lease, err := admission.SelfLease(ctx, runner, cwd)
 	if err != nil {
 		return err
@@ -172,6 +161,20 @@ func runAdmit(cmd *cobra.Command, args []string) error {
 			notifyDefer(ctx, cmd, store, effective, class, decision)
 			return deferExit(p, effective, class, "", decision, asJSON)
 		}
+	}
+
+	// Heavy work that holds no slot is invisible to the leases. The scan runs
+	// with the slot held, so the job that owned it is never mistaken for
+	// uncovered work, and it sees anything that started while we waited. A
+	// failed scan or work in this repository (or of unknown ownership) defers;
+	// the deferred Release above frees the slot.
+	if jobs, uerr := admitFindUncovered(ctx, cwd, class == admission.ClassMaintenance); uerr != nil || len(jobs) > 0 {
+		reason := "uncovered heavyweight work: " + strings.Join(jobs, ", ")
+		if uerr != nil {
+			reason = "heavy-work inventory unavailable: " + uerr.Error()
+		}
+		d := admission.Decision{Admit: false, Reasons: []string{reason}, RetryAfter: 30 * time.Second}
+		return deferExit(p, effective, class, "", d, asJSON)
 	}
 
 	return runAdmittedChild(ctx, p, runner, args, effective, class, slot, asJSON)
