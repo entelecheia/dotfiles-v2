@@ -29,9 +29,9 @@ const wsReadLimit = 256 * 1024
 
 // ScanWindowServerWatchdog scans one DiagnosticReports folder for WindowServer
 // watchdog evidence and returns the timestamp of the newest event. Evidence is
-// a WindowServer*.ips report recording a WATCHDOG termination (timestamped by
-// its captureTime) or a WindowServer* file whose name contains "watchdog"
-// (timestamped by mtime). Only the newest newestN candidates by mtime are
+// a WindowServer* file whose name contains "watchdog" (timestamped by mtime),
+// or a WindowServer*.ips report recording a WATCHDOG termination (timestamped
+// by its captureTime). Only the newest newestN candidates by mtime are
 // examined. No recursion. A missing directory is an empty scan, not an error.
 // The bool reports whether the scan completed; any read failure makes it
 // false so the gate defers instead of assuming quiet.
@@ -53,12 +53,19 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 		name := e.Name()
 		isIPS := strings.HasSuffix(name, ".ips")
 		// Spin and other watchdog reports name the cause in the file name
-		// (WindowServer_..._userspace_watchdog_timeout.spin).
-		byName := !isIPS && strings.Contains(strings.ToLower(name), "watchdog")
+		// (WindowServer_..._userspace_watchdog_timeout.spin). A name match is
+		// evidence on its own, whatever the extension: counting it errs
+		// toward deferring.
+		byName := strings.Contains(strings.ToLower(name), "watchdog")
 		if e.IsDir() || !strings.HasPrefix(name, "WindowServer") || (!isIPS && !byName) {
 			continue
 		}
 		info, err := e.Info()
+		if os.IsNotExist(err) {
+			// macOS moved the report into Retired/ after the listing; the
+			// caller scans Retired/ after this folder, so it is still seen.
+			continue
+		}
 		if err != nil {
 			return time.Time{}, false, err
 		}
@@ -77,6 +84,9 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 			continue
 		}
 		content, err := readBounded(r.path, wsReadLimit)
+		if os.IsNotExist(err) {
+			continue // moved into Retired/ mid-scan; see above
+		}
 		if err != nil {
 			return time.Time{}, false, err
 		}
@@ -96,7 +106,10 @@ func ScanWindowServerWatchdog(dir string, newestN int) (time.Time, bool, error) 
 
 // WindowServerReportDirs lists where macOS writes WindowServer diagnostics:
 // the system folder, its Retired/ subfolder (processed .ips reports move
-// there), and the user folder (#165).
+// there), and the user folder (#165). The system folder precedes Retired/ so
+// a report moved mid-scan is found in Retired/. The system folders are
+// readable only by admin accounts (_analyticsusers); elsewhere the scan stays
+// incomplete and the gate defers.
 func WindowServerReportDirs(home string) []string {
 	const system = "/Library/Logs/DiagnosticReports"
 	return []string{system, filepath.Join(system, "Retired"), filepath.Join(home, "Library", "Logs", "DiagnosticReports")}

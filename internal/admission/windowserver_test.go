@@ -16,6 +16,11 @@ const cleanIPS = `{"app_name":"WindowServer","timestamp":"2026-09-27 10:00:00.00
 {"captureTime" : "2026-09-27 10:00:00.0000 +0900","name" : "WindowServer","bug_type" : "298"}
 `
 
+// cleanIPSLate is a non-watchdog report captured after the watchdog one.
+const cleanIPSLate = `{"app_name":"WindowServer","timestamp":"2026-09-27 15:00:00.00 +0900","app_version":"1.0"}
+{"captureTime" : "2026-09-27 15:00:00.0000 +0900","name" : "WindowServer","bug_type" : "298"}
+`
+
 func writeIPS(t *testing.T, dir, name, content string, mtime time.Time) {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -139,7 +144,8 @@ func TestScanWindowServerDirs(t *testing.T) {
 	}
 	writeIPS(t, system, "WindowServer_2026-09-27-131418_Mac.userspace_watchdog_timeout.spin", "x", time.Date(2026, 9, 27, 4, 14, 18, 0, time.UTC))
 	writeIPS(t, retired, "WindowServer-2026-09-27-134223.ips", watchdogIPS, time.Date(2026, 9, 27, 5, 42, 23, 0, time.UTC))
-	writeIPS(t, retired, "WindowServer-2026-09-27-150000.ips", cleanIPS, time.Date(2026, 9, 27, 6, 0, 0, 0, time.UTC))
+	// A newer .ips without WATCHDOG must not win: it is not evidence.
+	writeIPS(t, retired, "WindowServer-2026-09-27-150000.ips", cleanIPSLate, time.Date(2026, 9, 27, 6, 0, 0, 0, time.UTC))
 	got, ok, err := ScanWindowServerDirs([]string{system, retired, filepath.Join(t.TempDir(), "missing")}, wsScanNewest)
 	if err != nil || !ok {
 		t.Fatalf("scan = %v, %v", ok, err)
@@ -171,5 +177,17 @@ func TestWindowServerReportDirs(t *testing.T) {
 	want := []string{"/Library/Logs/DiagnosticReports", "/Library/Logs/DiagnosticReports/Retired", "/Users/x/Library/Logs/DiagnosticReports"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("dirs = %v, want %v", got, want)
+	}
+}
+
+// TestScanWindowServerWatchdogNamedIPS: a watchdog-named .ips counts by its
+// name even when its content lacks WATCHDOG.
+func TestScanWindowServerWatchdogNamedIPS(t *testing.T) {
+	dir := t.TempDir()
+	mtime := time.Date(2026, 9, 27, 4, 0, 0, 0, time.UTC)
+	writeIPS(t, dir, "WindowServer_2026-09-27_Mac.watchdog.ips", cleanIPS, mtime)
+	got, ok, err := ScanWindowServerWatchdog(dir, wsScanNewest)
+	if err != nil || !ok || !got.Equal(mtime) {
+		t.Fatalf("scan = %v, %v, %v; want the named report's mtime %v", got, ok, err, mtime)
 	}
 }
