@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -257,17 +256,21 @@ func newAIMemoryMCPServerCmd() *cobra.Command {
 }
 
 func newAIMemoryBridgeCmd() *cobra.Command {
+	return newAIMemoryBridgeCmdWithManager(newClaudeMemManagerFromCmd)
+}
+
+func newAIMemoryBridgeCmdWithManager(manager func(*cobra.Command) (*aisettings.ClaudeMemManager, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:    "bridge",
 		Short:  "Run the Kimi/Kiro/Copilot/Qwen/pi transcript bridge",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			mgr, err := newClaudeMemManagerFromCmd(cmd)
+			mgr, err := manager(cmd)
 			if err != nil {
 				return err
 			}
-			return mgr.RunBridge(context.Background())
+			return mgr.RunBridge(cmd.Context())
 		},
 	}
 }
