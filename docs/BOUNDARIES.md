@@ -91,7 +91,15 @@ tool):
 - `/Library/LaunchDaemons/com.dotfiles.watchdog.warp.plist` — the root
   LaunchDaemon that runs the WARP heal pass, installed with sudo by
   `dot watchdog setup` when `watchdog.warp` is enabled and removed by
-  `dot watchdog uninstall` (macOS only)
+  `dot watchdog uninstall` (macOS only). Trust note: the daemon executes
+  the same user-installed `dot` binary (with `--home` pinned to the
+  installing user). On the single-user Macs dot targets that user already
+  holds sudo, so the user-writable binary is not a privilege boundary;
+  hardening it would need a root-owned copy refreshed on every dot
+  update, which is a documented non-goal for now. The kickstart target is
+  re-validated against Cloudflare's WARP daemon label shape at run time,
+  so a local edit of `warp.json` cannot redirect the root daemon at an
+  arbitrary service
 - `~/.local/state/dot/watchdog/` — the watchdog machine state: the resolved
   config snapshot (`watchdog.yaml`) the scheduled reaper reads, the
   cross-run CPU history (`samples.json`), the WARP heal bookkeeping

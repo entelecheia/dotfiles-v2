@@ -146,15 +146,19 @@ func (m *Manager) PowerStatePath() string {
 }
 
 // InstallWarp resolves the Cloudflare WARP daemon label, installs the
-// root heal daemon, and bootstraps it. The caller primes sudo first.
-// Idempotent: any loaded copy is booted out first so an interval change
-// takes effect on rerun. Refuses to install when the WARP daemon itself
-// cannot be found — kickstarting the wrong service later is worse.
+// root heal daemon, persists the label BEFORE the RunAtLoad job can fire
+// its first pass, and bootstraps. The caller primes sudo first. Idempotent:
+// any loaded copy is booted out first so an interval change takes effect on
+// rerun. Refuses to install when the WARP daemon itself cannot be found —
+// kickstarting the wrong service later is worse.
 func (m *Manager) InstallWarp(ctx context.Context, dotPath string, interval time.Duration) (string, error) {
 	if m.goos() != "darwin" {
 		return "", ErrNeedsDarwin
 	}
-	out, err := m.Runner.RunQuery(ctx, "launchctl", "list")
+	// `sudo launchctl list` inspects the system domain, where Cloudflare's
+	// LaunchDaemon lives; the bare form would list only the user's domain
+	// and report WARP absent on a healthy install.
+	out, err := m.Runner.RunQuery(ctx, "sudo", "launchctl", "list")
 	if err != nil {
 		return "", fmt.Errorf("listing launchd services: %w", err)
 	}
@@ -162,8 +166,19 @@ func (m *Manager) InstallWarp(ctx context.Context, dotPath string, interval time
 	if err != nil {
 		return "", err
 	}
-	plist := RenderWarpPlist(dotPath, interval, m.LogDir())
+	plist := RenderWarpPlist(dotPath, m.Home, interval, m.LogDir())
 	if err := sudoInstallContent(ctx, m.Runner, []byte(plist), m.WarpPlistPath(), 0o644); err != nil {
+		return "", err
+	}
+	// The daemon starts at bootstrap (RunAtLoad), so the label must be on
+	// disk first: a first pass that reads a label-less state would save it
+	// back over the value this install resolved.
+	state, err := LoadWarpState(m.WarpStatePath())
+	if err != nil {
+		return "", err
+	}
+	state.DaemonLabel = daemonLabel
+	if err := SaveWarpState(m.WarpStatePath(), state); err != nil {
 		return "", err
 	}
 	_, _ = m.Runner.Run(ctx, "sudo", "launchctl", "bootout", "system/"+WarpLabel)

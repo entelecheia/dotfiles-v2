@@ -100,12 +100,21 @@ func runWatchdogWarpForGOOS(cmd *cobra.Command, _ []string, goos string) error {
 
 // executeWarpAction applies the decided action, logging and notifying on
 // every one. The state save happens in the caller only after this succeeds,
-// so a failed action does not consume an attempt. Kickstart runs without
-// sudo: the invoking daemon is root; a manual unprivileged run gets a clear
-// error instead of a hidden password prompt.
+// so a failed action does not consume an attempt — but a failed NOTIFICATION
+// must not block it either: an ntfy outage after a kickstart would otherwise
+// leave LastRestart unsaved and defeat the restart rate limit. Kickstart
+// runs without sudo: the invoking daemon is root; a manual unprivileged run
+// gets a clear error instead of a hidden password prompt.
 func executeWarpAction(ctx context.Context, mgr *watchdog.Manager, runner *exec.Runner, wcfg config.WatchdogConfig, state watchdog.WarpState, action watchdog.WarpAction, next watchdog.WarpState, now time.Time) error {
 	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), runner, runtime.GOOS)
 	event := watchdog.Event{Time: now, Event: "warp", Action: action.String()}
+	// notifyBestEffort reports the alert, then records — not returns — a
+	// delivery failure, so the pass still persists its state.
+	notifyBestEffort := func(level, msg string) {
+		if err := notifier.Notify(ctx, level, msg); err != nil {
+			_ = watchdog.AppendEvent(mgr.LogPath(), watchdog.Event{Time: now, Level: "warn", Event: "error", Msg: "notification failed: " + err.Error()})
+		}
+	}
 	switch action {
 	case watchdog.WarpActionNone:
 		return nil
@@ -125,21 +134,28 @@ func executeWarpAction(ctx context.Context, mgr *watchdog.Manager, runner *exec.
 		if err := watchdog.AppendEvent(mgr.LogPath(), event); err != nil {
 			return err
 		}
-		return notifier.Notify(ctx, "warn", event.Msg)
+		notifyBestEffort("warn", event.Msg)
+		return nil
 	case watchdog.WarpActionKickstart:
 		label := state.DaemonLabel
 		if label == "" {
 			return fmt.Errorf("WARP daemon label unknown; rerun `dot watchdog setup` to resolve and persist it")
 		}
+		// warp.json is user-writable while this pass may run as root: never
+		// kickstart a label that cannot be Cloudflare's WARP daemon.
+		if !watchdog.ValidWarpDaemonLabel(label) {
+			return fmt.Errorf("persisted WARP daemon label %q failed validation; rerun `dot watchdog setup`", label)
+		}
 		if _, err := runner.Run(ctx, "launchctl", "kickstart", "-k", "system/"+label); err != nil {
 			return fmt.Errorf("kickstarting WARP daemon (needs root; try `sudo dot watchdog warp`): %w", err)
 		}
 		event.Level = "critical"
-		event.Msg = fmt.Sprintf("WARP daemon %s kickstarted after %d failed reconnects", label, watchdog.MaxReconnectAttempts)
+		event.Msg = fmt.Sprintf("WARP daemon %s kickstarted after %d failed reconnects; further restarts rate-limited to one per %s", label, watchdog.MaxReconnectAttempts, watchdog.WarpRestartMinInterval)
 		if err := watchdog.AppendEvent(mgr.LogPath(), event); err != nil {
 			return err
 		}
-		return notifier.Notify(ctx, "critical", event.Msg)
+		notifyBestEffort("critical", event.Msg)
+		return nil
 	}
 	return nil
 }
@@ -164,20 +180,14 @@ func setupWarpDaemonStep(p *Printer, mgr *watchdog.Manager, wcfg config.Watchdog
 	if err != nil {
 		return err
 	}
-	state, err := watchdog.LoadWarpState(mgr.WarpStatePath())
-	if err != nil {
-		return err
-	}
-	state.DaemonLabel = daemonLabel
-	if err := watchdog.SaveWarpState(mgr.WarpStatePath(), state); err != nil {
-		return err
-	}
 	p.Line("  ✓ WARP heal daemon installed (every %s, kickstart target %s)", settings.Interval, daemonLabel)
 	return nil
 }
 
 // applyPowerStep captures the current power values into power.json BEFORE
-// applying the headless set, so uninstall can restore them.
+// applying the headless set, so uninstall can restore them. A rerun keeps
+// the first capture: re-capturing the already-hardened values would make a
+// later "restore" replay the hardened set and lose the original ones.
 func applyPowerStep(p *Printer, mgr *watchdog.Manager, yes bool) error {
 	ok, err := ui.Confirm("Apply headless power settings (pmset: no sleep on charger, autorestart, womp; restartfreeze on)?", yes)
 	if err != nil {
@@ -191,20 +201,27 @@ func applyPowerStep(p *Printer, mgr *watchdog.Manager, yes bool) error {
 	if err := mgr.Runner.RunInteractive(ctx, "sudo", "-v"); err != nil {
 		return fmt.Errorf("sudo is required for pmset/systemsetup: %w", err)
 	}
-	pmsetG, err := mgr.Runner.RunQuery(ctx, "pmset", "-g")
-	if err != nil {
-		return fmt.Errorf("reading current pmset values: %w", err)
-	}
-	freeze, err := mgr.Runner.RunQuery(ctx, "systemsetup", "-getrestartfreeze")
-	if err != nil {
-		return fmt.Errorf("reading current restartfreeze value: %w", err)
-	}
-	state, err := watchdog.CapturePower(pmsetG.Stdout, freeze.Stdout)
-	if err != nil {
+	if _, exists, err := watchdog.LoadPowerState(mgr.PowerStatePath()); err != nil {
 		return err
-	}
-	if err := watchdog.SavePowerState(mgr.PowerStatePath(), state); err != nil {
-		return err
+	} else if !exists {
+		pmsetG, err := mgr.Runner.RunQuery(ctx, "pmset", "-g", "custom")
+		if err != nil {
+			return fmt.Errorf("reading current pmset values: %w", err)
+		}
+		// systemsetup requires administrator privileges even for -get.
+		freeze, err := mgr.Runner.RunQuery(ctx, "sudo", "systemsetup", "-getrestartfreeze")
+		if err != nil {
+			return fmt.Errorf("reading current restartfreeze value: %w", err)
+		}
+		state, err := watchdog.CapturePower(pmsetG.Stdout, freeze.Stdout)
+		if err != nil {
+			return err
+		}
+		if err := watchdog.SavePowerState(mgr.PowerStatePath(), state); err != nil {
+			return err
+		}
+	} else {
+		p.Line("  keeping the original power snapshot in %s (already captured)", mgr.PowerStatePath())
 	}
 	if err := watchdog.RunPowerCommands(ctx, mgr.Runner, true, watchdog.PowerApplyCommands()); err != nil {
 		return err

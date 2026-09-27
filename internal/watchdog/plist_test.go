@@ -105,7 +105,7 @@ func TestManager_ProbeOffDarwinIsPlistOnly(t *testing.T) {
 }
 
 func TestRenderWarpPlist_Golden(t *testing.T) {
-	got := RenderWarpPlist("/Users/test/.local/bin/dot", 120*time.Second, "/Users/test/Library/Logs/dot")
+	got := RenderWarpPlist("/Users/test/.local/bin/dot", "/Users/test", 120*time.Second, "/Users/test/Library/Logs/dot")
 	golden := filepath.Join("testdata", "warp.plist.golden")
 	if os.Getenv("UPDATE_GOLDEN") == "1" {
 		if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
@@ -122,8 +122,20 @@ func TestRenderWarpPlist_Golden(t *testing.T) {
 }
 
 func TestRenderWarpPlist_CarriesLabelMarkerAndInterval(t *testing.T) {
-	plist := RenderWarpPlist("/usr/local/bin/dot", 120*time.Second, "/tmp/logs")
+	plist := RenderWarpPlist("/usr/local/bin/dot", "/Users/test", 120*time.Second, "/tmp/logs")
 	for _, want := range []string{WarpLabel, "<key>" + ScheduledRunEnv + "</key>", "<integer>120</integer>", "watchdog</string>", "warp</string>"} {
+		if !strings.Contains(plist, want) {
+			t.Errorf("warp plist missing %q", want)
+		}
+	}
+}
+
+// The root daemon runs as root: without the owning user's home pinned in
+// its arguments, homeFor resolves /var/root and the pass never finds the
+// setup snapshot.
+func TestRenderWarpPlist_PinsTheUsersHome(t *testing.T) {
+	plist := RenderWarpPlist("/usr/local/bin/dot", "/Users/test", 120*time.Second, "/tmp/logs")
+	for _, want := range []string{"<string>--home</string>", "<string>/Users/test</string>"} {
 		if !strings.Contains(plist, want) {
 			t.Errorf("warp plist missing %q", want)
 		}

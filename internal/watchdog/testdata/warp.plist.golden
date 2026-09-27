@@ -8,6 +8,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>/Users/test/.local/bin/dot</string>
+    <string>--home</string>
+    <string>/Users/test</string>
     <string>watchdog</string>
     <string>warp</string>
   </array>

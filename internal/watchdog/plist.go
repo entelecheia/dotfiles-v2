@@ -62,8 +62,10 @@ func RenderReapPlist(dotPath string, interval time.Duration, logDir string) stri
 
 // RenderWarpPlist renders the root LaunchDaemon for the WARP heal pass.
 // Same explicit-PATH rationale as the reaper unit; the daemon writes its
-// stdout/stderr beside the user agent's logs.
-func RenderWarpPlist(dotPath string, interval time.Duration, logDir string) string {
+// stdout/stderr beside the user agent's logs. The daemon runs as root, so
+// the arguments pin the owning user's home explicitly — without it homeFor
+// resolves /var/root and the pass never finds the setup snapshot.
+func RenderWarpPlist(dotPath, homeDir string, interval time.Duration, logDir string) string {
 	seconds := int(interval / time.Second)
 	if seconds < 1 {
 		seconds = 1
@@ -77,6 +79,8 @@ func RenderWarpPlist(dotPath string, interval time.Duration, logDir string) stri
   <string>%s</string>
   <key>ProgramArguments</key>
   <array>
+    <string>%s</string>
+    <string>--home</string>
     <string>%s</string>
     <string>watchdog</string>
     <string>warp</string>
@@ -98,5 +102,5 @@ func RenderWarpPlist(dotPath string, interval time.Duration, logDir string) stri
   <string>%s/warp.err.log</string>
 </dict>
 </plist>
-`, WarpLabel, dotPath, ScheduledRunEnv, seconds, logDir, logDir)
+`, WarpLabel, dotPath, homeDir, ScheduledRunEnv, seconds, logDir, logDir)
 }

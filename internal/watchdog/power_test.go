@@ -11,18 +11,23 @@ import (
 )
 
 const pmsetGFixture = `System-wide power settings:
-Currently in use:
+Battery Power:
+ standby              1
+ sleep                10
+ autorestart          0
+ womp                 0
+ displaysleep         5
+AC Power:
  standby              1
  Sleep On Power Button 1
  hibernatefile        /var/vm/sleepimage
  powernap             1
- disksleep            10
  sleep                1
+ autorestart          0
+ womp                 0
  hibernatemode        3
  ttyskeepawake        1
  displaysleep         15
- autorestart          0
- womp                 0
 `
 
 func TestCapturePower_Fixture(t *testing.T) {
@@ -30,7 +35,10 @@ func TestCapturePower_Fixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CapturePower: %v", err)
 	}
-	want := PowerState{Sleep: "1", AutoRestart: "0", Womp: "0", RestartFreeze: "off"}
+	want := PowerState{
+		Sleep: "1", AutoRestart: "0", Womp: "0", RestartFreeze: "off",
+		SleepBattery: "10", AutoRestartBattery: "0", WompBattery: "0",
+	}
 	if st != want {
 		t.Fatalf("CapturePower = %#v, want %#v", st, want)
 	}
@@ -91,12 +99,29 @@ func TestPowerCommandPlans(t *testing.T) {
 	restore := PowerRestoreCommands(st)
 	wantRestore := [][]string{
 		{"pmset", "-c", "sleep", "1"},
-		{"pmset", "-a", "autorestart", "0"},
-		{"pmset", "-a", "womp", "1"},
+		{"pmset", "-c", "autorestart", "0"},
+		{"pmset", "-c", "womp", "1"},
 		{"systemsetup", "-setrestartfreeze", "off"},
 	}
 	if !reflect.DeepEqual(restore, wantRestore) {
 		t.Fatalf("restore plan = %v", restore)
+	}
+
+	// A capture with a battery profile restores both profiles, battery
+	// commands before the system-wide systemsetup.
+	st.SleepBattery, st.AutoRestartBattery, st.WompBattery = "10", "0", "0"
+	restore = PowerRestoreCommands(st)
+	wantRestore = [][]string{
+		{"pmset", "-c", "sleep", "1"},
+		{"pmset", "-c", "autorestart", "0"},
+		{"pmset", "-c", "womp", "1"},
+		{"pmset", "-b", "sleep", "10"},
+		{"pmset", "-b", "autorestart", "0"},
+		{"pmset", "-b", "womp", "0"},
+		{"systemsetup", "-setrestartfreeze", "off"},
+	}
+	if !reflect.DeepEqual(restore, wantRestore) {
+		t.Fatalf("per-source restore plan = %v", restore)
 	}
 }
 
@@ -174,8 +199,11 @@ func TestPowerState_RoundTrip(t *testing.T) {
 	if err := RunPowerCommands(context.Background(), r, true, PowerRestoreCommands(loaded)); err != nil {
 		t.Fatal(err)
 	}
-	if r.calls[0] != "sudo pmset -c sleep 1" || r.calls[3] != "sudo systemsetup -setrestartfreeze on" {
+	if r.calls[0] != "sudo pmset -c sleep 1" || r.calls[len(r.calls)-1] != "sudo systemsetup -setrestartfreeze on" {
 		t.Fatalf("restored calls replay the captured values: %v", r.calls)
+	}
+	if len(r.calls) != 7 {
+		t.Fatalf("a battery-profile capture restores both profiles: %v", r.calls)
 	}
 }
 

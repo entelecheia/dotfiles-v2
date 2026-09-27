@@ -17,33 +17,77 @@ import (
 
 // PowerState holds the pre-hardening values, persisted to power.json.
 // Values are kept as strings exactly as pmset/systemsetup print them, so a
-// restore replays what was there rather than a guess at its type.
+// restore replays what was there rather than a guess at its type. The three
+// pmset keys are captured per power source (`pmset -g custom`): `pmset -g`
+// shows only the currently active source, and restoring charger values that
+// were actually battery values would corrupt both profiles. Battery fields
+// stay empty on desktops, and restores then touch only the charger profile.
 type PowerState struct {
-	Sleep         string `json:"sleep"`          // pmset -c sleep
-	AutoRestart   string `json:"autorestart"`    // pmset -a autorestart
-	Womp          string `json:"womp"`           // pmset -a womp
-	RestartFreeze string `json:"restart_freeze"` // systemsetup -getrestartfreeze: On | Off
+	Sleep         string `json:"sleep"`          // pmset AC sleep
+	AutoRestart   string `json:"autorestart"`    // pmset AC autorestart
+	Womp          string `json:"womp"`           // pmset AC womp
+	RestartFreeze string `json:"restart_freeze"` // systemsetup -getrestartfreeze: on | off
+
+	SleepBattery       string `json:"sleep_battery,omitempty"`
+	AutoRestartBattery string `json:"autorestart_battery,omitempty"`
+	WompBattery        string `json:"womp_battery,omitempty"`
 }
 
-// CapturePower parses `pmset -g` and `systemsetup -getrestartfreeze`
-// output into the state saved BEFORE hardening.
-func CapturePower(pmsetG, restartFreezeOut string) (PowerState, error) {
+// CapturePower parses `pmset -g custom` (per-source values) and
+// `systemsetup -getrestartfreeze` output into the state saved BEFORE
+// hardening. The AC section fills the charger fields; the Battery section,
+// when present, fills the battery fields.
+func CapturePower(pmsetGCustom, restartFreezeOut string) (PowerState, error) {
 	var st PowerState
 	var err error
-	if st.Sleep, err = pmsetValue(pmsetG, "sleep"); err != nil {
+	ac := pmsetSection(pmsetGCustom, "AC Power")
+	if ac == "" {
+		// Desktops without a battery report a single unnamed profile; fall
+		// back to reading it as the charger profile.
+		ac = pmsetGCustom
+	}
+	if st.Sleep, err = pmsetValue(ac, "sleep"); err != nil {
 		return PowerState{}, err
 	}
-	if st.AutoRestart, err = pmsetValue(pmsetG, "autorestart"); err != nil {
+	if st.AutoRestart, err = pmsetValue(ac, "autorestart"); err != nil {
 		return PowerState{}, err
 	}
-	if st.Womp, err = pmsetValue(pmsetG, "womp"); err != nil {
+	if st.Womp, err = pmsetValue(ac, "womp"); err != nil {
 		return PowerState{}, err
+	}
+	if battery := pmsetSection(pmsetGCustom, "Battery Power"); battery != "" {
+		if st.SleepBattery, err = pmsetValue(battery, "sleep"); err != nil {
+			return PowerState{}, err
+		}
+		if st.AutoRestartBattery, err = pmsetValue(battery, "autorestart"); err != nil {
+			return PowerState{}, err
+		}
+		if st.WompBattery, err = pmsetValue(battery, "womp"); err != nil {
+			return PowerState{}, err
+		}
 	}
 	st.RestartFreeze, err = parseRestartFreeze(restartFreezeOut)
 	if err != nil {
 		return PowerState{}, err
 	}
 	return st, nil
+}
+
+// pmsetSection extracts the lines of one `pmset -g custom` section
+// ("AC Power:" / "Battery Power:"), stopping at the next section header.
+func pmsetSection(pmsetGCustom, header string) string {
+	var lines []string
+	inSection := false
+	for _, line := range strings.Split(pmsetGCustom, "\n") {
+		if strings.HasSuffix(strings.TrimSpace(line), ":") {
+			inSection = strings.TrimSpace(line) == header+":"
+			continue
+		}
+		if inSection {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // pmsetValue extracts one value from `pmset -g` output (" sleep               0").
@@ -88,14 +132,25 @@ func PowerApplyCommands() [][]string {
 	}
 }
 
-// PowerRestoreCommands replays the captured pre-hardening values.
+// PowerRestoreCommands replays the captured pre-hardening values, per power
+// source: charger keys go to -c, captured battery keys to -b, and
+// restartfreeze is system-wide. Battery commands are absent when the capture
+// saw no battery profile (desktops, or a state file written before
+// per-source capture existed).
 func PowerRestoreCommands(st PowerState) [][]string {
-	return [][]string{
+	cmds := [][]string{
 		{"pmset", "-c", "sleep", st.Sleep},
-		{"pmset", "-a", "autorestart", st.AutoRestart},
-		{"pmset", "-a", "womp", st.Womp},
-		{"systemsetup", "-setrestartfreeze", st.RestartFreeze},
+		{"pmset", "-c", "autorestart", st.AutoRestart},
+		{"pmset", "-c", "womp", st.Womp},
 	}
+	if st.SleepBattery != "" {
+		cmds = append(cmds, [][]string{
+			{"pmset", "-b", "sleep", st.SleepBattery},
+			{"pmset", "-b", "autorestart", st.AutoRestartBattery},
+			{"pmset", "-b", "womp", st.WompBattery},
+		}...)
+	}
+	return append(cmds, []string{"systemsetup", "-setrestartfreeze", st.RestartFreeze})
 }
 
 // CommandRunner is the slice of *exec.Runner the power step needs; tests

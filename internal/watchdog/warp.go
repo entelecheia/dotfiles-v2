@@ -174,11 +174,18 @@ func ResolveWarpDaemonLabel(launchctlListOut string) (string, error) {
 			continue
 		}
 		label := fields[len(fields)-1]
-		if strings.HasPrefix(label, "com.cloudflare.") && strings.Contains(label, "warp") && strings.HasSuffix(label, "daemon") {
+		if ValidWarpDaemonLabel(label) {
 			return label, nil
 		}
 	}
 	return "", fmt.Errorf("cloudflare WARP daemon not found in `launchctl list`; install and start WARP, then rerun `dot watchdog setup`")
+}
+
+// ValidWarpDaemonLabel is the kickstart-time re-validation of the persisted
+// label: warp.json lives in the user-writable state dir, and the root daemon
+// must never kickstart an arbitrary service a local edit planted there.
+func ValidWarpDaemonLabel(label string) bool {
+	return strings.HasPrefix(label, "com.cloudflare.") && strings.Contains(label, "warp") && strings.HasSuffix(label, "daemon")
 }
 
 // LoadWarpState reads the warp state file. A missing file is a zero state,
@@ -208,7 +215,9 @@ func SaveWarpState(path string, s WarpState) error {
 }
 
 // saveJSONAtomic writes data to path via a same-dir temp file and rename,
-// creating the parent directory first (see SaveSamples).
+// creating the parent directory first (see SaveSamples). The temp file gets
+// 0644 explicitly: CreateTemp's 0600 would make a root-written warp.json
+// unreadable — and unreloadable — for the user's manual passes.
 func saveJSONAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating state dir: %w", err)
@@ -224,6 +233,9 @@ func saveJSONAtomic(path string, data []byte) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("writing state: %w", err)
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return fmt.Errorf("chmod state temp file: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("replacing state: %w", err)
