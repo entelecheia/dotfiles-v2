@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -63,13 +64,13 @@ func TestCatalogAndSelectionAllowlist(t *testing.T) {
 			tools = append(tools, e.ID)
 		}
 	}
-	if !reflect.DeepEqual(agents, []string{"claude", "codex", "kimi", "qwen", "grok", "opencode"}) {
+	if !reflect.DeepEqual(agents, []string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "gencode", "pi", "antigravity"}) {
 		t.Fatal(agents)
 	}
 	if !reflect.DeepEqual(tools, []string{"ripwire", "ocr", "gsd", "claude-mem", "ponytail"}) {
 		t.Fatal(tools)
 	}
-	for _, bad := range []string{"skills", "firecrawl", "cursor", "pi", "agent-hub"} {
+	for _, bad := range []string{"skills", "firecrawl", "cursor", "agent-hub"} {
 		if ValidateSelection(config.AIToolingConfig{Tools: []string{bad}}) == nil {
 			t.Fatal(bad)
 		}
@@ -79,6 +80,12 @@ func TestCatalogAndSelectionAllowlist(t *testing.T) {
 	}
 	if ValidateSelection(config.AIToolingConfig{Agents: []string{"codex"}, Pins: map[string]string{"codex": "1.0.0-beta"}}) == nil {
 		t.Fatal("prerelease pin accepted")
+	}
+	if ValidateSelection(config.AIToolingConfig{Agents: []string{"gencode"}, Pins: map[string]string{"gencode": "1.18.32-gencode.1"}}) != nil {
+		t.Fatal("gencode suffixed pin rejected")
+	}
+	if ValidateSelection(config.AIToolingConfig{Agents: []string{"pi"}, Pins: map[string]string{"pi": "0.87.1-beta"}}) == nil {
+		t.Fatal("pi prerelease pin accepted")
 	}
 }
 func TestInspectAndDryRunDoNotAcquireOrSave(t *testing.T) {
@@ -439,5 +446,154 @@ func TestRelativeAmbientConfigHomeRejectedBeforeAdmission(t *testing.T) {
 	_, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"codex"}}, Ensure)
 	if err == nil || !strings.Contains(err.Error(), "configuration home must be absolute") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestSuffixedLatestOnlyAcceptedWhenAllowed(t *testing.T) {
+	body := `{"version":"1.18.32-gencode.1"}`
+	for _, allow := range []bool{false, true} {
+		e := testEngine(t)
+		e.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})
+		v, err := e.latestVersion(context.Background(), "https://example.invalid/latest", allow)
+		if allow && (err != nil || v != "1.18.32-gencode.1") {
+			t.Fatalf("allowSuffix: v=%q err=%v", v, err)
+		}
+		if !allow && err == nil {
+			t.Fatal("strict metadata accepted a suffixed version")
+		}
+	}
+}
+func TestGencodeInstallsSuffixedVersionViaNpm(t *testing.T) {
+	e := testEngine(t)
+	fakeBinary(t, e, "npm")
+	e.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"version":"1.18.32-gencode.1"}`)), Header: make(http.Header)}, nil
+	})
+	var commands []command
+	e.exec = func(_ context.Context, c command) (string, error) {
+		commands = append(commands, c)
+		if filepath.Base(c.Path) == "npm" {
+			fakeBinary(t, e, "gencode")
+			return "", nil
+		}
+		return "gencode 1.18.32-gencode.1", nil
+	}
+	r, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"gencode"}}, Ensure)
+	if err != nil || r.Failed != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if len(commands) != 2 || strings.Join(commands[0].Args, " ") != "install --global --prefix "+filepath.Join(e.opts.HomeDir, ".local")+" --registry=https://registry.npmjs.org @genspark/gencode@1.18.32-gencode.1" {
+		t.Fatalf("unexpected command sequence %v", commandDiagnostics(commands))
+	}
+	if r.Items[0].Status != "installed" || r.Items[0].Installed != "1.18.32-gencode.1" {
+		t.Fatal(r.Items[0])
+	}
+}
+func TestPiInstallsViaNpmProvider(t *testing.T) {
+	e := testEngine(t)
+	fakeBinary(t, e, "npm")
+	e.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"version":"0.87.1"}`)), Header: make(http.Header)}, nil
+	})
+	var commands []command
+	e.exec = func(_ context.Context, c command) (string, error) {
+		commands = append(commands, c)
+		if filepath.Base(c.Path) == "npm" {
+			fakeBinary(t, e, "pi")
+			return "", nil
+		}
+		return "pi 0.87.1", nil
+	}
+	r, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"pi"}}, Ensure)
+	if err != nil || r.Failed != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if len(commands) != 2 || strings.Join(commands[0].Args, " ") != "install --global --prefix "+filepath.Join(e.opts.HomeDir, ".local")+" --registry=https://registry.npmjs.org @earendil-works/pi-coding-agent@0.87.1" {
+		t.Fatalf("unexpected command sequence %v", commandDiagnostics(commands))
+	}
+	if r.Items[0].Status != "installed" || r.Items[0].Installed != "0.87.1" {
+		t.Fatal(r.Items[0])
+	}
+}
+func TestAntigravityMetadataURLUsesRuntimePlatform(t *testing.T) {
+	got := metadataURL(binarySpecs()["antigravity"])
+	switch runtime.GOOS + "_" + runtime.GOARCH {
+	case "darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64":
+		if strings.Contains(got, "%s") || !strings.HasSuffix(got, "/manifests/"+runtime.GOOS+"_"+runtime.GOARCH+".json") {
+			t.Fatal(got)
+		}
+	default:
+		if !strings.Contains(got, "%s") {
+			t.Fatal("unsupported platform must keep the unexpanded template")
+		}
+	}
+	if got := metadataURL(binarySpecs()["codex"]); strings.Contains(got, "%s") {
+		t.Fatal(got)
+	}
+}
+func TestAntigravityDefersSelfUpdate(t *testing.T) {
+	e := testEngine(t)
+	fakeBinary(t, e, "agy")
+	e.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"version":"1.2.12"}`)), Header: make(http.Header)}, nil
+	})
+	e.exec = func(_ context.Context, c command) (string, error) {
+		if filepath.Base(c.Path) == "agy" {
+			return "agy 1.2.11", nil
+		}
+		t.Fatalf("unexpected mutation command: %s", commandDiagnostic(c))
+		return "", nil
+	}
+	r, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"antigravity"}}, Update)
+	if err != nil || len(r.Items) != 1 || r.Items[0].Status != "deferred-self-update" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if !strings.Contains(r.Items[0].Detail, "self-updates") {
+		t.Fatal(r.Items[0])
+	}
+}
+func TestAntigravityInstallsWhenMissing(t *testing.T) {
+	e := testEngine(t)
+	e.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"version":"1.2.12"}`)), Header: make(http.Header)}, nil
+	})
+	var commands []command
+	e.exec = func(_ context.Context, c command) (string, error) {
+		commands = append(commands, c)
+		if c.Path == "/bin/bash" {
+			fakeBinary(t, e, "agy")
+			return "", nil
+		}
+		return "agy 1.2.12", nil
+	}
+	r, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"antigravity"}}, Ensure)
+	if err != nil || r.Failed != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if len(commands) != 2 || strings.Join(commands[0].Args, " ") != "-s -- --dir "+filepath.Join(e.opts.HomeDir, ".local", "bin") {
+		t.Fatalf("unexpected command sequence %v", commandDiagnostics(commands))
+	}
+	if r.Items[0].Status != "installed" || r.Items[0].Installed != "1.2.12" {
+		t.Fatal(r.Items[0])
+	}
+}
+
+func TestAntigravityDefersUnavailablePin(t *testing.T) {
+	e := testEngine(t)
+	e.http.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"version":"1.2.12"}`)), Header: make(http.Header)}, nil
+	})
+	e.exec = func(_ context.Context, c command) (string, error) {
+		t.Fatalf("unexpected mutation command: %s", commandDiagnostic(c))
+		return "", nil
+	}
+	r, err := e.Run(context.Background(), config.AIToolingConfig{Agents: []string{"antigravity"}, Pins: map[string]string{"antigravity": "1.0.0"}}, Ensure)
+	if err != nil || len(r.Items) != 1 || r.Items[0].Status != "deferred-pin" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if !strings.Contains(r.Items[0].Detail, "1.2.12") || !strings.Contains(r.Items[0].Detail, "1.0.0") {
+		t.Fatal(r.Items[0])
 	}
 }

@@ -177,10 +177,14 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 
 ### Selected Agent Environments
 
-`dot ai setup` selects Claude, Codex, Kimi, Qwen, Grok and OpenCode CLIs,
-optional development add-ons, and shared skills. Saved selections control
-installation, instruction rendering and subsequent maintenance. Deselecting
-stops future managed writes without uninstalling software or deleting data.
+`dot ai setup` selects Claude, Codex, Kimi, Qwen, Grok, OpenCode, Genspark
+Gencode, pi and Antigravity CLIs, optional development add-ons, and shared
+skills. Saved selections control installation, instruction rendering and
+subsequent maintenance. Deselecting stops future managed writes without
+uninstalling software or deleting data. Gencode and pi install through the
+npm provider; Antigravity installs its `agy` binary into `~/.local/bin` and
+self-updates in the background, so `dot ai update` defers to that
+self-updater instead of reinstalling.
 
 ```bash
 dot ai setup

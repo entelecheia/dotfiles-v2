@@ -67,8 +67,10 @@ func runToolingSelection(cmd *cobra.Command, selection config.AIToolingConfig, o
 			return err
 		}
 		if !dry {
-			if _, err := mgr.Apply(aisettings.ApplyOptions{Tools: selection.Agents}); err != nil {
-				return err
+			if tools := registeredInstructionTools(mgr, selection.Agents); len(tools) > 0 {
+				if _, err := mgr.Apply(aisettings.ApplyOptions{Tools: tools}); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -121,4 +123,17 @@ func toolingAdmissionBlocked(report aitooling.Report) bool {
 		}
 	}
 	return false
+}
+
+// registeredInstructionTools intersects selected agents with the instruction
+// registry; the install catalog can lead the registry (e.g. gencode has no
+// verified instruction target yet).
+func registeredInstructionTools(mgr *aisettings.AgentsManager, agents []string) []string {
+	var out []string
+	for _, id := range agents {
+		if _, ok := mgr.Tool(id); ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }

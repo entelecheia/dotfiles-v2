@@ -23,7 +23,7 @@ func TestResolveUpdateToolsKeepsPhaseOrder(t *testing.T) {
 	}
 }
 func TestResolveUpdateToolsRejectsExcluded(t *testing.T) {
-	for _, id := range []string{"skills", "gemini", "pi", "cursor", "copilot", "kiro", "firecrawl", "agent-hub", ","} {
+	for _, id := range []string{"skills", "gemini", "cursor", "copilot", "kiro", "firecrawl", "agent-hub", ","} {
 		t.Run(id, func(t *testing.T) {
 			cmd := newAIUpdateCmd()
 			_ = cmd.Flags().Set("tool", id)

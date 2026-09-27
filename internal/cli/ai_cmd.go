@@ -64,13 +64,13 @@ func newAIListCmd() *cobra.Command {
 // extraDetectedCLIs are probed by `dot ai list` but are not `dot ai update`
 // phases: agy has no self-update path dot drives, and gh/fabric are helpers
 // the 30-ai.sh aliases depend on.
-var extraDetectedCLIs = []string{"agy", "gh", "fabric"}
+var extraDetectedCLIs = []string{"gh", "fabric"}
 
 // detectedCLINames derives the probe list from the update phases so a binary
 // rename in updateToolBinary cannot leave this list silently reporting
 // "(not found)".
 func detectedCLINames() []string {
-	return append([]string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "copilot", "gemini", "pi", "kiro-cli", "cursor-agent"}, extraDetectedCLIs...)
+	return append([]string{"claude", "codex", "kimi", "qwen", "grok", "opencode", "gencode", "pi", "agy", "copilot", "gemini", "kiro-cli", "cursor-agent"}, extraDetectedCLIs...)
 }
 
 func runAIList(cmd *cobra.Command, _ []string) error {
