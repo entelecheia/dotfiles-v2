@@ -518,7 +518,7 @@ func propagateDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, con
 }
 
 func runDeleteRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
-	result, err := runner.Run(ctx, "rsync", args...)
+	result, err := runner.Run(ctx, cfg.rsyncBin(), args...)
 	if result != nil {
 		output := strings.ToLower(result.Stdout + "\n" + result.Stderr)
 		if strings.Contains(output, "cannot delete") {

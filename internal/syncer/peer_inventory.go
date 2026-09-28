@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,7 +35,10 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 	}
 	defer os.RemoveAll(root)
 
-	args := []string{"-r", "--dry-run", "--no-links", "--out-format=@@%l\t%M\t%n"}
+	// -8 keeps rsync 3.x from escaping high-bit bytes as \#ooo, which it does
+	// for every non-ASCII name when the locale is C (a bare ssh command, a
+	// launchd job). The names must arrive as bytes for the NFD check.
+	args := []string{"-r", "-8", "--dry-run", "--no-links", "--out-format=@@%l\t%M\t%n"}
 	args = append(args, PeerFilterArgs(cfg, rf)...)
 	remoteRsync := cfg.RemoteRsyncPath
 	if remoteRsync == "" {
@@ -44,7 +48,7 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 	// from `date +%z` is wrong for historical timestamps across DST changes.
 	args = append(args, "--rsync-path=env TZ=UTC "+remoteRsync)
 	args = append(args, "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", cfg.Target.RsyncDest(), root+"/")
-	res, runErr := runner.Run(ctx, "env", append([]string{"TZ=UTC", "rsync"}, args...)...)
+	res, runErr := runner.Run(ctx, "env", append([]string{"TZ=UTC", cfg.rsyncBin()}, args...)...)
 	if runErr != nil {
 		return nil, fmt.Errorf("peer inventory: %w", runErr)
 	}
@@ -253,6 +257,9 @@ func parsePeerRemoteInventory(stdout string, remoteLoc *time.Location, baseline 
 		if err != nil {
 			return nil, err
 		}
+		if rsyncEscapeRe.MatchString(rel) {
+			return nil, fmt.Errorf("peer inventory: rsync printed the name %q with \\#ooo octal escapes, not an NFD problem: the name holds a control character (Finder's Icon\\r, say) or a literal \\# before digits, which rsync always escapes, or the client is openrsync; rename or exclude that file", rel)
+		}
 		if requireNFD && rel != "" && !NFDPathNormalized(rel) {
 			return nil, fmt.Errorf("peer inventory: path %q is not NFD-normalized; normalize the peer before retrying", rel)
 		}
@@ -284,6 +291,13 @@ func parsePeerRemoteInventory(stdout string, remoteLoc *time.Location, baseline 
 	}
 	return out, nil
 }
+
+// rsyncEscapeRe matches rsync's \#ooo octal escape in an --out-format name.
+// openrsync, and rsync 3.x without -8, print it for every non-ASCII byte;
+// rsync 3.x with -8 still prints it for control characters and for a literal
+// backslash before '#' and digits. Either way the inventory would read the
+// escape as the file's real name, so it fails closed.
+var rsyncEscapeRe = regexp.MustCompile(`\\#[0-7]{3}`)
 
 func cleanPeerInventoryRel(raw string, isDir bool) (string, error) {
 	if strings.ContainsAny(raw, "\x00\r\n\t") {
