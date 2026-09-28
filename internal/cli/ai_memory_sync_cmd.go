@@ -154,24 +154,33 @@ func logSkippedColumns(p *Printer, report *aisettings.SyncReport) {
 }
 
 // memorySyncPeer resolves --peer, falling back to the configured dot peer
-// target (read-only profile resolution).
+// target (read-only profile resolution). A target that is the peer
+// profile's host runs the dot its remote_dot pins, as dot peer does.
 func memorySyncPeer(cmd *cobra.Command) (aisettings.SyncPeer, error) {
 	target, _ := cmd.Flags().GetString("peer")
+	var profile *syncer.Config
+	bs, err := syncer.Bootstrap(syncer.BootstrapOptions{Profile: PeerProfile, Home: homeOverrideFrom(cmd), ReadOnly: true})
+	switch {
+	case err == nil && bs.Config.Target.IsSSH():
+		profile = bs.Config
+	case target == "" && err != nil:
+		return aisettings.SyncPeer{}, err
+	}
 	if target == "" {
-		bs, err := syncer.Bootstrap(syncer.BootstrapOptions{Profile: PeerProfile, Home: homeOverrideFrom(cmd), ReadOnly: true})
-		if err != nil {
-			return aisettings.SyncPeer{}, err
-		}
-		if !bs.Config.Target.IsSSH() {
+		if profile == nil {
 			return aisettings.SyncPeer{}, fmt.Errorf("no --peer given and dot peer is not configured; pass --peer <ssh-target> or run: dot peer init --host <user@host>")
 		}
-		target = bs.Config.Target.Host
+		target = profile.Target.Host
 	}
 	if err := validateSyncPeerTarget(target); err != nil {
 		return aisettings.SyncPeer{}, err
 	}
 	remoteDB, _ := cmd.Flags().GetString("remote-db")
-	return aisettings.SyncPeer{Target: target, RemoteDB: remoteDB}, nil
+	peer := aisettings.SyncPeer{Target: target, RemoteDB: remoteDB}
+	if profile != nil && target == profile.Target.Host {
+		peer.RemoteDot = profile.RemoteDot
+	}
+	return peer, nil
 }
 
 // validateSyncPeerTarget rejects targets that ssh would read as its own

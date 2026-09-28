@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -190,46 +191,50 @@ func resolveRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config) (*r
 	if cfg.remoteDot != nil {
 		return cfg.remoteDot, nil
 	}
-	candidates := remoteDotCandidates
-	pinned := strings.TrimSpace(cfg.RemoteDot)
-	if pinned != "" {
-		candidates = remoteShellPath(pinned)
-	}
-	probe, err := runRemoteDotProbe(ctx, runner, cfg.Target.Host, candidates)
+	dot, err := probePeerDot(ctx, runner, cfg.Target.Host, cfg.RemoteDot)
 	if err != nil {
 		return nil, err
-	}
-	dot, err := pickRemoteDot(probe, pinned != "")
-	if err != nil {
-		if pinned != "" {
-			return nil, fmt.Errorf("remote_dot %q in the peer config is not an executable on %s", pinned, cfg.Target.Host)
-		}
-		return nil, fmt.Errorf("%s on %s", err, cfg.Target.Host)
 	}
 	cfg.remoteDot = dot
 	return dot, nil
 }
 
-func runRemoteDotProbe(ctx context.Context, runner *exec.Runner, host, candidates string) (string, error) {
+// probePeerDot picks the dot on host: pin (a remote_dot) when set, which
+// must exist and run there, else the newest release among the candidates.
+func probePeerDot(ctx context.Context, runner *exec.Runner, host, pin string) (*remoteDot, error) {
+	candidates := remoteDotCandidates
+	pinned := strings.TrimSpace(pin)
+	if pinned != "" {
+		candidates = remoteShellPath(pinned)
+	}
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, remoteDotProbe(candidates))
 	if err != nil {
-		return "", fmt.Errorf("peer dot probe on %s: %w", host, err)
+		// The command is the whole probe script; say what failed instead.
+		var cmdErr *exec.CmdError
+		if errors.As(err, &cmdErr) {
+			return nil, fmt.Errorf("peer dot probe on %s: %v: %s", host, cmdErr.Err, cmdErr.Details())
+		}
+		return nil, fmt.Errorf("peer dot probe on %s: %w", host, err)
 	}
-	return res.Stdout, nil
+	dot, err := pickRemoteDot(res.Stdout, pinned != "")
+	if err != nil {
+		if pinned != "" {
+			return nil, fmt.Errorf("remote_dot %q in the peer config is not an executable on %s", pinned, host)
+		}
+		return nil, fmt.Errorf("%s on %s", err, host)
+	}
+	return dot, nil
 }
 
-// ResolvePeerDotPath is the dot on host that dot peer would run there
-// (#176): the newest release among its install locations, so a stale dev
-// build at ~/.local/bin does not shadow it. It serves callers outside the
-// peer profile, such as dot ai memory sync --peer (#195).
-func ResolvePeerDotPath(ctx context.Context, runner *exec.Runner, host string) (string, error) {
-	probe, err := runRemoteDotProbe(ctx, runner, host, remoteDotCandidates)
+// ResolvePeerDotPath is the dot on host that dot peer would run there (#176):
+// pin, the peer profile's remote_dot, when set; otherwise the newest release
+// among its install locations, so a stale dev build at ~/.local/bin does not
+// shadow it. It serves callers outside the peer profile, such as dot ai
+// memory sync --peer (#195).
+func ResolvePeerDotPath(ctx context.Context, runner *exec.Runner, host, pin string) (string, error) {
+	dot, err := probePeerDot(ctx, runner, host, pin)
 	if err != nil {
 		return "", err
-	}
-	dot, err := pickRemoteDot(probe, false)
-	if err != nil {
-		return "", fmt.Errorf("%s on %s", err, host)
 	}
 	return dot.Path, nil
 }

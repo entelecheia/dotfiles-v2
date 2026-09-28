@@ -401,3 +401,27 @@ func TestSSHTransportRunsThePeersReleaseDot(t *testing.T) {
 		t.Fatalf("probes %d, serves %d:\n%s", probes, serves, body)
 	}
 }
+
+// A pinned remote_dot (the peer profile's, for its host) is run as pinned,
+// a dev build included, as dot peer runs it (#199 review).
+func TestSSHTransportHonorsThePin(t *testing.T) {
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "ssh.log")
+	script := "#!/bin/sh\n" +
+		"for last; do :; done\n" +
+		"printf '%s\\n' \"$last\" >> '" + log + "'\n" +
+		"case \"$last\" in\n" +
+		"  *'list dot candidates'*) printf '/h/.local/bin/dot\\tdot version dev (f467e65)\\n' ;;\n" +
+		"  *) cat >/dev/null; printf '{\"max\":{}}\\n' ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := (&SSHTransport{}).Max(context.Background(), SyncPeer{Target: "peer-mac", RemoteDot: "~/.local/bin/dot"}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(log)
+	if !strings.Contains(string(body), `for c in "$HOME"/'.local/bin/dot'; do`) || !strings.Contains(string(body), "exec '/h/.local/bin/dot' 'ai' 'memory' 'sync' '--serve' 'max'") {
+		t.Fatalf("the pin was not probed and run:\n%s", body)
+	}
+}

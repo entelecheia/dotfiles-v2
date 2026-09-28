@@ -60,18 +60,19 @@ type SSHTransport struct {
 // peerDot resolves the peer's dot the way dot peer does (#176, #195): the
 // newest release among its install locations, not the first on PATH, so a
 // stale dev build at ~/.local/bin does not shadow it.
-func (t *SSHTransport) peerDot(ctx context.Context, target string) (string, error) {
-	if dot, ok := t.dots[target]; ok {
+func (t *SSHTransport) peerDot(ctx context.Context, peer SyncPeer) (string, error) {
+	key := peer.Target + "\x00" + peer.RemoteDot
+	if dot, ok := t.dots[key]; ok {
 		return dot, nil
 	}
-	dot, err := syncer.ResolvePeerDotPath(ctx, dotexec.NewRunner(false, slog.New(slog.DiscardHandler)), target)
+	dot, err := syncer.ResolvePeerDotPath(ctx, dotexec.NewRunner(false, slog.New(slog.DiscardHandler)), peer.Target, peer.RemoteDot)
 	if err != nil {
 		return "", err
 	}
 	if t.dots == nil {
 		t.dots = map[string]string{}
 	}
-	t.dots[target] = dot
+	t.dots[key] = dot
 	return dot, nil
 }
 
@@ -89,7 +90,7 @@ func (t *SSHTransport) call(ctx context.Context, peer SyncPeer, op string, req s
 	}
 	run := t.Run
 	if run == nil {
-		dot, err := t.peerDot(ctx, peer.Target)
+		dot, err := t.peerDot(ctx, peer)
 		if err != nil {
 			return nil, fmt.Errorf("ssh %s serve %s: %w", peer.Target, op, err)
 		}
@@ -157,10 +158,10 @@ func (t *SSHTransport) Counts(ctx context.Context, peer SyncPeer) (*TableCounts,
 }
 
 // sshServe is the production SSHRunner: BatchMode so a missing key fails
-// fast instead of hanging a scheduled run on a password prompt. The peer's
-// sshd hands non-interactive shells a minimal PATH that covers neither
-// ~/.local/bin nor the brew prefixes, so the remote command prefixes them —
-// the peer really does need nothing but the dot binary on disk.
+// fast instead of hanging a scheduled run on a password prompt. dot is the
+// absolute path the peer's own probe reported (peerDot), so the minimal PATH
+// sshd gives non-interactive shells does not matter: the peer really does
+// need nothing but the dot binary on disk.
 func sshServe(ctx context.Context, target, dot string, serveArgs []string, stdin []byte) ([]byte, error) {
 	remote := "exec " + shellQuote(dot)
 	for _, arg := range serveArgs {
