@@ -44,7 +44,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			// HEAD is at or ahead of its upstream, so the chain above is
 			// empty: score the upstream itself (the files peer sync
 			// delivered from the other Mac's pushed branch).
-			if d, err := r.rescueDiffs(ctx, abs, gitdir, upstream); err == nil {
+			if d, err := r.rescueDiffs(ctx, abs, gitdir, rep.Head, upstream); err == nil {
 				upBest = d
 			}
 		}
@@ -192,7 +192,7 @@ func (r *gitStateRun) bestOnChain(ctx context.Context, abs, gitdir, head, tip st
 	lines := strings.Split(out, "\n")
 	for i := len(lines) - 1; i >= 0; i-- { // oldest first, as realign lists candidates
 		sha := strings.TrimSpace(lines[i])
-		diffs, err := r.rescueDiffs(ctx, abs, gitdir, sha)
+		diffs, err := r.rescueDiffs(ctx, abs, gitdir, head, sha)
 		switch {
 		case err != nil:
 		case bestDiffs < 0 || diffs < bestDiffs:
@@ -213,12 +213,16 @@ func (r *gitStateRun) bestOnChain(ctx context.Context, abs, gitdir, head, tip st
 // commit lacks and the worktree still holds (a feature branch's own file,
 // seen from the default branch) would go unnoticed and become untracked
 // after the move. Those count as differences too.
-func (r *gitStateRun) rescueDiffs(ctx context.Context, abs, gitdir, commit string) (int, error) {
+func (r *gitStateRun) rescueDiffs(ctx context.Context, abs, gitdir, head, commit string) (int, error) {
+	key := abs + "\x00" + head + "\x00" + commit
+	if n, ok := r.rescued[key]; ok {
+		return n, nil
+	}
 	diffs, err := r.contentDiffs(ctx, abs, gitdir, commit)
 	if err != nil {
 		return -1, err
 	}
-	out, err := r.read(ctx, abs, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=D", "--ignore-submodules", "HEAD", commit, "--", ":(exclude).gitmodules")
+	out, err := r.read(ctx, abs, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=D", "--ignore-submodules", head, commit, "--", ":(exclude).gitmodules")
 	if err != nil {
 		return -1, err
 	}
@@ -229,6 +233,12 @@ func (r *gitStateRun) rescueDiffs(ctx context.Context, abs, gitdir, commit strin
 		if _, err := os.Lstat(filepath.Join(abs, filepath.FromSlash(rel))); err == nil {
 			diffs++
 		}
+	}
+	if isCommitID(head) && isCommitID(commit) {
+		if r.rescued == nil {
+			r.rescued = map[string]int{}
+		}
+		r.rescued[key] = diffs
 	}
 	return diffs, nil
 }

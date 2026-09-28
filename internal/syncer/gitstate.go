@@ -190,6 +190,10 @@ type gitStateRun struct {
 	// gitlinks each commit's tree records.
 	targets map[string]childAnswer
 	links   map[string][]gitlinkEntry
+	// Answers about two commits' trees (sameOwnContent) and a move's
+	// rescue score (rescueDiffs, against the HEAD it names).
+	same    map[string]bool
+	rescued map[string]int
 }
 
 // gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
@@ -714,19 +718,17 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 			}
 			// Where the child ends once this contender is recorded: its own
 			// turn, with that gitlink.
-			target, exact, ok, held := r.childTarget(ctx, child, sha)
+			ends, exact, ok, held := r.childTarget(ctx, child, sha)
 			switch {
 			case !ok:
 				// No checkout to ask (a delivered addition has no .git).
-			case target == sha:
-				if exact {
-					scores[i]++
-					placed = true
-				}
-			case r.strictDescendant(ctx, child, sha, target):
-				// The child ends ahead of it: a forward change to record.
-			default:
+			case slices.ContainsFunc(ends, func(end string) bool { return end != sha && !r.strictDescendant(ctx, child, sha, end) }):
 				dropped(i, held)
+			case exact && len(ends) == 1 && ends[0] == sha:
+				scores[i]++
+				placed = true
+			default:
+				// The child ends at or ahead of it: a forward change to record.
 			}
 		}
 		if placed {
@@ -765,66 +767,66 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 	return ev
 }
 
-// childTarget is where the child checkout at abs ends when its parent
+// childTarget is where the child checkout at abs can end when its parent
 // records gitlink ("" asks where it is without one): the child's own turn
 // (classify, then a planned rescue) run on a report that is thrown away, so
 // the parent's question and the child's answer cannot differ (#189 round
-// 17). A child this run leaves alone (a lock, an operation, staged changes,
-// a linked worktree, outside the restriction) stays at HEAD whatever its
-// files show, and held says why. exact says its files match that commit
-// with no difference; ok is false when there is no checkout to read.
-func (r *gitStateRun) childTarget(ctx context.Context, abs, gitlink string) (string, bool, bool, string) {
+// 17). A rescue can fail after the parent has moved (a push, a ref it
+// cannot create), so it has two endings, HEAD and its target, and the
+// parent must hold for both (round 19). A child this run leaves alone (a
+// lock, an operation, staged changes, a linked worktree, outside the
+// restriction) stays at HEAD whatever its files show, and held says why.
+// exact says its files match the one ending with no difference; ok is false
+// when there is no checkout to read.
+func (r *gitStateRun) childTarget(ctx context.Context, abs, gitlink string) ([]string, bool, bool, string) {
 	key := abs + "\x00" + gitlink
 	if a, ok := r.targets[key]; ok {
-		return a.target, a.exact, a.ok, a.held
+		return a.ends, a.exact, a.ok, a.held
 	}
-	target, exact, ok, held := r.childTurn(ctx, abs, gitlink)
+	ends, exact, ok, held := r.childTurn(ctx, abs, gitlink)
 	if r.targets == nil {
 		r.targets = map[string]childAnswer{}
 	}
-	r.targets[key] = childAnswer{target, exact, ok, held}
-	return target, exact, ok, held
+	r.targets[key] = childAnswer{ends, exact, ok, held}
+	return ends, exact, ok, held
 }
 
-func (r *gitStateRun) childTurn(ctx context.Context, abs, gitlink string) (string, bool, bool, string) {
+func (r *gitStateRun) childTurn(ctx context.Context, abs, gitlink string) ([]string, bool, bool, string) {
 	gitdir, err := r.gitDir(ctx, abs)
 	if err != nil {
-		return "", false, false, ""
+		return nil, false, false, ""
 	}
 	if held := r.leftAlone(ctx, abs, gitdir); held != "" {
 		head, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "HEAD")
 		if err != nil {
-			return "", false, false, ""
+			return nil, false, false, ""
 		}
 		diffs, err := r.contentDiffs(ctx, abs, gitdir, head)
 		if err != nil {
-			return "", false, false, ""
+			return nil, false, false, ""
 		}
-		return head, diffs == 0, true, held
+		return []string{head}, diffs == 0, true, held
 	}
 	rep := &GitRepoReport{}
 	r.classify(ctx, abs, gitdir, gitlink, rep)
 	if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
-		r.planRescue(ctx, abs, rep)
-		// A rescue that pushes can fail on the network after the parent has
-		// moved, so the parent counts only on one that stays local.
-		if rep.RescueRemote != "" {
-			return rep.Head, rep.HeadDiffs == 0, true, ""
+		if r.planRescue(ctx, abs, rep); rep.Status == GitRepoRealignable {
+			return []string{rep.Head, rep.Target}, false, true, ""
 		}
 	}
 	switch {
 	case rep.Head == "":
-		return "", false, false, ""
+		return nil, false, false, ""
 	case rep.Status == GitRepoRealignable:
-		return rep.Target, rep.TargetDiffs == 0, true, ""
+		return []string{rep.Target}, rep.TargetDiffs == 0, true, ""
 	}
-	return rep.Head, rep.HeadDiffs == 0, true, ""
+	return []string{rep.Head}, rep.HeadDiffs == 0, true, ""
 }
 
 // childAnswer is a remembered childTarget. A child is asked only before its
 // own turn moves anything, so an answer holds for the run.
 type childAnswer struct {
-	target    string
+	ends      []string
 	exact, ok bool
 	held      string
 }
@@ -844,8 +846,21 @@ func (r *gitStateRun) leftAlone(ctx context.Context, abs, gitdir string) string 
 // sameOwnContent reports two commits with the same content outside their
 // gitlinks and .gitmodules: they differ in their children only.
 func (r *gitStateRun) sameOwnContent(ctx context.Context, abs, a, b string) bool {
+	key := abs + "\x00" + a + "\x00" + b
+	if same, ok := r.same[key]; ok {
+		return same
+	}
 	code, err := r.run(ctx, abs, nil, true, "diff", "--quiet", "--ignore-submodules", a, b, "--", ".", ":(exclude).gitmodules")
-	return err == nil && code == 0
+	if err != nil || code > 1 {
+		return false
+	}
+	if r.same == nil {
+		r.same = map[string]bool{}
+	}
+	if isCommitID(a) && isCommitID(b) {
+		r.same[key] = code == 0
+	}
+	return code == 0
 }
 
 // isCommitID reports a full object id, the only key the run's caches take.
