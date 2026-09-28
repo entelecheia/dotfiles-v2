@@ -176,13 +176,13 @@ type gitStateRun struct {
 	opts     RealignOptions
 	restrict map[string]bool // nil means all repos
 	env      []string        // the environment without git's repo-local variables
-	// Answers that hold for the whole run, keyed by repo and commits: a
-	// present commit stays present, and ancestry between two present
-	// commits never changes. A missing object is not cached, so a --fetch
-	// can still bring it.
+	// Answers that hold for the whole run, keyed by repo and full commit ids
+	// (a ref name can move, so it is never a key): a present commit stays
+	// present, and ancestry between two present commits never changes. A
+	// missing object is not cached, so a --fetch can still bring it.
 	present  map[string]bool
 	ancestry map[string]bool
-	// contentDiffs by repo and commit: a run never writes the files it
+	// contentDiffs, keyed the same way: a run never writes the files it
 	// compares (gitlinks and .gitmodules are left out), so a child scored
 	// for its parent's question is not scored again in its own turn.
 	diffs map[string]int
@@ -580,6 +580,9 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 	if len(ev.unknown) > 0 {
 		note = " (" + strings.Join(ev.unknown, ", ") + "; fetch it there, from the URL the candidate's .gitmodules names if it moved, then realign again)"
 	}
+	if ev.ahead && len(ev.behind) > 0 {
+		note += " (every candidate is past what " + strings.Join(ev.behind, ", ") + " holds; a commit -a before the children catch up records a rewind)"
+	}
 	pool := ev.pool
 	if withHead {
 		if len(pool) == 1 && pool[0] == tied[0] {
@@ -609,6 +612,7 @@ type tieEvidence struct {
 	split   bool     // the evidence told the contenders apart
 	behind  []string // the paths whose child has not reached a candidate's gitlink
 	unknown []string // "<path> lacks <sha>": commits a child could not compare with
+	ahead   bool     // every candidate is past a child, and the parent must move anyway
 }
 
 // childrenEvidence asks each child whose gitlink differs between the
@@ -724,7 +728,10 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 	}
 	eligible := func(i int) bool { return i < first || !behind[i] }
 	if !withHead && !slices.ContainsFunc(tied, func(c string) bool { return !behind[slices.Index(tied, c)] }) {
-		eligible = func(int) bool { return true } // a move is due: least bad
+		// The parent's own content needs a move: the rules below pick among
+		// them all, and the tie line warns about the children.
+		eligible = func(int) bool { return true }
+		ev.ahead = true
 	}
 	best, worst, dropped := -1, -1, false
 	for i := range tied {
@@ -825,6 +832,11 @@ func (r *gitStateRun) sameOwnContent(ctx context.Context, abs, a, b string) bool
 	return err == nil && code == 0
 }
 
+// isCommitID reports a full object id, the only key the run's caches take.
+func isCommitID(s string) bool {
+	return (len(s) == 40 || len(s) == 64) && strings.Trim(s, "0123456789abcdef") == ""
+}
+
 func (r *gitStateRun) hasCommit(ctx context.Context, abs, sha string) bool {
 	key := abs + "\x00" + sha
 	if r.present[key] {
@@ -836,7 +848,9 @@ func (r *gitStateRun) hasCommit(ctx context.Context, abs, sha string) bool {
 	if r.present == nil {
 		r.present = map[string]bool{}
 	}
-	r.present[key] = true
+	if isCommitID(sha) {
+		r.present[key] = true
+	}
 	return true
 }
 
@@ -936,7 +950,9 @@ func (r *gitStateRun) strictDescendant(ctx context.Context, abs, head, cand stri
 	if r.ancestry == nil {
 		r.ancestry = map[string]bool{}
 	}
-	r.ancestry[key] = code == 0
+	if isCommitID(head) && isCommitID(cand) {
+		r.ancestry[key] = code == 0
+	}
 	return code == 0
 }
 
@@ -975,7 +991,9 @@ func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit stri
 	if r.diffs == nil {
 		r.diffs = map[string]int{}
 	}
-	r.diffs[key] = count
+	if isCommitID(commit) { // a ref name can move within a run
+		r.diffs[key] = count
+	}
 	return count, nil
 }
 

@@ -1216,3 +1216,69 @@ func TestPeerGitRealign_ChildrenThatDisagreeKeepHEAD(t *testing.T) {
 		t.Fatalf("root = %+v, want aligned with HEAD kept", rep)
 	}
 }
+
+// The parent's own content forces a move and every candidate records a
+// gitlink the child has not reached: the newest is taken, and the tie line
+// says the child is behind all of them before a commit -a records a rewind
+// (#189 round 16).
+func TestPeerGitRealign_ForcedMovePastEveryChildSaysSo(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	s0 := gitStateCommitFile(t, subSrc, "file.txt", "v0\n", "s0")
+	s1 := gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+	s2 := gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s0)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateCommitFile(t, origin, "readme.md", "parent v2\n", "p1 readme and bump s1")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p2 bump s2")
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	gitStateRewriteTracked(t, filepath.Join(ws, "readme.md"), "parent v2\n")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); root.Status != GitRepoRealignable || !strings.Contains(root.TieBreak, "every candidate is past what sub") {
+		t.Fatalf("root = %+v, want a move whose tie line names sub", root)
+	}
+}
+
+// The run's caches take only full commit ids: a ref name scored twice
+// around a move of that ref gets two answers (#189 round 16).
+func TestGitStateCachesSkipRefNames(t *testing.T) {
+	repo := t.TempDir()
+	gitStateInitRepo(t, repo)
+	a := gitStateCommitFile(t, repo, "f.txt", "a\n", "a")
+	b := gitStateCommitFile(t, repo, "f.txt", "b\n", "b")
+	gitStateRun_(t, repo, "update-ref", "refs/heads/x", a)
+	r := &gitStateRun{git: "git"}
+	ctx := context.Background()
+	gitdir, err := r.gitDir(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := r.contentDiffs(ctx, repo, gitdir, "refs/heads/x")
+	if err != nil || before != 1 {
+		t.Fatalf("diffs against a = %d, %v; want 1", before, err)
+	}
+	gitStateRun_(t, repo, "update-ref", "refs/heads/x", b)
+	if after, err := r.contentDiffs(ctx, repo, gitdir, "refs/heads/x"); err != nil || after != 0 {
+		t.Fatalf("diffs after the ref moved to b = %d, %v; want 0 (a stale cached answer?)", after, err)
+	}
+}
