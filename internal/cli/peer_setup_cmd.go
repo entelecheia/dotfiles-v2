@@ -199,6 +199,8 @@ func newPeerDoctorCmd() *cobra.Command {
 		Long: `Probe everything that silently breaks a peer transfer.
 
 Checks, and why each exists:
+  local rsync    a non-login shell finds macOS openrsync before Homebrew's
+                 3.x; openrsync escapes non-ASCII names in the inventory
   reachability   an offline peer must be a clean no-op, not a failure
   remote rsync   macOS 26 ships openrsync, which cannot receive -aHAX from a
                  3.x client — and --dry-run never surfaces it, because a dry
@@ -224,9 +226,18 @@ Checks, and why each exists:
 			p.Section("peer")
 			p.KV("target", report.Target)
 
+			if report.LocalRsyncErr != nil {
+				p.Fail("local rsync: %v", report.LocalRsyncErr)
+			} else {
+				p.Success("local rsync: %s (%s)", report.LocalRsyncPath, report.LocalRsyncVersion)
+			}
+
 			if report.Unreachable {
 				p.Warn("unreachable: %v", report.UnreachableErr)
 				p.Line("  A scheduled run would exit cleanly here; a manual one has nothing to do.")
+				if report.Problems > 0 {
+					return fmt.Errorf("%d peer precondition(s) need attention", report.Problems)
+				}
 				return nil
 			}
 			p.Success("reachable")
