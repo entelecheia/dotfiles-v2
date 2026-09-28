@@ -49,6 +49,7 @@ type PeerPlan struct {
 	QuarantineRemote []string
 	Conflicts        []PeerConflict
 	NextBaseline     PeerSnapshot
+	LocalBefore      PeerSnapshot
 	RemoteBefore     PeerSnapshot
 	BaselineCount    int
 	LocalCount       int
@@ -71,6 +72,7 @@ func (p *PeerPlan) HasConflicts() bool {
 func PlanPeerReconcile(baseline map[string]Fingerprint, local, remote PeerSnapshot) (*PeerPlan, error) {
 	plan := &PeerPlan{
 		NextBaseline: PeerSnapshot{},
+		LocalBefore:  clonePeerSnapshot(local),
 		RemoteBefore: clonePeerSnapshot(remote),
 		LocalCount:   len(local),
 		RemoteCount:  len(remote),
