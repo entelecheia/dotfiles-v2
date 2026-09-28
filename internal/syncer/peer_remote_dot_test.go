@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -193,6 +194,30 @@ func TestPeerDotOlder(t *testing.T) {
 		}
 		if got := peerDotOlder(tc.local, remote) != ""; got != tc.warns {
 			t.Errorf("local %q peer %q: warns %v, want %v", tc.local, tc.banner, got, tc.warns)
+		}
+	}
+}
+
+// A failed probe says what ssh said, not the probe script, and keeps ssh's
+// exit status for dot's own exit code.
+func TestProbePeerDotFailureKeepsTheSSHStatus(t *testing.T) {
+	for _, stderr := range []string{"ssh: connect to host fake-peer: Connection refused", ""} {
+		bin := t.TempDir()
+		script := "#!/bin/sh\nexit 255\n"
+		if stderr != "" {
+			script = "#!/bin/sh\necho '" + stderr + "' >&2\nexit 255\n"
+		}
+		writeStub(t, filepath.Join(bin, "ssh"), script)
+		t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		_, err := ResolvePeerDotPath(context.Background(), peerScheduleRunner(false), "fake-peer", "")
+		var exitCoder interface{ ExitCode() int }
+		if err == nil || !errors.As(err, &exitCoder) || exitCoder.ExitCode() != 255 {
+			t.Fatalf("stderr %q: err = %v; want ssh's exit status 255 in the chain", stderr, err)
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "dot-peer: list dot candidates") || strings.HasSuffix(msg, ": ") || (stderr != "" && !strings.Contains(msg, stderr)) {
+			t.Fatalf("stderr %q: message %q", stderr, msg)
 		}
 	}
 }
