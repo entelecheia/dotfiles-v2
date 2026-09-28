@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // urlMove is one submodule whose URL a committed .gitmodules changed.
@@ -172,7 +173,11 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 	}
 	// The URL comes from a committed .gitmodules, so the fetch runs with the
 	// protocol restrictions git submodule itself applies to such URLs.
-	if _, err := r.runOutput(ctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0"}, false, "fetch", "-q", "origin"); err != nil {
+	// Like the rescue push: no prompt anyone can answer, and a time bound.
+	fctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	_, err := r.runOutput(fctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0"}, false, "fetch", "-q", "origin")
+	cancel()
+	if err != nil {
 		rep.Reason = gitlinkMissing + "; fetch failed: " + shortErr(err)
 		if move != nil && rawOrigin != "" {
 			if _, rerr := r.runOutput(ctx, abs, nil, false, "remote", "set-url", "--", "origin", rawOrigin); rerr == nil {

@@ -56,7 +56,8 @@ type GitRepoReport struct {
 	TieBreak string `json:"tieBreak,omitempty"`
 	// PreviousHead is HEAD's commit before an applied move; Undo is the exact
 	// command that restores it (for a branch switch, HEAD's branch too; a
-	// default branch the switch created or fast-forwarded stays).
+	// default branch the switch created or fast-forwarded stays, and so does
+	// a .gitmodules the run restored and synced).
 	PreviousHead string `json:"previousHead,omitempty"`
 	// Class refines a no-match or skipped outcome and Suggestion is the
 	// one-line next step for it (#178).
@@ -947,6 +948,9 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.git, full...)
 	cmd.Dir = abs
+	// After a timeout kills git, its ssh or https helper can hold the output
+	// pipes open; stop waiting on them.
+	cmd.WaitDelay = 5 * time.Second
 	base := r.env
 	if base == nil {
 		base = os.Environ() // a run built without runGitState

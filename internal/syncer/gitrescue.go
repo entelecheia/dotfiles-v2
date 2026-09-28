@@ -69,7 +69,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	if upstream == "" {
 		return
 	}
-	upName := strings.TrimPrefix(upstream, "refs/remotes/")
+	upName := strings.TrimPrefix(strings.TrimPrefix(upstream, "refs/remotes/"), "refs/heads/")
 	counts, err := r.read(ctx, abs, "rev-list", "--left-right", "--count", "HEAD...@{upstream}")
 	if err != nil {
 		return
@@ -113,7 +113,9 @@ func (r *gitStateRun) pushRemote(ctx context.Context, abs, branch string) string
 		keys = []string{"branch." + branch + ".pushRemote", "remote.pushDefault", "branch." + branch + ".remote"}
 	}
 	for _, key := range keys {
-		if remote, err := r.read(ctx, abs, "config", key); err == nil && remote != "" && remote != "." {
+		// "." is a remote too: git pushes such a branch into this repo, and
+		// planRescue keeps its rescue branch local.
+		if remote, err := r.read(ctx, abs, "config", key); err == nil && remote != "" {
 			return remote
 		}
 	}

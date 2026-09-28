@@ -199,6 +199,9 @@ retries it.`,
 			case dryRun && summary.Realignable > 0:
 				p.Blank()
 				p.Line("--dry-run: nothing changed. Re-run without it to apply.")
+			case summary.Realignable > 0 && rescue:
+				p.Blank()
+				p.Line("Run with --rescue --apply to realign.")
 			case summary.Realignable > 0:
 				p.Blank()
 				p.Line("Run with --apply to realign.")

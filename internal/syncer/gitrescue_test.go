@@ -379,3 +379,26 @@ func TestRescuePushRemoteFollowsGitsPushOrder(t *testing.T) {
 		}
 	}
 }
+
+// A branch tracking a local branch pushes into this repo ("."), so its
+// rescue branch stays local instead of landing on origin.
+func TestPeerGitRescue_LocalUpstreamKeepsTheRescueLocal(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "main")
+	gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+	tip := f.publish(t, "a.txt", "a2\n")
+	gitStateRun_(t, f.ws, "update-ref", "refs/heads/main", tip)
+	f.deliver(t, tip)
+
+	r := &gitStateRun{git: "git"}
+	if got := r.pushRemote(context.Background(), f.ws, "feat"); got != "." {
+		t.Fatalf("push remote %q, want .", got)
+	}
+	rep := rescueRealign(t, f.ws, RealignOptions{Rescue: true})
+	if rep.Class != GitClassDiverged || rep.RescueRemote != "" {
+		t.Fatalf("class %q rescue remote %q, want diverged kept local", rep.Class, rep.RescueRemote)
+	}
+	if !strings.Contains(rep.Suggestion, "on main") || strings.Contains(rep.Suggestion, "refs/heads/") {
+		t.Fatalf("suggestion names the upstream as %q", rep.Suggestion)
+	}
+}
