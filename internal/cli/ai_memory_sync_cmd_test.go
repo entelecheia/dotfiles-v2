@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/entelecheia/dotfiles-v2/internal/aisettings"
 )
 
@@ -345,4 +347,27 @@ func seedSyncTestSchema(db *aisettings.SyncDB) error {
 	}
 	_, err = db.Import(bundle)
 	return err
+}
+
+// The peer profile's remote_dot follows its host: the default target and an
+// explicit --peer naming that host carry it, any other target runs the
+// newest release (#199 review).
+func TestMemorySyncPeerCarriesThePeerProfilesPin(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", "peer", "config.yaml"),
+		"target: ssh:peer-alias:/remote/work\nremote_dot: ~/.local/bin/dot\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	for _, tc := range []struct{ flag, target, pin string }{
+		{"", "peer-alias", "~/.local/bin/dot"},
+		{"peer-alias", "peer-alias", "~/.local/bin/dot"},
+		{"other-host", "other-host", ""},
+	} {
+		cmd := &cobra.Command{}
+		cmd.Flags().String("peer", tc.flag, "")
+		cmd.Flags().String("remote-db", "", "")
+		cmd.Flags().String("home", "", "")
+		peer, err := memorySyncPeer(cmd)
+		if err != nil || peer.Target != tc.target || peer.RemoteDot != tc.pin {
+			t.Errorf("--peer %q: %+v %v, want %s with pin %q", tc.flag, peer, err, tc.target, tc.pin)
+		}
+	}
 }

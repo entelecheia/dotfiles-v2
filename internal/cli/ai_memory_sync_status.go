@@ -135,9 +135,9 @@ func printMemorySyncStatusSection(p *Printer, cmd *cobra.Command, mgr *aisetting
 		p.Bullet(hint, "sync agent installed but not loaded — rerun: dot ai memory install --peer <target>")
 	}
 	home := mgr.HomeDir
-	target := ""
+	target, remoteDot := "", ""
 	if bs, err := syncer.Bootstrap(syncer.BootstrapOptions{Profile: PeerProfile, Home: homeOverrideFrom(cmd), ReadOnly: true}); err == nil && bs.Config.Target.IsSSH() {
-		target = bs.Config.Target.Host
+		target, remoteDot = bs.Config.Target.Host, bs.Config.RemoteDot
 	}
 	if target == "" {
 		if recorded := memorySyncPeersFromState(home); len(recorded) > 0 {
@@ -168,7 +168,7 @@ func printMemorySyncStatusSection(p *Printer, cmd *cobra.Command, mgr *aisetting
 	if local, err := db.Counts(); err == nil {
 		p.Bullet(hint, syncCountsLine("local", local))
 	}
-	counts, err := (&aisettings.SSHTransport{}).Counts(cmd.Context(), aisettings.SyncPeer{Target: target})
+	counts, err := (&aisettings.SSHTransport{}).Counts(cmd.Context(), aisettings.SyncPeer{Target: target, RemoteDot: remoteDot})
 	if err != nil {
 		p.Bullet(hint, "peer counts unreachable")
 		return
