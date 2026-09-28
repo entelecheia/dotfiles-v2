@@ -615,19 +615,20 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 			cfg.remoteDot.String(), cfg.Target.Host)
 	}
 	if older := peerDotOlder(opts.LocalDotVersion, cfg.remoteDot); older != "" && opts.Warn != nil {
-		// Its dot runs the adopt and then coordinates: a release before
-		// #196 drops the config keys it does not know, and one without
-		// role hooks runs no on_activate while this Mac's on_deactivate
-		// runs. A real run goes on to adopt (a second handover from here is
+		// Its dot runs the adopt and then coordinates. The warning says
+		// only what holds for every older release (patch skew included):
+		// keys newer than it do not take effect there, one from before #196
+		// also drops them, and one without role hooks runs no on_activate.
+		// A real run goes on to adopt (a second handover from here is
 		// refused once the owner moved), so it names the repair there.
-		msg := fmt.Sprintf("the peer's dot %s is older than this machine's %s: its adopt may drop config keys its release does not know (hooks, remote_dot, host_merge, owner_aliases) from its peer config", older, strings.Fields(opts.LocalDotVersion)[0])
+		msg := fmt.Sprintf("the peer's dot %s is older than this machine's %s: config keys added after its release do not take effect there, and a release from before #196 also drops them from its peer config when it adopts", older, strings.Fields(opts.LocalDotVersion)[0])
 		if len(cfg.Hooks.OnDeactivate)+len(cfg.Hooks.OnActivate) > 0 {
 			msg += "; this Mac's on_deactivate still runs while a release without role hooks runs no on_activate there"
 		}
 		if opts.DryRun {
 			msg += "; upgrade dot on " + cfg.Target.Host + " before handing over"
 		} else {
-			msg += "; if so, upgrade dot on " + cfg.Target.Host + ", put the dropped keys back in its peer config, and run `dot peer setup` there (dot peer handover --dry-run shows this before anything changes)"
+			msg += "; if its peer config lost keys, upgrade dot on " + cfg.Target.Host + ", put them back, and run `dot peer setup` there (dot peer handover --dry-run shows this before anything changes)"
 		}
 		opts.Warn(msg)
 	}

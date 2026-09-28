@@ -601,13 +601,23 @@ func keepUnknownConfigKeys(path string, data []byte) ([]byte, error) {
 	known := localConfigKeys()
 	kept := false
 	for i := 0; i+1 < len(was.Content[0].Content); i += 2 {
-		// A merge key (<<) is not a key of its own: what it sets for the
-		// struct was loaded and is written, and carrying it would bring a
-		// cleared key back on the next load.
-		if key := was.Content[0].Content[i]; !known[key.Value] && key.ShortTag() != "!!merge" {
-			now.Content[0].Content = append(now.Content[0].Content, resolveYAMLAliases(key), resolveYAMLAliases(was.Content[0].Content[i+1]))
-			kept = true
+		// The key is judged as the decoder reads it (an alias key names the
+		// key it points at). A merge key (<<) is not a key of its own: what
+		// it sets for the struct was loaded and is written, and carrying it
+		// would bring a cleared key back on the next load.
+		key, err := resolveYAMLAliases(was.Content[0].Content[i])
+		if err != nil {
+			return nil, fmt.Errorf("refusing to save %s: %w", path, err)
 		}
+		if known[key.Value] || key.ShortTag() == "!!merge" {
+			continue
+		}
+		value, err := resolveYAMLAliases(was.Content[0].Content[i+1])
+		if err != nil {
+			return nil, fmt.Errorf("refusing to save %s: its key %q: %w", path, key.Value, err)
+		}
+		now.Content[0].Content = append(now.Content[0].Content, key, value)
+		kept = true
 	}
 	if !kept {
 		return data, nil
@@ -625,17 +635,39 @@ func keepUnknownConfigKeys(path string, data []byte) ([]byte, error) {
 
 // resolveYAMLAliases copies n with every alias replaced by a copy of what
 // it names, anchors dropped, so the copy stands alone in another document.
-func resolveYAMLAliases(n *yaml.Node) *yaml.Node {
+// An alias inside what it names, or an expansion past maxResolvedYAMLNodes,
+// is an error: the decoder never read these values, so nothing guarded them.
+//
+// ponytail: fixed node budget; raise it if a real config's kept key needs more.
+func resolveYAMLAliases(n *yaml.Node) (*yaml.Node, error) {
+	budget := maxResolvedYAMLNodes
+	return resolveYAMLAliasesIn(n, map[*yaml.Node]bool{}, &budget)
+}
+
+const maxResolvedYAMLNodes = 10000
+
+func resolveYAMLAliasesIn(n *yaml.Node, open map[*yaml.Node]bool, budget *int) (*yaml.Node, error) {
 	for n.Kind == yaml.AliasNode && n.Alias != nil {
 		n = n.Alias
 	}
+	if open[n] {
+		return nil, fmt.Errorf("anchor %q contains an alias to itself", n.Anchor)
+	}
+	if *budget--; *budget < 0 {
+		return nil, fmt.Errorf("its aliases expand past %d nodes", maxResolvedYAMLNodes)
+	}
+	open[n] = true
+	defer delete(open, n)
 	c := *n
 	c.Anchor = ""
 	c.Content = make([]*yaml.Node, len(n.Content))
 	for i, child := range n.Content {
-		c.Content[i] = resolveYAMLAliases(child)
+		var err error
+		if c.Content[i], err = resolveYAMLAliasesIn(child, open, budget); err != nil {
+			return nil, err
+		}
 	}
-	return &c
+	return &c, nil
 }
 
 // localConfigKeys are the top-level keys LocalConfig owns.

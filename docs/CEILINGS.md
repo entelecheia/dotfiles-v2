@@ -185,8 +185,9 @@ explicitly, and a new key that depends on a known one (the way
 changes the known key, so the newer dot must check it against that key on
 load. A top-level merge key (`<<`) is not carried: the known keys it set
 are written by the struct, and an unknown key it alone supplied is lost
-(the anchored source key stays). Releases from before #196 drop every
-unknown key.
+(the anchored source key stays). An alias used as a key counts as the key
+it names. A kept value whose aliases loop, or expand past 10,000 nodes,
+refuses the save. Releases from before #196 drop every unknown key.
 
 Replace this when a struct-valued key gains a sub-key that must survive an
 older dot's save, or when a key is retired.

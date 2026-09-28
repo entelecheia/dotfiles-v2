@@ -735,9 +735,13 @@ func TestPeerHandover(t *testing.T) {
 	// The peer's release is older than this one: said before it adopts
 	// (#196). A dry run advises the upgrade; a real run, which goes on to
 	// adopt, names the repair on the peer.
+	// It holds for any older release, patch skew included, and names the
+	// hooks consequence when hooks are set.
 	var dry []string
+	hooked := *sb.cfg
+	hooked.Hooks = PeerHooks{OnActivate: []string{"app-open Maru"}}
 	if _, err := PeerHandover(context.Background(), PeerHandoverOptions{
-		Config:          sb.cfg,
+		Config:          &hooked,
 		Runner:          peerScheduleRunner(false),
 		Probe:           peerScheduleRunner(false),
 		LocalDotVersion: "99.0.0 (local)",
@@ -746,7 +750,8 @@ func TestPeerHandover(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PeerHandover --dry-run: %v", err)
 	}
-	if len(dry) != 1 || !strings.HasSuffix(dry[0], "upgrade dot on "+sb.cfg.Target.Host+" before handing over") {
+	if len(dry) != 1 || !strings.Contains(dry[0], "config keys added after its release do not take effect there") ||
+		!strings.Contains(dry[0], "no on_activate there") || !strings.HasSuffix(dry[0], "upgrade dot on "+sb.cfg.Target.Host+" before handing over") {
 		t.Errorf("dry-run warnings = %q", dry)
 	}
 	var warned []string
@@ -771,7 +776,7 @@ func TestPeerHandover(t *testing.T) {
 		t.Fatalf("result = %+v, want peer-mac/2", res)
 	}
 	if len(warned) != 1 || !strings.Contains(warned[0], "9.9.9") || !strings.Contains(warned[0], "older than this machine's 99.0.0") ||
-		!strings.Contains(warned[0], "run `dot peer setup` there") {
+		!strings.Contains(warned[0], "run `dot peer setup` there") || strings.Contains(warned[0], "on_activate") {
 		t.Errorf("warnings = %q", warned)
 	}
 

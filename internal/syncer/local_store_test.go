@@ -562,29 +562,72 @@ func TestSaveLocalConfigResolvesAliasesInKeptKeys(t *testing.T) {
 	}
 }
 
-// A top-level merge key is not carried: what it set was loaded into the
-// struct, so a key it supplied and the operator cleared stays cleared
-// (#200 review).
-func TestSaveLocalConfigDropsAMergeKey(t *testing.T) {
-	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
-	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
-		t.Fatal(err)
+// A key the decoder reads as a known one is not carried: a top-level merge
+// key (what it set was loaded into the struct) or an alias used as a key.
+// So a key the operator cleared stays cleared, and a known key is never
+// written twice (#200 review).
+func TestSaveLocalConfigDropsKeysTheDecoderReadsAsKnown(t *testing.T) {
+	for name, on := range map[string]string{
+		"merge key":      "x-base: &b {owner_aliases: [old]}\nowner: a\n<<: *b\n",
+		"alias key":      "x: &k owner_aliases\nowner: a\n*k : [old]\n",
+		"alias of owner": "x: &k owner\n*k : a\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+			if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(on), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, _, err := LoadLocalConfig(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.OwnerAliases = nil
+			if err := SaveLocalConfig(paths, cfg); err != nil {
+				t.Fatal(err)
+			}
+			again, _, err := LoadLocalConfig(paths)
+			if body, _ := os.ReadFile(paths.ConfigFile); err != nil || again.Owner != "a" || len(again.OwnerAliases) != 0 || !strings.Contains(string(body), "\nx") {
+				t.Fatalf("reload = %+v, %v, want owner a, no aliases, x kept:\n%s", again, err, body)
+			}
+		})
 	}
-	on := "x-base: &b {owner_aliases: [old]}\nowner: a\n<<: *b\n"
-	if err := os.WriteFile(paths.ConfigFile, []byte(on), 0o644); err != nil {
-		t.Fatal(err)
+}
+
+// Kept values were never decoded, so nothing guarded their aliases: one
+// inside what it names, or a billion-laughs expansion, refuses the save
+// instead of crashing it, and the file stays as it was (#200 review).
+func TestSaveLocalConfigRefusesRunawayAliases(t *testing.T) {
+	laughs := "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+	for _, n := range []string{"b", "c", "d"} {
+		prev := string(rune(n[0] - 1))
+		laughs += n + ": &" + n + " [" + strings.Repeat("*"+prev+", ", 9) + "*" + prev + "]\n"
 	}
-	cfg, _, err := LoadLocalConfig(paths)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.OwnerAliases = nil
-	if err := SaveLocalConfig(paths, cfg); err != nil {
-		t.Fatal(err)
-	}
-	again, _, err := LoadLocalConfig(paths)
-	if body, _ := os.ReadFile(paths.ConfigFile); err != nil || len(again.OwnerAliases) != 0 || !strings.Contains(string(body), "x-base:") {
-		t.Fatalf("reload = %+v, %v, want no aliases and x-base kept:\n%s", again, err, body)
+	for name, tc := range map[string]struct{ on, want string }{
+		"cycle":  {"owner: a\nfuture: &a [*a]\n", "contains an alias to itself"},
+		"laughs": {"owner: a\n" + laughs, "expand past"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+			if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(tc.on), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, _, err := LoadLocalConfig(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := SaveLocalConfig(paths, cfg); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("save = %v, want a refusal saying %q", err, tc.want)
+			}
+			if body, _ := os.ReadFile(paths.ConfigFile); string(body) != tc.on {
+				t.Fatalf("the file changed:\n%s", body)
+			}
+		})
 	}
 }
 
