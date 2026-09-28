@@ -127,14 +127,32 @@ func TestEvaluatePeerSides(t *testing.T) {
 	peer.WorkspacePath, peer.TargetPath, peer.TargetHost = "/Users/b/work", "/Users/a/elsewhere", "m5x26.ts.net"
 	// The fix names the Mac that is wrong and the target, and leaves the
 	// owner and epoch alone (dot peer init would claim the owner).
-	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") || c.Fix != "on m3x23: dot sync target --profile=peer ssh:m5x26.ts.net:/Users/a/work" {
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "topology", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") || c.Fix != "on m3x23: dot sync target --profile=peer ssh:m5x26.ts.net:/Users/a/work" {
 		t.Errorf("topology mismatch: %+v", c)
 	}
 	// Also with both Macs coordinating after a takeover: the fence refuses
 	// on both sides before any demotion.
 	peer.Coordinator, peer.OwnerEpoch = true, 3
-	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") {
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "topology", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") {
 		t.Errorf("topology mismatch with two coordinators passed: %+v", c)
+	}
+	// The topology row stands on its own: with no coordinator, and next to
+	// the roles row it does not hide.
+	for _, tc := range []struct {
+		name   string
+		mutate func(l, p *PeerSideFacts)
+	}{
+		{"neither", func(l, p *PeerSideFacts) { l.Coordinator, p.Coordinator, p.OwnerEpoch = false, false, 2 }},
+		{"two at one epoch", func(l, p *PeerSideFacts) { p.Coordinator, p.OwnerEpoch = true, 2 }},
+	} {
+		local, peer := doctorFacts()
+		local.WorkspacePath, local.TargetPath = "/Users/a/work", "/Users/b/work"
+		peer.WorkspacePath, peer.TargetPath = "/Users/b/work", "/Users/a/elsewhere"
+		tc.mutate(local, peer)
+		checks := evaluatePeerSides(local, peer, "m5x26", "m3x23")
+		if checkFor(checks, "topology", DoctorFail) == nil || checkFor(checks, "roles", DoctorFail) == nil {
+			t.Errorf("%s: topology or roles row missing: %+v", tc.name, checks)
+		}
 	}
 
 	// The other Mac holds a higher epoch: the coordinator's next sync
@@ -237,8 +255,22 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 		{"two, the higher without a plist", func(l, p *PeerSideFacts) {
 			l.OwnerEpoch, l.Scheduler = 3, false
 			p.Coordinator, p.Scheduler = true, true
-		}, nil, "after the roles fix, on m5x26: dot peer setup"},
+		}, []string{"on m3x23: dot peer setup --off"}, "after the fixes above, on m5x26: dot peer setup"},
 		{"two at one epoch", func(l, p *PeerSideFacts) { p.Coordinator, p.Scheduler = true, true }, nil, ""},
+		// Undecided: one line, no host told to set up.
+		{"two at one epoch, no plists", func(l, p *PeerSideFacts) {
+			l.Scheduler = false
+			p.Coordinator = true
+		}, []string{"on m5x26: dot peer setup", "on m3x23: dot peer setup"}, "dot peer setup on the Mac you choose"},
+		// A name both answer to: aligning or adopting would make two.
+		{"sole coordinator, the peer answers to its owner", func(l, p *PeerSideFacts) {
+			p.MachineNames = []string{"m3x23", "m5x26"}
+			p.Owner, p.OwnerEpoch = "", 0
+		}, []string{"dot peer adopt"}, "a name only that Mac answers to"},
+		{"neither, the peer answers to this Mac's name", func(l, p *PeerSideFacts) {
+			l.Coordinator, l.PreferredName = false, "m5x26"
+			p.MachineNames = []string{"m5x26"}
+		}, []string{"dot peer adopt"}, "a name only that Mac answers to"},
 		{"sole coordinator demoted to no one", func(l, p *PeerSideFacts) {
 			l.MachineNames = []string{"m5x26"}
 			p.Owner, p.OwnerEpoch = "old-name", 3
@@ -273,9 +305,18 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 		})
 	}
 
+	// A Mac judged as the coordinator after the roles fix is counted as its
+	// own sync walks it (without linked worktrees).
+	local, peer := doctorFacts()
+	local.Coordinator, local.NonNFD, local.NonNFDSample = false, 1, []string{"wt/한글.md"}
+	local.CoordNonNFD = &NFDCount{}
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "nfd", DoctorFail); c != nil {
+		t.Errorf("a linked worktree's name failed the settled coordinator: %+v", c)
+	}
+
 	// The lower Mac answers to the higher one's owner: its demotion leaves
 	// two writers at one epoch, which the fence lets through.
-	local, peer := doctorFacts()
+	local, peer = doctorFacts()
 	local.MachineNames = []string{"m5x26"}
 	peer.Coordinator, peer.Scheduler, peer.OwnerEpoch = true, true, 3
 	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "leaves two coordinators") {
