@@ -376,3 +376,18 @@ func TestRunPeerHooks_TimeoutSaysSo(t *testing.T) {
 		t.Fatalf("result = %+v", res[0])
 	}
 }
+
+// A bad host_merge key must not keep a Mac that lost the fence from
+// demoting: validation comes after the fence, and the hooks still run.
+func TestPeerSyncDemotesDespiteABadHostMergeKey(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{owner: "mac-b", epoch: 5, dotVersion: "9.9.9 (fake)"}, 1)
+	installHookServiceStubs(t, sb.record, "com.maru.job.mail-digest.1")
+	sb.plantPeerPlist(t)
+	plantAgentPlists(t, sb.home, "com.maru.job.mail-digest.1")
+	sb.cfg.Hooks = PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.*"}}
+	sb.cfg.HostMerge = map[string][]string{"~/.claude.json": {"mcpServers"}}
+	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)})
+	if err != nil || res == nil || !res.Demoted || len(res.Hooks) != 1 {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+}
