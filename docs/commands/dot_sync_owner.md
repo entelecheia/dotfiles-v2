@@ -29,7 +29,8 @@ peer. An unreachable peer exits 0 with that step printed; a peer that fails
 the step exits 1. A retry after a peer failure goes on to the peer (unless
 <old> was a generic name, which is not kept: then run the printed
 --local-only command there).
---dry-run shows the change without writing anything.
+--dry-run shows the change, and the warnings about names it cannot check,
+without writing anything: run it first.
 
 With --profile=peer, a --set or --clear that leaves this Mac without the
 coordinator role also removes its peer scheduler and runs its on_deactivate
