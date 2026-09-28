@@ -71,6 +71,20 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		profileName = state.Profile
 	}
 
+	// Without a terminal the prompts cannot run: huh opens /dev/tty and dies
+	// with a bubbletea error over a plain ssh command (#183). Stored values
+	// stand in for the prompts; a missing one, or the confirmation a real
+	// apply needs, is an error that names the way out.
+	interactive := ui.TerminalAttached()
+	if !yes && !interactive {
+		if missing := missingApplyValues(state, profileName, configPath); len(missing) > 0 {
+			return fmt.Errorf("no terminal for prompts and the stored configuration lacks %s; pass --yes to use defaults, or run dot apply from a terminal", strings.Join(missing, ", "))
+		}
+		if !dryRun {
+			return fmt.Errorf("no terminal to confirm the apply; pass --yes, or run dot apply from a terminal")
+		}
+	}
+
 	// Detect system
 	sysInfo, err := config.DetectSystem()
 	if err != nil {
@@ -98,7 +112,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	// Interactive configuration
 	p := printerFrom(cmd)
 	state.Profile = profileName
-	if err := configureInteractive(p, state, home, profileName, sysInfo, yes); err != nil {
+	if err := configureInteractive(p, state, home, profileName, sysInfo, yes || !interactive); err != nil {
 		if errors.Is(err, errAborted) {
 			p.Line("Aborted.")
 			return nil
@@ -218,6 +232,22 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		p.Line("✓ shell completions refreshed in %s", completionDir(home))
 	}
 	return nil
+}
+
+// missingApplyValues lists what a prompt would have to supply: the profile
+// (unless --config names the configuration) and the identity.
+func missingApplyValues(state *config.UserState, profile, configPath string) []string {
+	var missing []string
+	if profile == "" && configPath == "" {
+		missing = append(missing, "profile")
+	}
+	if state.Name == "" {
+		missing = append(missing, "name")
+	}
+	if state.Email == "" {
+		missing = append(missing, "email")
+	}
+	return missing
 }
 
 // configureInteractive walks through each configuration section interactively.

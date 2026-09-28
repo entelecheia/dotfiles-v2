@@ -1,6 +1,10 @@
 package ui
 
 import (
+	"errors"
+	"fmt"
+	"os"
+
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
@@ -55,10 +59,37 @@ var (
 			Foreground(lipgloss.Color("#565F89"))
 )
 
+// TerminalAttached reports whether the process has a controlling terminal,
+// which the prompts below need: huh opens /dev/tty, and without one (a plain
+// ssh command, launchd, CI) it dies with "bubbletea: could not open TTY"
+// (#183). Piped stdin or stdout alone is fine; huh reads /dev/tty. A
+// variable so tests can pin it.
+var TerminalAttached = func() bool {
+	f, err := os.Open("/dev/tty")
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+// ErrNoTerminal is what a prompt returns when it has no terminal to run on.
+var ErrNoTerminal = errors.New("no terminal for an interactive prompt; pass --yes, or run from a terminal")
+
+func noTerminal(message string) error {
+	if TerminalAttached() {
+		return nil
+	}
+	return fmt.Errorf("%q: %w", message, ErrNoTerminal)
+}
+
 // Confirm asks for yes/no. Returns true immediately if unattended.
 func Confirm(message string, unattended bool) (bool, error) {
 	if unattended {
 		return true, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return false, err
 	}
 	var confirmed bool
 	err := huh.NewConfirm().
@@ -73,6 +104,9 @@ func Confirm(message string, unattended bool) (bool, error) {
 func Select(message string, options []string, defaultVal string, unattended bool) (string, error) {
 	if unattended {
 		return defaultVal, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return defaultVal, err
 	}
 	selected := defaultVal
 	opts := make([]huh.Option[string], len(options))
@@ -95,6 +129,9 @@ func Select(message string, options []string, defaultVal string, unattended bool
 func Input(message, defaultVal string, unattended bool) (string, error) {
 	if unattended {
 		return defaultVal, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return defaultVal, err
 	}
 	// Seed value with default so user sees and can edit it
 	value := defaultVal
@@ -128,6 +165,9 @@ func MultiSelect(message string, options, defaultVals []string, unattended bool)
 	if unattended {
 		return defaultVals, nil
 	}
+	if err := noTerminal(message); err != nil {
+		return defaultVals, err
+	}
 	selected := append([]string(nil), defaultVals...)
 	opts := make([]huh.Option[string], len(options))
 	for i, o := range options {
@@ -156,6 +196,9 @@ func MultiSelectLabeled(message string, options []SelectOption, defaultVals []st
 	if unattended {
 		return defaultVals, nil
 	}
+	if err := noTerminal(message); err != nil {
+		return defaultVals, err
+	}
 	selected := append([]string(nil), defaultVals...)
 	opts := make([]huh.Option[string], len(options))
 	for i, o := range options {
@@ -176,6 +219,9 @@ func MultiSelectLabeled(message string, options []SelectOption, defaultVals []st
 func ConfirmBool(message string, defaultVal, unattended bool) (bool, error) {
 	if unattended {
 		return defaultVal, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return defaultVal, err
 	}
 	value := defaultVal
 	err := huh.NewConfirm().
