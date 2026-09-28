@@ -51,6 +51,17 @@ type peerStatusJSON struct {
 	// DotVersion names this binary so a newer peer can word its
 	// feature-skipped messages after the version that lacks the feature.
 	DotVersion string `json:"dotVersion,omitempty"`
+	// Role is "coordinator" when this machine passes the peer profile's
+	// owner guard, "peer" otherwise (#182).
+	Role string `json:"role,omitempty"`
+}
+
+// peerRole names this machine's part in the peer pair.
+func peerRole(cfg *syncer.Config) string {
+	if strings.TrimSpace(cfg.Owner) != "" && syncer.CheckOwner(cfg) == nil {
+		return "coordinator"
+	}
+	return "peer"
 }
 
 func newPeerStatusCmd() *cobra.Command {
@@ -127,6 +138,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 			OwnerEpoch:    cfg.OwnerEpoch,
 			FencePending:  cfg.FencePending,
 			DotVersion:    cmd.Root().Version,
+			Role:          peerRole(cfg),
 		})
 	}
 	p := printerFrom(cmd)
@@ -142,15 +154,36 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	if exe, err := os.Executable(); err == nil {
 		p.KV("Dot", exe+" ("+cmd.Root().Version+")")
 	}
-	p.KV("Scheduler", snapshot.State)
+	// The role decides how the rest reads: runs are recorded on the machine
+	// that made them, so the peer's timestamps are its time as coordinator,
+	// not stale coordinator activity (#182).
+	role := peerRole(cfg)
+	if role == "coordinator" {
+		p.KV("Role", "coordinator")
+	} else {
+		p.KV("Role", "peer; syncs run on the coordinator "+cfg.Owner)
+	}
+	scheduler := snapshot.State
+	if role == "peer" && snapshot.State == syncer.SchedulerNotInstalled.String() {
+		scheduler += " (expected on the peer)"
+	}
+	p.KV("Scheduler", scheduler)
 	if snapshot.IntervalSeconds > 0 {
 		p.KV("Interval", formatInterval(snapshot.IntervalSeconds))
 	}
 	if snapshot.LastExitCode != nil {
 		p.KV("Last exit", strconv.Itoa(*snapshot.LastExitCode))
 	}
-	p.KV("Last pull", formatLastSync(st.LastPull))
-	p.KV("Last push", formatLastSync(st.LastPush))
+	if role == "coordinator" {
+		p.KV("Last pull", formatLastSync(st.LastPull))
+		p.KV("Last push", formatLastSync(st.LastPush))
+	} else {
+		last := st.LastPull
+		if st.LastPush.After(last) {
+			last = st.LastPush
+		}
+		p.KV("Last run here", formatLastSync(last)+" (while this Mac was the coordinator)")
+	}
 	if !st.LastHeld.IsZero() {
 		// A held run transferred files but left deletions pending, so the
 		// timestamps above must not be read as a clean exchange.

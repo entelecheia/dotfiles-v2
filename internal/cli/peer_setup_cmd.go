@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"strings"
@@ -155,7 +156,8 @@ func printPeerScheduleDryRun(p *Printer, res *syncer.PeerScheduleResult) {
 }
 
 func newPeerDoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	var self bool
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check that a peer sync would work before running one",
 		Args:  cobra.NoArgs,
@@ -173,9 +175,26 @@ Checks, and why each exists:
   clock skew     "newer wins" is only meaningful if the clocks agree
   disk headroom  the receiving side has to hold the payload
   keychain       tokens there cannot be transferred, and cannot even be
-                 verified over ssh — a reminder, not a failure`,
+                 verified over ssh — a reminder, not a failure
+
+Then both machines are compared, each check with the command that fixes it
+and the Mac to run it on: rsync on each side; names not in NFD (the peer
+inventory stops on them); which machine is the coordinator and their owner
+epochs; a scheduler only on the coordinator; the takeover replica on the
+other Mac; max_delete, propagation and filter files that differ.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
+			if self {
+				// Plumbing for the other Mac's doctor: this machine's facts.
+				bs, err := peerBootstrapReadOnly(c)
+				if err != nil {
+					return err
+				}
+				facts := syncer.LocalPeerSideFacts(c.Context(), probeRunner(), bs.Config, c.Root().Version)
+				enc := json.NewEncoder(c.OutOrStdout())
+				enc.SetIndent("", "  ")
+				return enc.Encode(facts)
+			}
 			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
 				return err
@@ -197,6 +216,7 @@ Checks, and why each exists:
 			} else {
 				p.Success("local rsync: %s (%s)", report.LocalRsyncPath, report.LocalRsyncVersion)
 			}
+			p.KV("local dot", report.LocalDotPath+" ("+report.LocalDotVersion+")")
 
 			if report.Unreachable {
 				p.Warn("unreachable: %v", report.UnreachableErr)
@@ -207,8 +227,6 @@ Checks, and why each exists:
 				return nil
 			}
 			p.Success("reachable")
-
-			p.KV("local dot", report.LocalDotPath+" ("+report.LocalDotVersion+")")
 			switch {
 			case report.RemoteDotErr != nil:
 				p.Fail("peer dot: %v", report.RemoteDotErr)
@@ -245,6 +263,24 @@ Checks, and why each exists:
 				p.KV("peer disk", report.Disk)
 			}
 
+			p.Section("both machines")
+			if report.Peer == nil {
+				p.Warn("the peer's facts are unavailable: %v", report.PeerFactsErr)
+			}
+			for _, check := range report.Checks {
+				switch check.Level {
+				case syncer.DoctorFail:
+					p.Fail("%s: %s", check.Name, check.Detail)
+				case syncer.DoctorWarn:
+					p.Warn("%s: %s", check.Name, check.Detail)
+				default:
+					p.Success("%s: %s", check.Name, check.Detail)
+				}
+				if check.Fix != "" {
+					p.Line("    fix: %s", check.Fix)
+				}
+			}
+
 			p.Blank()
 			p.Line("Reminder: keychain-backed tokens (gh, for one) cannot be synced by any file")
 			p.Line("copy, and cannot be verified over ssh — check them in a local terminal.")
@@ -255,4 +291,7 @@ Checks, and why each exists:
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&self, "self", false, "print this machine's facts as JSON (read by the other Mac's doctor)")
+	_ = cmd.Flags().MarkHidden("self")
+	return cmd
 }

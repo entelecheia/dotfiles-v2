@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,8 +54,17 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 		return nil, fmt.Errorf("peer inventory: %w", runErr)
 	}
 	requireNFD := NFDMigrationMarked(cfg.LocalPaths.WorkspaceRoot)
-	return parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
+	snap, err := parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
+	if errors.Is(err, errPeerNameNotNFD) {
+		// The name lives on the peer, so the fix runs there (#182).
+		return nil, fmt.Errorf("%w on %s; run there: dot sync names normalize --profile=peer (dot peer doctor counts them)", err, cfg.Target.Host)
+	}
+	return snap, err
 }
+
+// errPeerNameNotNFD marks an inventory name the NFD-marked workspace
+// requires in NFD but the peer holds in another form.
+var errPeerNameNotNFD = errors.New("not NFD-normalized")
 
 // remoteDotCandidates are the shell words the peer probe expands into dot
 // candidates, in preference order for equal versions. Tests replace them so
@@ -418,7 +428,7 @@ func parsePeerRemoteInventory(stdout string, remoteLoc *time.Location, baseline 
 			return nil, fmt.Errorf("peer inventory: rsync printed the name %q with \\#ooo octal escapes, not an NFD problem: the name holds a control character (Finder's Icon\\r, say) or a literal \\# before digits, which rsync always escapes, or the client is openrsync; rename or exclude that file", rel)
 		}
 		if requireNFD && rel != "" && !NFDPathNormalized(rel) {
-			return nil, fmt.Errorf("peer inventory: path %q is not NFD-normalized; normalize the peer before retrying", rel)
+			return nil, fmt.Errorf("peer inventory: path %q is %w", rel, errPeerNameNotNFD)
 		}
 		// The dry-run listing includes directory traversal records. Inventory is
 		// file-only, so skip them before trimming the rsync directory marker.

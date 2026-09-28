@@ -922,7 +922,13 @@ type PeerDoctorReport struct {
 	ClockSkewOK       bool
 	Disk              string
 	DiskKnown         bool
-	Problems          int
+	// Local and Peer are both machines' facts and Checks their comparison
+	// (#182); Peer stays nil, with PeerFactsErr, when the peer cannot say.
+	Local        *PeerSideFacts
+	Peer         *PeerSideFacts
+	PeerFactsErr error
+	Checks       []DoctorCheck
+	Problems     int
 }
 
 // PeerDoctor probes everything that silently breaks a peer transfer.
@@ -936,6 +942,7 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 	if exe, err := peerExecutable(); err == nil {
 		report.LocalDotPath = exe
 	}
+	report.Local = LocalPeerSideFacts(ctx, runner, cfg, opts.LocalDotVersion)
 
 	// The local client is checked first: it needs no peer, and a run on this
 	// machine fails with it no matter how healthy the peer is.
@@ -987,6 +994,22 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 	if out, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", host, "df -h / | tail -1"); err == nil {
 		report.Disk = strings.Join(strings.Fields(strings.TrimSpace(out.Stdout)), " ")
 		report.DiskKnown = true
+	}
+
+	if report.RemoteDotErr == nil {
+		report.Peer, report.PeerFactsErr = remotePeerSideFacts(ctx, runner, cfg)
+	}
+	if report.Peer != nil {
+		here := PreferredMachineName()
+		if here == "" {
+			here = "this machine"
+		}
+		report.Checks = evaluatePeerSides(report.Local, report.Peer, here, host)
+		for _, c := range report.Checks {
+			if c.Level == DoctorFail {
+				report.Problems++
+			}
+		}
 	}
 	return report, nil
 }
