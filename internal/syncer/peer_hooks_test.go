@@ -16,12 +16,15 @@ import (
 func installHookServiceStubs(t *testing.T, record string, loaded ...string) {
 	t.Helper()
 	bin := t.TempDir()
-	list := "PID\tStatus\tLabel\n"
+	// The shape of `launchctl print gui/<uid>`: a services block among
+	// other sections.
+	domain := "gui/" + strconv.Itoa(os.Getuid()) + " = {\n\ttype = gui\n\tservices = {\n"
 	for _, label := range loaded {
-		list += "-\t0\t" + label + "\n"
+		domain += "\t\t       0      - \t" + label + "\n"
 	}
+	domain += "\t}\n\tdisabled services = {\n\t\t\"com.not.loaded\" => disabled\n\t}\n}\n"
 	writeStub(t, filepath.Join(bin, "launchctl"), "#!/bin/sh\n"+
-		"if [ \"$1\" = list ]; then printf '"+strings.ReplaceAll(list, "\n", "\\n")+"'; exit 0; fi\n"+
+		"if [ \"$1\" = print ]; then printf '"+strings.ReplaceAll(strings.ReplaceAll(domain, "\n", "\\n"), "\t", "\\t")+"'; exit 0; fi\n"+
 		"echo \"launchctl $*\" >> '"+record+"'\n")
 	for _, name := range []string{"osascript", "open"} {
 		writeStub(t, filepath.Join(bin, name), "#!/bin/sh\necho \""+name+" $*\" >> '"+record+"'\n")
@@ -215,5 +218,25 @@ func TestPeerHandover_RelaysRemoteHookResults(t *testing.T) {
 	}
 	if len(res.RemoteHookFailures) != 1 || !strings.Contains(res.RemoteHookFailures[0], "bootstrapping x failed") {
 		t.Fatalf("remote hook failures = %v", res.RemoteHookFailures)
+	}
+}
+
+func TestLoadedLaunchdLabelsReadsTheGuiServices(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "record.log")
+	installHookServiceStubs(t, record, "com.maru.job.a", "com.dotfiles.peer")
+	labels, err := loadedLaunchdLabels(context.Background(), peerScheduleRunner(false), "gui/"+strconv.Itoa(os.Getuid()))
+	if err != nil || strings.Join(labels, ",") != "com.dotfiles.peer,com.maru.job.a" {
+		t.Fatalf("labels = %v, %v", labels, err)
+	}
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.*", "launchd-bootstrap ../x"}}}
+	res := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
+	if strings.Contains(readRecord(t, record), "com.dotfiles.peer") || !strings.Contains(res[0].Detail, "1 job booted out") {
+		t.Fatalf("the peer scheduler was booted out: %+v / %q", res[0], readRecord(t, record))
+	}
+	if res[1].Err == nil || !strings.Contains(res[1].Err.Error(), "slash") {
+		t.Fatalf("a path escape was accepted: %+v", res[1])
 	}
 }

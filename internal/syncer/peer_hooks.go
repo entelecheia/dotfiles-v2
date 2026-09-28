@@ -96,9 +96,13 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 	}
 	if strings.HasPrefix(verb, "launchd-") {
 		// A malformed glob would otherwise match nothing and report success
-		// while the jobs keep running.
+		// while the jobs keep running; a label never holds a slash, and the
+		// bootstrap plists come from ~/Library/LaunchAgents only.
 		if _, err := path.Match(arg, ""); err != nil {
 			return "", fmt.Errorf("bad label glob %q: %w", arg, err)
+		}
+		if strings.Contains(arg, "/") {
+			return "", fmt.Errorf("label glob %q holds a slash", arg)
 		}
 	}
 	if runtime.GOOS != "darwin" {
@@ -112,13 +116,15 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	switch verb {
 	case "launchd-bootout":
-		loaded, err := loadedLaunchdLabels(ctx, runner)
+		loaded, err := loadedLaunchdLabels(ctx, runner, domain)
 		if err != nil {
 			return "", err
 		}
 		var matched []string
 		for _, label := range loaded {
-			if ok, _ := path.Match(arg, label); ok {
+			// The peer scheduler is dot's own; booting it out from inside a
+			// demotion would end the run before its plist is removed.
+			if ok, _ := path.Match(arg, label); ok && label != peerSchedulerLabel {
 				matched = append(matched, label)
 			}
 		}
@@ -128,7 +134,7 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 		var failed []string
 		for _, label := range matched {
 			if _, err := runner.Run(ctx, "launchctl", "bootout", domain+"/"+label); err != nil {
-				failed = append(failed, label)
+				failed = append(failed, label+" ("+firstLine(err.Error())+")")
 			}
 		}
 		if len(failed) > 0 {
@@ -140,7 +146,7 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 		if err != nil {
 			return "", err
 		}
-		loaded, err := loadedLaunchdLabels(ctx, runner)
+		loaded, err := loadedLaunchdLabels(ctx, runner, domain)
 		if err != nil {
 			return "", err
 		}
@@ -160,7 +166,7 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 		var failed []string
 		for _, plist := range todo {
 			if _, err := runner.Run(ctx, "launchctl", "bootstrap", domain, plist); err != nil {
-				failed = append(failed, filepath.Base(plist))
+				failed = append(failed, filepath.Base(plist)+" ("+firstLine(err.Error())+")")
 			}
 		}
 		if len(failed) > 0 {
@@ -187,20 +193,29 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 	}
 }
 
-// loadedLaunchdLabels lists the labels `launchctl list` reports in this
-// user's domain (third column).
-func loadedLaunchdLabels(ctx context.Context, runner *exec.Runner) ([]string, error) {
-	res, err := runner.RunQuery(ctx, "launchctl", "list")
+// loadedLaunchdLabels lists the services loaded in the gui domain. `launchctl
+// list` answers for the caller's own domain, which over ssh is not the gui
+// session the Maru agents run in; `print gui/<uid>` names it explicitly.
+func loadedLaunchdLabels(ctx context.Context, runner *exec.Runner, domain string) ([]string, error) {
+	res, err := runner.RunQuery(ctx, "launchctl", "print", domain)
 	if err != nil {
-		return nil, fmt.Errorf("launchctl list: %w", err)
+		return nil, fmt.Errorf("launchctl print %s: %w", domain, err)
 	}
 	var labels []string
-	for i, line := range strings.Split(res.Stdout, "\n") {
-		fields := strings.Fields(line)
-		if i == 0 || len(fields) < 3 {
-			continue // header, blank
+	in := false
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case !in && trimmed == "services = {":
+			in = true
+		case in && trimmed == "}":
+			in = false
+		case in:
+			// "<pid> <last exit> <label>"
+			if fields := strings.Fields(trimmed); len(fields) >= 3 {
+				labels = append(labels, fields[len(fields)-1])
+			}
 		}
-		labels = append(labels, fields[2])
 	}
 	sort.Strings(labels)
 	return labels, nil
