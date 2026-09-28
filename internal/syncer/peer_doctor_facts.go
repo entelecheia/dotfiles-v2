@@ -277,7 +277,13 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 	if local.OwnerEpoch > peer.OwnerEpoch {
 		lower, higher = there, here
 	}
+	// The fence checks topology first, on whichever Mac syncs; it is
+	// symmetric, so one call answers for both. Facts from an older dot lack
+	// the paths.
+	topo := topologyError(local.WorkspacePath, local.TargetPath, peer.WorkspacePath, peer.TargetPath)
 	switch {
+	case (local.Coordinator || peer.Coordinator) && topo != nil && local.WorkspacePath != "" && peer.WorkspacePath != "":
+		add("roles", DoctorFail, "every sync is refused: "+topo.Error(), "point both peer configs at each other: dot peer init --host <other Mac> on the one that is wrong")
 	case local.Coordinator && peer.Coordinator && local.OwnerEpoch == peer.OwnerEpoch:
 		// The fence refuses on both sides, or both write: an operator settles it.
 		add("roles", DoctorFail, fmt.Sprintf("both machines pass their owner guard at epoch %d: two coordinators", local.OwnerEpoch), "set one owner on both: dot sync owner --profile=peer --set <coordinator>")
@@ -306,11 +312,7 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		// and epoch, so the fence proceeds.
 		align := fmt.Sprintf("on %s: dot peer adopt --owner %s --epoch %d", other, c.Owner, c.OwnerEpoch)
 		demote, err := fenceDecision(c.Owner, c.OwnerEpoch, n.Owner, n.OwnerEpoch)
-		topo := topologyError(c.WorkspacePath, c.TargetPath, n.WorkspacePath, n.TargetPath)
 		switch {
-		case topo != nil && c.WorkspacePath != "" && n.WorkspacePath != "":
-			// The fence checks this first; facts from an older dot lack it.
-			add("roles", DoctorFail, fmt.Sprintf("%s's next sync is refused: %v", coord, topo), "point both peer configs at each other: dot peer init --host <other Mac> on the one that is wrong")
 		case err != nil:
 			add("roles", DoctorFail, fmt.Sprintf("%s's next sync is refused: %v", coord, err), align)
 		case demote && answersTo(c.MachineNames, n.Owner):

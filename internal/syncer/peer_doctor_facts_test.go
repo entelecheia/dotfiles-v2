@@ -128,6 +128,12 @@ func TestEvaluatePeerSides(t *testing.T) {
 	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") {
 		t.Errorf("topology mismatch passed: %+v", c)
 	}
+	// Also with both Macs coordinating after a takeover: the fence refuses
+	// on both sides before any demotion.
+	peer.Coordinator, peer.OwnerEpoch = true, 3
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") {
+		t.Errorf("topology mismatch with two coordinators passed: %+v", c)
+	}
 
 	// The other Mac holds a higher epoch: the coordinator's next sync
 	// demotes it. It stays the owner when it answers to the recorded name,

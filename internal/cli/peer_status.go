@@ -194,7 +194,11 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	if !st.LastHeld.IsZero() {
 		// A held run transferred files but left deletions pending, so the
 		// timestamps above must not be read as a clean exchange.
-		p.KV("Held transitions", formatLastSync(st.LastHeld))
+		held := formatLastSync(st.LastHeld)
+		if role != "coordinator" {
+			held += " (while this Mac was the coordinator)"
+		}
+		p.KV("Held transitions", held)
 	}
 	p.KV("Conflicts", strconv.Itoa(len(st.Conflicts)))
 	return nil
