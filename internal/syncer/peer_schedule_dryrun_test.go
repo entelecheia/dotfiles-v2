@@ -50,7 +50,7 @@ func peerScheduleSandbox(t *testing.T) (*Config, string) {
 		PeerStatusSchemaVersion, owner, cfg.Target.Path, localPath)
 	// `echo` is a shell builtin, so the stub needs nothing else on PATH. The
 	// document carries no single quote, so single-quoting it is safe.
-	writeStub(t, filepath.Join(binDir, "ssh"), "#!/bin/sh\necho '"+status+"'\n")
+	writeStub(t, filepath.Join(binDir, "ssh"), "#!/bin/sh\ncase \"$*\" in\n  *\"list dot candidates\"*) printf '/fake/dot\\tdot version 9.9.9 (fake)\\n' ;;\n  *) echo '"+status+"' ;;\nesac\n")
 	writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\nif [ -n \"$DOTFILES_TEST_LAUNCHCTL_ARGS\" ]; then printf '%s\\n' \"$*\" >> \"$DOTFILES_TEST_LAUNCHCTL_ARGS\"; fi\nexit 0\n")
 	t.Setenv("PATH", binDir)
 

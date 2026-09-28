@@ -1,8 +1,14 @@
 package ui
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"regexp"
+
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
@@ -55,10 +61,49 @@ var (
 			Foreground(lipgloss.Color("#565F89"))
 )
 
+// TerminalAttached reports whether the prompts below can run: huh's
+// accessible mode (TERM=dumb) needs no terminal; otherwise bubbletea's rule
+// applies, stdin when it is a terminal, else /dev/tty.
+// Without either (a plain ssh command, launchd, CI) huh dies with
+// "bubbletea: could not open TTY" (#183). A variable so tests can pin it.
+var TerminalAttached = func() bool {
+	// TERM=dumb puts huh in accessible mode, which reads stdin and writes
+	// stdout directly, with no terminal at all.
+	if os.Getenv("TERM") == "dumb" {
+		return true
+	}
+	// isatty, not a character-device check: /dev/null is a character device.
+	if term.IsTerminal(os.Stdin.Fd()) {
+		return true
+	}
+	f, err := os.Open("/dev/tty")
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+// ErrNoTerminal is what a prompt returns when it has no terminal to run on.
+var ErrNoTerminal = errors.New("no terminal for an interactive prompt; pass --yes, or run from a terminal")
+
+// ansiRe matches the SGR sequences lipgloss adds to prompt titles.
+var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func noTerminal(message string) error {
+	if TerminalAttached() {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", ansiRe.ReplaceAllString(message, ""), ErrNoTerminal)
+}
+
 // Confirm asks for yes/no. Returns true immediately if unattended.
 func Confirm(message string, unattended bool) (bool, error) {
 	if unattended {
 		return true, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return false, err
 	}
 	var confirmed bool
 	err := huh.NewConfirm().
@@ -73,6 +118,9 @@ func Confirm(message string, unattended bool) (bool, error) {
 func Select(message string, options []string, defaultVal string, unattended bool) (string, error) {
 	if unattended {
 		return defaultVal, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return defaultVal, err
 	}
 	selected := defaultVal
 	opts := make([]huh.Option[string], len(options))
@@ -95,6 +143,9 @@ func Select(message string, options []string, defaultVal string, unattended bool
 func Input(message, defaultVal string, unattended bool) (string, error) {
 	if unattended {
 		return defaultVal, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return defaultVal, err
 	}
 	// Seed value with default so user sees and can edit it
 	value := defaultVal
@@ -128,6 +179,9 @@ func MultiSelect(message string, options, defaultVals []string, unattended bool)
 	if unattended {
 		return defaultVals, nil
 	}
+	if err := noTerminal(message); err != nil {
+		return defaultVals, err
+	}
 	selected := append([]string(nil), defaultVals...)
 	opts := make([]huh.Option[string], len(options))
 	for i, o := range options {
@@ -156,6 +210,9 @@ func MultiSelectLabeled(message string, options []SelectOption, defaultVals []st
 	if unattended {
 		return defaultVals, nil
 	}
+	if err := noTerminal(message); err != nil {
+		return defaultVals, err
+	}
 	selected := append([]string(nil), defaultVals...)
 	opts := make([]huh.Option[string], len(options))
 	for i, o := range options {
@@ -176,6 +233,9 @@ func MultiSelectLabeled(message string, options []SelectOption, defaultVals []st
 func ConfirmBool(message string, defaultVal, unattended bool) (bool, error) {
 	if unattended {
 		return defaultVal, nil
+	}
+	if err := noTerminal(message); err != nil {
+		return defaultVal, err
 	}
 	value := defaultVal
 	err := huh.NewConfirm().
