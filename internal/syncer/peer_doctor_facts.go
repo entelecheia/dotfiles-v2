@@ -43,9 +43,10 @@ type PeerSideFacts struct {
 	MaxDelete    int               `json:"maxDelete"`
 	Propagation  PropagationPolicy `json:"propagation"`
 	// WorkspacePath and TargetPath are the profile's two ends, for the
-	// fence's topology check.
+	// fence's topology check; TargetHost is the target's ssh host.
 	WorkspacePath string `json:"workspacePath"`
 	TargetPath    string `json:"targetPath"`
+	TargetHost    string `json:"targetHost,omitempty"`
 	// Filters maps each peer filter file to its sha256, or "absent".
 	Filters map[string]string `json:"filters"`
 }
@@ -76,6 +77,7 @@ func LocalPeerSideFacts(ctx context.Context, probe *exec.Runner, cfg *Config, do
 
 		WorkspacePath: strings.TrimRight(cfg.LocalPath, "/"),
 		TargetPath:    cfg.Target.Path,
+		TargetHost:    cfg.Target.Host,
 	}
 	if exe, err := peerExecutable(); err == nil {
 		f.DotPath = exe
@@ -198,17 +200,42 @@ func nfdVerdict(s, o *PeerSideFacts, host, other string) (level, detail, fix str
 	return DoctorPass, host + ": every name in NFD (" + marker + ")", ""
 }
 
-// syncingCoordinators is who normalizes and moves names once the fence has
-// spoken: of two coordinators at different epochs the lower one's next sync
-// only demotes it (fenceDecision), before it normalizes or moves anything.
-// Equal epochs are the roles row's two-coordinator FAIL. A sole coordinator
-// stays one: the roles row's fix keeps it the coordinator.
-func syncingCoordinators(local, peer *PeerSideFacts) (bool, bool) {
+// settledCoordinators is who coordinates once the roles row's fix has run,
+// the state every other row judges: a sole coordinator stays one (the fix
+// aligns the other Mac); with none, this Mac (the fix adopts it here); of
+// two at different epochs the higher (the lower one's next sync only
+// demotes it, before it normalizes or moves anything). Two at equal epochs
+// stay undecided and are both judged as coordinators.
+func settledCoordinators(local, peer *PeerSideFacts) (bool, bool) {
 	l, p := local.Coordinator, peer.Coordinator
-	if l && p && local.OwnerEpoch != peer.OwnerEpoch {
+	switch {
+	case l && p && local.OwnerEpoch != peer.OwnerEpoch:
 		return local.OwnerEpoch > peer.OwnerEpoch, peer.OwnerEpoch > local.OwnerEpoch
+	case !l && !p:
+		return true, false
 	}
 	return l, p
+}
+
+// topologyFix names the Mac whose peer target does not point at the other
+// Mac's workspace and the target that does, set without touching the
+// owner or epoch (dot peer init would record this Mac as the owner).
+func topologyFix(local, peer *PeerSideFacts, here, there string) string {
+	var fixes []string
+	for _, s := range []struct {
+		host string
+		f, o *PeerSideFacts
+	}{{here, local, peer}, {there, peer, local}} {
+		if filepath.Clean(s.f.TargetPath) == filepath.Clean(s.o.WorkspacePath) {
+			continue
+		}
+		host := s.f.TargetHost
+		if host == "" {
+			host = "<ssh host>"
+		}
+		fixes = append(fixes, fmt.Sprintf("on %s: dot sync target --profile=peer ssh:%s:%s", s.host, host, s.o.WorkspacePath))
+	}
+	return strings.Join(fixes, "; ")
 }
 
 // IsPeerCoordinator reports whether this machine is the peer pair's
@@ -260,13 +287,12 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		host string
 		f    *PeerSideFacts
 	}
-	sides := []side{{here, local}, {there, peer}}
-	// The NFD rows take the Mac that normalizes and moves names once the
-	// fence has spoken, not every Mac that passes its owner guard.
-	lc, pc := syncingCoordinators(local, peer)
+	// Every row but rsync and roles judges the state the roles fix leaves,
+	// so no two fix lines contradict each other.
+	lc, pc := settledCoordinators(local, peer)
 	el, ep := *local, *peer
 	el.Coordinator, ep.Coordinator = lc, pc
-	synced := []side{{here, &el}, {there, &ep}}
+	sides := []side{{here, &el}, {there, &ep}}
 
 	// This machine's client is the doctor's first line. Every Mac that passes
 	// its owner guard runs one: a sync checks rsync before its fence, so a
@@ -275,13 +301,13 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 	case peer.RsyncError != "" && peer.Coordinator:
 		add("rsync", DoctorFail, there+": "+peer.RsyncError, "on "+there+": brew install rsync")
 	case peer.RsyncError != "":
-		add("rsync", DoctorWarn, there+": "+peer.RsyncError+" (it needs rsync 3.x once it coordinates)", "on "+there+": brew install rsync")
+		add("rsync", DoctorWarn, there+": "+peer.RsyncError+" (its client once it coordinates; see remote rsync above for the server this Mac uses)", "on "+there+": brew install rsync")
 	default:
 		add("rsync", DoctorPass, there+": "+peer.RsyncPath+" ("+peer.RsyncVersion+")", "")
 	}
 
-	for i, s := range synced {
-		o := synced[1-i]
+	for i, s := range sides {
+		o := sides[1-i]
 		level, detail, fix := nfdVerdict(s.f, o.f, s.host, o.host)
 		add("nfd", level, detail, fix)
 	}
@@ -305,10 +331,10 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 	topo := topologyError(local.WorkspacePath, local.TargetPath, peer.WorkspacePath, peer.TargetPath)
 	switch {
 	case (local.Coordinator || peer.Coordinator) && topo != nil && local.WorkspacePath != "" && peer.WorkspacePath != "":
-		add("roles", DoctorFail, "every sync is refused: "+topo.Error(), "point both peer configs at each other: dot peer init --host <other Mac> on the one that is wrong")
+		add("roles", DoctorFail, "every sync is refused: "+topo.Error(), topologyFix(local, peer, here, there))
 	case local.Coordinator && peer.Coordinator && local.OwnerEpoch == peer.OwnerEpoch:
 		// The fence refuses on both sides, or both write: an operator settles it.
-		add("roles", DoctorFail, fmt.Sprintf("both machines pass their owner guard at epoch %d: two coordinators", local.OwnerEpoch), "set one owner on both: dot sync owner --profile=peer --set <coordinator>")
+		add("roles", DoctorFail, fmt.Sprintf("both machines pass their owner guard at epoch %d: two coordinators", local.OwnerEpoch), "set one owner on both, a name only that Mac answers to: dot sync owner --profile=peer --set <coordinator>")
 	case local.Coordinator && peer.Coordinator:
 		// A takeover's pending fence: the lower epoch demotes at its next
 		// run. Each side's fence is asked, as each side's sync would.
@@ -319,6 +345,11 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		// The lower side always demotes (the higher epoch is at least 1).
 		settle := "on " + lower + ": dot peer sync (its fence demotes it)"
 		switch _, herr := fenceDecision(hi.Owner, hi.OwnerEpoch, lo.Owner, lo.OwnerEpoch); {
+		case answersTo(lo.MachineNames, hi.Owner):
+			// It adopts that owner and epoch and still passes its guard: two
+			// writers at one epoch, which the fence lets through.
+			add("roles", DoctorFail, fmt.Sprintf("both machines pass their owner guard, and %s answers to %s's owner %q too: its demotion leaves two coordinators", lower, higher, hi.Owner),
+				"set one owner on both, a name only that Mac answers to: dot sync owner --profile=peer --set <coordinator>")
 		case herr != nil:
 			add("roles", DoctorWarn, fmt.Sprintf("both machines pass their owner guard; %s (epoch %d) wins, but its syncs are refused until %s's next sync demotes it (%v)",
 				higher, hi.OwnerEpoch, lower, herr), settle)
@@ -362,12 +393,18 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		}
 	}
 
+	// Their fixes come after the roles fix, when it has one: dot peer setup
+	// checks the owner, and the replica comes from the settled coordinator.
+	after := ""
+	if slices.ContainsFunc(checks, func(c DoctorCheck) bool { return c.Name == "roles" && c.Level != DoctorPass }) {
+		after = "after the roles fix, "
+	}
 	for _, s := range sides {
 		switch {
 		case s.f.Coordinator && !s.f.Scheduler:
-			add("scheduler", DoctorWarn, s.host+" is the coordinator but has no peer scheduler", "on "+s.host+": dot peer setup")
+			add("scheduler", DoctorWarn, s.host+" is the coordinator but has no peer scheduler", after+"on "+s.host+": dot peer setup")
 		case !s.f.Coordinator && s.f.Scheduler:
-			add("scheduler", DoctorWarn, s.host+" is not the coordinator but has a peer scheduler", "on "+s.host+": dot peer setup --off")
+			add("scheduler", DoctorWarn, s.host+" is not the coordinator but has a peer scheduler", after+"on "+s.host+": dot peer setup --off")
 		case s.f.Scheduler:
 			add("scheduler", DoctorPass, s.host+": peer scheduler installed (coordinator)", "")
 		default:
@@ -380,17 +417,17 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 			continue
 		}
 		if s.f.ReplicaError != "" {
-			add("replica", DoctorWarn, s.host+": a takeover there would refuse the replica: "+s.f.ReplicaError, "run a complete dot peer sync on the coordinator")
+			add("replica", DoctorWarn, s.host+": a takeover there would refuse the replica: "+s.f.ReplicaError, after+"run a complete dot peer sync on the coordinator")
 			continue
 		}
 		if s.f.Replica == nil {
-			add("replica", DoctorWarn, "no takeover replica on "+s.host+": a takeover there is not possible", "run a complete dot peer sync on the coordinator")
+			add("replica", DoctorWarn, "no takeover replica on "+s.host+": a takeover there is not possible", after+"run a complete dot peer sync on the coordinator")
 			continue
 		}
 		if slices.ContainsFunc(s.f.MachineNames, func(n string) bool {
 			return NormalizeHostname(n) == NormalizeHostname(s.f.Replica.Coordinator)
 		}) {
-			add("replica", DoctorWarn, s.host+": the replica there was staged by "+s.host+" itself, not pushed by the coordinator", "run a complete dot peer sync on the coordinator")
+			add("replica", DoctorWarn, s.host+": the replica there was staged by "+s.host+" itself, not pushed by the coordinator", after+"run a complete dot peer sync on the coordinator")
 			continue
 		}
 		age := time.Since(s.f.Replica.WrittenAt).Round(time.Minute)

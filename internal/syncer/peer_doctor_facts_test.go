@@ -123,10 +123,12 @@ func TestEvaluatePeerSides(t *testing.T) {
 	// The fence's topology check comes first: a peer profile that does not
 	// point back here refuses every sync.
 	local, peer = doctorFacts()
-	local.WorkspacePath, local.TargetPath = "/Users/a/work", "/Users/b/work"
-	peer.WorkspacePath, peer.TargetPath = "/Users/b/work", "/Users/a/elsewhere"
-	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") {
-		t.Errorf("topology mismatch passed: %+v", c)
+	local.WorkspacePath, local.TargetPath, local.TargetHost = "/Users/a/work", "/Users/b/work", "m3x23.ts.net"
+	peer.WorkspacePath, peer.TargetPath, peer.TargetHost = "/Users/b/work", "/Users/a/elsewhere", "m5x26.ts.net"
+	// The fix names the Mac that is wrong and the target, and leaves the
+	// owner and epoch alone (dot peer init would claim the owner).
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") || c.Fix != "on m3x23: dot sync target --profile=peer ssh:m5x26.ts.net:/Users/a/work" {
+		t.Errorf("topology mismatch: %+v", c)
 	}
 	// Also with both Macs coordinating after a takeover: the fence refuses
 	// on both sides before any demotion.
@@ -213,6 +215,71 @@ func TestEvaluatePeerSides(t *testing.T) {
 	}
 	if c := checkFor(checks, "replica", DoctorWarn); c == nil || !strings.Contains(c.Detail, "m3x23") {
 		t.Errorf("missing replica not flagged: %+v", checks)
+	}
+}
+
+// Every row judges the state the roles fix leaves: across coordinator
+// shapes no host is told to remove its scheduler and to install it or adopt
+// the role, and a Mac the fence demotes is not told to set up.
+func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(l, p *PeerSideFacts)
+		never  []string
+		want   string
+	}{
+		{"one coordinator", func(l, p *PeerSideFacts) {}, nil, ""},
+		{"neither, this Mac keeps its plist", func(l, p *PeerSideFacts) { l.Coordinator = false }, []string{"on m5x26: dot peer setup --off"}, ""},
+		{"two, the lower without a plist", func(l, p *PeerSideFacts) {
+			l.Scheduler = false
+			p.Coordinator, p.Scheduler, p.OwnerEpoch = true, true, 3
+		}, []string{"on m5x26: dot peer setup"}, ""},
+		{"two, the higher without a plist", func(l, p *PeerSideFacts) {
+			l.OwnerEpoch, l.Scheduler = 3, false
+			p.Coordinator, p.Scheduler = true, true
+		}, nil, "after the roles fix, on m5x26: dot peer setup"},
+		{"two at one epoch", func(l, p *PeerSideFacts) { p.Coordinator, p.Scheduler = true, true }, nil, ""},
+		{"sole coordinator demoted to no one", func(l, p *PeerSideFacts) {
+			l.MachineNames = []string{"m5x26"}
+			p.Owner, p.OwnerEpoch = "old-name", 3
+		}, []string{"on m5x26: dot peer setup --off"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local, peer := doctorFacts()
+			tc.mutate(local, peer)
+			var fixes []string
+			for _, c := range evaluatePeerSides(local, peer, "m5x26", "m3x23") {
+				if c.Fix != "" {
+					fixes = append(fixes, c.Fix)
+				}
+			}
+			all := strings.Join(fixes, "\n")
+			for _, host := range []string{"m5x26", "m3x23"} {
+				off := strings.Contains(all, "on "+host+": dot peer setup --off")
+				on := strings.Contains(strings.ReplaceAll(all, "setup --off", ""), "on "+host+": dot peer setup")
+				adopt := host == "m5x26" && strings.Contains(all, "adopt --self")
+				if off && (on || adopt) {
+					t.Errorf("%s is told both ways:\n%s", host, all)
+				}
+			}
+			if !strings.Contains(all, tc.want) {
+				t.Errorf("no fix %q:\n%s", tc.want, all)
+			}
+			for _, never := range tc.never {
+				if strings.Contains(strings.ReplaceAll(all, never+" --off", ""), never) {
+					t.Errorf("fix %q given:\n%s", never, all)
+				}
+			}
+		})
+	}
+
+	// The lower Mac answers to the higher one's owner: its demotion leaves
+	// two writers at one epoch, which the fence lets through.
+	local, peer := doctorFacts()
+	local.MachineNames = []string{"m5x26"}
+	peer.Coordinator, peer.Scheduler, peer.OwnerEpoch = true, true, 3
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "leaves two coordinators") {
+		t.Errorf("a shared owner name passed: %+v", c)
 	}
 }
 
