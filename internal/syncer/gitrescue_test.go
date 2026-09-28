@@ -271,3 +271,26 @@ func TestPeerGitRescue_CreatedDefaultBranchTracksOrigin(t *testing.T) {
 		t.Fatalf("main upstream = %q", got)
 	}
 }
+
+// A default branch checked out in a linked worktree is not moved under it.
+func TestPeerGitRescue_SkipsDefaultBranchCheckedOutElsewhere(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+	gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+	mainTip := f.publish(t, "a.txt", "a2\n")
+	f.deliver(t, mainTip)
+	wt := filepath.Join(t.TempDir(), "wt-main")
+	gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
+	before := gitStateRun_(t, f.ws, "rev-parse", "main")
+
+	rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true})
+	if rep.Status != GitRepoSkipped || !strings.Contains(rep.Reason, "linked worktree") {
+		t.Fatalf("rescue = %+v", rep)
+	}
+	if got := gitStateRun_(t, f.ws, "rev-parse", "main"); got != before {
+		t.Fatalf("main moved to %s under its worktree", got)
+	}
+	if out := gitStateRun_(t, wt, "status", "--porcelain"); out != "" {
+		t.Fatalf("the linked worktree shows changes:\n%s", out)
+	}
+}

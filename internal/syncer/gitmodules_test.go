@@ -159,3 +159,86 @@ func TestPeerGitRealign_RestoresMissingGitmodules(t *testing.T) {
 		t.Fatalf(".gitmodules not restored: %v", err)
 	}
 }
+
+// gitlinkBumpFixture: the parent's upstream bumps sub to s2, a commit the
+// child does not have yet. The parent is realigned to that bump already;
+// the child's files match s2 (empty is true when s2 changes no file).
+func gitlinkBumpFixture(t *testing.T, empty bool) (ws, sub, subSrc, s2 string) {
+	t.Helper()
+	tmp := t.TempDir()
+	subSrc = filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	ws = filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	if empty {
+		gitStateRun_(t, subSrc, "commit", "-q", "--allow-empty", "-m", "s2 empty")
+		s2 = gitStateHead(t, subSrc)
+	} else {
+		s2 = gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+	}
+	gitStateRun_(t, filepath.Join(origin, "sub"), "fetch", "-q", "origin")
+	gitStateRun_(t, filepath.Join(origin, "sub"), "checkout", "-q", s2)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump")
+	gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules", "origin")
+	gitStateRun_(t, ws, "reset", "-q", "--mixed", "origin/main")
+	sub = filepath.Join(ws, "sub")
+	if !empty {
+		gitStateRewriteTracked(t, filepath.Join(sub, "file.txt"), "v2\n")
+	}
+	return ws, sub, subSrc, s2
+}
+
+// A child whose missing gitlink commit changes none of its files still
+// reports the missing commit (it used to read as aligned), and --fetch
+// brings it.
+func TestPeerGitRealign_MissingGitlinkWithMatchingContent(t *testing.T) {
+	ws, sub, _, s2 := gitlinkBumpFixture(t, true)
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child := gitStateReport(t, res, "sub"); child.Class != GitClassGitlinkMissing {
+		t.Fatalf("child = %+v, want gitlink-missing", child)
+	}
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitStateHead(t, sub); got != s2 {
+		t.Fatalf("child HEAD = %s, want %s", got, s2)
+	}
+}
+
+// An origin rewritten by url.<base>.insteadOf is not a moved URL: git
+// resolves both sides the same way, and --fetch must not touch origin.
+func TestPeerGitRealign_InsteadOfIsNotAMove(t *testing.T) {
+	ws, sub, subSrc, s2 := gitlinkBumpFixture(t, false)
+	const alias = "https://example.invalid/sub.git"
+	gitStateRun_(t, ws, "config", "-f", ".gitmodules", "submodule.sub.url", alias)
+	gitStateRun_(t, ws, "commit", "-q", "-m", "gitmodules alias", "--", ".gitmodules")
+	gitStateRun_(t, sub, "config", "url."+subSrc+".insteadOf", alias)
+	gitStateRun_(t, sub, "config", "remote.origin.url", alias)
+
+	res, err := PeerGitRealign(context.Background(), ws, []string{"sub"}, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child := gitStateReport(t, res, "sub"); child.Class != GitClassGitlinkMissing {
+		t.Fatalf("child = %+v, want gitlink-missing, not url-moved", child)
+	}
+	if _, err := PeerGitRealign(context.Background(), ws, []string{"sub"}, RealignOptions{Apply: true, Fetch: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitStateRun_(t, sub, "config", "--get", "remote.origin.url"); got != alias {
+		t.Fatalf("origin rewritten to %s", got)
+	}
+	if got := gitStateHead(t, sub); got != s2 {
+		t.Fatalf("child HEAD = %s, want %s", got, s2)
+	}
+}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -165,6 +166,12 @@ retries it.`,
 			// The preview is the default. The global --dry-run flag always
 			// wins over --apply: under it nothing changes in .git or in
 			// either peer store (#99, #103).
+			if fetch && !apply {
+				return fmt.Errorf("--fetch only acts with --apply")
+			}
+			if noPush && !rescue {
+				return fmt.Errorf("--no-push only applies to --rescue")
+			}
 			dryRun, _ := c.Flags().GetBool("dry-run")
 			apply = apply && !dryRun
 			res, err := syncer.PeerGitRealign(c.Context(), root, args, syncer.RealignOptions{

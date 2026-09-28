@@ -95,13 +95,14 @@ func (r *gitStateRun) staleGitmodules(ctx context.Context, abs, rev, content str
 // gitmodulesURLs maps submodule path to URL from one .gitmodules source:
 // "-f <file>" or "--blob <rev>:.gitmodules".
 func (r *gitStateRun) gitmodulesURLs(ctx context.Context, abs, flag, source string) map[string]string {
-	out, err := r.read(ctx, abs, "config", flag, source, "--get-regexp", `^submodule\..*\.(path|url)$`)
+	out, err := r.runOutput(ctx, abs, nil, true, "config", "-z", flag, source, "--get-regexp", `^submodule\..*\.(path|url)$`)
 	if err != nil {
 		return nil
 	}
 	paths, urls := map[string]string{}, map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
-		key, value, ok := strings.Cut(line, " ")
+	// -z: "key\nvalue\x00" records, so a submodule name may hold spaces.
+	for _, record := range strings.Split(out, "\x00") {
+		key, value, ok := strings.Cut(record, "\n")
 		if !ok {
 			continue
 		}
@@ -132,10 +133,18 @@ func (r *gitStateRun) gitmodulesURLs(ctx context.Context, abs, flag, source stri
 // moved URL, fetches, and is classified again; otherwise the report names
 // the exact commands.
 func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, wantURL string, apply bool, rep *GitRepoReport) {
+	// Both sides are compared as git resolves them: `remote get-url` and
+	// `ls-remote --get-url` apply url.<base>.insteadOf, so an https URL in
+	// .gitmodules and an ssh origin rewritten to each other do not count as
+	// a move. The raw origin URL is kept to restore it if the fetch fails.
 	var move *urlMove
+	rawOrigin := ""
 	if wantURL != "" && !strings.HasPrefix(wantURL, "./") && !strings.HasPrefix(wantURL, "../") {
-		if have, err := r.read(ctx, abs, "remote", "get-url", "origin"); err == nil && have != wantURL {
+		have, herr := r.read(ctx, abs, "remote", "get-url", "origin")
+		want, werr := r.read(ctx, abs, "ls-remote", "--get-url", wantURL)
+		if herr == nil && werr == nil && have != want {
 			move = &urlMove{old: have, new: wantURL}
+			rawOrigin, _ = r.read(ctx, abs, "config", "--get", "remote.origin.url")
 		}
 	}
 	commands := "git -C " + shellWord(abs) + " fetch origin"
@@ -153,13 +162,18 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 		return
 	}
 	if move != nil {
-		if _, err := r.runOutput(ctx, abs, nil, false, "remote", "set-url", "origin", move.new); err != nil {
+		if _, err := r.runOutput(ctx, abs, nil, false, "remote", "set-url", "--", "origin", move.new); err != nil {
 			rep.Reason = gitlinkMissing + "; setting the moved URL failed: " + shortErr(err)
 			return
 		}
 	}
 	if _, err := r.runOutput(ctx, abs, nil, false, "fetch", "-q", "origin"); err != nil {
 		rep.Reason = gitlinkMissing + "; fetch failed: " + shortErr(err)
+		if move != nil && rawOrigin != "" {
+			if _, rerr := r.runOutput(ctx, abs, nil, false, "remote", "set-url", "--", "origin", rawOrigin); rerr == nil {
+				rep.Reason += "; origin restored to " + rawOrigin
+			}
+		}
 		return
 	}
 	fresh := &GitRepoReport{Path: rep.Path}

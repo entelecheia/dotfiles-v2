@@ -177,7 +177,8 @@ func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoRe
 	rep.Reason = ""
 	rep.Target = rep.RescueTarget
 	rep.TargetDiffs = rep.rescueDiffs
-	if !r.opts.NoPush {
+	// A branch tracking "." has no remote to keep a copy on.
+	if !r.opts.NoPush && rep.remote != "." {
 		rep.RescueRemote = rep.remote
 	}
 }
@@ -193,7 +194,7 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		rep.Reason = "cannot create rescue branch " + rep.Rescue + ": " + shortErr(err)
 		return
 	}
-	if !r.opts.NoPush {
+	if rep.RescueRemote != "" {
 		if _, err := r.runOutput(ctx, abs, nil, false, "push", "-q", rep.RescueRemote, ref+":"+ref); err != nil {
 			rep.Status = GitRepoUnresolvable
 			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (retry, or use --no-push): " + shortErr(err)
@@ -203,9 +204,33 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 	}
 	if rep.rescueBranch == "" {
 		r.realign(ctx, abs, gitdir, rep)
+		if rep.Status != GitRepoRealigned {
+			rep.Reason += " (rescue branch " + rep.Rescue + " kept)"
+		}
 		return
 	}
 	r.switchBranch(ctx, abs, gitdir, rep)
+}
+
+// worktreeOnBranch names a worktree other than abs that has ref checked out.
+func (r *gitStateRun) worktreeOnBranch(ctx context.Context, abs, ref string) string {
+	out, err := r.read(ctx, abs, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	self, _ := filepath.EvalSymlinks(abs)
+	var path string
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			path = strings.TrimPrefix(line, "worktree ")
+		case line == "branch "+ref:
+			if p, _ := filepath.EvalSymlinks(path); p != self {
+				return path
+			}
+		}
+	}
+	return ""
 }
 
 // switchBranch points HEAD at the default branch, created at or
@@ -215,6 +240,13 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep *GitRepoReport) {
 	def, target := rep.rescueBranch, rep.Target
 	defRef := "refs/heads/" + def
+	// A branch checked out in a linked worktree must not move under it:
+	// that worktree would see the move as staged changes undoing it.
+	if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
+		rep.Status = GitRepoSkipped
+		rep.Reason = def + " is checked out in the linked worktree " + other + "; HEAD not moved (rescue branch " + rep.Rescue + " kept)"
+		return
+	}
 	oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef)
 	if oldDef != "" && oldDef != target && !r.strictDescendant(ctx, abs, oldDef, target) {
 		rep.Status = GitRepoSkipped
@@ -287,7 +319,7 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 	}
 	restoreHead := "git -C " + shellWord(abs) + " update-ref --no-deref HEAD " + rep.Head
 	if rep.branch != "" {
-		restoreHead = "git -C " + shellWord(abs) + " symbolic-ref HEAD refs/heads/" + rep.branch
+		restoreHead = "git -C " + shellWord(abs) + " symbolic-ref HEAD " + shellWord("refs/heads/"+rep.branch)
 	}
 	if err := os.Rename(lockPath, index); err != nil {
 		if rep.branch != "" {

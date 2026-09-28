@@ -347,7 +347,7 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 		rep.Reason = reason
 		if reason == staleRebaseHead {
 			rep.Class = GitClassStaleRebaseHead
-			rep.Suggestion = "no rebase is in progress; clear it: git -C " + abs + " update-ref -d REBASE_HEAD"
+			rep.Suggestion = "no rebase is in progress; clear it: git -C " + shellWord(abs) + " update-ref -d REBASE_HEAD"
 		}
 		return
 	}
@@ -376,7 +376,10 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 	aligned := func() { rep.Status = GitRepoAligned }
 	candidates, err := r.candidates(ctx, abs, head, gitlink)
 	if err != nil {
-		if headDiffs == 0 {
+		// A missing parent gitlink commit is reported even when HEAD's own
+		// content matches: its content can be identical while the parent
+		// already points past HEAD, and only the report leads to the fetch.
+		if headDiffs == 0 && err.Error() != gitlinkMissing {
 			aligned()
 			return
 		}
