@@ -610,6 +610,38 @@ func TestHostMergeCreatesRegularFilesOnly(t *testing.T) {
 		})
 	}
 
+	// A lone directory under a key is not created on the other Mac either
+	// (--files-from implies --dirs), and later runs are not refused.
+	for _, onPeer := range []bool{false, true} {
+		cfg, localHome, peerHome := claudeJSONFixture(t, `{}`, `{}`)
+		cfg.HostMerge = map[string][]string{".cfg": {"k"}}
+		if err := os.WriteFile(PeerHomePathsFile(cfg.LocalPaths), []byte(".cfg\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		from, to := localHome, peerHome
+		if onPeer {
+			from, to = peerHome, localHome
+		}
+		writePeerHomeFile(t, from, ".cfg/a.json", `{}`, peerHomeFixedTime)
+		res, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, Itemize: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range res.Plan.Items {
+			if strings.HasPrefix(it.Path, ".cfg") {
+				t.Fatalf("dir on peer=%v: the plan lists %+v", onPeer, it)
+			}
+		}
+		for run := 0; run < 2; run++ {
+			if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)}); err != nil {
+				t.Fatalf("dir on peer=%v, run %d: %v", onPeer, run, err)
+			}
+		}
+		if _, err := os.Lstat(filepath.Join(to, ".cfg")); !os.IsNotExist(err) {
+			t.Fatalf("dir on peer=%v: the directory was created: %v", onPeer, err)
+		}
+	}
+
 	cfg, localHome, peerHome := claudeJSONFixture(t, `{}`, `{}`)
 	cfg.HostMerge = map[string][]string{".cfg": {"k"}}
 	if err := os.WriteFile(PeerHomePathsFile(cfg.LocalPaths), []byte(".cfg\n"), 0o644); err != nil {

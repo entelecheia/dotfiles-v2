@@ -2,11 +2,13 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -90,13 +92,14 @@ func SetLocalOwner(cfg *Config, owner string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	local.Owner = owner
+	AssignOwner(local, owner)
 	if !dryRun {
 		if err := SaveLocalConfig(cfg.LocalPaths, local); err != nil {
 			return err
 		}
 	}
 	cfg.Owner = owner
+	cfg.OwnerAliases = local.OwnerAliases
 	return nil
 }
 
@@ -460,6 +463,7 @@ type OwnerOptions struct {
 	Clear   bool
 	SetSelf bool
 	SetTo   string
+	DryRun  bool // report the owner it would write; write nothing
 }
 
 // SetOwner records which machine may push this profile and returns the owner
@@ -483,6 +487,9 @@ func SetOwner(opts OwnerOptions) (string, error) {
 		return "", fmt.Errorf("profile %q has no config yet; run dot sync init first", cfg.Profile)
 	}
 	previous := local.Owner
+	// A deliberate owner change is a new decision, not a rename: earlier
+	// names no longer stand for the owner, even when the name is unchanged.
+	local.OwnerAliases = nil
 	switch {
 	case opts.Clear:
 		local.Owner = ""
@@ -499,10 +506,152 @@ func SetOwner(opts OwnerOptions) (string, error) {
 		local.OwnerEpoch++
 		local.FencePending = false
 	}
+	if opts.DryRun {
+		return local.Owner, nil
+	}
 	if err := SaveLocalConfig(paths, local); err != nil {
 		return "", err
 	}
 	return local.Owner, nil
+}
+
+// OwnerRenameResult names the profile stores RenameOwner rewrote.
+type OwnerRenameResult struct {
+	Profiles []string
+	// Already names the stores a previous run renamed (owner <new>, alias
+	// <old>), so a retry can go on to the peer.
+	Already []string
+	// OldKept says <old> was recorded as an alias (a generic name is not).
+	OldKept bool
+}
+
+// ErrNoProfileOwned is RenameOwner's answer when no store is owned by <old>.
+var ErrNoProfileOwned = errors.New("no profile is owned by that name")
+
+// RenameOwner records that the owner machine was renamed from oldName to
+// newName in every profile store of the workspace whose owner, or one of
+// whose aliases, is oldName (#185). The old name stays as an alias, so the
+// guard keeps matching a machine not renamed yet and a peer not migrated yet.
+// Nothing else changes: not the epoch (a rename is not a coordinator
+// change), not the target, not a baseline, so no run plans a deletion.
+//
+// keepAlias records <old> as an alias; only a Mac that answers to <old> or
+// <new> needs it (the fence reads the coordinator's), so the other Mac's
+// migration step records none.
+func RenameOwner(workspaceRoot, oldName, newName string, dryRun, keepAlias bool) (*OwnerRenameResult, error) {
+	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
+	if oldName == "" || newName == "" || strings.ContainsAny(newName, " \t\r\n'\"/") {
+		return nil, fmt.Errorf("owner rename needs an old and a new machine name, the new one without spaces, quotes or slashes (got %q -> %q)", oldName, newName)
+	}
+	if strings.HasPrefix(oldName, "-") || strings.HasPrefix(newName, "-") {
+		return nil, fmt.Errorf("owner rename: a machine name cannot start with '-' (got %q -> %q)", oldName, newName)
+	}
+	if strings.ContainsAny(oldName, "'\"\n") {
+		return nil, fmt.Errorf("owner rename: the old name %q holds a quote; record the owner with dot sync owner --set instead", oldName)
+	}
+	if genericMachineNames[NormalizeHostname(newName)] {
+		return nil, fmt.Errorf("owner rename: %q is a generic name many Macs answer to; give the Mac a specific name first", newName)
+	}
+	if NormalizeHostname(oldName) == NormalizeHostname(newName) {
+		return nil, fmt.Errorf("owner rename: %q and %q are the same name", oldName, newName)
+	}
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, ".dotfiles"))
+	if err != nil {
+		return nil, fmt.Errorf("owner rename: reading profile stores: %w", err)
+	}
+	result := &OwnerRenameResult{}
+	for _, entry := range entries {
+		if !entry.IsDir() || ValidateProfile(entry.Name()) != nil {
+			continue
+		}
+		paths := ResolveLocalPathsForProfile(workspaceRoot, entry.Name())
+		local, ok, err := LoadLocalConfig(paths)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || local == nil {
+			continue
+		}
+		if ownersMatch(local.Owner, nil, newName) && ownersMatch(oldName, nil, local.OwnerAliases...) {
+			result.Already = append(result.Already, entry.Name())
+			continue
+		}
+		// Only the current owner is renamed. An alias names a machine as it
+		// was; renaming through it would let a second Mac take the owner.
+		if !ownersMatch(local.Owner, nil, oldName) {
+			continue
+		}
+		seen := map[string]bool{NormalizeHostname(newName): true}
+		var aliases []string
+		earlier := slices.Clone(local.OwnerAliases)
+		if keepAlias {
+			earlier = append(earlier, local.Owner)
+		}
+		for _, alias := range earlier {
+			// A generic name ("mac") identifies no machine; keeping it would
+			// let any Mac with an unset HostName pass the guard.
+			if n := NormalizeHostname(alias); n != "" && !seen[n] && !genericMachineNames[n] {
+				seen[n] = true
+				aliases = append(aliases, alias)
+			}
+		}
+		local.Owner, local.OwnerAliases = newName, aliases
+		result.OldKept = slices.ContainsFunc(aliases, func(a string) bool { return NormalizeHostname(a) == NormalizeHostname(oldName) })
+		if !dryRun {
+			if err := SaveLocalConfig(paths, local); err != nil {
+				return nil, err
+			}
+		}
+		result.Profiles = append(result.Profiles, entry.Name())
+	}
+	if len(result.Profiles)+len(result.Already) == 0 {
+		return nil, fmt.Errorf("owner rename: no profile under %s is owned by %q: %w", filepath.Join(workspaceRoot, ".dotfiles"), oldName, ErrNoProfileOwned)
+	}
+	return result, nil
+}
+
+// RetireOwnerAliases drops the recorded earlier names from every profile
+// store of the workspace owned by owner. A complete peer run calls it once
+// the peer records the same owner: both machines are migrated and the old
+// names must stop admitting writes. It returns the profiles it changed.
+//
+// ponytail: known ceiling. See docs/CEILINGS.md (owner aliases outside the coordinator's peer run).
+func RetireOwnerAliases(workspaceRoot, owner string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, ".dotfiles"))
+	if err != nil {
+		return nil, err
+	}
+	// The peer store goes last: a run retries only while the peer profile
+	// still holds aliases, so a failure on another store must leave them.
+	slices.SortStableFunc(entries, func(a, b os.DirEntry) int {
+		switch {
+		case a.Name() == PeerProfile && b.Name() != PeerProfile:
+			return 1
+		case b.Name() == PeerProfile && a.Name() != PeerProfile:
+			return -1
+		}
+		return 0
+	})
+	var retired []string
+	for _, entry := range entries {
+		if !entry.IsDir() || ValidateProfile(entry.Name()) != nil {
+			continue
+		}
+		paths := ResolveLocalPathsForProfile(workspaceRoot, entry.Name())
+		local, ok, err := LoadLocalConfig(paths)
+		if err != nil {
+			return retired, err
+		}
+		if !ok || local == nil || len(local.OwnerAliases) == 0 || !ownersMatch(local.Owner, nil, owner) {
+			continue
+		}
+		local.OwnerAliases = nil
+		if err := SaveLocalConfig(paths, local); err != nil {
+			return retired, err
+		}
+		retired = append(retired, entry.Name())
+	}
+	return retired, nil
 }
 
 // RsyncOutcome names what EnsureRsync did about a missing rsync.

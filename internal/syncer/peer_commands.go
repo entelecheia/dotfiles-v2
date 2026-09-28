@@ -212,6 +212,7 @@ const (
 	PeerEventPeerDotUnreleased                          // the peer has only a non-release dot and no remote_dot pin; Path names it
 	PeerEventHostMerged                                 // a host_merge file was merged on both machines; Path names it
 	PeerEventHostMergeHeld                              // a one-way run leaves a differing host_merge file alone; Path names it
+	PeerEventOwnerAliasesRetired                        // both machines record the renamed owner; Path lists the profiles cleared
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -344,7 +345,7 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 	// gitignored), so the owner is simply this machine. Use the DNS-safe
 	// name rather than os.Hostname(), which can be the generic "Mac".
 	if name := PreferredMachineName(); name != "" {
-		local.Owner = name
+		AssignOwner(local, name)
 	}
 
 	result := &PeerInitResult{
@@ -821,6 +822,22 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		if err := PushPeerReplica(ctx, runner, cfg); err != nil {
 			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventReplicaPushFailed, Err: err})
 		}
+		// A rename is finished once the peer records the same owner: the
+		// old names retire here so they stop admitting writes (#185).
+		// Only once this Mac answers to the new name itself: retiring while
+		// it still answers only to an alias would lock it out of its own
+		// profiles. Like the replica push, a failure here is reported, not
+		// fatal: the run itself is complete.
+		if len(cfg.OwnerAliases) > 0 && NormalizeHostname(remoteStatus.Profile.Owner) == NormalizeHostname(cfg.Owner) &&
+			ownersMatch(cfg.Owner, nil, MachineNames()...) {
+			retired, err := RetireOwnerAliases(strings.TrimRight(cfg.LocalPath, "/"), cfg.Owner)
+			if err == nil {
+				cfg.OwnerAliases = nil
+			}
+			if err != nil || len(retired) > 0 {
+				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerAliasesRetired, Path: strings.Join(retired, ", "), Err: err})
+			}
+		}
 		if cfg.FencePending {
 			// The first complete run after contact: the fence has done its
 			// job and normal requirements apply again.
@@ -1273,11 +1290,16 @@ func peerHomeAdditiveArgs(cfg *Config, list string, report, createOnly bool) []s
 	// A host_merge file is never newest-wins input, by config rather than by
 	// who has a copy when: a stale save by a running app stays on its own
 	// Mac, and the next two-way run's merge restores it there (#181).
-	if !createOnly {
-		for _, rel := range slices.Sorted(maps.Keys(cfg.HostMerge)) {
-			if pattern, err := literalRsyncPattern(rel); err == nil {
-				args = append(args, "--exclude=/"+pattern)
+	// The create-only pass excludes each key as a directory: --files-from
+	// implies --dirs, which would create a listed directory empty on the
+	// other Mac. The trailing slash matches only a directory, and exclude
+	// rules reach the remote sender, so it holds in both directions.
+	for _, rel := range slices.Sorted(maps.Keys(cfg.HostMerge)) {
+		if pattern, err := literalRsyncPattern(rel); err == nil {
+			if createOnly {
+				pattern += "/"
 			}
+			args = append(args, "--exclude=/"+pattern)
 		}
 	}
 	args = append(args, "--files-from="+list)

@@ -207,7 +207,15 @@ func peerFence(cfg *Config, remote *remotePeerStatus) (demote, legacy bool, err 
 	case cfg.OwnerEpoch > remote.OwnerEpoch:
 		return false, false, nil
 	}
-	if NormalizeHostname(cfg.Owner) != NormalizeHostname(remote.Profile.Owner) {
+	// At equal epochs only one machine may pass its owner guard. The peer's
+	// canPush is its own verdict, so names and aliases that happen to match
+	// cannot admit a second coordinator.
+	if remote.Profile.CanPush {
+		return false, false, fmt.Errorf(
+			"peer fence: equal owner epochs (%d) and the peer also passes its own owner guard (its owner %q, local %q); both sides refuse — set one coordinator with `dot sync owner --profile=peer --set <machine>` on both machines",
+			cfg.OwnerEpoch, remote.Profile.Owner, cfg.Owner)
+	}
+	if !sameOwner(cfg.Owner, cfg.OwnerAliases, remote.Profile.Owner, remote.Profile.OwnerAliases) {
 		return false, false, fmt.Errorf(
 			"peer fence: equal owner epochs (%d) with different owners (local %q, remote %q); both sides refuse — pick one coordinator and set it with `dot sync owner --profile=peer --set <machine>`",
 			cfg.OwnerEpoch, cfg.Owner, remote.Profile.Owner)
@@ -273,7 +281,7 @@ func PeerAdopt(cfg *Config, opts PeerAdoptOptions) (string, error) {
 	if !ok || local == nil {
 		return "", fmt.Errorf("peer adopt: profile %q has no config yet; run dot peer init first", cfg.Profile)
 	}
-	local.Owner = owner
+	AssignOwner(local, owner)
 	local.OwnerEpoch = opts.Epoch
 	local.FencePending = opts.FencePending
 	if err := SaveLocalConfig(cfg.LocalPaths, local); err != nil {
@@ -623,7 +631,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	// direction. The peer prints the exact owner it adopted.
 	remoteOwner, err := peerRemoteAdopt(ctx, opts.Runner, cfg, epoch, generation)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("peer handover: the peer's adopt failed or its answer was unusable; nothing changed here, check `dot peer status` on %s (the next sync's fence settles a half-done adopt): %w", cfg.Target.Host, err)
 	}
 	result.NewOwner = remoteOwner
 	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: remoteOwner, Epoch: epoch}); err != nil {
@@ -721,17 +729,48 @@ func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args .
 func peerRemoteDotResult(ctx context.Context, runner *exec.Runner, cfg *Config, args ...string) (*exec.Result, error) {
 	dot, err := resolveRemoteDot(ctx, runner, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("peer handover: %w", err)
+		return nil, err
 	}
 	cmd, err := peerRemoteDotCommand(dot.Path, args...)
 	if err != nil {
 		return nil, err
 	}
+	// Shared by handover and rename: the caller names its step.
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", cfg.Target.Host, cmd)
 	if err != nil {
-		return nil, fmt.Errorf("peer handover: remote `dot %s` failed: %w", strings.Join(args, " "), err)
+		return nil, fmt.Errorf("remote `dot %s` on %s failed: %w", strings.Join(args, " "), cfg.Target.Host, err)
 	}
 	return res, nil
+}
+
+// PeerView is what an owner rename asks the other Mac: the names it answers
+// to and its peer scheduler's state.
+type PeerView struct {
+	MachineNames []string
+	Scheduler    string // "not installed" when it has none; "" when unknown
+}
+
+// PeerOwnerView reads the peer's status document over ssh.
+func PeerOwnerView(ctx context.Context, runner *exec.Runner, cfg *Config) (*PeerView, error) {
+	if err := CheckSSH(ctx, runner, cfg.Target.Host); err != nil {
+		return nil, err
+	}
+	status, err := fetchRemotePeerStatus(ctx, runner, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &PeerView{MachineNames: status.Profile.MachineNames, Scheduler: status.Job.State}, nil
+}
+
+// RenamePeerOwner applies `dot sync owner --rename <old> <new> --local-only`
+// on the peer, through the same resolved dot binary the status probe uses.
+// It returns the peer's output, which says when nothing there was owned by
+// oldName.
+func RenamePeerOwner(ctx context.Context, runner *exec.Runner, cfg *Config, oldName, newName string) (string, error) {
+	if err := CheckSSH(ctx, runner, cfg.Target.Host); err != nil {
+		return "", err
+	}
+	return peerRemoteDot(ctx, runner, cfg, "sync", "owner", "--rename", "--local-only", oldName, newName)
 }
 
 // peerRemoteAdopt asks the peer to adopt itself as coordinator and returns
@@ -749,7 +788,7 @@ func peerRemoteAdopt(ctx context.Context, runner *exec.Runner, cfg *Config, epoc
 		owner = strings.TrimSpace(owner[i+1:])
 	}
 	if owner == "" || strings.ContainsAny(owner, " \t'\"/") {
-		return "", fmt.Errorf("peer handover: the peer reported an unusable owner name %q", owner)
+		return "", fmt.Errorf("the peer reported an unusable owner name %q", owner)
 	}
 	return owner, nil
 }
