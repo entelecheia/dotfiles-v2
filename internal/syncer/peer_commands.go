@@ -206,6 +206,7 @@ const (
 	PeerEventPartialTransfer                            // rsync moved some but not all of a pass; Err carries it
 	PeerEventPeerLacksHandover                          // peer dot predates epochs; Path names its version when known
 	PeerEventReplicaPushFailed                          // the replica push after a complete run failed; Err carries it
+	PeerEventHostMerged                                 // a host_merge file was merged on both machines; Path names it
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -379,13 +380,19 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 type PeerDiffOptions struct {
 	Config *Config
 	Probe  *exec.Runner
+	// Itemize also plans the tracked and additive host-path passes and
+	// lists every action (#180).
+	Itemize bool
 }
 
 // PeerDiffResult carries the divergence plan, or the fact that the peer was
-// away. An unreachable peer is not an error.
+// away. An unreachable peer is not an error. Items is set under Itemize, and
+// is returned with the error when the workspace plan fails a safety check,
+// so the refused deletions can be seen.
 type PeerDiffResult struct {
 	Unreachable bool
 	Plan        *PeerPlan
+	Items       *PeerRunPlan
 }
 
 // PeerDiff reports paths where the two machines disagree.
@@ -430,10 +437,33 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 	if err != nil {
 		return nil, err
 	}
+	res := &PeerDiffResult{Plan: plan}
+	if opts.Itemize {
+		items := newPeerRunPlan(cfg)
+		items.addPlan(plan, PlanScopeWorkspace)
+		tracked, err := planPeerHomeTracked(ctx, opts.Probe, cfg, nil, true)
+		if err != nil {
+			return nil, err
+		}
+		if tracked != nil {
+			items.addPlan(tracked.plan, PlanScopeHostTracked)
+		}
+		additive, err := peerHomeAdditiveItems(ctx, opts.Probe, cfg, false, false)
+		if err != nil {
+			return nil, err
+		}
+		items.Items = append(items.Items, additive...)
+		annotateHotItems(ctx, opts.Probe, cfg, items.Items)
+		items.sortItems()
+		res.Items = items
+	}
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
+		if opts.Itemize {
+			return res, err
+		}
 		return nil, err
 	}
-	return &PeerDiffResult{Plan: plan}, nil
+	return res, nil
 }
 
 // PeerSyncOptions controls PeerSync. Runner performs the transfers and honors
@@ -448,6 +478,9 @@ type PeerSyncOptions struct {
 	SkipHome bool
 	DryRun   bool
 	Progress func(PeerEvent)
+	// Itemize returns the run's plan item by item (#180): the same plans
+	// the run executes, and the additive host pass as rsync decides it.
+	Itemize bool
 }
 
 // PeerSyncResult reports how the transaction ended. Complete=false means
@@ -458,6 +491,8 @@ type PeerSyncResult struct {
 	Unreachable bool
 	Complete    bool
 	Demoted     bool
+	// Plan is the itemized plan under Itemize.
+	Plan *PeerRunPlan
 }
 
 // PeerSync exchanges the workspace and the host paths with the peer.
@@ -552,6 +587,11 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
 		return nil, err
 	}
+	var runPlan *PeerRunPlan
+	if opts.Itemize {
+		runPlan = newPeerRunPlan(cfg)
+		runPlan.addPlan(plan, PlanScopeWorkspace)
+	}
 	conflict := NewConflictDir()
 	complete := true
 	baselineReady, err := PeerBaselineReady(cfg)
@@ -640,12 +680,34 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	// runs first so its three-way plan observes the tracked trees before
 	// the additive pass touches anything.
 	if !opts.SkipHome {
-		trackedComplete, trackedErr := peerHomeTrackedSync(ctx, runner, probe, cfg, opts.Progress, dryRun, opts.PushOnly, opts.PullOnly)
+		trackedComplete, trackedPlan, trackedErr := peerHomeTrackedSync(ctx, runner, probe, cfg, opts.Progress, dryRun, opts.PushOnly, opts.PullOnly)
 		if err := failOnPartial(opts.Progress, trackedErr); err != nil {
 			return nil, err
 		}
 		if !trackedComplete {
 			complete = false
+		}
+		if runPlan != nil {
+			runPlan.addPlan(trackedPlan, PlanScopeHostTracked)
+			// Listed before the pass runs: afterwards rsync has nothing left
+			// to report.
+			additive, err := peerHomeAdditiveItems(ctx, probe, cfg, opts.PushOnly, opts.PullOnly)
+			if err != nil {
+				return nil, err
+			}
+			runPlan.Items = append(runPlan.Items, additive...)
+			annotateHotItems(ctx, probe, cfg, runPlan.Items)
+		}
+		// host_merge runs before the additive pass and only in a two-way run:
+		// it writes both machines.
+		if !dryRun && !opts.PushOnly && !opts.PullOnly && len(cfg.HostMerge) > 0 {
+			merged, err := mergePeerHostFiles(ctx, runner, probe, cfg)
+			for _, rel := range merged {
+				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostMerged, Path: rel})
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostPathsStart})
 		homeErr := peerHomeSync(ctx, runner, cfg, opts.Progress, dryRun, opts.PushOnly, opts.PullOnly)
@@ -694,7 +756,10 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			return nil, err
 		}
 	}
-	return &PeerSyncResult{Complete: complete}, nil
+	if runPlan != nil {
+		runPlan.sortItems()
+	}
+	return &PeerSyncResult{Complete: complete, Plan: runPlan}, nil
 }
 
 // recordPeerRun stamps a finished peer run onto state.yaml. A held run still
@@ -1026,21 +1091,10 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, cfg *Config, progres
 	// home-paths.txt is seed-once, so lists written before the entry was removed
 	// still carry it, and Codex hash-keys its Keychain MCP OAuth credentials to
 	// this file's server definitions - copying a peer's copy orphans them.
-	base := []string{"-aHAX", "--numeric-ids", "-r", "--human-readable", "--stats",
-		"--ignore-missing-args", "--chmod=Du+w",
-		"--update",
-		"--exclude=known_hosts", "--exclude=known_hosts.old", "--exclude=known_hosts2",
-		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
-		"--exclude=/.codex/config.toml",
-		"--exclude=.DS_Store",
-		"--files-from=" + list}
-	if cfg.RemoteRsyncPath != "" {
-		base = append(base, "--rsync-path="+cfg.RemoteRsyncPath)
-	}
+	base := peerHomeAdditiveArgs(cfg, list, true)
 	if dryRun {
 		base = append(base, "--dry-run")
 	}
-	base = append(base, "-e", "ssh")
 	remote := cfg.Target.Host + ":"
 
 	// Pull first, same reasoning as the workspace pass: the additive direction
@@ -1058,6 +1112,28 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, cfg *Config, progres
 		}
 	}
 	return nil
+}
+
+// peerHomeAdditiveArgs are the additive pass's rsync flags, shared with the
+// itemized plan (#180) so a preview lists what the run would move. report
+// adds the human-readable stats a transfer prints.
+func peerHomeAdditiveArgs(cfg *Config, list string, report bool) []string {
+	args := []string{"-aHAX", "--numeric-ids", "-r"}
+	if report {
+		args = append(args, "--human-readable", "--stats")
+	}
+	args = append(args,
+		"--ignore-missing-args", "--chmod=Du+w",
+		"--update",
+		"--exclude=known_hosts", "--exclude=known_hosts.old", "--exclude=known_hosts2",
+		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
+		"--exclude=/.codex/config.toml",
+		"--exclude=.DS_Store",
+		"--files-from="+list)
+	if cfg.RemoteRsyncPath != "" {
+		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
+	}
+	return append(args, "-e", "ssh")
 }
 
 func runPeerRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {

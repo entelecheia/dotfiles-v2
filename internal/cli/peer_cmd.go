@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -170,6 +173,8 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 				version = "unknown (pre-handover release)"
 			}
 			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", version)
+		case syncer.PeerEventHostMerged:
+			p.Success("merged ~/%s from both machines (host_merge)", e.Path)
 		case syncer.PeerEventReplicaPushFailed:
 			p.Warn("replica push failed: %v", e.Err)
 			p.Line("  The run itself is complete; the next unplanned switch may lack a fresh replica.")
@@ -199,10 +204,16 @@ func reportPartial(p *Printer, err error) {
 // reading every byte, and a checksum pass over 60 GB is not something to do on a
 // schedule.
 func newPeerDiffCmd() *cobra.Command {
-	return &cobra.Command{
+	var list, jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "diff",
 		Short: "List paths where this machine and the peer disagree",
-		Args:  cobra.NoArgs,
+		Long: `Count where the two machines disagree. --list prints every planned action,
+workspace and host paths alike, with each side's size and mtime; --json
+prints the same plan as a document. The deletion counts are shown next to
+max_delete, which caps each direction of the workspace and of the tracked
+host paths.`,
+		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
 			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
@@ -210,13 +221,23 @@ func newPeerDiffCmd() *cobra.Command {
 				return err
 			}
 			res, err := syncer.PeerDiff(context.Background(), syncer.PeerDiffOptions{
-				Config: bs.Config,
-				Probe:  probeRunner(),
+				Config:  bs.Config,
+				Probe:   probeRunner(),
+				Itemize: list || jsonOut,
 			})
+			if res != nil && res.Items != nil {
+				if perr := printPeerRunPlan(c, p, res.Items, jsonOut); perr != nil {
+					return perr
+				}
+				return err
+			}
 			if err != nil {
 				return err
 			}
 			if res.Unreachable {
+				if jsonOut {
+					return writePeerPlanJSON(c, nil, true)
+				}
 				p.Warn("peer %s unreachable", bs.Config.Target.Host)
 				return nil
 			}
@@ -243,10 +264,84 @@ func newPeerDiffCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&list, "list", false, "print every planned action, host paths included")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "print the itemized plan as JSON")
+	return cmd
+}
+
+// peerPlanSchemaVersion is the `peer diff --json` / `peer sync --json`
+// plan document schema; new fields are additive.
+const peerPlanSchemaVersion = 1
+
+type peerPlanJSON struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	Kind          string `json:"kind"`
+	Unreachable   bool   `json:"unreachable,omitempty"`
+	*syncer.PeerRunPlan
+}
+
+func writePeerPlanJSON(c *cobra.Command, plan *syncer.PeerRunPlan, unreachable bool) error {
+	enc := json.NewEncoder(c.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(peerPlanJSON{SchemaVersion: peerPlanSchemaVersion, Kind: "peer-plan", Unreachable: unreachable, PeerRunPlan: plan})
+}
+
+// printPeerRunPlan renders the itemized plan: one line per action, grouped by
+// scope, then the deletion counts next to max_delete.
+func printPeerRunPlan(c *cobra.Command, p *Printer, plan *syncer.PeerRunPlan, jsonOut bool) error {
+	if jsonOut {
+		return writePeerPlanJSON(c, plan, false)
+	}
+	p.Section(fmt.Sprintf("peer plan (%d action(s))", len(plan.Items)))
+	scope := ""
+	for _, it := range plan.Items {
+		if it.Scope != scope {
+			scope = it.Scope
+			p.Line("  %s", scope)
+		}
+		line := fmt.Sprintf("    %-4s %-8s %s", it.Direction, it.Action, it.Path)
+		if side := planSide("here", it.Local) + planSide("peer", it.Peer); side != "" {
+			line += "  [" + strings.TrimSuffix(side, "; ") + "]"
+		}
+		if it.Hot {
+			line += "  [hot]"
+		}
+		if it.Reason != "" {
+			line += "  (" + it.Reason + ")"
+		}
+		p.Line("%s", line)
+		for _, k := range it.Keys {
+			p.Line("        %s", k)
+		}
+		if it.Warning != "" {
+			p.Warn("        %s", it.Warning)
+		}
+	}
+	var parts []string
+	for _, sc := range []string{syncer.PlanScopeWorkspace, syncer.PlanScopeHostTracked} {
+		if d, ok := plan.Deletes[sc]; ok {
+			parts = append(parts, fmt.Sprintf("%s in %d / out %d", sc, d.In, d.Out))
+		}
+	}
+	if len(parts) > 0 {
+		limit := "no max_delete"
+		if plan.MaxDelete > 0 {
+			limit = fmt.Sprintf("max_delete %d per direction", plan.MaxDelete)
+		}
+		p.KV("deletions", strings.Join(parts, ", ")+" ("+limit+")")
+	}
+	return nil
+}
+
+func planSide(label string, side *syncer.PlanSide) string {
+	if side == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s %d B %s; ", label, side.Size, side.Mtime.Local().Format("2006-01-02 15:04"))
 }
 
 func newPeerSyncCmd() *cobra.Command {
-	var pushOnly, pullOnly, skipHome bool
+	var pushOnly, pullOnly, skipHome, list, jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Exchange workspace and host paths with the peer (both directions)",
@@ -274,6 +369,11 @@ on a laptop.`,
 				return err
 			}
 			dryRun, _ := c.Flags().GetBool("dry-run")
+			// A JSON document owns stdout; progress lines would corrupt it.
+			progress := renderPeerEvent(p)
+			if jsonOut {
+				progress = nil
+			}
 			res, err := syncer.PeerSync(context.Background(), syncer.PeerSyncOptions{
 				Config:   bs.Config,
 				Runner:   bs.Runner,
@@ -282,10 +382,19 @@ on a laptop.`,
 				PullOnly: pullOnly,
 				SkipHome: skipHome,
 				DryRun:   dryRun,
-				Progress: renderPeerEvent(p),
+				Progress: progress,
+				Itemize:  list || jsonOut,
 			})
 			if err != nil {
 				return quietScheduledContention(bs.Runner, err)
+			}
+			if res.Plan != nil {
+				if err := printPeerRunPlan(c, p, res.Plan, jsonOut); err != nil {
+					return err
+				}
+				if jsonOut {
+					return nil
+				}
 			}
 			if res.Unreachable {
 				p.Warn("peer %s unreachable; nothing to do", bs.Config.Target.Host)
@@ -310,5 +419,7 @@ on a laptop.`,
 	cmd.Flags().BoolVar(&pushOnly, "push-only", false, "send local changes without pulling first")
 	cmd.Flags().BoolVar(&pullOnly, "pull-only", false, "receive peer changes without pushing")
 	cmd.Flags().BoolVar(&skipHome, "skip-home", false, "workspace only; skip the host-path pass")
+	cmd.Flags().BoolVar(&list, "list", false, "print every planned action (with --dry-run: exactly what a run would do)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "print the itemized plan as JSON")
 	return cmd
 }

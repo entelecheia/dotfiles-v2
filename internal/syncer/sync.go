@@ -95,6 +95,9 @@ type Config struct {
 	// While set, PeerSchedule skips the reachability and remote-owner checks.
 	FencePending bool
 
+	// HostMerge is the peer profile's host_merge policy (#181).
+	HostMerge map[string][]string
+
 	// NamesNormalized avoids a second full workspace scan when a CLI caller
 	// already ran the marker-gated NFD preflight under the shared lock.
 	NamesNormalized bool
@@ -318,6 +321,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Profile:           profile,
 		Home:              override,
 		Owner:             localCfg.Owner,
+		HostMerge:         localCfg.HostMerge,
 		OwnerEpoch:        localCfg.OwnerEpoch,
 		FencePending:      localCfg.FencePending,
 		IncludeSubmodules: localCfg.IncludeSubmodules,

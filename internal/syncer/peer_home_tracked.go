@@ -634,47 +634,68 @@ func deletePeerHomeLocal(cfg *Config, stamp string, rels []string, dryRun bool) 
 // then its own baseline commit. complete=false means destructive transitions
 // were held for want of home baseline provenance; the home baseline advances
 // only after the complete transaction succeeds.
-func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *Config, progress func(PeerEvent), dryRun, pushOnly, pullOnly bool) (bool, error) {
+// homeTrackedPlan is the tracked host-path pass's three-way plan and the
+// evidence the transaction needs after it.
+type homeTrackedPlan struct {
+	entries  []string
+	baseline map[string]Fingerprint
+	ready    bool
+	local    PeerSnapshot
+	plan     *PeerPlan
+}
+
+// planPeerHomeTracked builds the tracked host-path plan without moving
+// anything. A nil plan means there is no tracked list, or it is empty.
+func planPeerHomeTracked(ctx context.Context, probe *exec.Runner, cfg *Config, progress func(PeerEvent), dryRun bool) (*homeTrackedPlan, error) {
 	if cfg.LocalPaths == nil {
-		return false, fmt.Errorf("peer tracked home: local paths unresolved")
+		return nil, fmt.Errorf("peer tracked home: local paths unresolved")
 	}
 	list := PeerHomeTrackedFile(cfg.LocalPaths)
 	entries, err := readPeerHomeTrackedEntries(list)
 	if os.IsNotExist(err) {
 		emitPeer(progress, PeerEvent{Kind: PeerEventHostPathsMissing, Path: list})
-		return true, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if len(entries) == 0 {
-		return true, nil
+		return nil, nil
 	}
 	emitPeer(progress, PeerEvent{Kind: PeerEventHomeTrackedStart})
 
 	baselineFile := peerHomeBaselineFile(cfg.LocalPaths)
 	baseline, err := LoadBaselineManifest(baselineFile)
 	if err != nil {
-		return false, fmt.Errorf("peer tracked home: loading baseline: %w", err)
+		return nil, fmt.Errorf("peer tracked home: loading baseline: %w", err)
 	}
 	ready, err := peerHomeBaselineReady(cfg)
 	if err != nil {
-		return false, fmt.Errorf("peer tracked home: checking baseline provenance: %w", err)
+		return nil, fmt.Errorf("peer tracked home: checking baseline provenance: %w", err)
 	}
 	local, err := inventoryPeerHomeTracked(cfg.HomeDir(), entries)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	remote, err := peerHomeRemoteInventory(ctx, probe, cfg, entries, baseline, dryRun)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	plan, err := PlanPeerReconcile(baseline, local, remote)
 	if err != nil {
-		return false, fmt.Errorf("peer tracked home: %w", err)
+		return nil, fmt.Errorf("peer tracked home: %w", err)
 	}
+	return &homeTrackedPlan{entries: entries, baseline: baseline, ready: ready, local: local, plan: plan}, nil
+}
+
+func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *Config, progress func(PeerEvent), dryRun, pushOnly, pullOnly bool) (bool, *PeerPlan, error) {
+	tp, err := planPeerHomeTracked(ctx, probe, cfg, progress, dryRun)
+	if err != nil || tp == nil {
+		return err == nil, nil, err
+	}
+	entries, baseline, ready, local, plan := tp.entries, tp.baseline, tp.ready, tp.local, tp.plan
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
-		return false, err
+		return false, plan, err
 	}
 	stamp := NewConflictDir().Timestamp
 	complete := true
@@ -684,11 +705,11 @@ func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *C
 
 	if !pushOnly {
 		if err := pullPeerHomePaths(ctx, runner, cfg, plan.Pull, dryRun); err != nil {
-			return false, err
+			return false, plan, err
 		}
 		if cfg.Propagation.Delete && deletesAuthorized && len(plan.DeleteLocal) > 0 {
 			if err := deletePeerHomeLocal(cfg, stamp, plan.DeleteLocal, dryRun); err != nil {
-				return false, err
+				return false, plan, err
 			}
 		} else if len(plan.DeleteLocal) > 0 {
 			complete = false
@@ -701,7 +722,7 @@ func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *C
 		// file this machine never had.
 		tombstones, err := computeHomeTombstones(local, baseline, entries)
 		if err != nil {
-			return false, err
+			return false, plan, err
 		}
 		deleteSet := intersectPeerPaths(tombstones, plan.DeleteRemote)
 		if !cfg.Propagation.Delete {
@@ -710,7 +731,7 @@ func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *C
 		if len(deleteSet) > 0 && deletesAuthorized {
 			emitPeer(progress, PeerEvent{Kind: PeerEventPropagateDeletesStart})
 			if err := propagatePeerHomeDeletes(ctx, runner, cfg, stamp, deleteSet, dryRun); err != nil {
-				return false, err
+				return false, plan, err
 			}
 		} else if len(plan.DeleteRemote) > 0 {
 			complete = false
@@ -730,27 +751,27 @@ func peerHomeTrackedSync(ctx context.Context, runner, probe *exec.Runner, cfg *C
 			}
 			remoteNow, err := peerHomeRemoteInventory(ctx, probe, cfg, entries, checkBase, dryRun)
 			if err != nil {
-				return false, err
+				return false, plan, err
 			}
 			if err := ValidatePeerPushRemoteStable(plan, remoteNow); err != nil {
-				return false, err
+				return false, plan, err
 			}
 		}
 		if err := pushPeerHomePlan(ctx, runner, cfg, plan, stamp, dryRun); err != nil {
-			return false, err
+			return false, plan, err
 		}
 	}
 	if complete && !dryRun && !pullOnly {
 		if err := AppendPeerConflictAudit(cfg, plan); err != nil {
-			return false, err
+			return false, plan, err
 		}
 	}
 	canCommitBaseline := ready ||
 		(len(plan.DeleteLocal) == 0 && len(plan.DeleteRemote) == 0)
 	if complete && !dryRun && !pushOnly && !pullOnly && canCommitBaseline {
 		if err := commitPeerHomeBaseline(cfg, plan.NextBaseline); err != nil {
-			return false, err
+			return false, plan, err
 		}
 	}
-	return complete, nil
+	return complete, plan, nil
 }
