@@ -84,6 +84,11 @@ func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, appl
 			continue
 		}
 		if gitdir, err := r.gitDir(ctx, childAbs); err == nil {
+			// A linked worktree shares its config with the main clone.
+			if _, err := os.Stat(filepath.Join(gitdir, "commondir")); err == nil {
+				skipped = append(skipped, p+" (linked worktree)")
+				continue
+			}
 			if reason := r.blockReason(ctx, childAbs, gitdir); reason != "" {
 				skipped = append(skipped, p+" ("+reason+")")
 				continue

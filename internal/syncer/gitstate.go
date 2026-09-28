@@ -61,8 +61,9 @@ type GitRepoReport struct {
 	// default branch the switch created or fast-forwarded stays, and so does
 	// a .gitmodules the run restored and synced).
 	PreviousHead string `json:"previousHead,omitempty"`
-	// Class refines a no-match or skipped outcome and Suggestion is the
-	// one-line next step for it (#178).
+	// Class refines a no-match or skipped outcome (#178), or an
+	// unresolvable one whose URL moved or whose gitlink commit is missing
+	// (#179), and Suggestion is the one-line next step for it.
 	Class      string `json:"class,omitempty"`
 	Suggestion string `json:"suggestion,omitempty"`
 	// RescueTarget is the commit on the upstream or default branch the files
@@ -93,7 +94,8 @@ type GitRepoReport struct {
 	rescueDiffs  int    // worktree differences against RescueTarget
 }
 
-// Classes of no-match and skipped outcomes (#178).
+// Classes of no-match and skipped outcomes (#178) and of unresolvable ones
+// (url-moved, gitlink-missing; #179).
 const (
 	GitClassAtTip           = "at-tip"
 	GitClassAheadUnpushed   = "ahead-unpushed"
@@ -577,6 +579,7 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 	matches := map[string]bool{} // path + " " + sha
 	scores := make([]int, len(tied))
 	best, worst := -1, -1
+	var unknown []string
 	for i := range tied {
 		for path := range varying {
 			sha, ok := links[i][path]
@@ -586,7 +589,11 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 			key := path + " " + sha
 			match, seen := matches[key]
 			if !seen {
-				match = r.childMatches(ctx, abs, path, sha)
+				var known bool
+				match, known = r.childMatches(ctx, abs, path, sha)
+				if !known {
+					unknown = append(unknown, path+" lacks "+shortRev(sha))
+				}
 				matches[key] = match
 			}
 			if match {
@@ -599,6 +606,14 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 		if worst < 0 || scores[i] < worst {
 			worst = scores[i]
 		}
+	}
+	// A child that lacks a gitlink's commit cannot say whether it matches:
+	// counting that as "no" would let HEAD win and keep the parent behind a
+	// commit nobody fetched. The children decide nothing then; the parent
+	// moves by the next rules and the child reports the missing commit.
+	if len(unknown) > 0 {
+		slices.Sort(unknown)
+		return tied, "children cannot tell (" + strings.Join(unknown, ", ") + ")"
 	}
 	if best == worst {
 		return tied, ""
@@ -613,18 +628,19 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 }
 
 // childMatches reports whether the child checkout at path already holds the
-// content of commit sha. A missing checkout or object is no match.
-func (r *gitStateRun) childMatches(ctx context.Context, abs, path, sha string) bool {
+// content of commit sha. A missing checkout is no match; a missing object
+// is unknown (known=false): the child cannot compare with it.
+func (r *gitStateRun) childMatches(ctx context.Context, abs, path, sha string) (match, known bool) {
 	child := filepath.Join(abs, filepath.FromSlash(path))
 	gitdir, err := r.gitDir(ctx, child)
 	if err != nil {
-		return false
+		return false, true
 	}
 	if _, err := r.read(ctx, child, "cat-file", "-e", sha+"^{commit}"); err != nil {
-		return false
+		return false, false
 	}
 	diffs, err := r.contentDiffs(ctx, child, gitdir, sha)
-	return err == nil && diffs == 0
+	return err == nil && diffs == 0, true
 }
 
 const (

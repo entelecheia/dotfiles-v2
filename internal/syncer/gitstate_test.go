@@ -682,3 +682,45 @@ func TestGitCleanEnvKeepsConfigOverrides(t *testing.T) {
 		t.Error("kept GIT_DIR")
 	}
 }
+
+// A child that lacks a gitlink's commit cannot vote in the tie: the parent
+// must not stay behind a bump nobody fetched ("children match ... so HEAD
+// stays"); it moves by the next rules and the child reports the missing
+// commit with the fetch command.
+func TestPeerGitRealign_MissingGitlinkCommitDoesNotKeepTheParentBehind(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+	// s2 has s1's content and lives only in origin's checkout of sub: the
+	// peer's commit that never reached the child's remote.
+	gitStateRun_(t, origin, "-C", "sub", "commit", "-q", "--allow-empty", "-m", "s2")
+	s2 := gitStateHead(t, filepath.Join(origin, "sub"))
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump only")
+	p1 := gitStateHead(t, origin)
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "clone", "-q", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := gitStateReport(t, res, ".")
+	if root.Status != GitRepoRealignable || root.Target != p1 || !strings.Contains(root.TieBreak, "children cannot tell (sub lacks "+shortRev(s2)+")") {
+		t.Fatalf("root = %+v, want realignable to %s with an undecided children rule", root, p1)
+	}
+	if child := gitStateReport(t, res, "sub"); child.Class != GitClassGitlinkMissing && child.Reason != gitlinkMissing {
+		t.Fatalf("the missing commit went unreported: %+v", child)
+	}
+}
