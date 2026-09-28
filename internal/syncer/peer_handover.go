@@ -301,14 +301,17 @@ func removePeerSchedulerArtifacts(ctx context.Context, runner *exec.Runner, cfg 
 // demotePeer loses the fence: adopt the winner's owner and epoch, drop any
 // pending fence, and leave no plist or loaded job behind. A preview writes
 // nothing.
-func demotePeer(ctx context.Context, runner *exec.Runner, cfg *Config, adoptedOwner string, epoch int, dryRun bool) error {
+func demotePeer(ctx context.Context, runner *exec.Runner, cfg *Config, adoptedOwner string, epoch int, dryRun bool) ([]HookResult, error) {
 	if dryRun {
-		return nil
+		return runPeerHooks(ctx, runner, cfg, HookOnDeactivate, true), nil
 	}
 	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: adoptedOwner, Epoch: epoch}); err != nil {
-		return fmt.Errorf("peer demotion: %w", err)
+		return nil, fmt.Errorf("peer demotion: %w", err)
 	}
-	return removePeerSchedulerArtifacts(ctx, runner, cfg)
+	// The hooks run before the scheduler goes: from inside the scheduled
+	// job, its bootout ends the process.
+	hooks := runPeerHooks(ctx, runner, cfg, HookOnDeactivate, false)
+	return hooks, removePeerSchedulerArtifacts(ctx, runner, cfg)
 }
 
 // clearPeerFencePending records that the first complete run after contact
@@ -525,6 +528,9 @@ type PeerHandoverResult struct {
 	NewOwner string
 	Epoch    int
 	Steps    []string
+	// Hooks are this machine's on_deactivate results; the new coordinator
+	// runs its on_activate when its scheduler is installed.
+	Hooks []HookResult
 }
 
 // PeerHandover moves coordination to the peer, planned, with both machines
@@ -587,8 +593,9 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	if opts.DryRun {
 		step("would set owner and epoch %d on the peer, then locally", epoch)
 		step("would remove the local scheduler")
+		result.Hooks = runPeerHooks(ctx, opts.Runner, cfg, HookOnDeactivate, true)
 		step("would set the peer's baselines aside and run its first sync as an additive bootstrap")
-		step("would install the peer's scheduler")
+		step("would install the peer's scheduler, which runs its on_activate hooks")
 		return result, nil
 	}
 
@@ -612,6 +619,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 		return nil, fmt.Errorf("peer handover: removing the local scheduler (owner already moved): %w", err)
 	}
 	step("local scheduler removed")
+	result.Hooks = runPeerHooks(ctx, opts.Runner, cfg, HookOnDeactivate, false)
 
 	// 4. On the peer: old baselines aside, then the first sync as an additive
 	// bootstrap. No baseline means no deletes can be planned, and right after
@@ -632,7 +640,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 			"peer handover: installing the peer's scheduler failed: %w. Ownership already moved; run `dot peer setup` on %s to finish",
 			err, cfg.Target.Host)
 	}
-	step("peer scheduler installed")
+	step("peer scheduler installed; its on_activate hooks ran there")
 	return result, nil
 }
 

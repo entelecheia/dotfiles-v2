@@ -264,6 +264,12 @@ tool):
   default `realign`, `--dry-run`) writes nothing; linked worktrees and
   locked, staged, conflicting or in-progress repositories are never
   touched.
+- launchd jobs and apps named by the operator in the peer profile's
+  `hooks` (`.dotfiles/peer/config.yaml`): booted out, bootstrapped from
+  their existing `~/Library/LaunchAgents/<label>.plist`, quit or opened,
+  only as listed, when `dot peer setup`, a handover or a fence demotion
+  changes this machine's coordinator role. dot never writes those plists
+  or the apps' files; an unset `hooks` touches nothing.
 
 ## dotfiles-v2 Must Not Write Directly
 

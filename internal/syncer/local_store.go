@@ -168,6 +168,8 @@ type LocalConfig struct {
 	PullMode          RunMode           `yaml:"pull_mode,omitempty"`     // automatic pull mode (clean|force)
 	Paused            bool              `yaml:"paused,omitempty"`
 	SharedExcludes    []string          `yaml:"shared_excludes,omitempty"`
+	// Hooks run around this machine's peer coordinator role (#184).
+	Hooks PeerHooks `yaml:"hooks,omitempty"`
 }
 
 // LocalState holds non-config runtime telemetry — the sticky timestamps

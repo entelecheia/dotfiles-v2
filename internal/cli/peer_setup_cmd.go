@@ -95,7 +95,25 @@ An unreachable peer exits 0, so a laptop that is away simply produces quiet
 no-op runs rather than failures. That is why this can be scheduled at all.
 
 Pick an interval in minutes, not seconds: the payload is large and each run
-walks the whole tree.`,
+walks the whole tree.
+
+Role hooks: the machine without the coordinator role must run no jobs that
+write the workspace. List them in .dotfiles/peer/config.yaml:
+
+  hooks:
+    on_deactivate:
+      - launchd-bootout com.maru.job.*
+      - app-quit Maru
+    on_activate:
+      - launchd-bootstrap com.maru.job.*
+      - app-open Maru
+
+on_activate runs after this command installs the scheduler (also the step a
+handover runs on the new coordinator, and the one a takeover names next);
+on_deactivate runs after --off, on the old coordinator in a handover, and on
+a machine that demotes itself at the fence. --dry-run lists what each would
+do. Results are printed and appended to the peer log; a failed hook never
+stops the command or a sync.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if goos != "darwin" {
 				return fmt.Errorf("peer scheduler requires macOS launchd (host OS %s); no scheduler artifact was changed", goos)
@@ -120,13 +138,16 @@ walks the whole tree.`,
 			if res.Off {
 				if res.DryRun {
 					printPeerScheduleDryRun(p, res)
+					printPeerHooks(p, res.Hooks)
 					return nil
 				}
 				p.Success("peer sync job removed")
+				printPeerHooks(p, res.Hooks)
 				return nil
 			}
 			if res.DryRun {
 				printPeerScheduleDryRun(p, res)
+				printPeerHooks(p, res.Hooks)
 				return nil
 			}
 			p.Success("peer sync scheduled every %s", res.Interval)
@@ -135,12 +156,28 @@ walks the whole tree.`,
 			if res.SeededHomeTrackedFile != "" {
 				p.KV("tracked host paths", res.SeededHomeTrackedFile+" (seeded)")
 			}
+			printPeerHooks(p, res.Hooks)
 			return nil
 		},
 	}
 	cmd.Flags().DurationVar(&interval, "interval", 15*time.Minute, "how often to sync with the peer")
 	cmd.Flags().BoolVar(&off, "off", false, "remove the scheduled job")
 	return cmd
+}
+
+// printPeerHooks reports each role hook: what it did, what it would do in a
+// preview, or why it failed (a failure never stops the command).
+func printPeerHooks(p *Printer, hooks []syncer.HookResult) {
+	for _, h := range hooks {
+		switch {
+		case h.Err != nil:
+			p.Warn("hook %s %s: %v", h.Phase, h.Action, h.Err)
+		case h.DryRun:
+			p.Line("dry-run: hook %s %s: %s", h.Phase, h.Action, h.Detail)
+		default:
+			p.Success("hook %s %s: %s", h.Phase, h.Action, h.Detail)
+		}
+	}
 }
 
 func printPeerScheduleDryRun(p *Printer, res *syncer.PeerScheduleResult) {

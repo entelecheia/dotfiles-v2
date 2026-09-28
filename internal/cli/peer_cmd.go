@@ -294,6 +294,7 @@ on a laptop.`,
 			if res.Demoted {
 				p.Warn("this machine lost the coordinator fence: it adopted the peer's owner and epoch")
 				p.Line("  Its scheduler was removed and nothing was transferred.")
+				printPeerHooks(p, res.Hooks)
 				return nil
 			}
 			p.Blank()
