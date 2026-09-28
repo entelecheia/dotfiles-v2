@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -120,6 +121,11 @@ func TestSyncOwnerRenameNeedsTheOwnersScheduler(t *testing.T) {
 	}
 
 	peerSays("not installed")
+	if runtime.GOOS != "darwin" {
+		// The scheduler proof is launchd's: elsewhere only --local-only renames.
+		refused("host without launchd", "needs launchd")
+		return
+	}
 	refused("no scheduler here", "does not run the peer scheduler")
 	// `dot sync setup` installs the mirror unit on either Mac: it proves
 	// nothing.
