@@ -97,6 +97,11 @@ type Config struct {
 
 	// HostMerge is the peer profile's host_merge policy (#181).
 	HostMerge map[string][]string
+	// RemoteDot is the peer profile's remote_dot pin; empty picks the newest
+	// release on the peer.
+	RemoteDot string
+	// remoteDot caches the peer's dot binary for one run (resolveRemoteDot).
+	remoteDot *remoteDot
 
 	// NamesNormalized avoids a second full workspace scan when a CLI caller
 	// already ran the marker-gated NFD preflight under the shared lock.
@@ -328,6 +333,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Home:              override,
 		Owner:             localCfg.Owner,
 		HostMerge:         localCfg.HostMerge,
+		RemoteDot:         localCfg.RemoteDot,
 		OwnerEpoch:        localCfg.OwnerEpoch,
 		FencePending:      localCfg.FencePending,
 		IncludeSubmodules: localCfg.IncludeSubmodules,
