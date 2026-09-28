@@ -263,22 +263,21 @@ tool):
   Only `--rescue` moves a branch sideways: HEAD's commits are first kept
   on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed where
   git pushes the branch (pushRemote, pushDefault, then its remote) unless
-  `--no-push`; then the branch, or for a branch
-  mismatch the default branch (created with `branch.<name>.remote` and
-  `.merge` pointing at origin's, or fast-forwarded; never while a linked
-  worktree has it checked out; HEAD re-pointed after re-checking it under
-  the index lock), moves under the same protocol.
+  `--no-push`; then the branch, or for a branch mismatch the default
+  branch (created with `branch.<name>.remote` and `.merge` pointing at
+  origin's, or fast-forwarded; never while a linked worktree has it checked
+  out; HEAD re-pointed after re-checking it under the index lock), moves
+  under the same protocol.
 - `<workspace repo>/.gitmodules`: restored from the index by
   `realign --apply` only when it equals an older committed version or is
   missing (peer sync never carries it), then `git submodule sync` for the
   URLs it moves (`.git/config` and the submodule's default remote URL: its
   branch's remote, else origin), only in submodules the run names and that
   are not locked or mid-operation, each rewritten remote URL printed with
-  its undo. With `--apply --fetch` a
-  submodule whose gitlink commit is missing (and is a checkout of its own,
-  never a directory git resolves to the parent) gets `git fetch
-  --no-recurse-submodules` under git submodule's protocol rules
-  (`GIT_PROTOCOL_FROM_USER=0`), after
+  its undo. With `--apply --fetch` a submodule whose gitlink commit is
+  missing (and is a checkout of its own, never a directory git resolves to
+  the parent) gets `git fetch --no-recurse-submodules` under git
+  submodule's protocol rules (`GIT_PROTOCOL_FROM_USER=0`), after
   `remote set-url origin` when its URL moved (both URLs compared as git
   resolves them, `url.<base>.insteadOf` included); the old URL is put back
   if that fetch fails.
@@ -286,6 +285,19 @@ tool):
   status`, default `realign`, `--dry-run`) writes nothing; linked
   worktrees and locked, staged, conflicting or in-progress repositories
   are never touched.
+- launchd jobs and apps named by the operator in the peer profile's
+  `hooks` (`.dotfiles/peer/config.yaml`): the jobs of their existing
+  `~/Library/LaunchAgents/<label>.plist` disabled and booted out, or
+  re-enabled and bootstrapped, apps quit or opened, only as listed: by
+  `dot peer setup` (on_activate, also on a refresh), `dot peer setup --off`
+  (on_deactivate), a handover (on_deactivate here, last) and a fence
+  demotion (on_deactivate). The disable and enable write those labels' entries in
+  launchd's per-user override database (`launchctl disable/enable
+  gui/<uid>/<label>`), so a bootout survives a reboot; only labels dot
+  disabled are enabled again. dot never writes those plists or the apps'
+  files; an unset `hooks` touches nothing.
+- `<workspace>/.dotfiles/peer/hooks-disabled.txt`: the launchd labels the
+  role hooks disabled, one per line, so `on_activate` re-enables only those.
 
 ## dotfiles-v2 Must Not Write Directly
 
