@@ -104,12 +104,13 @@ func (m *CoauthorGuardManager) Status(mode string) (CoauthorGuardStatus, error) 
 		return CoauthorGuardStatus{}, err
 	}
 	st := CoauthorGuardStatus{
-		Mode:          mode,
-		HookPath:      m.hookPath(),
-		GitConfigPath: m.gitConfigPath(),
-		AgentsPath:    m.SSOTPath(),
-		HookDrift:     "off",
-		AgentsDrift:   "off",
+		Mode:            mode,
+		HookPath:        m.hookPath(),
+		GitConfigPath:   m.gitConfigPath(),
+		AgentsPath:      m.SSOTPath(),
+		HookDrift:       "off",
+		HookConfigDrift: "off",
+		AgentsDrift:     "off",
 	}
 	if mode == CoauthorGuardOff {
 		return st, nil
@@ -231,9 +232,12 @@ func (m *CoauthorGuardManager) dotManagedHooksPath(content string) string {
 }
 
 // gitHooksCapability reports the installed git version and whether it has
-// config-based hooks (hook.<name>.command/.event, git 2.54).
+// config-based hooks (hook.<name>.command/.event, git 2.54). The probe uses
+// its own non-dry-run runner: under `dot check` or `apply --dry-run` the
+// caller's runner never executes, which would misreport every host as
+// unsupported.
 func (m *CoauthorGuardManager) gitHooksCapability() (version string, supported bool) {
-	res, err := m.runner().Run(context.Background(), "git", "version")
+	res, err := dotexec.NewProbeRunner().Run(context.Background(), "git", "version")
 	if err != nil {
 		return "", false
 	}
@@ -302,8 +306,7 @@ func patchGitHookConfig(content, home string, supported bool) string {
 			if keyStart < 0 {
 				continue
 			}
-			value := strings.Trim(strings.TrimSpace(strings.SplitN(lines[keyStart], "=", 2)[1]), `"'`)
-			if normalizeGitPath(value, home) != normalizeGitPath(coauthorGuardHooksRelPath, home) {
+			if normalizeGitPath(gitConfigLineValue(lines[keyStart]), home) != normalizeGitPath(coauthorGuardHooksRelPath, home) {
 				continue // not dot's; leave it
 			}
 			next := append([]string{}, lines[:keyStart]...)
@@ -329,8 +332,7 @@ func patchGitHookConfig(content, home string, supported bool) string {
 	// Rewrite the table's keys in place; an operator's hand-written absolute
 	// command path is kept as-is when it already points at the hook.
 	if ks, _ := findTOMLKey(lines, start+1, end, "command"); ks >= 0 {
-		value := strings.Trim(strings.TrimSpace(strings.SplitN(lines[ks], "=", 2)[1]), `"'`)
-		if normalizeGitPath(value, home) != normalizeGitPath(coauthorGuardHookCommand, home) {
+		if normalizeGitPath(gitConfigLineValue(lines[ks]), home) != normalizeGitPath(coauthorGuardHookCommand, home) {
 			lines[ks] = desiredCommand
 		}
 	} else {
@@ -432,6 +434,18 @@ EOF
 fi
 exit 0
 `, mode)
+}
+
+// gitConfigLineValue extracts the value of one `key = value` config line,
+// stripping quotes and a trailing comment, mirroring gitConfigValue's regex
+// for callers that already located the line.
+func gitConfigLineValue(line string) string {
+	pattern := regexp.MustCompile(`^\s*[^=]+?=\s*(.+?)\s*(#.*)?$`)
+	match := pattern.FindStringSubmatch(line)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(match[1]), `"'`)
 }
 
 func gitConfigValue(content, table, key string) string {

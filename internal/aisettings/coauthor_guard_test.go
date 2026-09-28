@@ -198,6 +198,7 @@ func TestCoauthorGuardIntegration(t *testing.T) {
 	trailer := "feat: change\n\nCo-authored-by: Bot <bot@example.com>\n"
 	clean := "feat: change\n"
 
+	gitEnv := func() []string { return append(os.Environ(), "HOME="+home) }
 	gitCommit := func(t *testing.T, repo, message string) error {
 		t.Helper()
 		msg := filepath.Join(repo, "MSG")
@@ -206,14 +207,28 @@ func TestCoauthorGuardIntegration(t *testing.T) {
 		}
 		cmd := exec.Command("git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-F", "MSG")
 		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "HOME="+home)
-		return cmd.Run()
+		cmd.Env = gitEnv()
+		out, err := cmd.CombinedOutput()
+		if err == nil && message != clean {
+			// The trailer slipped through: dump what git sees so a CI
+			// failure explains itself instead of just asserting.
+			diag := exec.Command("git", "config", "--show-origin", "--get-regexp", "^hook\\.")
+			diag.Dir = repo
+			diag.Env = gitEnv()
+			origins, _ := diag.CombinedOutput()
+			ver, _ := exec.Command("git", "version").CombinedOutput()
+			t.Logf("commit output:\n%s\ngit: %s\nhook config:\n%s", out, ver, origins)
+		}
+		if err != nil {
+			t.Logf("commit output:\n%s", out)
+		}
+		return err
 	}
 	newRepo := func(t *testing.T) string {
 		t.Helper()
 		repo := filepath.Join(t.TempDir(), "repo")
 		cmd := exec.Command("git", "init", "-q", repo)
-		cmd.Env = append(os.Environ(), "HOME="+home)
+		cmd.Env = gitEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git init: %v\n%s", err, out)
 		}
@@ -238,7 +253,7 @@ func TestCoauthorGuardIntegration(t *testing.T) {
 			"#!/bin/sh\ntouch '"+marker+"'\n")
 		cmd := exec.Command("git", "config", "core.hooksPath", "localhooks")
 		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "HOME="+home)
+		cmd.Env = gitEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("set repo hooksPath: %v\n%s", err, out)
 		}
