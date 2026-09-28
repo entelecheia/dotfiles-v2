@@ -61,11 +61,17 @@ var (
 			Foreground(lipgloss.Color("#565F89"))
 )
 
-// TerminalAttached reports whether the prompts below can reach a terminal,
-// by bubbletea's own rule: stdin when it is a terminal, else /dev/tty.
+// TerminalAttached reports whether the prompts below can run: huh's
+// accessible mode (TERM=dumb) needs no terminal; otherwise bubbletea's rule
+// applies, stdin when it is a terminal, else /dev/tty.
 // Without either (a plain ssh command, launchd, CI) huh dies with
 // "bubbletea: could not open TTY" (#183). A variable so tests can pin it.
 var TerminalAttached = func() bool {
+	// TERM=dumb puts huh in accessible mode, which reads stdin and writes
+	// stdout directly, with no terminal at all.
+	if os.Getenv("TERM") == "dumb" {
+		return true
+	}
 	// isatty, not a character-device check: /dev/null is a character device.
 	if term.IsTerminal(os.Stdin.Fd()) {
 		return true

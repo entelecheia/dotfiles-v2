@@ -242,7 +242,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 func missingApplyValues(state *config.UserState, profile, configPath string) []string {
 	var missing []string
 	if profile == "" && configPath == "" {
-		missing = append(missing, "the profile (pass --profile or set DOTFILES_PROFILE)")
+		missing = append(missing, "the profile (pass --profile, set DOTFILES_PROFILE, or pass --yes for the suggested one)")
 	}
 	var identity []string
 	if state.Name == "" && os.Getenv("DOTFILES_NAME") == "" {
