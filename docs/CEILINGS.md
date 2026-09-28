@@ -172,6 +172,26 @@ trigger. Replace this if mirror-only workspaces gain a point where both
 Macs are known to record the new owner, or if a reused name is seen in
 practice.
 
+## Unknown config keys, top level only
+
+`internal/syncer/local_store.go` (`keepUnknownConfigKeys`) keeps the
+top-level keys of a profile's `config.yaml` that the running dot does not
+know, so an older dot saving the file (a handover's adopt on the peer, a
+stale binary) no longer drops them. A key nested under one it knows (a new
+sub-key of `hooks` or `propagation`) is still dropped by that save. A key
+retired from `LocalConfig` later stays in the file until it is deleted
+explicitly, and a new key that depends on a known one (the way
+`owner_aliases` depends on `owner`) is carried unchanged when an older dot
+changes the known key, so the newer dot must check it against that key on
+load. A top-level merge key (`<<`) is not carried: the known keys it set
+are written by the struct, and an unknown key it alone supplied is lost
+(the anchored source key stays). An alias used as a key counts as the key
+it names. A kept value whose aliases loop, or expand past 10,000 nodes,
+refuses the save. Releases from before #196 drop every unknown key.
+
+Replace this when a struct-valued key gains a sub-key that must survive an
+older dot's save, or when a key is retired.
+
 ## Replica bootstrap trust
 
 A takeover validates the pushed replica (`<workspace>/.dotfiles/peer/replica/`

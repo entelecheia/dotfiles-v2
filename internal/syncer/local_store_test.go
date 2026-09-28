@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
 
@@ -498,5 +500,158 @@ func TestLoadLocalState_MissingReturnsZero(t *testing.T) {
 	}
 	if got == nil || !got.LastPull.IsZero() || !got.LastPush.IsZero() || !got.LastIntake.IsZero() {
 		t.Errorf("expected zero state, got %+v", got)
+	}
+}
+
+// #196: a key this dot does not know survives its save, value intact, while
+// a key it owns follows the struct (cleared stays cleared).
+func TestSaveLocalConfigKeepsUnknownKeys(t *testing.T) {
+	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	on := "target: ssh:peer:/w\nowner: a\nowner_aliases:\n    - old-a\nfuture_key:\n    nested: [1, 2]\n    text: 'keep me'\npropagation:\n    create: true\n    update: true\n    delete: true\n"
+	if err := os.WriteFile(paths.ConfigFile, []byte(on), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OwnerAliases = nil
+	if err := SaveLocalConfig(paths, cfg); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(paths.ConfigFile)
+	if !strings.Contains(string(body), "future_key:\n    nested: [1, 2]\n    text: 'keep me'\n") {
+		t.Errorf("the unknown key changed or went:\n%s", body)
+	}
+	if strings.Contains(string(body), "owner_aliases") {
+		t.Errorf("a cleared key came back:\n%s", body)
+	}
+	if again, _, err := LoadLocalConfig(paths); err != nil || again.Owner != "a" {
+		t.Fatalf("reload: %+v %v", again, err)
+	}
+}
+
+// A carried value that aliases an anchor on a key LocalConfig rewrites is
+// copied with the alias resolved, so the file still loads (#200 review).
+func TestSaveLocalConfigResolvesAliasesInKeptKeys(t *testing.T) {
+	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	on := "propagation: &p {create: true, update: true, delete: true}\nfuture: *p\n"
+	if err := os.WriteFile(paths.ConfigFile, []byte(on), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveLocalConfig(paths, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadLocalConfig(paths); err != nil {
+		body, _ := os.ReadFile(paths.ConfigFile)
+		t.Fatalf("the saved file does not load: %v\n%s", err, body)
+	}
+	body, _ := os.ReadFile(paths.ConfigFile)
+	if !strings.Contains(string(body), "future:") || !strings.Contains(string(body), "create: true") {
+		t.Fatalf("the kept key lost its value:\n%s", body)
+	}
+}
+
+// A key the decoder reads as a known one is not carried: a top-level merge
+// key (what it set was loaded into the struct) or an alias used as a key.
+// So a key the operator cleared stays cleared, and a known key is never
+// written twice (#200 review).
+func TestSaveLocalConfigDropsKeysTheDecoderReadsAsKnown(t *testing.T) {
+	for name, on := range map[string]string{
+		"merge key":      "x-base: &b {owner_aliases: [old]}\nowner: a\n<<: *b\n",
+		"alias key":      "x: &k owner_aliases\nowner: a\n*k : [old]\n",
+		"alias of owner": "x: &k owner\n*k : a\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+			if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(on), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, _, err := LoadLocalConfig(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.OwnerAliases = nil
+			if err := SaveLocalConfig(paths, cfg); err != nil {
+				t.Fatal(err)
+			}
+			again, _, err := LoadLocalConfig(paths)
+			if body, _ := os.ReadFile(paths.ConfigFile); err != nil || again.Owner != "a" || len(again.OwnerAliases) != 0 || !strings.Contains(string(body), "\nx") {
+				t.Fatalf("reload = %+v, %v, want owner a, no aliases, x kept:\n%s", again, err, body)
+			}
+		})
+	}
+}
+
+// Kept values were never decoded, so nothing guarded their aliases: one
+// inside what it names, or a billion-laughs expansion, refuses the save
+// instead of crashing it, and the file stays as it was (#200 review).
+func TestSaveLocalConfigRefusesRunawayAliases(t *testing.T) {
+	laughs := "a: &a [x, x, x, x, x, x, x, x, x, x]\n"
+	for _, n := range []string{"b", "c", "d"} {
+		prev := string(rune(n[0] - 1))
+		laughs += n + ": &" + n + " [" + strings.Repeat("*"+prev+", ", 9) + "*" + prev + "]\n"
+	}
+	for name, tc := range map[string]struct{ on, want string }{
+		"cycle":  {"owner: a\nfuture: &a [*a]\n", "contains an alias to itself"},
+		"laughs": {"owner: a\n" + laughs, "expand past"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+			if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(tc.on), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, _, err := LoadLocalConfig(paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := SaveLocalConfig(paths, cfg); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("save = %v, want a refusal saying %q", err, tc.want)
+			}
+			if body, _ := os.ReadFile(paths.ConfigFile); string(body) != tc.on {
+				t.Fatalf("the file changed:\n%s", body)
+			}
+		})
+	}
+}
+
+// Every LocalConfig field has an explicit yaml name, so the keys it owns
+// are exactly what it marshals (an untagged field would be carried twice).
+func TestLocalConfigKeysMatchWhatItMarshals(t *testing.T) {
+	full := LocalConfig{Target: "t", Owner: "o", OwnerAliases: []string{"a"}, OwnerEpoch: 1, FencePending: true, IncludeSubmodules: true,
+		MirrorPath: "m", FilterMode: DefaultFilterMode(), MaxDelete: 1, Interval: 1, PullInterval: 1, PushMode: "clean", PullMode: "clean",
+		Paused: true, SharedExcludes: []string{"x"}, Hooks: PeerHooks{OnActivate: []string{"a"}}, RemoteDot: "d", HostMerge: map[string][]string{"f": {"k"}}}
+	data, err := yaml.Marshal(&full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := yaml.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	known := localConfigKeys()
+	for key := range m {
+		if !known[key] {
+			t.Errorf("marshaled key %q is not owned", key)
+		}
+	}
+	if len(m) != len(known) {
+		t.Errorf("owned %d keys, marshaled %d: fill every field in this test", len(known), len(m))
 	}
 }

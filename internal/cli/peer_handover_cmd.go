@@ -61,6 +61,9 @@ coordinator with ` + "`dot peer git realign --apply`" + ` (fetch first).`,
 				Probe:  probeRunner(),
 				Peer:   peer,
 				DryRun: dryRun,
+
+				LocalDotVersion: c.Root().Version,
+				Warn:            func(msg string) { p.Warn("%s", msg) },
 			})
 			if err != nil {
 				if res != nil {
