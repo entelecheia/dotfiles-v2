@@ -258,7 +258,7 @@ func parsePeerRemoteInventory(stdout string, remoteLoc *time.Location, baseline 
 			return nil, err
 		}
 		if rsyncEscapeRe.MatchString(rel) {
-			return nil, fmt.Errorf("peer inventory: rsync escaped a file name as %q (\\#ooo octal escapes): the local rsync client is openrsync or lacks -8, not an NFD problem; use rsync 3.x (brew install rsync)", rel)
+			return nil, fmt.Errorf("peer inventory: rsync printed the name %q with \\#ooo octal escapes, not an NFD problem: the name holds a control character (Finder's Icon\\r, say) or a literal \\# before digits, which rsync always escapes, or the client is openrsync; rename or exclude that file", rel)
 		}
 		if requireNFD && rel != "" && !NFDPathNormalized(rel) {
 			return nil, fmt.Errorf("peer inventory: path %q is not NFD-normalized; normalize the peer before retrying", rel)
@@ -293,9 +293,10 @@ func parsePeerRemoteInventory(stdout string, remoteLoc *time.Location, baseline 
 }
 
 // rsyncEscapeRe matches rsync's \#ooo octal escape in an --out-format name.
-// openrsync, and rsync 3.x without -8, print it instead of the raw bytes of a
-// name they consider unprintable, so the inventory would read the escape as
-// the file's real name.
+// openrsync, and rsync 3.x without -8, print it for every non-ASCII byte;
+// rsync 3.x with -8 still prints it for control characters and for a literal
+// backslash before '#' and digits. Either way the inventory would read the
+// escape as the file's real name, so it fails closed.
 var rsyncEscapeRe = regexp.MustCompile(`\\#[0-7]{3}`)
 
 func cleanPeerInventoryRel(raw string, isDir bool) (string, error) {

@@ -106,7 +106,8 @@ func LocalRsyncPath(ctx context.Context, runner *exec.Runner) (string, string, e
 }
 
 // rsyncBin is the local rsync client for this run: the binary a peer run
-// resolved and verified, else bare "rsync" through PATH.
+// resolved and verified, else the PATH lookup made when the config was
+// resolved, else bare "rsync".
 func (c *Config) rsyncBin() string {
 	if c != nil && c.RsyncPath != "" {
 		return c.RsyncPath

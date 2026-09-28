@@ -146,7 +146,7 @@ func TestParsePeerRemoteInventory_EscapedNameIsNotAnNFDError(t *testing.T) {
 	if err == nil {
 		t.Fatal("escaped name accepted")
 	}
-	if !strings.Contains(err.Error(), "escaped") || strings.Contains(err.Error(), "NFD-normalized") {
+	if !strings.Contains(err.Error(), "octal escapes") || strings.Contains(err.Error(), "NFD-normalized") {
 		t.Fatalf("want an rsync escaping error, got %v", err)
 	}
 }

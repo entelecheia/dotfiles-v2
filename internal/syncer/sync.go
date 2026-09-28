@@ -312,7 +312,13 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		return nil, fmt.Errorf("loading allow patterns: %w", err)
 	}
 
-	rsyncPath, _ := osexec.LookPath("rsync")
+	// A relative PATH entry makes LookPath return a relative path with
+	// exec.ErrDot; keep only a clean result, since exec.Command would run a
+	// relative path as given.
+	rsyncPath, err := osexec.LookPath("rsync")
+	if err != nil {
+		rsyncPath = ""
+	}
 
 	return &Config{
 		Profile:           profile,
