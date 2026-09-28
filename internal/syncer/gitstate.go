@@ -54,8 +54,9 @@ type GitRepoReport struct {
 	// TieBreak says which rule chose Target when several candidates matched
 	// the worktree equally well (#177); empty when there was no tie.
 	TieBreak string `json:"tieBreak,omitempty"`
-	// PreviousHead is the undo record after an applied realign; restore with
-	// `git reset --mixed -q <PreviousHead>`.
+	// PreviousHead is HEAD's commit before an applied move; Undo is the exact
+	// command that restores it (for a branch switch, HEAD's branch too; a
+	// default branch the switch created or fast-forwarded stays).
 	PreviousHead string `json:"previousHead,omitempty"`
 	// Class refines a no-match or skipped outcome and Suggestion is the
 	// one-line next step for it (#178).
@@ -946,7 +947,11 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.git, full...)
 	cmd.Dir = abs
-	cmd.Env = append(append([]string{}, r.env...), env...)
+	base := r.env
+	if base == nil {
+		base = os.Environ() // a run built without runGitState
+	}
+	cmd.Env = append(append([]string{}, base...), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

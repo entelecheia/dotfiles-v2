@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // rescueChainLimit caps how many commits bestOnChain reads, newest first.
@@ -32,8 +33,22 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	// taken for a branch whose work landed on the default branch.
 	upstream, _ := r.read(ctx, abs, "rev-parse", "--symbolic-full-name", "@{upstream}")
 	upCand, upDiffs, upOK := "", 0, false
+	// upBest is how well the branch's own upstream matches the files; the
+	// default branch must beat it to call the checkout a branch mismatch.
+	upBest := -1
 	if upstream != "" {
 		upCand, upDiffs, upOK = r.bestOnChain(ctx, abs, gitdir, rep.Head, upstream, rep.HeadDiffs)
+		switch {
+		case upOK:
+			upBest = upDiffs
+		case r.isAncestor(ctx, abs, upstream, "HEAD"):
+			// HEAD is at or ahead of its upstream, so the chain above is
+			// empty: score the upstream itself (the files peer sync
+			// delivered from the other Mac's pushed branch).
+			if d, err := r.rescueDiffs(ctx, abs, gitdir, upstream); err == nil {
+				upBest = d
+			}
+		}
 	}
 
 	// A checkout on another branch (the dev/maru case: a squash-merged
@@ -41,9 +56,9 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	// anything on its own upstream. A detached HEAD, the normal state of a
 	// submodule, is not a branch to rescue.
 	if def, ref := r.defaultBranch(ctx, abs); ref != "" && rep.branch != "" && rep.branch != def {
-		if cand, diffs, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok && (!upOK || diffs < upDiffs) {
+		if cand, diffs, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok && (upBest < 0 || diffs < upBest) {
 			rep.Class = GitClassBranchMismatch
-			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, "origin"
+			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, r.pushRemote(ctx, abs, rep.branch)
 			rep.rescueDiffs = diffs
 			rep.Suggestion = fmt.Sprintf("on %s, but %s %s at %s; keep HEAD on a rescue branch and switch: %s",
 				label, matchWords(diffs), def, shortRev(cand), rescueCommand(rep.Path))
@@ -77,12 +92,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s; push them: git -C %s push", ahead, label, shellWord(abs))
 	case ahead > 0:
 		rep.Class = GitClassDiverged
-		rep.remote = "origin"
-		if rep.branch != "" {
-			if remote, err := r.read(ctx, abs, "config", "branch."+rep.branch+".remote"); err == nil && remote != "" {
-				rep.remote = remote
-			}
-		}
+		rep.remote = r.pushRemote(ctx, abs, rep.branch)
 		if upOK {
 			rep.RescueTarget = upCand
 			rep.rescueDiffs = upDiffs
@@ -93,6 +103,21 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 				ahead, behind, upName)
 		}
 	}
+}
+
+// pushRemote is where git would push branch: branch.<b>.pushRemote, then
+// remote.pushDefault, then branch.<b>.remote, then origin.
+func (r *gitStateRun) pushRemote(ctx context.Context, abs, branch string) string {
+	keys := []string{"remote.pushDefault"}
+	if branch != "" {
+		keys = []string{"branch." + branch + ".pushRemote", "remote.pushDefault", "branch." + branch + ".remote"}
+	}
+	for _, key := range keys {
+		if remote, err := r.read(ctx, abs, "config", key); err == nil && remote != "" && remote != "." {
+			return remote
+		}
+	}
+	return "origin"
 }
 
 func rescueCommand(path string) string {
@@ -150,7 +175,7 @@ func (r *gitStateRun) bestOnChain(ctx context.Context, abs, gitdir, head, tip st
 	}
 	best, bestDiffs := "", -1
 	for _, sha := range strings.Split(out, "\n") {
-		diffs, err := r.contentDiffs(ctx, abs, gitdir, strings.TrimSpace(sha))
+		diffs, err := r.rescueDiffs(ctx, abs, gitdir, strings.TrimSpace(sha))
 		if err != nil {
 			continue
 		}
@@ -165,6 +190,36 @@ func (r *gitStateRun) bestOnChain(ctx context.Context, abs, gitdir, head, tip st
 		return "", 0, false
 	}
 	return best, bestDiffs, true
+}
+
+// rescueDiffs scores a commit a rescue would move HEAD to: contentDiffs
+// counts only the files that commit tracks, so a file HEAD tracks, the
+// commit lacks and the worktree still holds (a feature branch's own file,
+// seen from the default branch) would go unnoticed and become untracked
+// after the move. Those count as differences too.
+func (r *gitStateRun) rescueDiffs(ctx context.Context, abs, gitdir, commit string) (int, error) {
+	diffs, err := r.contentDiffs(ctx, abs, gitdir, commit)
+	if err != nil {
+		return -1, err
+	}
+	out, err := r.read(ctx, abs, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=D", "--ignore-submodules", "HEAD", commit, "--", ":(exclude).gitmodules")
+	if err != nil {
+		return -1, err
+	}
+	for _, rel := range strings.Split(out, "\x00") {
+		if rel == "" {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(abs, filepath.FromSlash(rel))); err == nil {
+			diffs++
+		}
+	}
+	return diffs, nil
+}
+
+func (r *gitStateRun) isAncestor(ctx context.Context, abs, a, b string) bool {
+	_, err := r.runOutput(ctx, abs, nil, true, "merge-base", "--is-ancestor", a, b)
+	return err == nil
 }
 
 // planRescue turns a classified no-match into a realignable move under
@@ -219,7 +274,12 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		return
 	}
 	if rep.RescueRemote != "" {
-		if _, err := r.runOutput(ctx, abs, nil, false, "push", "-q", rep.RescueRemote, ref+":"+ref); err != nil {
+		// No prompt can be answered here (a hook, a scheduled shell): fail
+		// instead of waiting on credentials, and bound a hung remote.
+		pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		_, err := r.runOutput(pctx, abs, []string{"GIT_TERMINAL_PROMPT=0"}, false, "push", "-q", rep.RescueRemote, ref+":"+ref)
+		cancel()
+		if err != nil {
 			rep.Status = GitRepoUnresolvable
 			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (retry, or use --no-push): " + shortErr(err)
 			return

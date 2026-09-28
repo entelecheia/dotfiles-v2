@@ -261,8 +261,9 @@ tool):
   protocol (compare-and-swap `update-ref`, fast-forward only onto a
   strict descendant, the old value recorded in the reflog for undo).
   Only `--rescue` moves a branch sideways: HEAD's commits are first kept
-  on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed to the
-  repo's remote unless `--no-push`; then the branch, or for a branch
+  on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed where
+  git pushes the branch (pushRemote, pushDefault, then its remote) unless
+  `--no-push`; then the branch, or for a branch
   mismatch the default branch (created with `branch.<name>.remote` and
   `.merge` pointing at origin's, or fast-forwarded; never while a linked
   worktree has it checked out; HEAD re-pointed after re-checking it under

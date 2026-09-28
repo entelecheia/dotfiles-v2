@@ -283,3 +283,21 @@ func TestPeerGitRealign_UninitializedSubmoduleNeverTouchesTheParent(t *testing.T
 		t.Fatalf("repos = %d, want the root and the child once each", len(res.Repos))
 	}
 }
+
+// A root already at its tip (an earlier realign, or a reset by hand) with
+// other local edits still gets its stale .gitmodules restored.
+func TestPeerGitRealign_RestoresStaleGitmodulesAtTip(t *testing.T) {
+	ws, _, _, _, p1, _ := urlMoveFixture(t)
+	gitStateRun_(t, ws, "reset", "-q", "--mixed", p1)
+	gitStateRewriteTracked(t, filepath.Join(ws, "readme.md"), "wip\n")
+	res, err := PeerGitRealign(context.Background(), ws, []string{"."}, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); root.Class != GitClassAtTip || root.Gitmodules != "restored" {
+		t.Fatalf("root = %+v", root)
+	}
+	if out := gitStateRun_(t, ws, "status", "--porcelain", "--", ".gitmodules"); out != "" {
+		t.Fatalf(".gitmodules still differs: %q", out)
+	}
+}

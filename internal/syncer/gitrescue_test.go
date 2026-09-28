@@ -322,3 +322,60 @@ func TestPeerGitClass_ForcePushedFeatureIsDivergedFromItsUpstream(t *testing.T) 
 		t.Fatalf("class %q target %q, want diverged -> origin/feature %s", rep.Class, rep.RescueTarget, tip)
 	}
 }
+
+// A pushed feature branch at its upstream tip, with WIP in files the feature
+// added, is at-tip: main does not track those files, so it must not look
+// closer to the worktree than HEAD (they would turn untracked on a switch).
+func TestPeerGitClass_FeatureWIPIsNotABranchMismatch(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
+	gitStateCommitFile(t, f.ws, "n1.txt", "n1\n", "n1")
+	gitStateCommitFile(t, f.ws, "n2.txt", "n2\n", "n2")
+	gitStateRun_(t, f.ws, "push", "-q", "-u", "origin", "feat")
+	f.publish(t, "a.txt", "a2\n")
+	gitStateRewriteTracked(t, filepath.Join(f.ws, "n1.txt"), "wip1\n")
+	gitStateRewriteTracked(t, filepath.Join(f.ws, "n2.txt"), "wip2\n")
+	requireClass(t, rescueRealign(t, f.ws, RealignOptions{}), GitClassAtTip, "only uncommitted changes differ")
+}
+
+// Local commits ahead of a feature upstream whose files the worktree holds
+// (what peer sync delivers from the Mac that pushed it) are ahead-unpushed,
+// even when a main commit is closer than HEAD: the upstream itself matches.
+func TestPeerGitClass_AheadOfMatchingUpstreamIsNotABranchMismatch(t *testing.T) {
+	f := newRescueFixture(t)
+	f.publish(t, "b.txt", "b1\n")
+	gitStateRun_(t, f.ws, "merge", "-q", "--ff-only", "origin/main")
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
+	gitStateCommitFile(t, f.ws, "a.txt", "f1\n", "a f1")
+	pushed := gitStateCommitFile(t, f.ws, "b.txt", "f1\n", "b f1")
+	gitStateRun_(t, f.ws, "push", "-q", "-u", "origin", "feat")
+	for _, v := range []string{"f2", "f3", "f4"} {
+		gitStateCommitFile(t, f.ws, "a.txt", v+"\n", "a "+v)
+		gitStateCommitFile(t, f.ws, "b.txt", v+"\n", "b "+v)
+	}
+	f.publish(t, "a.txt", "f1\n") // main: a.txt matches, b.txt does not
+	f.deliver(t, pushed)
+	requireClass(t, rescueRealign(t, f.ws, RealignOptions{}), GitClassAheadUnpushed, "local-only commit")
+}
+
+// A rescue branch goes where git would push the branch: a fork setup's
+// pushRemote, not the fetch upstream.
+func TestRescuePushRemoteFollowsGitsPushOrder(t *testing.T) {
+	repo := t.TempDir()
+	gitStateInitRepo(t, repo)
+	r := &gitStateRun{git: "git"}
+	ctx := context.Background()
+	for _, tc := range []struct{ key, value, want string }{
+		{"", "", "origin"},
+		{"branch.feat.remote", "upstream", "upstream"},
+		{"remote.pushDefault", "mine", "mine"},
+		{"branch.feat.pushRemote", "fork", "fork"},
+	} {
+		if tc.key != "" {
+			gitStateRun_(t, repo, "config", tc.key, tc.value)
+		}
+		if got := r.pushRemote(ctx, repo, "feat"); got != tc.want {
+			t.Fatalf("after %s=%s: push remote %q, want %q", tc.key, tc.value, got, tc.want)
+		}
+	}
+}

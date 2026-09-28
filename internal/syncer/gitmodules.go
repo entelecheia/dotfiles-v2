@@ -21,8 +21,11 @@ type urlMove struct{ old, new string }
 // and syncs the moved submodule URLs. Anything else is a local edit and left
 // alone.
 func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, apply bool, rep *GitRepoReport) {
-	switch rep.Status {
-	case GitRepoAligned, GitRepoRealignable, GitRepoRealigned:
+	// at-tip: HEAD is already its upstream (an earlier realign, or a reset
+	// by hand) and only local edits differ; the stale copy is one of them.
+	switch {
+	case rep.Status == GitRepoAligned, rep.Status == GitRepoRealignable, rep.Status == GitRepoRealigned:
+	case rep.Class == GitClassAtTip:
 	default:
 		return
 	}
