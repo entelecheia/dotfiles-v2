@@ -243,13 +243,23 @@ type remotePeerStatus struct {
 	FencePending  bool     `json:"fencePending"`
 	DotVersion    string   `json:"dotVersion"`
 	Profile       struct {
-		Configured    bool   `json:"configured"`
-		Owner         string `json:"owner"`
+		Configured   bool     `json:"configured"`
+		Owner        string   `json:"owner"`
+		OwnerAliases []string `json:"ownerAliases"`
+		MachineNames []string `json:"machineNames"`
+		// CanPush is the remote's own owner guard: true means that machine
+		// believes it is the coordinator.
+		CanPush       bool   `json:"canPush"`
 		WorkspacePath string `json:"workspacePath"`
 		Target        struct {
 			Path string `json:"path"`
 		} `json:"target"`
 	} `json:"profile"`
+	// Job is the remote's peer scheduler; State is "not installed" when it
+	// has none.
+	Job struct {
+		State string `json:"state"`
+	} `json:"job"`
 }
 
 // checkRemotePeerOwner makes the single-coordinator invariant bilateral. A
@@ -354,9 +364,12 @@ func checkRemotePeerTopology(cfg *Config, status *remotePeerStatus) error {
 // checkRemotePeerOwnerMatch is the pre-epoch refusal: without an epoch to
 // order them, two different owners can never both proceed.
 func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
-	wantOwner := NormalizeHostname(cfg.Owner)
-	gotOwner := NormalizeHostname(status.Profile.Owner)
-	if wantOwner == "" || gotOwner != wantOwner {
+	if status.Profile.CanPush {
+		return fmt.Errorf(
+			"peer coordinator check: the peer also passes its own owner guard (its owner %q, local %q); two coordinators would write to each other. Set one owner on both machines with `dot sync owner --profile=peer --set <coordinator>`",
+			status.Profile.Owner, cfg.Owner)
+	}
+	if NormalizeHostname(cfg.Owner) == "" || !sameOwner(cfg.Owner, cfg.OwnerAliases, status.Profile.Owner, status.Profile.OwnerAliases) {
 		return fmt.Errorf(
 			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
 			cfg.Owner, status.Profile.Owner, cfg.Owner)

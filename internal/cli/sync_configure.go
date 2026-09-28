@@ -67,14 +67,15 @@ func runSyncConfigure(cmd *cobra.Command, _ []string) error {
 		owner, _ := cmd.Flags().GetString("owner")
 		switch strings.TrimSpace(owner) {
 		case "self":
-			local.Owner = syncer.PreferredMachineName()
-			if local.Owner == "" {
+			self := syncer.PreferredMachineName()
+			if self == "" {
 				return fmt.Errorf("cannot determine this machine's name")
 			}
+			syncer.AssignOwner(local, self)
 		case "none":
-			local.Owner = ""
+			syncer.AssignOwner(local, "")
 		default:
-			local.Owner = strings.TrimSpace(owner)
+			syncer.AssignOwner(local, strings.TrimSpace(owner))
 		}
 	}
 	// --filter-mode is inherited from the parent sync command's persistent
@@ -207,6 +208,7 @@ func applyLocalConfigPreview(cfg *syncer.Config, local *syncer.LocalConfig, home
 		cfg.Target = target
 	}
 	cfg.Owner = local.Owner
+	cfg.OwnerAliases = local.OwnerAliases
 	if local.FilterMode != "" {
 		cfg.FilterMode = local.FilterMode
 	}

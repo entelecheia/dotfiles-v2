@@ -142,6 +142,12 @@ type LocalConfig struct {
 	// is on, so each run undoes the other. Empty means unrestricted (the
 	// pre-existing behavior, kept so upgrades are not gated on setting it).
 	Owner string `yaml:"owner,omitempty"`
+	// OwnerAliases are earlier names of the owner, recorded by
+	// `dot sync owner --rename`. This machine is the owner when it answers to
+	// any of them, and two profiles name the same owner when their names or
+	// aliases meet, so a Mac rename never splits the pair mid-transition
+	// (#185). Any deliberate owner change clears them.
+	OwnerAliases []string `yaml:"owner_aliases,omitempty"`
 	// OwnerEpoch orders coordinator transitions (peer profile). Every
 	// deliberate owner change bumps it; on first contact after a switch the
 	// higher epoch wins and the lower demotes itself. Zero means the profile

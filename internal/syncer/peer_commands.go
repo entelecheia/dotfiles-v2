@@ -208,6 +208,7 @@ const (
 	PeerEventReplicaPushFailed                          // the replica push after a complete run failed; Err carries it
 	PeerEventDotVersionMismatch                         // peer dot release differs from this one; Path names the peer binary
 	PeerEventPeerDotUnreleased                          // the peer has only a non-release dot and no remote_dot pin; Path names it
+	PeerEventOwnerAliasesRetired                        // both machines record the renamed owner; Path lists the profiles cleared
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -340,7 +341,7 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 	// gitignored), so the owner is simply this machine. Use the DNS-safe
 	// name rather than os.Hostname(), which can be the generic "Mac".
 	if name := PreferredMachineName(); name != "" {
-		local.Owner = name
+		AssignOwner(local, name)
 	}
 
 	result := &PeerInitResult{
@@ -682,6 +683,22 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		// unplanned switch, not this run, so it is reported, not fatal.
 		if err := PushPeerReplica(ctx, runner, cfg); err != nil {
 			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventReplicaPushFailed, Err: err})
+		}
+		// A rename is finished once the peer records the same owner: the
+		// old names retire here so they stop admitting writes (#185).
+		// Only once this Mac answers to the new name itself: retiring while
+		// it still answers only to an alias would lock it out of its own
+		// profiles. Like the replica push, a failure here is reported, not
+		// fatal: the run itself is complete.
+		if len(cfg.OwnerAliases) > 0 && NormalizeHostname(remoteStatus.Profile.Owner) == NormalizeHostname(cfg.Owner) &&
+			ownersMatch(cfg.Owner, nil, MachineNames()...) {
+			retired, err := RetireOwnerAliases(strings.TrimRight(cfg.LocalPath, "/"), cfg.Owner)
+			if err == nil {
+				cfg.OwnerAliases = nil
+			}
+			if err != nil || len(retired) > 0 {
+				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerAliasesRetired, Path: strings.Join(retired, ", "), Err: err})
+			}
 		}
 		if cfg.FencePending {
 			// The first complete run after contact: the fence has done its
