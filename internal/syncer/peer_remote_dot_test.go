@@ -17,13 +17,14 @@ func TestPickRemoteDot_PrefersNewestReleaseOverStaleDevBuild(t *testing.T) {
 		{"stale dev build first", "/h/.local/bin/dot\tdot version dev (f467e65)\n/opt/homebrew/bin/dot\tdot version 2.70.22 (388a398)\n", "/opt/homebrew/bin/dot", 1},
 		{"older release first", "/h/.local/bin/dot\tdot version 2.70.10 (aaa)\n/opt/homebrew/bin/dot\tdot version 2.70.22 (bbb)\n", "/opt/homebrew/bin/dot", 1},
 		{"newest first stays", "/h/.local/bin/dot\tdot version 2.71.0 (aaa)\n/opt/homebrew/bin/dot\tdot version 2.70.22 (bbb)\n", "/h/.local/bin/dot", 1},
-		{"equal releases keep order", "/h/.local/bin/dot\tdot version 2.70.22 (x)\n/opt/homebrew/bin/dot\tdot version 2.70.22 (x)\n", "/h/.local/bin/dot", 1},
+		{"equal releases keep order, the copy is not listed", "/h/.local/bin/dot\tdot version 2.70.22 (x)\n/opt/homebrew/bin/dot\tdot version 2.70.22 (x)\n", "/h/.local/bin/dot", 0},
 		{"only a dev build", "/h/.local/bin/dot\tdot version dev (f467e65)\n", "/h/.local/bin/dot", 0},
 		{"command -v duplicate", "/opt/homebrew/bin/dot\tdot version 2.70.22 (x)\n/opt/homebrew/bin/dot\tdot version 2.70.22 (x)\n", "/opt/homebrew/bin/dot", 0},
+		{"graphviz dot ignored", "/usr/bin/dot\t\n/opt/homebrew/bin/dot\tdot version 2.70.22 (x)\n", "/opt/homebrew/bin/dot", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := pickRemoteDot(tt.probe)
+			got, err := pickRemoteDot(tt.probe, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -32,8 +33,17 @@ func TestPickRemoteDot_PrefersNewestReleaseOverStaleDevBuild(t *testing.T) {
 			}
 		})
 	}
-	if _, err := pickRemoteDot("\n"); err == nil || !strings.Contains(err.Error(), "missing") {
+	if _, err := pickRemoteDot("\n", false); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("empty probe: err = %v", err)
+	}
+	if got, _ := pickRemoteDot("/h/.local/bin/dot\tdot version dev (x)\n", false); !got.Unreleased() {
+		t.Fatal("an unpinned dev build is not flagged")
+	}
+	if got, _ := pickRemoteDot("/h/dev/dot\tdot version dev (x)\n", true); got.Unreleased() {
+		t.Fatal("a pinned dev build is flagged")
+	}
+	if got := remoteShellPath("~/bin/dot"); got != `"$HOME"/'bin/dot'` {
+		t.Fatalf("remoteShellPath = %s", got)
 	}
 }
 
@@ -91,11 +101,38 @@ func TestRemoteStatusAndFenceUseTheNewestRelease(t *testing.T) {
 		t.Fatalf("resolved %s passed %v", cfg.remoteDot, cfg.remoteDot.Passed)
 	}
 
-	// DOT_PEER_REMOTE_DOT pins a dev build explicitly.
-	cfg.remoteDot = nil
-	t.Setenv(remoteDotEnv, stale)
-	if dot, err := resolveRemoteDot(context.Background(), peerScheduleRunner(false), cfg); err != nil || dot.Path != stale {
+	// remote_dot pins a dev build explicitly; a bad pin names the pin.
+	cfg.remoteDot, cfg.RemoteDot = nil, stale
+	if dot, err := resolveRemoteDot(context.Background(), peerScheduleRunner(false), cfg); err != nil || dot.Path != stale || dot.Unreleased() {
 		t.Fatalf("pinned dot = %v, %v; want %s", dot, err, stale)
+	}
+	cfg.remoteDot, cfg.RemoteDot = nil, stale+"-missing"
+	if _, err := resolveRemoteDot(context.Background(), peerScheduleRunner(false), cfg); err == nil || !strings.Contains(err.Error(), "remote_dot") {
+		t.Fatalf("bad pin: err = %v", err)
+	}
+}
+
+// Only a dev build and no pin: the sync says so instead of falling back
+// silently.
+func TestPeerSync_ReportsUnreleasedPeerDot(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "dev (abc)"}, 1)
+	dev := filepath.Join(t.TempDir(), "dot")
+	writeStub(t, dev, "#!/bin/sh\n[ \"$1\" = --version ] && echo 'dot version dev (abc)'\nexit 0\n")
+	useRemoteDotCandidates(t, dev)
+	var got string
+	if _, err := PeerSync(context.Background(), PeerSyncOptions{
+		Config: sb.cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, SkipHome: true,
+		LocalDotVersion: "2.70.22 (x)",
+		Progress: func(e PeerEvent) {
+			if e.Kind == PeerEventPeerDotUnreleased {
+				got = e.Path
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, dev) || !strings.Contains(got, "dev (abc)") {
+		t.Fatalf("no unreleased notice naming %s; got %q", dev, got)
 	}
 }
 

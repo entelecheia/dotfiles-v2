@@ -57,10 +57,6 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 // a probe never reaches a dot installed on the test host.
 var remoteDotCandidates = `"$HOME/.local/bin/dot" /opt/homebrew/bin/dot /usr/local/bin/dot /home/linuxbrew/.linuxbrew/bin/dot "$(command -v dot 2>/dev/null || true)"`
 
-// remoteDotEnv names an explicit remote dot path, the only way to make a peer
-// run use a dev build: the probe otherwise prefers the newest release.
-const remoteDotEnv = "DOT_PEER_REMOTE_DOT"
-
 // remoteDotProbe lists every executable dot candidate on the peer with the
 // first line of its --version banner, one "path<TAB>banner" line each.
 func remoteDotProbe(candidates string) string {
@@ -76,8 +72,17 @@ type remoteDot struct {
 	Path    string
 	Banner  string // first --version line, e.g. "dot version 2.70.22 (388a398)"
 	release []int  // nil for a dev build or an unreadable banner
-	// Passed names the candidates the probe skipped, "path (banner)" each.
+	// Pinned says the peer config's remote_dot chose it.
+	Pinned bool
+	// Passed names the other dot installs the probe passed over, "path
+	// (banner)" each; copies of the chosen version are left out.
 	Passed []string
+}
+
+// Unreleased reports a chosen binary that is not a release build and that no
+// remote_dot pin asked for: the fallback when the peer has nothing newer.
+func (d *remoteDot) Unreleased() bool {
+	return d != nil && d.release == nil && !d.Pinned
 }
 
 // String renders the binary for notices: path and version together.
@@ -142,19 +147,20 @@ func releaseNewer(a, b []int) bool {
 
 // pickRemoteDot chooses the newest release among the probed candidates, so a
 // stale dev build at ~/.local/bin/dot no longer shadows the installed
-// release (#176). A dev build is used only when nothing else exists, and
-// then the notices name it.
-func pickRemoteDot(probe string) (*remoteDot, error) {
+// release (#176). A dev build is used only when nothing else exists; the
+// sync and doctor then name it (Unreleased). A candidate whose banner is not
+// dot's (Graphviz also installs a `dot`) is ignored unless pinned.
+func pickRemoteDot(probe string, pinned bool) (*remoteDot, error) {
 	var all []*remoteDot
 	seen := map[string]bool{}
 	for _, line := range strings.Split(probe, "\n") {
 		path, banner, ok := strings.Cut(strings.TrimRight(line, "\r"), "\t")
-		if !ok || path == "" || seen[path] {
+		banner = strings.TrimSpace(banner)
+		if !ok || path == "" || seen[path] || (!pinned && !strings.HasPrefix(banner, "dot version ")) {
 			continue
 		}
 		seen[path] = true
-		banner = strings.TrimSpace(banner)
-		all = append(all, &remoteDot{Path: path, Banner: banner, release: dotRelease(banner)})
+		all = append(all, &remoteDot{Path: path, Banner: banner, release: dotRelease(banner), Pinned: pinned})
 	}
 	if len(all) == 0 {
 		return nil, fmt.Errorf("peer dot binary is missing from supported install locations")
@@ -166,7 +172,7 @@ func pickRemoteDot(probe string) (*remoteDot, error) {
 		}
 	}
 	for _, cand := range all {
-		if cand != best {
+		if cand != best && cand.Banner != best.Banner {
 			best.Passed = append(best.Passed, cand.String())
 		}
 	}
@@ -174,26 +180,39 @@ func pickRemoteDot(probe string) (*remoteDot, error) {
 }
 
 // resolveRemoteDot probes the peer once per run and caches the choice on the
-// config. DOT_PEER_REMOTE_DOT pins the path (and is the only way to select a
-// dev build); it must still exist and run on the peer.
+// config. The peer profile's remote_dot pins the path (the way to use a dev
+// build, read by scheduled runs too); it must still exist and run there.
 func resolveRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config) (*remoteDot, error) {
 	if cfg.remoteDot != nil {
 		return cfg.remoteDot, nil
 	}
 	candidates := remoteDotCandidates
-	if pinned := strings.TrimSpace(os.Getenv(remoteDotEnv)); pinned != "" {
-		candidates = shellQuote(pinned)
+	pinned := strings.TrimSpace(cfg.RemoteDot)
+	if pinned != "" {
+		candidates = remoteShellPath(pinned)
 	}
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remoteDotProbe(candidates))
 	if err != nil {
 		return nil, fmt.Errorf("peer dot probe on %s: %w", cfg.Target.Host, err)
 	}
-	dot, err := pickRemoteDot(res.Stdout)
+	dot, err := pickRemoteDot(res.Stdout, pinned != "")
 	if err != nil {
+		if pinned != "" {
+			return nil, fmt.Errorf("remote_dot %q in the peer config is not an executable on %s", pinned, cfg.Target.Host)
+		}
 		return nil, fmt.Errorf("%s on %s", err, cfg.Target.Host)
 	}
 	cfg.remoteDot = dot
 	return dot, nil
+}
+
+// remoteShellPath quotes a peer path for the remote shell, letting a leading
+// "~/" expand to the peer's home.
+func remoteShellPath(path string) string {
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		return `"$HOME"/` + shellQuote(rest)
+	}
+	return shellQuote(path)
 }
 
 func remotePeerStatusCommand(dot string) string {

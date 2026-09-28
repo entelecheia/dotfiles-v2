@@ -203,6 +203,8 @@ Checks, and why each exists:
 				p.Fail("peer dot: %v", report.RemoteDotErr)
 			case report.DotMismatch:
 				p.Warn("peer dot: %s is a different release from this machine's; upgrade the older side", report.RemoteDot)
+			case report.DotUnreleased:
+				p.Warn("peer dot: %s is not a release build; install a release there, or pin it with remote_dot in the peer config", report.RemoteDot)
 			default:
 				p.Success("peer dot: %s", report.RemoteDot)
 			}

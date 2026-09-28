@@ -95,6 +95,9 @@ type Config struct {
 	// While set, PeerSchedule skips the reachability and remote-owner checks.
 	FencePending bool
 
+	// RemoteDot is the peer profile's remote_dot pin; empty picks the newest
+	// release on the peer.
+	RemoteDot string
 	// remoteDot caches the peer's dot binary for one run (resolveRemoteDot).
 	remoteDot *remoteDot
 
@@ -321,6 +324,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Profile:           profile,
 		Home:              override,
 		Owner:             localCfg.Owner,
+		RemoteDot:         localCfg.RemoteDot,
 		OwnerEpoch:        localCfg.OwnerEpoch,
 		FencePending:      localCfg.FencePending,
 		IncludeSubmodules: localCfg.IncludeSubmodules,

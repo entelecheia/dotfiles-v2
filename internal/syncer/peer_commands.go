@@ -204,9 +204,10 @@ const (
 	PeerEventHostPathsMissing                           // no host-path list exists; Path names where one would live
 	PeerEventHomeTrackedStart                           // the tracked host-path pass begins
 	PeerEventPartialTransfer                            // rsync moved some but not all of a pass; Err carries it
-	PeerEventPeerLacksHandover                          // peer dot predates epochs; Path names its version when known
+	PeerEventPeerLacksHandover                          // peer dot predates epochs; Path names the binary, "path (banner)"
 	PeerEventReplicaPushFailed                          // the replica push after a complete run failed; Err carries it
 	PeerEventDotVersionMismatch                         // peer dot release differs from this one; Path names the peer binary
+	PeerEventPeerDotUnreleased                          // the peer has only a non-release dot and no remote_dot pin; Path names it
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -507,9 +508,12 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err != nil {
 		return nil, err
 	}
-	if legacy {
+	switch {
+	case legacy:
 		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventPeerLacksHandover, Path: cfg.remoteDot.String()})
-	} else if dotVersionsDiffer(opts.LocalDotVersion, cfg.remoteDot) {
+	case cfg.remoteDot.Unreleased():
+		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventPeerDotUnreleased, Path: cfg.remoteDot.String()})
+	case dotVersionsDiffer(opts.LocalDotVersion, cfg.remoteDot):
 		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventDotVersionMismatch, Path: cfg.remoteDot.String()})
 	}
 	if demote {
@@ -909,6 +913,7 @@ type PeerDoctorReport struct {
 	RemoteDotPassed []string // candidates the probe passed over
 	RemoteDotErr    error
 	DotMismatch     bool
+	DotUnreleased   bool // only a non-release dot, and no remote_dot pin
 	Unreachable     bool
 	UnreachableErr  error
 	RemoteRsyncPath string
@@ -946,6 +951,7 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 		report.RemoteDot = dot.String()
 		report.RemoteDotPassed = dot.Passed
 		report.DotMismatch = dotVersionsDiffer(opts.LocalDotVersion, dot)
+		report.DotUnreleased = dot.Unreleased()
 	}
 
 	rp, err := RemoteRsyncPath(ctx, runner, host)

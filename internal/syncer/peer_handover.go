@@ -574,8 +574,8 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	}
 	if remote.DotVersion == "" {
 		return nil, fmt.Errorf(
-			"peer handover: the peer runs a dot release that predates handover support (its status document carries no dotVersion); upgrade dot on %s first",
-			cfg.Target.Host)
+			"peer handover: the peer's dot %s predates handover support (its status document carries no dotVersion); upgrade dot on %s first",
+			cfg.remoteDot.String(), cfg.Target.Host)
 	}
 	epoch := cfg.OwnerEpoch + 1
 	generation, err := readPeerReplicaGeneration(cfg.LocalPaths)

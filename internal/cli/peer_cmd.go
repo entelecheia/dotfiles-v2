@@ -166,7 +166,9 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 			reportPartial(p, e.Err)
 		case syncer.PeerEventPeerLacksHandover:
 			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", e.Path)
-			p.Line("  Upgrade dot there, or remove that binary if a newer release is installed next to it.")
+			p.Line("  Upgrade dot on the peer, or pin a newer binary with remote_dot in the peer config.")
+		case syncer.PeerEventPeerDotUnreleased:
+			p.Warn("peer dot %s is not a release build; install a release there, or pin it with remote_dot in the peer config", e.Path)
 		case syncer.PeerEventDotVersionMismatch:
 			p.Warn("peer dot %s is a different release from this machine's; upgrade the older side", e.Path)
 		case syncer.PeerEventReplicaPushFailed:
