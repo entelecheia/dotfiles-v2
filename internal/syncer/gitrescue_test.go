@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -400,5 +401,55 @@ func TestPeerGitRescue_LocalUpstreamKeepsTheRescueLocal(t *testing.T) {
 	}
 	if !strings.Contains(rep.Suggestion, "on main") || strings.Contains(rep.Suggestion, "refs/heads/") {
 		t.Fatalf("suggestion names the upstream as %q", rep.Suggestion)
+	}
+}
+
+// A rescue target is chosen like a realign's: of the upstream commits that
+// tie on the files, one recording a gitlink the child has not reached loses,
+// so a diverged parent does not move past an undelivered bump and record a
+// rewind (#189 round 15).
+func TestPeerGitRescue_TieFollowsTheChildren(t *testing.T) {
+	for _, fetched := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fetched=%v", fetched), func(t *testing.T) {
+			tmp := t.TempDir()
+			subSrc := filepath.Join(tmp, "sub-src")
+			gitStateInitRepo(t, subSrc)
+			gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+
+			origin := filepath.Join(tmp, "origin")
+			gitStateInitRepo(t, origin)
+			gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+			gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+			ws := filepath.Join(tmp, "ws")
+			gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+
+			p1 := gitStateCommitFile(t, origin, "readme.md", "parent v2\n", "p1")
+			s2 := gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+			gitStateRun_(t, origin, "-C", "sub", "fetch", "-q")
+			gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+			gitStateRun_(t, origin, "add", "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p2 bump sub only")
+
+			// Diverged: one local commit whose file peer sync removed, and
+			// p1's readme delivered; the child keeps s1's files.
+			gitStateCommitFile(t, ws, "docs.md", "unpushed\n", "local docs")
+			if err := os.Remove(filepath.Join(ws, "docs.md")); err != nil {
+				t.Fatal(err)
+			}
+			gitStateRewriteTracked(t, filepath.Join(ws, "readme.md"), "parent v2\n")
+			gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+			if fetched {
+				gitStateRun_(t, ws, "-C", "sub", "fetch", "-q")
+			}
+
+			rep := rescueRealign(t, ws, RealignOptions{Apply: true, Rescue: true, NoPush: true})
+			if rep.Status != GitRepoRealigned || gitStateHead(t, ws) != p1 {
+				t.Fatalf("rescue = %+v, HEAD %s, want realigned to %s", rep, gitStateHead(t, ws), p1)
+			}
+			if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "rewind") {
+				t.Fatalf("the parent records a rewind:\n%s", log)
+			}
+		})
 	}
 }

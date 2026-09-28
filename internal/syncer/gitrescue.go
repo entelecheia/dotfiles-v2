@@ -12,9 +12,8 @@ import (
 
 // rescueChainLimit caps how many commits bestOnChain reads, newest first.
 //
-// ponytail: fixed cap. A branch whose files match a default-branch commit
-// older than the newest 50 stays unclassified; raise it or bisect by
-// content if that case appears.
+// ponytail: known ceiling. See docs/CEILINGS.md (rescue reads the newest
+// 50 upstream commits).
 const rescueChainLimit = 50
 
 // classifyNoMatch refines a no-match repo into one of the #178 classes with a
@@ -32,12 +31,12 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	// force-pushed on the other Mac must realign to its own upstream, not be
 	// taken for a branch whose work landed on the default branch.
 	upstream, _ := r.read(ctx, abs, "rev-parse", "--symbolic-full-name", "@{upstream}")
-	upCand, upDiffs, upOK := "", 0, false
+	upCand, upDiffs, upTie, upOK := "", 0, "", false
 	// upBest is how well the branch's own upstream matches the files; the
 	// default branch must beat it to call the checkout a branch mismatch.
 	upBest := -1
 	if upstream != "" {
-		upCand, upDiffs, upOK = r.bestOnChain(ctx, abs, gitdir, rep.Head, upstream, rep.HeadDiffs)
+		upCand, upDiffs, upTie, upOK = r.bestOnChain(ctx, abs, gitdir, rep.Head, upstream, rep.HeadDiffs)
 		switch {
 		case upOK:
 			upBest = upDiffs
@@ -56,10 +55,11 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	// anything on its own upstream. A detached HEAD, the normal state of a
 	// submodule, is not a branch to rescue.
 	if def, ref := r.defaultBranch(ctx, abs); ref != "" && rep.branch != "" && rep.branch != def {
-		if cand, diffs, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok && (upBest < 0 || diffs < upBest) {
+		if cand, diffs, tie, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok && (upBest < 0 || diffs < upBest) {
 			rep.Class = GitClassBranchMismatch
 			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, r.pushRemote(ctx, abs, rep.branch)
 			rep.rescueDiffs = diffs
+			rescueTie(rep, tie)
 			rep.Suggestion = fmt.Sprintf("on %s, but %s %s at %s; keep HEAD on a rescue branch and switch: %s",
 				label, matchWords(diffs), def, shortRev(cand), rescueCommand(rep.Path))
 			return
@@ -96,12 +96,21 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		if upOK {
 			rep.RescueTarget = upCand
 			rep.rescueDiffs = upDiffs
+			rescueTie(rep, upTie)
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s; keep the local commits on a rescue branch and realign: %s",
 				ahead, behind, upName, matchWords(upDiffs), shortRev(upCand), rescueCommand(rep.Path))
 		} else {
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and no upstream commit matches the files better than HEAD; rebase or merge by hand",
 				ahead, behind, upName)
 		}
+	}
+}
+
+// rescueTie records how the rescue target won a tie, unless the report
+// already holds the realign's own tie line.
+func rescueTie(rep *GitRepoReport, tie string) {
+	if rep.TieBreak == "" {
+		rep.TieBreak = tie
 	}
 }
 
@@ -168,30 +177,35 @@ func (r *gitStateRun) defaultBranch(ctx context.Context, abs string) (string, st
 }
 
 // bestOnChain finds the commit on tip's first-parent chain, not reachable
-// from head, whose content is closest to the worktree, newest first; ties
-// keep the newer commit. It succeeds only when that commit beats HEAD.
-func (r *gitStateRun) bestOnChain(ctx context.Context, abs, gitdir, head, tip string, headDiffs int) (string, int, bool) {
+// from head, whose content is closest to the worktree. Commits that tie go
+// through breakTie like a realign's: a commit recording a gitlink its child
+// has not reached (or a child the run leaves alone) loses to one that does
+// not, then the newest wins. It succeeds only when that commit beats HEAD,
+// and says how a tie was broken.
+func (r *gitStateRun) bestOnChain(ctx context.Context, abs, gitdir, head, tip string, headDiffs int) (string, int, string, bool) {
 	out, err := r.read(ctx, abs, "rev-list", "--first-parent", "--max-count="+strconv.Itoa(rescueChainLimit), tip, "--not", head)
 	if err != nil || out == "" {
-		return "", 0, false
+		return "", 0, "", false
 	}
-	best, bestDiffs := "", -1
-	for _, sha := range strings.Split(out, "\n") {
-		diffs, err := r.rescueDiffs(ctx, abs, gitdir, strings.TrimSpace(sha))
-		if err != nil {
-			continue
-		}
-		if bestDiffs < 0 || diffs < bestDiffs {
-			best, bestDiffs = strings.TrimSpace(sha), diffs
-		}
-		if diffs == 0 {
-			break
+	var tied []string
+	bestDiffs := -1
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- { // oldest first, as realign lists candidates
+		sha := strings.TrimSpace(lines[i])
+		diffs, err := r.rescueDiffs(ctx, abs, gitdir, sha)
+		switch {
+		case err != nil:
+		case bestDiffs < 0 || diffs < bestDiffs:
+			tied, bestDiffs = []string{sha}, diffs
+		case diffs == bestDiffs:
+			tied = append(tied, sha)
 		}
 	}
-	if best == "" || bestDiffs >= headDiffs {
-		return "", 0, false
+	if len(tied) == 0 || bestDiffs >= headDiffs {
+		return "", 0, "", false
 	}
-	return best, bestDiffs, true
+	best, rule, _ := r.breakTie(ctx, abs, "", "", false, tied)
+	return best, bestDiffs, rule, true
 }
 
 // rescueDiffs scores a commit a rescue would move HEAD to: contentDiffs
@@ -279,7 +293,7 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		// No prompt can be answered here (a hook, a scheduled shell): fail
 		// instead of waiting on credentials, and bound a hung remote.
 		pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		_, err := r.runOutput(pctx, abs, []string{"GIT_TERMINAL_PROMPT=0"}, false, "push", "-q", rep.RescueRemote, ref+":"+ref)
+		_, err := r.runOutput(pctx, abs, []string{"GIT_TERMINAL_PROMPT=0"}, false, "push", "-q", "--recurse-submodules=no", rep.RescueRemote, ref+":"+ref)
 		cancel()
 		if err != nil {
 			rep.Status = GitRepoUnresolvable

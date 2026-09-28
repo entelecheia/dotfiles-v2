@@ -45,6 +45,9 @@ func TestCeilingsDoc(t *testing.T) {
 	if !strings.Contains(doc, "## host_merge read-merge-write race") {
 		t.Error("host_merge race ceiling (#181) missing from docs/CEILINGS.md")
 	}
+	if !strings.Contains(doc, "## Rescue reads the newest 50 upstream commits") || !strings.Contains(doc, "internal/syncer/gitrescue.go") {
+		t.Error("rescue chain ceiling (#189) missing from docs/CEILINGS.md")
+	}
 	if !strings.Contains(doc, "## Owner aliases outside the coordinator's peer run") {
 		t.Error("owner alias ceiling (#185) missing from docs/CEILINGS.md")
 	}

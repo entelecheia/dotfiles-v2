@@ -235,7 +235,8 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 			line += "  (" + rep.Reason + ")"
 		}
 		p.Bullet(peerGitStatusMarker(rep.Status), rep.Path+"  "+line)
-		if rep.TieBreak != "" && (withMoves || rep.Status == syncer.GitRepoRealigned) {
+		// A no-match repo's reason can point at its tie line ("see tie").
+		if rep.TieBreak != "" && (withMoves || rep.Status == syncer.GitRepoRealigned || rep.Status == syncer.GitRepoNoMatch) {
 			p.Line("      tie: %s", rep.TieBreak)
 		}
 		if rep.Rescue != "" && (rep.Status == syncer.GitRepoRealignable && withMoves || rep.Status == syncer.GitRepoRealigned) {

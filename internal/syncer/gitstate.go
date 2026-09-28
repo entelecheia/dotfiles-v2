@@ -176,6 +176,16 @@ type gitStateRun struct {
 	opts     RealignOptions
 	restrict map[string]bool // nil means all repos
 	env      []string        // the environment without git's repo-local variables
+	// Answers that hold for the whole run, keyed by repo and commits: a
+	// present commit stays present, and ancestry between two present
+	// commits never changes. A missing object is not cached, so a --fetch
+	// can still bring it.
+	present  map[string]bool
+	ancestry map[string]bool
+	// contentDiffs by repo and commit: a run never writes the files it
+	// compares (gitlinks and .gitmodules are left out), so a child scored
+	// for its parent's question is not scored again in its own turn.
+	diffs map[string]int
 }
 
 // gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
@@ -816,8 +826,18 @@ func (r *gitStateRun) sameOwnContent(ctx context.Context, abs, a, b string) bool
 }
 
 func (r *gitStateRun) hasCommit(ctx context.Context, abs, sha string) bool {
-	_, err := r.read(ctx, abs, "cat-file", "-e", sha+"^{commit}")
-	return err == nil
+	key := abs + "\x00" + sha
+	if r.present[key] {
+		return true
+	}
+	if _, err := r.read(ctx, abs, "cat-file", "-e", sha+"^{commit}"); err != nil {
+		return false
+	}
+	if r.present == nil {
+		r.present = map[string]bool{}
+	}
+	r.present[key] = true
+	return true
 }
 
 const (
@@ -905,8 +925,19 @@ func (r *gitStateRun) strictDescendant(ctx context.Context, abs, head, cand stri
 	if cand == head {
 		return false
 	}
+	key := abs + "\x00" + head + "\x00" + cand
+	if yes, ok := r.ancestry[key]; ok {
+		return yes
+	}
 	code, err := r.run(ctx, abs, nil, true, "merge-base", "--is-ancestor", head, cand)
-	return err == nil && code == 0
+	if err != nil || code > 1 {
+		return false // a missing commit: ask again after a fetch
+	}
+	if r.ancestry == nil {
+		r.ancestry = map[string]bool{}
+	}
+	r.ancestry[key] = code == 0
+	return code == 0
 }
 
 // contentDiffs counts tracked files whose worktree content differs from a
@@ -914,6 +945,10 @@ func (r *gitStateRun) strictDescendant(ctx context.Context, abs, head, cand stri
 // read-tree -m into it, refresh stat info, then diff-files. This writes no
 // objects and holds no lock on the real index. Untracked files never appear.
 func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit string) (int, error) {
+	key := abs + "\x00" + commit
+	if n, ok := r.diffs[key]; ok {
+		return n, nil
+	}
 	tempIndex, cleanup, err := r.tempIndexFor(ctx, abs, gitdir, commit)
 	if err != nil {
 		return -1, err
@@ -937,6 +972,10 @@ func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit stri
 			count++
 		}
 	}
+	if r.diffs == nil {
+		r.diffs = map[string]int{}
+	}
+	r.diffs[key] = count
 	return count, nil
 }
 

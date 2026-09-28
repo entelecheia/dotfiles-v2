@@ -4,6 +4,8 @@ Status: Phase A implementation on `feat/peer-git-realign`; handover/takeover (Ph
 Date: 2026-09-28
 Issue: https://github.com/entelecheia/dotfiles-v2/issues/147
 
+Superseded in part by #177, #178 and #179 (PR #189): ties are broken by the children's content, then the parent's gitlink, then the newest candidate; `--rescue` moves a diverged or branch-mismatch repo sideways onto a rescue-kept HEAD; `--fetch` fetches a missing gitlink commit; a stale `.gitmodules` is restored in the worktree. The decisions below that say otherwise describe Phase A.
+
 ## Problem and evidence
 
 `dot peer` copies the working trees of the workspace root and every submodule

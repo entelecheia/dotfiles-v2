@@ -172,6 +172,19 @@ trigger. Replace this if mirror-only workspaces gain a point where both
 Macs are known to record the new owner, or if a reused name is seen in
 practice.
 
+## Rescue reads the newest 50 upstream commits
+
+`internal/syncer/gitrescue.go` (`rescueChainLimit`, `bestOnChain`) scores
+only the newest 50 commits on the upstream or default branch's first-parent
+chain when it looks for a `--rescue` target. A branch whose files match a
+commit older than that stays diverged or unclassified, with the suggestion
+to rebase or merge by hand; nothing moves. Every commit read costs a content
+comparison, and a peer sync delivers recent work, so the match is near the
+tip.
+
+Replace this if a real workspace reports a rescue target further back, by
+raising the cap or bisecting the chain by content.
+
 ## Replica bootstrap trust
 
 A takeover validates the pushed replica (`<workspace>/.dotfiles/peer/replica/`
