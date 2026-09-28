@@ -9,16 +9,15 @@ Show or set which machine may push this profile.
 Renaming a Mac: run dot sync owner --rename <old> <new> on that Mac. It
 rewrites the owner in every profile of this workspace owned by <old> (mirror
 and peer alike), then does the same on the peer over ssh unless --local-only.
-Only a profile whose current owner is <old> is renamed. The old name stays
-as an alias, so the guard and the peer's owner check keep matching while
-either Mac still answers to it; a generic name such as "Mac" is not kept.
-The coordinator retires its aliases at the first complete peer sync that
-finds the peer recording the new owner, once this Mac answers to the new
-name; the other Mac records no alias (the fence reads the coordinator's).
-At equal epochs the peer fence refuses a peer that passes its own owner
-guard. When the peer
-cannot be reached, the rename runs only on a Mac that still answers to <old>
-(or with --local-only). The epoch, targets and baselines are untouched, so no
+Only a profile whose current owner is <old> is renamed. On this Mac the old
+name stays as an alias, so the guard and the peer's owner check keep
+matching while it still answers to it; a generic name such as "Mac" is not
+kept, and the other Mac records no alias (the fence reads the
+coordinator's). The coordinator retires its aliases at the first complete
+peer sync that finds the peer recording the new owner, once this Mac answers
+to the new name. At equal epochs the peer fence refuses a peer that passes
+its own owner guard. When the peer cannot be reached, the rename runs only
+on a Mac that still answers to <old> (or with --local-only). The epoch, targets and baselines are untouched, so no
 run plans a deletion. It refuses when this Mac answers to neither name, when
 the peer (or the peer target's host) answers to either one, and, once this
 Mac no longer answers to <old>, unless it runs the peer scheduler and the

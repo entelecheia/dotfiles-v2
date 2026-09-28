@@ -294,15 +294,24 @@ on a laptop.`,
 				LocalDotVersion: c.Root().Version,
 			})
 			if err != nil {
+				if res != nil && res.Demoted {
+					printPeerHooks(p, res.Hooks) // they ran before the failure
+				}
 				return quietScheduledContention(bs.Runner, err)
 			}
 			if res.Unreachable {
 				p.Warn("peer %s unreachable; nothing to do", bs.Config.Target.Host)
 				return nil
 			}
+			if res.Demoted && dryRun {
+				p.Warn("this machine would lose the coordinator fence: a real run adopts the peer's owner and epoch and removes its scheduler")
+				printPeerHooks(p, res.Hooks)
+				return nil
+			}
 			if res.Demoted {
 				p.Warn("this machine lost the coordinator fence: it adopted the peer's owner and epoch")
 				p.Line("  Its scheduler was removed and nothing was transferred.")
+				printPeerHooks(p, res.Hooks)
 				return nil
 			}
 			p.Blank()

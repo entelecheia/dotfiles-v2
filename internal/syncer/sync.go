@@ -96,6 +96,8 @@ type Config struct {
 	// While set, PeerSchedule skips the reachability and remote-owner checks.
 	FencePending bool
 
+	// Hooks are the peer role hooks from the store config (#184).
+	Hooks PeerHooks
 	// RemoteDot is the peer profile's remote_dot pin; empty picks the newest
 	// release on the peer.
 	RemoteDot string
@@ -332,6 +334,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Home:              override,
 		Owner:             localCfg.Owner,
 		OwnerAliases:      localCfg.OwnerAliases,
+		Hooks:             localCfg.Hooks,
 		RemoteDot:         localCfg.RemoteDot,
 		OwnerEpoch:        localCfg.OwnerEpoch,
 		FencePending:      localCfg.FencePending,

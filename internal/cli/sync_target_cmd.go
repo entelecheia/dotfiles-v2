@@ -192,16 +192,15 @@ func newSyncOwnerCmd() *cobra.Command {
 Renaming a Mac: run dot sync owner --rename <old> <new> on that Mac. It
 rewrites the owner in every profile of this workspace owned by <old> (mirror
 and peer alike), then does the same on the peer over ssh unless --local-only.
-Only a profile whose current owner is <old> is renamed. The old name stays
-as an alias, so the guard and the peer's owner check keep matching while
-either Mac still answers to it; a generic name such as "Mac" is not kept.
-The coordinator retires its aliases at the first complete peer sync that
-finds the peer recording the new owner, once this Mac answers to the new
-name; the other Mac records no alias (the fence reads the coordinator's).
-At equal epochs the peer fence refuses a peer that passes its own owner
-guard. When the peer
-cannot be reached, the rename runs only on a Mac that still answers to <old>
-(or with --local-only). The epoch, targets and baselines are untouched, so no
+Only a profile whose current owner is <old> is renamed. On this Mac the old
+name stays as an alias, so the guard and the peer's owner check keep
+matching while it still answers to it; a generic name such as "Mac" is not
+kept, and the other Mac records no alias (the fence reads the
+coordinator's). The coordinator retires its aliases at the first complete
+peer sync that finds the peer recording the new owner, once this Mac answers
+to the new name. At equal epochs the peer fence refuses a peer that passes
+its own owner guard. When the peer cannot be reached, the rename runs only
+on a Mac that still answers to <old> (or with --local-only). The epoch, targets and baselines are untouched, so no
 run plans a deletion. It refuses when this Mac answers to neither name, when
 the peer (or the peer target's host) answers to either one, and, once this
 Mac no longer answers to <old>, unless it runs the peer scheduler and the
@@ -321,7 +320,8 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 				return fmt.Errorf("this machine no longer answers to %q, and the scheduler proof of ownership needs launchd (macOS); run with --local-only on the owner of each profile", oldName)
 			case !runsPeerScheduler(bs):
 				return fmt.Errorf("this machine no longer answers to %q and does not run the peer scheduler, so it cannot be shown to be the owner being renamed; run --rename on the coordinator (the Mac with the peer scheduler), or, when the mirror and the peer have different owners, --local-only on the owner of each profile", oldName)
-			case peerView.Scheduler != syncer.SchedulerNotInstalled.String():
+			case peerView.Scheduler != syncer.SchedulerNotInstalled.String() && !strings.HasPrefix(peerView.Scheduler, "unsupported"):
+				// A peer without launchd (unsupported) runs no scheduler.
 				return fmt.Errorf("both Macs claim the owner's peer scheduler (the peer reports %q), so neither can be shown to be the owner being renamed; remove the stale one with dot peer setup --off there, or run with --local-only on the owner", peerView.Scheduler)
 			}
 		}
@@ -334,7 +334,7 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 	res, err := syncer.RenameOwner(root, oldName, newName, dryRun, keepAlias)
 	if localOnly && errors.Is(err, syncer.ErrNoProfileOwned) {
 		// The peer step on a Mac that owns nothing by that name: done.
-		p.Line("no profile here is owned by %q; nothing to rename", oldName)
+		p.Line("no profile here is owned by %q; %s", oldName, nothingToRename)
 		return nil
 	}
 	if err != nil {
@@ -372,14 +372,23 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 		p.Line("dry-run: would run on %s: %s", host, manual)
 		return nil
 	}
-	if err := syncer.RenamePeerOwner(cmd.Context(), probeRunner(), peer.Config, oldName, newName); err != nil {
+	out, err := syncer.RenamePeerOwner(cmd.Context(), probeRunner(), peer.Config, oldName, newName)
+	if err != nil {
 		p.Warn("peer %s not migrated: %v", host, err)
 		p.Line("  Run there: %s", manual)
 		return fmt.Errorf("renamed here, but the peer %s was not migrated", host)
 	}
+	if strings.Contains(out, nothingToRename) {
+		p.Line("peer %s: no profile there is owned by %q; nothing to rename", host, oldName)
+		return nil
+	}
 	p.Success("peer %s: profiles owned by %q renamed to %q", host, oldName, newName)
 	return nil
 }
+
+// nothingToRename is what --local-only prints when no store is owned by
+// <old>; the caller on the other Mac reads it from the output.
+const nothingToRename = "nothing to rename"
 
 // peerStoreExists reports a peer profile store, loadable or not: a store
 // that fails to load must not read as "no peer".

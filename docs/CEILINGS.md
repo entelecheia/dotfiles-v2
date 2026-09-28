@@ -133,10 +133,11 @@ safe machine-to-machine state channel is ever designed.
 keeps a renamed owner's earlier names in `owner_aliases` so a Mac still
 answering to the old name keeps its role mid-rename. Only the Mac being
 renamed records them (the other Mac's migration step records none), and only
-the coordinator retires them, at a complete peer sync. In a workspace with
-no peer profile they stay until the owner next changes, so a Mac that later
-answers to a retired name (a reinstall that comes back as the default
-`<Name>s-MacBook-Pro`) passes the mirror owner guard there.
+the coordinator retires them, at a complete peer sync. Where that run does
+not reach (a workspace with no peer profile, or the mirror owner when
+another Mac coordinates the peer) they stay until the owner next changes, so
+a Mac that later answers to a retired name (a reinstall that comes back as
+the default `<Name>s-MacBook-Pro`) passes the mirror owner guard there.
 
 A reused default name on a reinstalled Mac of the same user is the only
 trigger. Replace this if mirror-only workspaces gain a point where both

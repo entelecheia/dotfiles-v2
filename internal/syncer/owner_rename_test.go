@@ -140,7 +140,7 @@ func TestPeerSync_AfterRenameWithUnmigratedPeer(t *testing.T) {
 func TestRenamePeerOwnerRunsTheRenameOnThePeer(t *testing.T) {
 	sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1)
 	sb.installFakeRemoteDot(t)
-	if err := RenamePeerOwner(context.Background(), peerScheduleRunner(false), sb.cfg, "old-mac-name", "new-mac-name"); err != nil {
+	if _, err := RenamePeerOwner(context.Background(), peerScheduleRunner(false), sb.cfg, "old-mac-name", "new-mac-name"); err != nil {
 		t.Fatal(err)
 	}
 	lines := sb.recordLines(t)

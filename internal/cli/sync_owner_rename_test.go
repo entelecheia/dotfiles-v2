@@ -266,3 +266,34 @@ func TestSyncOwnerRenameLocalOnlyOnTheOtherMacKeepsNoAlias(t *testing.T) {
 		t.Fatalf("owner %q aliases %v, want new-mac and none", local.Owner, local.OwnerAliases)
 	}
 }
+
+// A peer without launchd reports its scheduler as unsupported, which is
+// none: it cannot hold the owner's scheduler.
+func TestSyncOwnerRenameTreatsAnUnsupportedPeerSchedulerAsNone(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the scheduler proof needs launchd here")
+	}
+	f := newSyncCLIFixture(t)
+	self := syncer.PreferredMachineName()
+	if self == "" {
+		t.Skip("no machine name")
+	}
+	status := `{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"owner":"gone-mac","machineNames":["other-box"],"workspacePath":"/remote/work","target":{"path":"` + f.local + `"}},"job":{"state":"unsupported: peer scheduler requires macOS launchd"}}`
+	bin := t.TempDir()
+	writeCLITestFile(t, filepath.Join(bin, "ssh"), "#!/bin/sh\ncase \"$*\" in\n"+
+		"  *\"list dot candidates\"*) printf '/fake/dot\\tdot version 9.9.9 (fake)\\n' ;;\n"+
+		"  *\"peer status --json\"*) printf '%s\\n' '"+status+"' ;;\n"+
+		"  *) exit 0 ;;\nesac\n")
+	if err := os.Chmod(filepath.Join(bin, "ssh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, profile := range []string{"sync", "peer"} {
+		writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", profile, "config.yaml"),
+			"target: ssh:peer-alias:/remote/work\nowner: gone-mac\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	}
+	writeCLITestFile(t, filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist"), "<plist/>")
+	if _, errOut, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err != nil {
+		t.Fatalf("%v\n%s", err, errOut)
+	}
+}

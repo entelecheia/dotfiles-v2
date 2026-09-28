@@ -198,6 +198,11 @@ func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string,
 	plist := filepath.Join(home, "Library", "LaunchAgents", label+".plist")
 	body, err := os.ReadFile(plist)
 	if err != nil {
+		// Only a missing plist is "not installed": an owner rename trusts
+		// that answer from the other Mac.
+		if !os.IsNotExist(err) {
+			snapshot.State = "unknown: " + err.Error()
+		}
 		return snapshot
 	}
 	snapshot.State = syncer.SchedulerStopped.String()

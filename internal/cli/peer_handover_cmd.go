@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -24,7 +26,13 @@ machines reachable:
   4. On the peer, set the old baselines aside and run the first sync as an
      additive bootstrap (no baseline means no deletes can be planned, and
      right after step 1 almost nothing transfers).
-  5. Install the peer's scheduler.
+  5. Install the peer's scheduler; its setup runs the peer's on_activate.
+  6. Run this Mac's on_deactivate hooks, last: an app-quit may end the
+     process running the handover.
+
+A lost terminal (SIGHUP) does not stop a handover once it has started. If
+one stops after step 3 anyway, finish by hand: dot peer setup --off here,
+then dot peer sync and dot peer setup on the peer.
 
 The takeover replica is not used here: right after a complete run the safest
 baseline is no baseline. After the switch, realign the repos on the new
@@ -32,6 +40,12 @@ coordinator with ` + "`dot peer git realign --apply`" + ` (fetch first).`,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			p := printerFrom(c)
+			if dry, _ := c.Flags().GetBool("dry-run"); !dry {
+				// nohup: from step 2 on, a dropped ssh session must not end
+				// the switch halfway, with ownership moved and this Mac's
+				// on_deactivate not run.
+				signal.Ignore(syscall.SIGHUP)
+			}
 			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
 			if err != nil {
 				return err
@@ -49,6 +63,9 @@ coordinator with ` + "`dot peer git realign --apply`" + ` (fetch first).`,
 				DryRun: dryRun,
 			})
 			if err != nil {
+				if res != nil {
+					printPeerHooks(p, res.Hooks) // a demotion's hooks ran
+				}
 				return err
 			}
 			if res.DryRun {
@@ -58,6 +75,10 @@ coordinator with ` + "`dot peer git realign --apply`" + ` (fetch first).`,
 			}
 			for _, step := range res.Steps {
 				p.Bullet(ui.MarkPresent, step)
+			}
+			printPeerHooks(p, res.Hooks)
+			for _, line := range res.RemoteHookFailures {
+				p.Warn("peer %s", line)
 			}
 			if res.DryRun {
 				p.Blank()
