@@ -45,10 +45,28 @@ After the switch, fetch and realign repos with ` + "`dot peer git realign --appl
 			}
 			yes, _ := c.Flags().GetBool("yes")
 			dryRun, _ := c.Flags().GetBool("dry-run")
+			diffsShown := false
+			showDiffs := func(res *syncer.PeerTakeoverResult) {
+				p.KV("Replica generation", strconv.Itoa(res.Generation))
+				if len(res.FilterDiffs) == 0 {
+					p.Line("Filter files: no differences from the replica.")
+				} else {
+					p.Section("filter files vs replica")
+					for _, d := range res.FilterDiffs {
+						p.KV(d.Name, d.Status)
+					}
+				}
+			}
 			res, err := syncer.PeerTakeover(bs.Config, syncer.PeerTakeoverOptions{
 				Yes:    yes,
 				DryRun: dryRun,
-				Confirm: func(prompt string) (bool, error) {
+				Confirm: func(prompt string, preview *syncer.PeerTakeoverResult) (bool, error) {
+					// The differences must inform the decision, so they are
+					// shown before the prompt, not after the install.
+					p.Header("Peer Takeover")
+					showDiffs(preview)
+					p.Blank()
+					diffsShown = true
 					return ui.Confirm(prompt, false)
 				},
 			})
@@ -57,17 +75,11 @@ After the switch, fetch and realign repos with ` + "`dot peer git realign --appl
 			}
 			if res.DryRun {
 				p.Header("Peer Takeover (preview)")
-			} else {
+			} else if !diffsShown {
 				p.Header("Peer Takeover")
 			}
-			p.KV("Replica generation", strconv.Itoa(res.Generation))
-			if len(res.FilterDiffs) == 0 {
-				p.Line("Filter files: no differences from the replica.")
-			} else {
-				p.Section("filter files vs replica")
-				for _, d := range res.FilterDiffs {
-					p.KV(d.Name, d.Status)
-				}
+			if !diffsShown {
+				showDiffs(res)
 			}
 			if res.DryRun {
 				p.Blank()

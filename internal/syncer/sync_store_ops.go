@@ -468,6 +468,10 @@ type OwnerOptions struct {
 // On the peer profile every deliberate owner change also bumps the owner
 // epoch and clears a pending fence: a recorded decision outranks any earlier
 // takeover, and the epoch is what the first contact after a switch compares.
+// An explicit Set/SetSelf bumps even when the owner is unchanged: the
+// equal-epoch fence recovery tells the operator to set one coordinator on
+// both machines, and only a bump on both keeps the chosen machine from
+// reading the other's bumped record as a lost fence and demoting itself.
 func SetOwner(opts OwnerOptions) (string, error) {
 	cfg := opts.Config
 	paths := cfg.LocalPaths
@@ -490,7 +494,8 @@ func SetOwner(opts OwnerOptions) (string, error) {
 	default:
 		local.Owner = opts.SetTo
 	}
-	if cfg.Profile == PeerProfile && local.Owner != previous {
+	explicitSet := opts.SetSelf || opts.SetTo != ""
+	if cfg.Profile == PeerProfile && (local.Owner != previous || explicitSet) {
 		local.OwnerEpoch++
 		local.FencePending = false
 	}

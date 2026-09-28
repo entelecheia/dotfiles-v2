@@ -274,6 +274,26 @@ func TestSetOwnerBumpsEpochOnPeerProfileOnly(t *testing.T) {
 	}
 }
 
+func TestSetOwnerBumpsEpochOnUnchangedPeerOwner(t *testing.T) {
+	// Equal-fence recovery sets the same coordinator on both machines; the
+	// machine that already owned the profile must still advance its epoch or
+	// it reads the other's bumped record as a lost fence and demotes itself.
+	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+	if err := EnsureLocalLayout(paths); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveLocalConfig(paths, &LocalConfig{Owner: "mac-a", OwnerEpoch: 5, Propagation: DefaultPropagationPolicy()}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Profile: PeerProfile, LocalPaths: paths}
+	if _, err := SetOwner(OwnerOptions{Config: cfg, SetTo: "mac-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadPeerStoreConfig(t, paths); got.OwnerEpoch != 6 {
+		t.Errorf("epoch = %d, want 6 after re-setting the same owner", got.OwnerEpoch)
+	}
+}
+
 func TestPeerAdopt(t *testing.T) {
 	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
 	if err := EnsureLocalLayout(paths); err != nil {
@@ -584,7 +604,7 @@ func TestPeerTakeoverValidation(t *testing.T) {
 	})
 	t.Run("declined", func(t *testing.T) {
 		cfg, paths, _ := peerTakeoverFixture(t)
-		_, err := PeerTakeover(cfg, PeerTakeoverOptions{Confirm: func(string) (bool, error) { return false, nil }})
+		_, err := PeerTakeover(cfg, PeerTakeoverOptions{Confirm: func(string, *PeerTakeoverResult) (bool, error) { return false, nil }})
 		if err == nil || !strings.Contains(err.Error(), "declined") {
 			t.Fatalf("err = %v, want declined", err)
 		}

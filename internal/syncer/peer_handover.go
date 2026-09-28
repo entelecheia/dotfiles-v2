@@ -159,7 +159,14 @@ func PushPeerReplica(ctx context.Context, runner *exec.Runner, cfg *Config) erro
 	// second as the previous one would otherwise be skipped, stalling the
 	// very generation a takeover compares. The payload is a few small files
 	// plus the baselines, so hashing both sides is cheap.
-	args := []string{"-a", "--checksum", "--delete", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", replicaDir + "/", cfg.Target.Host + ":" + remoteDir}
+	args := []string{"-a", "--checksum", "--delete"}
+	if cfg.RemoteRsyncPath != "" {
+		// A peer whose default rsync is openrsync/2.x can only be served by
+		// the alternate the probe selected (rsyncbin.go); bare `rsync` on the
+		// remote side would fail every push.
+		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
+	}
+	args = append(args, "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", replicaDir+"/", cfg.Target.Host+":"+remoteDir)
 	if _, err := runner.Run(ctx, "rsync", args...); err != nil {
 		return fmt.Errorf("peer replica: pushing to %s: %w", cfg.Target.Host, err)
 	}
@@ -412,12 +419,13 @@ func diffPeerReplicaFilters(cfg *Config, replicaDir string, meta *peerReplicaMet
 }
 
 // PeerTakeoverOptions controls the unplanned switch. Confirm gates the
-// install after the filter differences are shown; a nil Confirm means the
-// caller already consented (cli passes ui.Confirm, tests pass nil with Yes).
+// install and receives the validated preview (replica generation and filter
+// differences) so the caller can show it before the operator answers; a nil
+// Confirm means the caller already consented (tests pass nil with Yes).
 type PeerTakeoverOptions struct {
 	Yes     bool
 	DryRun  bool
-	Confirm func(prompt string) (bool, error)
+	Confirm func(prompt string, preview *PeerTakeoverResult) (bool, error)
 }
 
 // PeerTakeoverResult reports what a takeover installed or would install.
@@ -454,7 +462,7 @@ func PeerTakeover(cfg *Config, opts PeerTakeoverOptions) (*PeerTakeoverResult, e
 		if opts.Confirm == nil {
 			return nil, fmt.Errorf("peer takeover: confirmation required (pass --yes to skip)")
 		}
-		ok, err := opts.Confirm("Install the replica baselines and take over coordination?")
+		ok, err := opts.Confirm("Install the replica baselines and take over coordination?", result)
 		if err != nil {
 			return nil, err
 		}
