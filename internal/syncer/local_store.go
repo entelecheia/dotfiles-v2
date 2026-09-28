@@ -175,6 +175,10 @@ type LocalConfig struct {
 	PullMode          RunMode           `yaml:"pull_mode,omitempty"`     // automatic pull mode (clean|force)
 	Paused            bool              `yaml:"paused,omitempty"`
 	SharedExcludes    []string          `yaml:"shared_excludes,omitempty"`
+	// HostMerge maps a host path (relative to $HOME) to the top-level JSON
+	// keys whose entries a peer run merges from both copies before the
+	// additive pass, so neither Mac's entries are lost (#181).
+	HostMerge map[string][]string `yaml:"host_merge,omitempty"`
 	// Hooks run around this machine's peer coordinator role (#184).
 	Hooks PeerHooks `yaml:"hooks,omitempty"`
 	// RemoteDot pins the dot binary a peer run uses on the other machine

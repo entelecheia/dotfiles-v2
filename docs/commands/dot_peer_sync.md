@@ -29,6 +29,8 @@ dot peer sync [flags]
 
 ```
   -h, --help        help for sync
+      --json        print the itemized plan as JSON
+      --list        print every planned action (with --dry-run: exactly what a run would do)
       --pull-only   receive peer changes without pushing
       --push-only   send local changes without pulling first
       --skip-home   workspace only; skip the host-path pass
