@@ -146,6 +146,19 @@ jobs:
             echo "::error title=Profiled systemd parser evidence::TestSystemdAnalyze_ProfiledUnits did not pass"
             exit 1
           fi
+      # Peer runs refuse openrsync (#175), the only rsync on hosted macOS
+      # images, so without Homebrew's 3.x the real-rsync peer tests skip there.
+      - name: rsync 3.x for peer tests
+        if: matrix.os == 'macos-latest'
+        run: brew install rsync
+      - name: Peer real-rsync evidence - did it run or skip?
+        run: |
+          set -o pipefail
+          go test ./internal/syncer -run '^TestPeerDiff_NonASCIINameThroughResolvedLocalRsync$' -count=1 -v 2>&1 | tee peer-rsync.log
+          if ! grep -q '^--- PASS: TestPeerDiff_NonASCIINameThroughResolvedLocalRsync' peer-rsync.log; then
+            echo "::error title=Peer real-rsync evidence::the non-ASCII peer inventory test did not pass (skipped or failed)"
+            exit 1
+          fi
       - name: Unit tests with coverage
         # Verbose so named Linux scheduler, lock, and service-domain
         # PASS/no-SKIP evidence is auditable (BUG-18); packages, race mode,

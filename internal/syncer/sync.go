@@ -876,9 +876,9 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
 	var err error
 	if cfg.Verbose {
-		err = runner.RunAttached(ctx, "rsync", args...)
+		err = runner.RunAttached(ctx, cfg.rsyncBin(), args...)
 	} else {
-		_, err = runner.Run(ctx, "rsync", args...)
+		_, err = runner.Run(ctx, cfg.rsyncBin(), args...)
 	}
 	return classifyRsyncError(err)
 }
