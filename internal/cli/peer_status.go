@@ -154,6 +154,17 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	if exe, err := os.Executable(); err == nil {
 		p.KV("Dot", exe+" ("+cmd.Root().Version+")")
 	}
+	// The owner is a recorded name and this machine answers to live host
+	// names; after a Mac rename the two drift apart (#185).
+	owner := cfg.Owner
+	if owner == "" {
+		owner = "(unset)"
+	}
+	if len(cfg.OwnerAliases) > 0 {
+		owner += " (aliases: " + strings.Join(cfg.OwnerAliases, ", ") + ")"
+	}
+	p.KV("Owner", owner)
+	p.KV("This machine", strings.Join(syncer.MachineNames(), ", "))
 	// The role decides how the rest reads: runs are recorded on the machine
 	// that made them, so the peer's timestamps are its time as coordinator,
 	// not stale coordinator activity (#182).
@@ -226,11 +237,17 @@ func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string,
 		return snapshot
 	}
 	if home == "" {
+		snapshot.State = "unknown: no home directory"
 		return snapshot
 	}
 	plist := filepath.Join(home, "Library", "LaunchAgents", label+".plist")
 	body, err := os.ReadFile(plist)
 	if err != nil {
+		// Only a missing plist is "not installed": an owner rename trusts
+		// that answer from the other Mac.
+		if !os.IsNotExist(err) {
+			snapshot.State = "unknown: " + err.Error()
+		}
 		return snapshot
 	}
 	snapshot.State = syncer.SchedulerStopped.String()

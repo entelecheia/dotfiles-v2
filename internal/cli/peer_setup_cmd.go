@@ -111,8 +111,9 @@ write the workspace. List them in .dotfiles/peer/config.yaml:
 
 on_activate runs after this command installs the scheduler (also the step a
 handover runs on the new coordinator, and the one a takeover names next);
-on_deactivate runs after --off, on the old coordinator in a handover, and on
-a machine that demotes itself at the fence. The launchd actions act on the
+on_deactivate runs after --off, on the old coordinator in a handover, on a
+machine that demotes itself at the fence, and after a peer dot sync owner
+--set/--clear that takes the role from this Mac. The launchd actions act on the
 jobs of ~/Library/LaunchAgents/<glob>.plist: launchd-bootout disables them,
 so a reboot does not load them again, and records which ones it disabled;
 launchd-bootstrap re-enables only those, so a job stopped outside dot stays

@@ -51,7 +51,7 @@ func TestEvaluatePeerSides(t *testing.T) {
 	peer.Replica = nil
 	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
 	for _, want := range []struct{ name, level, fix string }{
-		{"roles", DoctorFail, "dot sync owner --profile=peer --set"},
+		{"roles", DoctorFail, "dot peer adopt --owner <a name only the chosen Mac answers to> --epoch 3"},
 		{"nfd", DoctorFail, "on m3x23: dot sync names normalize --profile=peer"},
 		{"nfd", DoctorWarn, "on m3x23: dot sync names normalize --profile=peer"},
 		{"rsync", DoctorFail, "on m3x23: brew install rsync"},
@@ -78,7 +78,9 @@ func TestEvaluatePeerSides(t *testing.T) {
 	// A takeover's pending fence is the fence's to settle, not two
 	// coordinators: the lower epoch demotes at its next run.
 	local, peer = doctorFacts()
+	local.MachineNames = []string{"m5x26"}
 	peer.Coordinator, peer.Scheduler, peer.OwnerEpoch, peer.FencePending = true, true, 3, true
+	peer.Owner, peer.MachineNames = "m3x23", []string{"m3x23"}
 	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
 	if c := checkFor(checks, "roles", DoctorFail); c != nil {
 		t.Errorf("a pending fence failed: %+v", c)
@@ -249,12 +251,12 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 		{"one coordinator", func(l, p *PeerSideFacts) {}, nil, ""},
 		{"neither, this Mac keeps its plist", func(l, p *PeerSideFacts) { l.Coordinator = false }, []string{"on m5x26: dot peer setup --off"}, ""},
 		{"two, the lower without a plist", func(l, p *PeerSideFacts) {
-			l.Scheduler = false
-			p.Coordinator, p.Scheduler, p.OwnerEpoch = true, true, 3
+			l.Scheduler, l.MachineNames = false, []string{"m5x26"}
+			p.Coordinator, p.Scheduler, p.OwnerEpoch, p.Owner, p.MachineNames = true, true, 3, "m3x23", []string{"m3x23"}
 		}, []string{"on m5x26: dot peer setup"}, ""},
 		{"two, the higher without a plist", func(l, p *PeerSideFacts) {
-			l.OwnerEpoch, l.Scheduler = 3, false
-			p.Coordinator, p.Scheduler = true, true
+			l.OwnerEpoch, l.Scheduler, l.MachineNames = 3, false, []string{"m5x26"}
+			p.Coordinator, p.Scheduler, p.Owner, p.MachineNames = true, true, "m3x23", []string{"m3x23"}
 		}, []string{"on m3x23: dot peer setup --off"}, "after the fixes above, on m5x26: dot peer setup"},
 		{"two at one epoch", func(l, p *PeerSideFacts) { p.Coordinator, p.Scheduler = true, true }, nil, ""},
 		// Undecided: one line, no host told to set up.
@@ -266,11 +268,11 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 		{"sole coordinator, the peer answers to its owner", func(l, p *PeerSideFacts) {
 			p.MachineNames = []string{"m3x23", "m5x26"}
 			p.Owner, p.OwnerEpoch = "", 0
-		}, []string{"dot peer adopt"}, "a name only that Mac answers to"},
+		}, []string{"adopt --owner m5x26"}, "a name only the chosen Mac answers to"},
 		{"neither, the peer answers to this Mac's name", func(l, p *PeerSideFacts) {
 			l.Coordinator, l.PreferredName = false, "m5x26"
 			p.MachineNames = []string{"m5x26"}
-		}, []string{"dot peer adopt"}, "a name only that Mac answers to"},
+		}, []string{"adopt --self"}, "a name only the chosen Mac answers to"},
 		{"sole coordinator demoted to no one", func(l, p *PeerSideFacts) {
 			l.MachineNames = []string{"m5x26"}
 			p.Owner, p.OwnerEpoch = "old-name", 3
@@ -305,9 +307,47 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 		})
 	}
 
+	// The "choose" fix, applied for either choice, leaves a pair whose
+	// fence settles on the chosen Mac: one owner at one new epoch.
+	local, peer := doctorFacts()
+	local.MachineNames = []string{"m5x26", "mac"}
+	peer.Coordinator, peer.OwnerEpoch, peer.Owner, peer.MachineNames = true, 3, "mac", []string{"m3x23", "mac"}
+	c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail)
+	var epoch int
+	if c == nil || !strings.Contains(c.Fix, "dot peer adopt --owner") {
+		t.Fatalf("shared-name takeover: %+v", c)
+	}
+	if _, err := fmt.Sscanf(c.Fix[strings.Index(c.Fix, "--epoch ")+len("--epoch "):], "%d", &epoch); err != nil || epoch != 4 {
+		t.Fatalf("fix %q: epoch %d, %v", c.Fix, epoch, err)
+	}
+	for _, chosen := range []string{"m5x26", "m3x23"} {
+		coord := fenceSide{Owner: chosen, Epoch: epoch}
+		other := fenceSide{Owner: chosen, Epoch: epoch} // it does not answer to the chosen name
+		if demote, err := fenceDecision(coord, other); demote || err != nil {
+			t.Errorf("chose %s: demote %v, err %v", chosen, demote, err)
+		}
+	}
+
+	// Mid-rename (#191): the coordinator records the new name with the old
+	// one as an alias, the other Mac still the old name, at one epoch. The
+	// fence proceeds through the alias, so the doctor passes too.
+	local, peer = doctorFacts()
+	local.OwnerAliases, peer.Owner = []string{"old-m5"}, "old-m5"
+	if checks := evaluatePeerSides(local, peer, "m5x26", "m3x23"); checkFor(checks, "roles", DoctorFail) != nil || checkFor(checks, "roles", DoctorPass) == nil {
+		t.Errorf("a half-migrated rename fails the roles row: %+v", checks)
+	}
+
+	// Neither answers to the one owner both record: a renamed coordinator,
+	// so the fix names the rename (it keeps epoch and baselines) first.
+	local, peer = doctorFacts()
+	local.Coordinator, local.Owner, peer.Owner = false, "old-name", "old-name"
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Fix, "dot sync owner --rename 'old-name' <its name now>") {
+		t.Errorf("renamed coordinator: %+v", c)
+	}
+
 	// A Mac judged as the coordinator after the roles fix is counted as its
 	// own sync walks it (without linked worktrees).
-	local, peer := doctorFacts()
+	local, peer = doctorFacts()
 	local.Coordinator, local.NonNFD, local.NonNFDSample = false, 1, []string{"wt/한글.md"}
 	local.CoordNonNFD = &NFDCount{}
 	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "nfd", DoctorFail); c != nil {

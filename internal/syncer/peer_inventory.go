@@ -253,13 +253,23 @@ type remotePeerStatus struct {
 	FencePending  bool     `json:"fencePending"`
 	DotVersion    string   `json:"dotVersion"`
 	Profile       struct {
-		Configured    bool   `json:"configured"`
-		Owner         string `json:"owner"`
+		Configured   bool     `json:"configured"`
+		Owner        string   `json:"owner"`
+		OwnerAliases []string `json:"ownerAliases"`
+		MachineNames []string `json:"machineNames"`
+		// CanPush is the remote's own owner guard: true means that machine
+		// believes it is the coordinator.
+		CanPush       bool   `json:"canPush"`
 		WorkspacePath string `json:"workspacePath"`
 		Target        struct {
 			Path string `json:"path"`
 		} `json:"target"`
 	} `json:"profile"`
+	// Job is the remote's peer scheduler; State is "not installed" when it
+	// has none.
+	Job struct {
+		State string `json:"state"`
+	} `json:"job"`
 }
 
 // checkRemotePeerOwner makes the single-coordinator invariant bilateral. A
@@ -368,16 +378,19 @@ func topologyError(localWorkspace, localTarget, remoteWorkspace, remoteTarget st
 // checkRemotePeerOwnerMatch is the pre-epoch refusal: without an epoch to
 // order them, two different owners can never both proceed.
 func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
-	return ownerMatchError(cfg.Owner, status.Profile.Owner)
+	return ownerMatchError(localFenceSide(cfg), remoteFenceSide(status))
 }
 
-func ownerMatchError(localOwner, remoteOwner string) error {
-	wantOwner := NormalizeHostname(localOwner)
-	gotOwner := NormalizeHostname(remoteOwner)
-	if wantOwner == "" || gotOwner != wantOwner {
+func ownerMatchError(local, remote fenceSide) error {
+	if remote.CanPush {
+		return fmt.Errorf(
+			"peer coordinator check: the peer also passes its own owner guard (its owner %q, local %q); two coordinators would write to each other. Set one owner on both machines with `dot sync owner --profile=peer --set <coordinator>`",
+			remote.Owner, local.Owner)
+	}
+	if NormalizeHostname(local.Owner) == "" || !sameOwner(local.Owner, local.Aliases, remote.Owner, remote.Aliases) {
 		return fmt.Errorf(
 			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
-			localOwner, remoteOwner, localOwner)
+			local.Owner, remote.Owner, local.Owner)
 	}
 	return nil
 }
