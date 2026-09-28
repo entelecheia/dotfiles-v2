@@ -397,6 +397,9 @@ on a laptop.`,
 				}
 			}
 			if res.Unreachable {
+				if jsonOut {
+					return writePeerPlanJSON(c, nil, true)
+				}
 				p.Warn("peer %s unreachable; nothing to do", bs.Config.Target.Host)
 				return nil
 			}
