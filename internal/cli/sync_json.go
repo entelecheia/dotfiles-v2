@@ -14,8 +14,8 @@ import (
 
 // syncStatusSchemaVersion advances whenever the status document gains,
 // drops, or renames a field, so a strict consumer can reject a document
-// shape it does not know. v3 adds unsupportedNameCount.
-const syncStatusSchemaVersion = 3
+// shape it does not know. v3 adds unsupportedNameCount, v4 ownerAliases.
+const syncStatusSchemaVersion = 4
 
 type syncTargetJSON struct {
 	Kind string `json:"kind"`

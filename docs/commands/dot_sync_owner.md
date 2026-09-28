@@ -6,12 +6,15 @@ Show or set which machine may push this profile
 
 Show or set which machine may push this profile.
 
-Renaming a Mac: dot sync owner --rename <old> <new> rewrites the owner in
-every profile of this workspace owned by <old> (mirror and peer alike), then
-does the same on the peer over ssh unless --local-only. The old name stays as
-an alias, so the guard and the peer's owner check keep matching while either
-Mac still answers to it. The epoch, targets and baselines are untouched, so
-no run plans a deletion.
+Renaming a Mac: run dot sync owner --rename <old> <new> on that Mac. It
+rewrites the owner in every profile of this workspace owned by <old> (mirror
+and peer alike), then does the same on the peer over ssh unless --local-only.
+The old name stays as an alias, so the guard and the peer's owner check keep
+matching while either Mac still answers to it; a generic name such as "Mac"
+is not kept. The epoch, targets and baselines are untouched, so no run plans
+a deletion. It refuses when this Mac answers to neither name, and when the
+peer answers to either one: moving ownership between the Macs is --set or
+dot peer handover. --dry-run shows the change without writing anything.
 
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer

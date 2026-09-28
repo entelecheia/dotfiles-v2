@@ -91,7 +91,7 @@ func SetLocalOwner(cfg *Config, owner string, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	local.Owner = owner
+	AssignOwner(local, owner)
 	if !dryRun {
 		if err := SaveLocalConfig(cfg.LocalPaths, local); err != nil {
 			return err
@@ -484,6 +484,9 @@ func SetOwner(opts OwnerOptions) (string, error) {
 		return "", fmt.Errorf("profile %q has no config yet; run dot sync init first", cfg.Profile)
 	}
 	previous := local.Owner
+	// A deliberate owner change is a new decision, not a rename: earlier
+	// names no longer stand for the owner, even when the name is unchanged.
+	local.OwnerAliases = nil
 	switch {
 	case opts.Clear:
 		local.Owner = ""
@@ -495,9 +498,6 @@ func SetOwner(opts OwnerOptions) (string, error) {
 	default:
 		local.Owner = opts.SetTo
 	}
-	// A deliberate owner change is a new decision, not a rename: earlier
-	// names no longer stand for the owner.
-	local.OwnerAliases = nil
 	explicitSet := opts.SetSelf || opts.SetTo != ""
 	if cfg.Profile == PeerProfile && (local.Owner != previous || explicitSet) {
 		local.OwnerEpoch++
@@ -520,10 +520,13 @@ type OwnerRenameResult struct {
 // guard keeps matching a machine not renamed yet and a peer not migrated yet.
 // Nothing else changes: not the epoch (a rename is not a coordinator
 // change), not the target, not a baseline, so no run plans a deletion.
-func RenameOwner(workspaceRoot, oldName, newName string) (*OwnerRenameResult, error) {
+func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRenameResult, error) {
 	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
 	if oldName == "" || newName == "" || strings.ContainsAny(newName, " \t'\"/") {
-		return nil, fmt.Errorf("owner rename needs an old and a new machine name without spaces, quotes or slashes (got %q -> %q)", oldName, newName)
+		return nil, fmt.Errorf("owner rename needs an old and a new machine name, the new one without spaces, quotes or slashes (got %q -> %q)", oldName, newName)
+	}
+	if strings.ContainsAny(oldName, "'\"\n") {
+		return nil, fmt.Errorf("owner rename: the old name %q holds a quote; record the owner with dot sync owner --set instead", oldName)
 	}
 	if NormalizeHostname(oldName) == NormalizeHostname(newName) {
 		return nil, fmt.Errorf("owner rename: %q and %q are the same name", oldName, newName)
@@ -548,14 +551,18 @@ func RenameOwner(workspaceRoot, oldName, newName string) (*OwnerRenameResult, er
 		seen := map[string]bool{NormalizeHostname(newName): true}
 		var aliases []string
 		for _, alias := range append(slices.Clone(local.OwnerAliases), local.Owner) {
-			if n := NormalizeHostname(alias); n != "" && !seen[n] {
+			// A generic name ("mac") identifies no machine; keeping it would
+			// let any Mac with an unset HostName pass the guard.
+			if n := NormalizeHostname(alias); n != "" && !seen[n] && !genericMachineNames[n] {
 				seen[n] = true
 				aliases = append(aliases, alias)
 			}
 		}
 		local.Owner, local.OwnerAliases = newName, aliases
-		if err := SaveLocalConfig(paths, local); err != nil {
-			return nil, err
+		if !dryRun {
+			if err := SaveLocalConfig(paths, local); err != nil {
+				return nil, err
+			}
 		}
 		result.Profiles = append(result.Profiles, entry.Name())
 	}

@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,7 +33,7 @@ func TestRenameOwner_RewritesEveryOwnedProfileAndKeepsAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := RenameOwner(root, "youngs-macbook-pro", "m5x26")
+	res, err := RenameOwner(root, "youngs-macbook-pro", "m5x26", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,13 +57,13 @@ func TestRenameOwner_RewritesEveryOwnedProfileAndKeepsAlias(t *testing.T) {
 	}
 
 	// A second rename keeps both earlier names; the old name no longer owns.
-	if _, err := RenameOwner(root, "m5x26", "m5x27"); err != nil {
+	if _, err := RenameOwner(root, "m5x26", "m5x27", false); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadPeerStoreConfig(t, peer); got.Owner != "m5x27" || len(got.OwnerAliases) != 2 {
 		t.Fatalf("second rename: %+v", got)
 	}
-	if _, err := RenameOwner(root, "nobody", "x"); err == nil || !strings.Contains(err.Error(), "no profile") {
+	if _, err := RenameOwner(root, "nobody", "x", false); err == nil || !strings.Contains(err.Error(), "no profile") {
 		t.Fatalf("rename of an unknown owner: %v", err)
 	}
 }
@@ -106,7 +107,7 @@ func TestPeerSync_AfterRenameWithUnmigratedPeer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RenameOwner(sb.local, "old-mac-name", sb.owner); err != nil {
+	if _, err := RenameOwner(sb.local, "old-mac-name", sb.owner, false); err != nil {
 		t.Fatal(err)
 	}
 	stored := loadPeerStoreConfig(t, sb.paths)
@@ -138,5 +139,69 @@ func TestRenamePeerOwnerRunsTheRenameOnThePeer(t *testing.T) {
 	lines := sb.recordLines(t)
 	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], "dot sync owner --rename --local-only old-mac-name new-mac-name") {
 		t.Fatalf("remote commands: %v", lines)
+	}
+}
+
+// Two different current owners that share an old name are two coordinators;
+// the fence must still refuse them at equal epochs.
+func TestSameOwner_SharedAliasIsNotTheSameOwner(t *testing.T) {
+	if sameOwner("m5x26", []string{"youngs-macbook-pro"}, "m3x23", []string{"youngs-macbook-pro"}) {
+		t.Fatal("a shared alias made two owners equal")
+	}
+	cfg := &Config{Owner: "m5x26", OwnerAliases: []string{"youngs-macbook-pro"}, OwnerEpoch: 3, LocalPath: "/w/", Target: Target{Kind: TargetSSH, Host: "p", Path: "/p"}}
+	remote := &remotePeerStatus{OwnerEpoch: 3, DotVersion: "9.9.9"}
+	remote.Profile.Owner, remote.Profile.OwnerAliases = "m3x23", []string{"youngs-macbook-pro"}
+	remote.Profile.WorkspacePath, remote.Profile.Target.Path = "/p", "/w"
+	if _, _, err := peerFence(cfg, remote); err == nil || !strings.Contains(err.Error(), "equal owner epochs") {
+		t.Fatalf("fence err = %v, want the equal-epoch refusal", err)
+	}
+}
+
+// An adopted, initialized or configured different owner drops the aliases
+// the old owner carried (PeerAdopt is the demotion and handover path).
+func TestOwnerChangesDropAliases(t *testing.T) {
+	paths := seedProfile(t, t.TempDir(), PeerProfile, &LocalConfig{Owner: "m5x26", OwnerAliases: []string{"youngs-macbook-pro"}, OwnerEpoch: 3})
+	cfg := &Config{Profile: PeerProfile, LocalPaths: paths}
+	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: "m3x23", Epoch: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadPeerStoreConfig(t, paths); got.Owner != "m3x23" || got.OwnerAliases != nil {
+		t.Fatalf("after adopting another owner: %+v", got)
+	}
+	local := &LocalConfig{Owner: "a", OwnerAliases: []string{"old-a"}}
+	AssignOwner(local, "A")
+	if len(local.OwnerAliases) != 1 {
+		t.Fatal("a case-only change dropped the aliases")
+	}
+}
+
+func TestRenameOwner_GenericNamesAndDryRun(t *testing.T) {
+	root := t.TempDir()
+	paths := seedProfile(t, root, DefaultProfile, &LocalConfig{Owner: "Mac"})
+	if _, err := RenameOwner(root, "mac", "m5x26", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadPeerStoreConfig(t, paths); got.Owner != "Mac" {
+		t.Fatalf("dry run wrote %+v", got)
+	}
+	if _, err := RenameOwner(root, "mac", "m5x26", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadPeerStoreConfig(t, paths); got.Owner != "m5x26" || got.OwnerAliases != nil {
+		t.Fatalf("generic name kept as an alias: %+v", got)
+	}
+	if _, err := RenameOwner(root, "young's pro", "x", false); err == nil || !strings.Contains(err.Error(), "--set") {
+		t.Fatalf("quoted old name: %v", err)
+	}
+}
+
+func TestPeerMachineNamesReadsTheStatusDocument(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1)
+	status := fmt.Sprintf(`{"schemaVersion":%d,"kind":"peer","profile":{"configured":true,"owner":%q,"machineNames":["m3x23","macbook-pro-2023"],"workspacePath":%q,"target":{"path":%q}}}`,
+		PeerStatusSchemaVersion, sb.owner, sb.peer, sb.local)
+	installFakePeerSSH(t, status)
+	names, err := PeerMachineNames(context.Background(), peerScheduleRunner(false), sb.cfg)
+	if err != nil || !slices.Equal(names, []string{"m3x23", "macbook-pro-2023"}) {
+		t.Fatalf("names = %v, %v", names, err)
 	}
 }

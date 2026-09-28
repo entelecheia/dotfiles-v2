@@ -185,12 +185,15 @@ func newSyncOwnerCmd() *cobra.Command {
 		Short: "Show or set which machine may push this profile",
 		Long: `Show or set which machine may push this profile.
 
-Renaming a Mac: dot sync owner --rename <old> <new> rewrites the owner in
-every profile of this workspace owned by <old> (mirror and peer alike), then
-does the same on the peer over ssh unless --local-only. The old name stays as
-an alias, so the guard and the peer's owner check keep matching while either
-Mac still answers to it. The epoch, targets and baselines are untouched, so
-no run plans a deletion.
+Renaming a Mac: run dot sync owner --rename <old> <new> on that Mac. It
+rewrites the owner in every profile of this workspace owned by <old> (mirror
+and peer alike), then does the same on the peer over ssh unless --local-only.
+The old name stays as an alias, so the guard and the peer's owner check keep
+matching while either Mac still answers to it; a generic name such as "Mac"
+is not kept. The epoch, targets and baselines are untouched, so no run plans
+a deletion. It refuses when this Mac answers to neither name, and when the
+peer answers to either one: moving ownership between the Macs is --set or
+dot peer handover. --dry-run shows the change without writing anything.
 
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer
@@ -206,6 +209,9 @@ config resets the baseline. Point the old alias at the new host name in
 			if rename {
 				return runSyncOwnerRename(c, args[0], args[1], localOnly)
 			}
+			if localOnly {
+				return fmt.Errorf("--local-only only applies to --rename")
+			}
 			return runSyncOwner(c, syncer.OwnerOptions{Clear: clearOwner, SetSelf: setSelf, SetTo: setTo})
 		},
 	}
@@ -214,42 +220,104 @@ config resets the baseline. Point the old alias at the new host name in
 	cmd.Flags().BoolVar(&clearOwner, "clear", false, "remove the ownership restriction")
 	cmd.Flags().BoolVar(&rename, "rename", false, "record a machine rename <old> <new> in every profile, here and on the peer")
 	cmd.Flags().BoolVar(&localOnly, "local-only", false, "with --rename, leave the peer alone")
+	cmd.MarkFlagsMutuallyExclusive("rename", "set", "set-self", "clear")
 	return cmd
 }
 
 // runSyncOwnerRename migrates every profile owned by oldName, then the peer's
-// profiles over ssh. A peer that cannot be reached or updated is reported
-// with the command to run there; the alias keeps the pair working meanwhile.
+// profiles over ssh. It runs on the machine being renamed, and never moves
+// ownership to or from the peer: that is --set or a handover, with an epoch.
+// A peer that cannot be reached or updated is reported with the command to
+// run there; the alias keeps the pair working meanwhile.
 func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly bool) error {
 	p := printerFrom(cmd)
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	bs, err := syncer.Bootstrap(syncBootstrapOptions(cmd, false))
 	if err != nil {
 		return err
 	}
+	names := syncer.MachineNames()
+	manual := "dot sync owner --rename " + shellArg(oldName) + " " + shellArg(newName) + " --local-only"
+
+	var peer *syncer.BootstrapResult
+	if !localOnly {
+		if !answersTo(names, oldName) && !answersTo(names, newName) {
+			return fmt.Errorf("this machine answers to %s, neither %q nor %q; run --rename on the machine being renamed", strings.Join(names, ", "), oldName, newName)
+		}
+		var perr error
+		peer, perr = peerBootstrapReadOnly(cmd)
+		switch {
+		case perr != nil:
+			p.Warn("peer profile could not be read (%v); the peer will not be migrated", perr)
+			peer = nil
+		case !peer.Config.Target.IsSSH():
+			peer = nil
+		}
+		if peer != nil {
+			peerNames, err := syncer.PeerMachineNames(cmd.Context(), probeRunner(), peer.Config)
+			switch {
+			case err != nil:
+				p.Warn("peer %s not reachable (%v); it cannot be checked or migrated now", peer.Config.Target.Host, err)
+				peer = nil
+			case answersTo(peerNames, oldName) || answersTo(peerNames, newName):
+				return fmt.Errorf("the peer answers to %s, which includes %q or %q: a rename cannot move ownership between the Macs; use dot sync owner --set or dot peer handover", strings.Join(peerNames, ", "), oldName, newName)
+			}
+		}
+	}
+
 	root := strings.TrimRight(bs.Config.LocalPath, "/")
-	res, err := syncer.RenameOwner(root, oldName, newName)
+	res, err := syncer.RenameOwner(root, oldName, newName, dryRun)
 	if err != nil {
 		return err
 	}
-	for _, profile := range res.Profiles {
-		p.Success("profile %q: owner %q (was %q, kept as an alias)", profile, newName, oldName)
+	verb := "owner"
+	if dryRun {
+		verb = "dry-run: would set owner"
 	}
-	p.KV("this machine", strings.Join(syncer.MachineNames(), ", "))
+	for _, profile := range res.Profiles {
+		p.Success("profile %q: %s %q (was %q, kept as an alias)", profile, verb, newName, oldName)
+	}
+	p.KV("this machine", strings.Join(names, ", "))
 	if localOnly {
 		return nil
 	}
-	peer, err := peerBootstrapReadOnly(cmd)
-	if err != nil || !peer.Config.Target.IsSSH() {
-		return nil // no peer profile: nothing else to migrate
+	if peer == nil {
+		p.Line("  On the other Mac, when reachable: %s", manual)
+		return nil
 	}
 	host := peer.Config.Target.Host
+	if dryRun {
+		p.Line("dry-run: would run on %s: %s", host, manual)
+		return nil
+	}
 	if err := syncer.RenamePeerOwner(cmd.Context(), probeRunner(), peer.Config, oldName, newName); err != nil {
 		p.Warn("peer %s not migrated: %v", host, err)
-		p.Line("  Run there: dot sync owner --rename %s %s --local-only", oldName, newName)
+		p.Line("  Run there: %s", manual)
 		return nil
 	}
 	p.Success("peer %s: profiles owned by %q renamed to %q", host, oldName, newName)
 	return nil
+}
+
+func answersTo(names []string, name string) bool {
+	want := syncer.NormalizeHostname(name)
+	for _, n := range names {
+		if syncer.NormalizeHostname(n) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// shellArg quotes an argument for a printed command line when it needs it.
+func shellArg(s string) string {
+	unsafe := func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' && r != '.'
+	}
+	if s != "" && strings.IndexFunc(s, unsafe) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
 func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
@@ -270,6 +338,9 @@ func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
 			p.KV("owner", "(unset - any machine may push)")
 		} else {
 			p.KV("owner", cfg.Owner)
+		}
+		if len(cfg.OwnerAliases) > 0 {
+			p.KV("aliases", strings.Join(cfg.OwnerAliases, ", "))
 		}
 		p.KV("this machine", strings.Join(names, ", "))
 		if err := syncer.CheckOwner(cfg); err != nil {

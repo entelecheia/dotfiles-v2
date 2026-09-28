@@ -96,7 +96,7 @@ func PreferredMachineName() string {
 	if len(names) == 0 {
 		return ""
 	}
-	generic := map[string]bool{"mac": true, "macbook": true, "localhost": true, "imac": true}
+	generic := genericMachineNames
 	best := ""
 	for _, n := range names {
 		if generic[n] {
@@ -158,12 +158,31 @@ func ownersMatch(owner string, aliases []string, names ...string) bool {
 	return false
 }
 
-// sameOwner reports whether two profiles name the same owner: their names or
-// aliases meet. Two machines migrated one after the other by
-// `dot sync owner --rename` agree throughout.
+// sameOwner reports whether two profiles name the same owner: the owners are
+// equal, or one side records the other's owner as an earlier name. Two
+// machines migrated one after the other by `dot sync owner --rename` agree
+// throughout. Aliases alone never match each other: two different current
+// owners that share an old name are two coordinators, and the fence must
+// refuse them.
 func sameOwner(a string, aAliases []string, b string, bAliases []string) bool {
-	return ownersMatch(a, aAliases, append([]string{b}, bAliases...)...)
+	a, b = NormalizeHostname(a), NormalizeHostname(b)
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || ownersMatch("", aAliases, b) || ownersMatch("", bAliases, a)
 }
+
+// AssignOwner sets the profile owner. A different owner is a new decision,
+// not a rename, so the earlier names recorded for the old one are dropped.
+func AssignOwner(local *LocalConfig, owner string) {
+	if NormalizeHostname(owner) != NormalizeHostname(local.Owner) {
+		local.OwnerAliases = nil
+	}
+	local.Owner = owner
+}
+
+// genericMachineNames are names many Macs answer to; they identify no one.
+var genericMachineNames = map[string]bool{"mac": true, "macbook": true, "localhost": true, "imac": true}
 
 // OwnerMismatchError reports that this machine may not write the profile.
 type OwnerMismatchError struct {

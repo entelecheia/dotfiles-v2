@@ -272,7 +272,7 @@ func PeerAdopt(cfg *Config, opts PeerAdoptOptions) (string, error) {
 	if !ok || local == nil {
 		return "", fmt.Errorf("peer adopt: profile %q has no config yet; run dot peer init first", cfg.Profile)
 	}
-	local.Owner = owner
+	AssignOwner(local, owner)
 	local.OwnerEpoch = opts.Epoch
 	local.FencePending = opts.FencePending
 	if err := SaveLocalConfig(cfg.LocalPaths, local); err != nil {
@@ -663,6 +663,19 @@ func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args .
 		return "", fmt.Errorf("remote `dot %s` on %s failed: %w", strings.Join(args, " "), cfg.Target.Host, err)
 	}
 	return res.Stdout, nil
+}
+
+// PeerMachineNames reads the live host names the peer answers to, from its
+// status document.
+func PeerMachineNames(ctx context.Context, runner *exec.Runner, cfg *Config) ([]string, error) {
+	if err := CheckSSH(ctx, runner, cfg.Target.Host); err != nil {
+		return nil, err
+	}
+	status, err := fetchRemotePeerStatus(ctx, runner, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return status.Profile.MachineNames, nil
 }
 
 // RenamePeerOwner applies `dot sync owner --rename <old> <new> --local-only`

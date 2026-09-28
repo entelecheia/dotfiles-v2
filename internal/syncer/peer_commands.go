@@ -338,7 +338,7 @@ func PeerInit(opts PeerInitOptions) (*PeerInitResult, error) {
 	// gitignored), so the owner is simply this machine. Use the DNS-safe
 	// name rather than os.Hostname(), which can be the generic "Mac".
 	if name := PreferredMachineName(); name != "" {
-		local.Owner = name
+		AssignOwner(local, name)
 	}
 
 	result := &PeerInitResult{
