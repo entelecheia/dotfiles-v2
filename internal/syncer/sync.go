@@ -97,6 +97,9 @@ type Config struct {
 
 	// HostMerge is the peer profile's host_merge policy (#181).
 	HostMerge map[string][]string
+	// hostMerged lists the files this run's merge wrote on both machines;
+	// the additive pass leaves them alone (peerHomeAdditiveArgs).
+	hostMerged []string
 	// RemoteDot is the peer profile's remote_dot pin; empty picks the newest
 	// release on the peer.
 	RemoteDot string

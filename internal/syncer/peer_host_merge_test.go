@@ -390,3 +390,55 @@ func TestValidateHostMergeRefusesForbiddenRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A stale save after the merge (an app writing its in-memory copy) must not
+// reach the other Mac through the additive pass: the merged file is not
+// newest-wins input any more, so the peer keeps the union and the next run
+// restores this Mac.
+func TestHostMergeSurvivesAStaleSaveAfterTheMerge(t *testing.T) {
+	cfg, localHome, peerHome := claudeJSONFixture(t,
+		`{"mcpServers":{"a":{},"mine":{}}}`,
+		`{"mcpServers":{"a":{},"kimi-cu":{},"pencil":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers", "projects"}}
+	real, err := osexec.LookPath("ssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Once the merge has written this Mac (the file holds the peer's entry),
+	// the next rsync starts with a stale copy saved here, clearly newer than
+	// the merge (an app saves seconds later; POSIX touch -t).
+	bin, done := t.TempDir(), filepath.Join(t.TempDir(), "done")
+	local := filepath.Join(localHome, ".claude.json")
+	later := time.Now().Add(time.Hour).Format("200601021504.05")
+	writeStub(t, filepath.Join(bin, "ssh"), "#!/bin/sh\n"+
+		"case \"$*\" in *'rsync --server'*)\n"+
+		"  if [ ! -f '"+done+"' ] && grep -q kimi-cu '"+local+"'; then\n"+
+		"    printf '{\"mcpServers\":{\"a\":{},\"mine\":{}},\"numStartups\":99}' > '"+local+"'; touch -t "+later+" '"+local+"'; touch '"+done+"'\n"+
+		"  fi ;;\n"+
+		"esac\n"+
+		"exec '"+real+"' \"$@\"\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	run := func() {
+		t.Helper()
+		if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run()
+	if _, err := os.Stat(done); err != nil {
+		t.Fatal("the stale save never happened; the test proves nothing")
+	}
+	if peer := string(gitStateFileBytes(t, filepath.Join(peerHome, ".claude.json"))); !strings.Contains(peer, "kimi-cu") || !strings.Contains(peer, "pencil") || !strings.Contains(peer, "mine") {
+		t.Fatalf("the stale save reached the peer: %s", peer)
+	}
+	run()
+	for _, home := range []string{localHome, peerHome} {
+		body := string(gitStateFileBytes(t, filepath.Join(home, ".claude.json")))
+		for _, want := range []string{"kimi-cu", "pencil", "mine"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %s after the next run: %s", home, want, body)
+			}
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -302,11 +303,12 @@ func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hos
 	return merges, nil
 }
 
-// hostMergeRefusal is the run's stop: any refused file, before anything moves.
-func hostMergeRefusal(merges []hostMerge) error {
+// hostMergeRefusal is the run's stop on any refused file; where says what
+// has moved by then.
+func hostMergeRefusal(merges []hostMerge, where string) error {
 	for _, m := range merges {
 		if m.refused != "" {
-			return fmt.Errorf("host_merge %s: %s; fix it or drop it from host_merge (nothing was transferred)", m.rel, m.refused)
+			return fmt.Errorf("host_merge %s: %s; fix it or drop it from host_merge (%s)", m.rel, m.refused, where)
 		}
 	}
 	return nil
@@ -483,7 +485,7 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		if err != nil {
 			return merged, err
 		}
-		if err := hostMergeRefusal(merges); err != nil {
+		if err := hostMergeRefusal(merges, "the host pass did not run; the next run merges it"); err != nil {
 			return merged, err
 		}
 		changed, err := writeHostMerges(ctx, runner, cfg, merges, &merged)
@@ -496,6 +498,32 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 			return merged, fmt.Errorf("host_merge %s: the file kept changing during the merge (%d attempts); the host pass did not run, the next run merges it", changed, hostMergeAttempts)
 		}
 	}
+}
+
+// pushMergedCopy sends body to rel on the peer with mtime at, from a temp
+// file that only this run writes.
+func pushMergedCopy(ctx context.Context, runner *exec.Runner, cfg *Config, rel string, body []byte, at time.Time) error {
+	dir, err := os.MkdirTemp("", "dot-host-merge-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	tmp := filepath.Join(dir, filepath.Base(rel))
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chtimes(tmp, at, at); err != nil {
+		return err
+	}
+	args := []string{"-t", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5"}
+	if cfg.RemoteRsyncPath != "" {
+		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
+	}
+	args = append(args, tmp, cfg.Target.Host+":"+rel)
+	if _, err := runner.Run(ctx, cfg.rsyncBin(), args...); err != nil {
+		return fmt.Errorf("host_merge %s: pushing the merged copy: %w", rel, err)
+	}
+	return nil
 }
 
 // hostMergeAttempts bounds how often a file saved during the merge is
@@ -523,15 +551,14 @@ func writeHostMerges(ctx context.Context, runner *exec.Runner, cfg *Config, merg
 		if err := os.Chtimes(localPath, now, now); err != nil {
 			return "", err
 		}
-		args := []string{"-t", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5"}
-		if cfg.RemoteRsyncPath != "" {
-			args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
+		// The merged bytes go to the peer from a private copy: the live file
+		// may already hold an app's newer save.
+		if err := pushMergedCopy(ctx, runner, cfg, m.rel, body, now); err != nil {
+			return "", err
 		}
-		args = append(args, localPath, cfg.Target.Host+":"+m.rel)
-		if _, err := runner.Run(ctx, cfg.rsyncBin(), args...); err != nil {
-			return "", fmt.Errorf("host_merge %s: pushing the merged copy: %w", m.rel, err)
+		if !slices.Contains(*merged, m.rel) {
+			*merged = append(*merged, m.rel)
 		}
-		*merged = append(*merged, m.rel)
 	}
 	return "", nil
 }

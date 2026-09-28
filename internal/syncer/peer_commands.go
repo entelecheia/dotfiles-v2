@@ -483,7 +483,7 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 		items.sortItems()
 		res.Items = items
 		// peer sync stops on the same refusal before anything moves.
-		if err := hostMergeRefusal(merges); err != nil {
+		if err := hostMergeRefusal(merges, "peer sync stops on it before anything moves"); err != nil {
 			return res, err
 		}
 	}
@@ -639,7 +639,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		if err != nil {
 			return nil, err
 		}
-		if err := hostMergeRefusal(m); err != nil {
+		if err := hostMergeRefusal(m, "nothing was transferred"); err != nil {
 			return nil, err
 		}
 		merges = m
@@ -765,6 +765,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		// it writes both machines.
 		if !dryRun && twoWay && len(cfg.HostMerge) > 0 {
 			merged, err := mergePeerHostFiles(ctx, runner, probe, cfg)
+			cfg.hostMerged = merged
 			for _, rel := range merged {
 				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostMerged, Path: rel})
 			}
@@ -1225,8 +1226,14 @@ func peerHomeAdditiveArgs(cfg *Config, list string, report bool) []string {
 		"--exclude=known_hosts", "--exclude=known_hosts.old", "--exclude=known_hosts2",
 		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
 		"--exclude=/.codex/config.toml",
-		"--exclude=.DS_Store",
-		"--files-from="+list)
+		"--exclude=.DS_Store")
+	// A file host_merge wrote on both machines this run is not newest-wins
+	// input any more: a stale save by a running app stays on its own Mac,
+	// and the next run's merge restores it there (#181).
+	for _, rel := range cfg.hostMerged {
+		args = append(args, "--exclude=/"+rel)
+	}
+	args = append(args, "--files-from="+list)
 	if cfg.RemoteRsyncPath != "" {
 		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
 	}

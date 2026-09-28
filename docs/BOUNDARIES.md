@@ -269,8 +269,9 @@ tool):
   host-path pass of a two-way `dot peer sync`, the entries of the listed
   top-level JSON keys from both copies are merged into the newer copy,
   which is written here (atomic rename, mode and owner kept, a symlink
-  refused) and pushed to the peer with its mtime. Other keys are the newer
-  copy's; an unlisted file is only ever copied whole, as before. Never a
+  refused) and pushed to the peer with its mtime from a private copy; the
+  additive pass of that run then leaves the file alone. Other keys are the
+  newer copy's; an unlisted file is only ever copied whole, as before. Never a
   file under a tool skill root (refused before a run starts), or one the
   additive host pass does not move.
 

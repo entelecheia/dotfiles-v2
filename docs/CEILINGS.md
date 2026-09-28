@@ -130,20 +130,21 @@ safe machine-to-machine state channel is ever designed.
 ## host_merge read-merge-write race
 
 `internal/syncer/peer_host_merge.go` (`mergePeerHostFiles`) reads both copies
-of a `host_merge` file, merges them and writes the result on both machines.
-An app that rewrites the file between that read and the write (Claude Code
-saving `~/.claude.json` while `dot peer sync` runs, often from inside a Claude
-session) loses its rewrite, and a running app holding a stale copy can later
-save it over the merged file: if that save lands before the same run's
-additive pass finishes, the pass carries it to the other Mac too, and the
-entries only the other copy had are gone from both.
+of a `host_merge` file, merges them and writes the result on both machines,
+pushing the merged bytes from a private copy; the additive pass of the same
+run then leaves the file alone. An app that rewrites the file between that
+read and the write (Claude Code saving `~/.claude.json` while `dot peer sync`
+runs, often from inside a Claude session) loses that rewrite. A running app
+that later saves a stale copy changes only its own Mac, and the next run's
+merge brings the missing entries back there.
 
 No lock exists that Claude Code honors for `~/.claude.json`. The merge
 re-reads both copies right before it writes and re-checks the local file's
 size and mtime just before the write; a file saved in between is decided
 again from the new copy (three attempts, then the run stops before the
-additive pass), so the window is a few hundred milliseconds per run. Replace this if the app gains a lock or an
-atomic update protocol, or if lost entries are reported in practice.
+additive pass), so the window for a lost rewrite is a few hundred
+milliseconds per run. Replace this if the app gains a lock or an atomic
+update protocol, or if lost entries are reported in practice.
 
 ## Replica bootstrap trust
 
