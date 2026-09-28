@@ -605,7 +605,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	// direction. The peer prints the exact owner it adopted.
 	remoteOwner, err := peerRemoteAdopt(ctx, opts.Runner, cfg, epoch, generation)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("peer handover: the peer's adopt failed; nothing changed here: %w", err)
 	}
 	result.NewOwner = remoteOwner
 	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: remoteOwner, Epoch: epoch}); err != nil {
@@ -674,16 +674,6 @@ func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args .
 		return "", fmt.Errorf("remote `dot %s` on %s failed: %w", strings.Join(args, " "), cfg.Target.Host, err)
 	}
 	return res.Stdout, nil
-}
-
-// PeerMachineNames reads the live host names the peer answers to, from its
-// status document.
-func PeerMachineNames(ctx context.Context, runner *exec.Runner, cfg *Config) ([]string, error) {
-	view, err := PeerOwnerView(ctx, runner, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return view.MachineNames, nil
 }
 
 // PeerView is what an owner rename asks the other Mac: the names it answers

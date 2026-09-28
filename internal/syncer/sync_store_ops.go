@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -516,7 +517,12 @@ type OwnerRenameResult struct {
 	// Already names the stores a previous run renamed (owner <new>, alias
 	// <old>), so a retry can go on to the peer.
 	Already []string
+	// OldKept says <old> was recorded as an alias (a generic name is not).
+	OldKept bool
 }
+
+// ErrNoProfileOwned is RenameOwner's answer when no store is owned by <old>.
+var ErrNoProfileOwned = errors.New("no profile is owned by that name")
 
 // RenameOwner records that the owner machine was renamed from oldName to
 // newName in every profile store of the workspace whose owner, or one of
@@ -578,6 +584,7 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 			}
 		}
 		local.Owner, local.OwnerAliases = newName, aliases
+		result.OldKept = slices.ContainsFunc(aliases, func(a string) bool { return NormalizeHostname(a) == NormalizeHostname(oldName) })
 		if !dryRun {
 			if err := SaveLocalConfig(paths, local); err != nil {
 				return nil, err
@@ -586,7 +593,7 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 		result.Profiles = append(result.Profiles, entry.Name())
 	}
 	if len(result.Profiles)+len(result.Already) == 0 {
-		return nil, fmt.Errorf("owner rename: no profile under %s is owned by %q", filepath.Join(workspaceRoot, ".dotfiles"), oldName)
+		return nil, fmt.Errorf("owner rename: no profile under %s is owned by %q: %w", filepath.Join(workspaceRoot, ".dotfiles"), oldName, ErrNoProfileOwned)
 	}
 	return result, nil
 }

@@ -27,6 +27,9 @@ dot peer handover. --local-only skips these checks; it is the step the
 command runs on the peer. A retry after a peer failure goes on to the peer.
 --dry-run shows the change without writing anything.
 
+With --profile=peer, a --set or --clear that leaves this Mac without the
+coordinator role also removes its peer scheduler, as a demotion does.
+
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer
 config resets the baseline. Point the old alias at the new host name in

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -208,6 +209,9 @@ dot peer handover. --local-only skips these checks; it is the step the
 command runs on the peer. A retry after a peer failure goes on to the peer.
 --dry-run shows the change without writing anything.
 
+With --profile=peer, a --set or --clear that leaves this Mac without the
+coordinator role also removes its peer scheduler, as a demotion does.
+
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer
 config resets the baseline. Point the old alias at the new host name in
@@ -288,6 +292,10 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 				peer = nil
 			case answersTo(view.MachineNames, oldName) || answersTo(view.MachineNames, newName):
 				return fmt.Errorf("the peer answers to %s, which includes %q or %q: a rename cannot move ownership between the Macs; use dot sync owner --set or dot peer handover", strings.Join(view.MachineNames, ", "), oldName, newName)
+			case len(view.MachineNames) == 0:
+				// No names is no answer: it cannot show it is neither name.
+				p.Warn("peer %s reported no machine names; it cannot be checked now", peer.Config.Target.Host)
+				peer = nil
 			default:
 				checked, peerView = true, view
 			}
@@ -317,6 +325,11 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 
 	root := strings.TrimRight(bs.Config.LocalPath, "/")
 	res, err := syncer.RenameOwner(root, oldName, newName, dryRun)
+	if localOnly && errors.Is(err, syncer.ErrNoProfileOwned) {
+		// The peer step on a Mac that owns nothing by that name: done.
+		p.Line("no profile here is owned by %q; nothing to rename", oldName)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -324,8 +337,12 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 	if dryRun {
 		verb = "dry-run: would set owner"
 	}
+	kept := "kept as an alias"
+	if !res.OldKept {
+		kept = "a generic name, not kept"
+	}
 	for _, profile := range res.Profiles {
-		p.Success("profile %q: %s %q (was %q, kept as an alias)", profile, verb, newName, oldName)
+		p.Success("profile %q: %s %q (was %q, %s)", profile, verb, newName, oldName, kept)
 	}
 	for _, profile := range res.Already {
 		p.Success("profile %q: already renamed to %q", profile, newName)
@@ -335,7 +352,9 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 		return nil
 	}
 	if peer == nil {
-		p.Line("  On the other Mac, when reachable: %s", manual)
+		if peerStoreExists(root) {
+			p.Line("  On the other Mac, when reachable: %s", manual)
+		}
 		return nil
 	}
 	host := peer.Config.Target.Host
@@ -428,6 +447,24 @@ func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
 		p.Success("owner cleared for profile %q (any machine may push)", cfg.Profile)
 	} else {
 		p.Success("owner of profile %q is now %q", cfg.Profile, owner)
+	}
+	// Taking the coordinator role from this Mac takes its peer scheduler
+	// too, as a demotion does: a plist left behind would keep failing its
+	// runs and read as the owner's in a later --rename (#185).
+	if cfg.Profile == syncer.PeerProfile && runsPeerScheduler(bs) {
+		after := *cfg
+		after.Owner, after.OwnerAliases = owner, nil
+		if strings.TrimSpace(owner) == "" || syncer.CheckOwner(&after) != nil {
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			if _, err := syncer.PeerSchedule(cmd.Context(), syncer.PeerScheduleOptions{Config: cfg, Runner: bs.Runner, Probe: probeRunner(), Off: true, DryRun: dryRun}); err != nil {
+				return fmt.Errorf("owner set, but removing this Mac's peer scheduler failed: %w; run dot peer setup --off", err)
+			}
+			if dryRun {
+				p.Line("dry-run: would remove this Mac's peer scheduler (it no longer coordinates)")
+			} else {
+				p.Success("peer scheduler removed: this Mac no longer coordinates")
+			}
+		}
 	}
 	return nil
 }

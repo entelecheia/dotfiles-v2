@@ -202,14 +202,14 @@ func TestRenameOwner_GenericNamesAndDryRun(t *testing.T) {
 	}
 }
 
-func TestPeerMachineNamesReadsTheStatusDocument(t *testing.T) {
+func TestPeerOwnerViewReadsTheStatusDocument(t *testing.T) {
 	sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1)
-	status := fmt.Sprintf(`{"schemaVersion":%d,"kind":"peer","profile":{"configured":true,"owner":%q,"machineNames":["m3x23","macbook-pro-2023"],"workspacePath":%q,"target":{"path":%q}}}`,
+	status := fmt.Sprintf(`{"schemaVersion":%d,"kind":"peer","profile":{"configured":true,"owner":%q,"machineNames":["m3x23","macbook-pro-2023"],"workspacePath":%q,"target":{"path":%q}},"job":{"state":"not installed"}}`,
 		PeerStatusSchemaVersion, sb.owner, sb.peer, sb.local)
 	installFakePeerSSH(t, status)
-	names, err := PeerMachineNames(context.Background(), peerScheduleRunner(false), sb.cfg)
-	if err != nil || !slices.Equal(names, []string{"m3x23", "macbook-pro-2023"}) {
-		t.Fatalf("names = %v, %v", names, err)
+	view, err := PeerOwnerView(context.Background(), peerScheduleRunner(false), sb.cfg)
+	if err != nil || !slices.Equal(view.MachineNames, []string{"m3x23", "macbook-pro-2023"}) || view.Scheduler != "not installed" {
+		t.Fatalf("view = %+v, %v", view, err)
 	}
 }
 

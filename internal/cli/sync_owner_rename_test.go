@@ -173,3 +173,49 @@ func TestSyncOwnerRenameWithoutAPeerAnswerFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// --set that takes the coordinator role from this Mac removes its peer
+// scheduler, as a demotion does: a stale plist would otherwise read as the
+// owner's in a later --rename.
+func TestSyncOwnerSetAwayRemovesThePeerScheduler(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	self := syncer.PreferredMachineName()
+	if self == "" {
+		t.Skip("no machine name")
+	}
+	bin := t.TempDir()
+	writeCLITestFile(t, filepath.Join(bin, "launchctl"), "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(filepath.Join(bin, "launchctl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", "peer", "config.yaml"),
+		"target: ssh:peer-alias:/remote/work\nowner: "+self+"\nowner_epoch: 2\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	plist := filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+	writeCLITestFile(t, plist, "<plist/>")
+
+	// Setting itself again keeps the scheduler.
+	if _, errOut, err := runDotForTest("sync", "owner", "--profile=peer", "--set", self); err != nil {
+		t.Fatalf("--set self: %v\n%s", err, errOut)
+	}
+	if _, err := os.Stat(plist); err != nil {
+		t.Fatalf("the coordinator's own --set removed its scheduler: %v", err)
+	}
+	if _, errOut, err := runDotForTest("sync", "owner", "--profile=peer", "--set", "other-mac"); err != nil {
+		t.Fatalf("--set other: %v\n%s", err, errOut)
+	}
+	if _, err := os.Stat(plist); !os.IsNotExist(err) {
+		t.Fatalf("the plist stayed after the role moved away: %v", err)
+	}
+}
+
+// The peer step on a Mac that owns nothing by <old> is a no-op, not a failure.
+func TestSyncOwnerRenameLocalOnlyWithNothingOwned(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", "sync", "config.yaml"),
+		"owner: someone-else\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	out, errOut, err := runDotForTest("sync", "owner", "--rename", "--local-only", "gone-mac", "new-mac")
+	if err != nil || !strings.Contains(out+errOut, "nothing to rename") {
+		t.Fatalf("err = %v\n%s%s", err, out, errOut)
+	}
+}
