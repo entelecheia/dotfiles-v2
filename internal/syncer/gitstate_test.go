@@ -1052,19 +1052,29 @@ func TestPeerGitRealign_UndeliveredSubmoduleAdditionKeepsTheParent(t *testing.T)
 
 // A child this run leaves alone (a stale index.lock, or outside the
 // restriction) stays at its HEAD whatever its files show: the parent must
-// not move past it, or it records a rewind (#189 round 13).
+// not move past it, or it records a rewind (#189 round 13). Also when the
+// child lacks the candidate's commit: HEAD cannot reach it (round 14).
 func TestPeerGitRealign_ParentStaysWithAChildLeftAlone(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		lock     bool
-		restrict []string
-	}{{"lock", true, nil}, {"restricted to the parent", false, []string{"."}}} {
+		name      string
+		lock      bool
+		restrict  []string
+		unfetched bool
+	}{
+		{"lock", true, nil, false},
+		{"restricted to the parent", false, []string{"."}, false},
+		{"lock, unfetched", true, nil, true},
+		{"restricted to the parent, unfetched", false, []string{"."}, true},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
 			subSrc := filepath.Join(tmp, "sub-src")
 			gitStateInitRepo(t, subSrc)
 			s1 := gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
-			s2 := gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+			s2 := ""
+			if !tc.unfetched {
+				s2 = gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+			}
 			origin := filepath.Join(tmp, "origin")
 			gitStateInitRepo(t, origin)
 			gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
@@ -1073,12 +1083,21 @@ func TestPeerGitRealign_ParentStaysWithAChildLeftAlone(t *testing.T) {
 			gitStateRun_(t, origin, "add", "sub")
 			gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
 			p0 := gitStateHead(t, origin)
+			ws := filepath.Join(tmp, "ws")
+			if tc.unfetched {
+				gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+				s2 = gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+				gitStateRun_(t, origin, "-C", "sub", "fetch", "-q")
+			}
 			gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
 			gitStateRun_(t, origin, "add", "sub")
 			gitStateRun_(t, origin, "commit", "-q", "-m", "p1")
 
-			ws := filepath.Join(tmp, "ws")
-			gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+			if tc.unfetched {
+				gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+			} else {
+				gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+			}
 			gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
 			gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
 			sub := filepath.Join(ws, "sub")

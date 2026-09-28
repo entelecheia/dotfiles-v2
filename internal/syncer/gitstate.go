@@ -551,12 +551,12 @@ func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, i
 // newest is the pool member that descends from every other one, so the
 // choice does not depend on list order (a child's own run and its parent's
 // question list its commits differently). Without one, the last in order:
-// the first-parent chain runs nearest HEAD first.
+// the first-parent chain runs nearest HEAD first. One merge-base call
+// answers it: the only independent commit of the pool is that member.
 func (r *gitStateRun) newest(ctx context.Context, abs string, pool []string) string {
-	for _, cand := range pool {
-		if !slices.ContainsFunc(pool, func(o string) bool { return o != cand && !r.strictDescendant(ctx, abs, o, cand) }) {
-			return cand
-		}
+	out, err := r.read(ctx, abs, append([]string{"merge-base", "--independent"}, pool...)...)
+	if err == nil && slices.Contains(pool, out) {
+		return out
 	}
 	return pool[len(pool)-1]
 }
@@ -684,7 +684,15 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 				if !slices.Contains(ev.unknown, note) {
 					ev.unknown = append(ev.unknown, note)
 				}
-				if exact {
+				switch {
+				case held != "":
+					// A child left alone stays at HEAD, which cannot reach a
+					// commit it does not have.
+					behind[i] = true
+					if !slices.Contains(ev.behind, label) {
+						ev.behind = append(ev.behind, label)
+					}
+				case exact:
 					behind[i] = true
 				}
 			case r.strictDescendant(ctx, child, sha, target):

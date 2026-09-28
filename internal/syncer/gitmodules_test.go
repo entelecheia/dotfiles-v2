@@ -307,7 +307,10 @@ func TestPeerGitRealign_RestoresStaleGitmodulesAtTip(t *testing.T) {
 // submodule sync follows the child's own rules: a locked child's origin is
 // left alone and reported, and a rewritten origin gets an undo command.
 func TestPeerGitRealign_SubmoduleSyncRespectsTheChild(t *testing.T) {
-	ws, sub, oldURL, _, _, _ := urlMoveFixture(t)
+	ws, sub, oldURL, _, p1, _ := urlMoveFixture(t)
+	// The root is already at p1 with a stale .gitmodules, so only the restore
+	// runs: a locked child could not follow a move there (it lacks s2).
+	gitStateRun_(t, ws, "reset", "-q", "--mixed", p1)
 	gitStateRun_(t, sub, "remote", "set-url", "origin", oldURL)
 	lock := filepath.Join(gitStateRun_(t, sub, "rev-parse", "--absolute-git-dir"), "index.lock")
 	if err := os.WriteFile(lock, nil, 0o644); err != nil {
