@@ -20,22 +20,24 @@ import (
 // `dot peer doctor --self` prints this machine's; the doctor on the
 // other Mac reads them over ssh and compares both sides.
 type PeerSideFacts struct {
-	MachineNames []string          `json:"machineNames"`
-	DotPath      string            `json:"dotPath"`
-	DotVersion   string            `json:"dotVersion"`
-	RsyncPath    string            `json:"rsyncPath,omitempty"`
-	RsyncVersion string            `json:"rsyncVersion,omitempty"`
-	RsyncError   string            `json:"rsyncError,omitempty"`
-	NFDMarked    bool              `json:"nfdMarked"`
-	NonNFD       int               `json:"nonNfd"`
-	NonNFDSample []string          `json:"nonNfdSample,omitempty"`
-	NonNFDError  string            `json:"nonNfdError,omitempty"`
-	Owner        string            `json:"owner"`
-	OwnerEpoch   int               `json:"ownerEpoch"`
-	FencePending bool              `json:"fencePending,omitempty"`
-	Coordinator  bool              `json:"coordinator"`
-	Scheduler    bool              `json:"scheduler"`
-	Replica      *PeerReplicaFacts `json:"replica,omitempty"`
+	MachineNames []string `json:"machineNames"`
+	// PreferredName is what `dot peer adopt --self` records here.
+	PreferredName string            `json:"preferredName,omitempty"`
+	DotPath       string            `json:"dotPath"`
+	DotVersion    string            `json:"dotVersion"`
+	RsyncPath     string            `json:"rsyncPath,omitempty"`
+	RsyncVersion  string            `json:"rsyncVersion,omitempty"`
+	RsyncError    string            `json:"rsyncError,omitempty"`
+	NFDMarked     bool              `json:"nfdMarked"`
+	NonNFD        int               `json:"nonNfd"`
+	NonNFDSample  []string          `json:"nonNfdSample,omitempty"`
+	NonNFDError   string            `json:"nonNfdError,omitempty"`
+	Owner         string            `json:"owner"`
+	OwnerEpoch    int               `json:"ownerEpoch"`
+	FencePending  bool              `json:"fencePending,omitempty"`
+	Coordinator   bool              `json:"coordinator"`
+	Scheduler     bool              `json:"scheduler"`
+	Replica       *PeerReplicaFacts `json:"replica,omitempty"`
 	// ReplicaError is why `dot peer takeover` would refuse the replica.
 	ReplicaError string            `json:"replicaError,omitempty"`
 	MaxDelete    int               `json:"maxDelete"`
@@ -61,14 +63,16 @@ type PeerReplicaFacts struct {
 func LocalPeerSideFacts(ctx context.Context, probe *exec.Runner, cfg *Config, dotVersion string) *PeerSideFacts {
 	f := &PeerSideFacts{
 		MachineNames: MachineNames(),
-		DotVersion:   dotVersion,
-		Owner:        cfg.Owner,
-		OwnerEpoch:   cfg.OwnerEpoch,
-		FencePending: cfg.FencePending,
-		Coordinator:  IsPeerCoordinator(cfg),
-		MaxDelete:    cfg.MaxDelete,
-		Propagation:  cfg.Propagation,
-		Filters:      map[string]string{},
+
+		PreferredName: PreferredMachineName(),
+		DotVersion:    dotVersion,
+		Owner:         cfg.Owner,
+		OwnerEpoch:    cfg.OwnerEpoch,
+		FencePending:  cfg.FencePending,
+		Coordinator:   IsPeerCoordinator(cfg),
+		MaxDelete:     cfg.MaxDelete,
+		Propagation:   cfg.Propagation,
+		Filters:       map[string]string{},
 
 		WorkspacePath: strings.TrimRight(cfg.LocalPath, "/"),
 		TargetPath:    cfg.Target.Path,
@@ -84,11 +88,14 @@ func LocalPeerSideFacts(ctx context.Context, probe *exec.Runner, cfg *Config, do
 	if cfg.LocalPaths != nil {
 		f.NFDMarked = NFDMigrationMarked(cfg.LocalPaths.WorkspaceRoot)
 	}
-	// Plan with the linked-worktree exclude a peer run applies: names inside
-	// a worktree it never walks do not count.
+	// Plan as the sync walks this Mac: the coordinator's preflight skips the
+	// linked worktrees a peer run excludes; the other Mac is normalized by
+	// `dot sync names normalize` over ssh, which walks them.
 	planCfg := *cfg
-	if wt, err := MergePeerWorktrees(cfg, nil, false); err == nil {
-		planCfg.WorktreeExcludes = wt
+	if f.Coordinator {
+		if wt, err := MergePeerWorktrees(cfg, nil, false); err == nil {
+			planCfg.WorktreeExcludes = wt
+		}
 	}
 	if plan, err := PlanWorkspaceNameNormalization(&planCfg); err != nil {
 		f.NonNFDError = err.Error()
@@ -144,6 +151,49 @@ func answersTo(names []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// nfdVerdict is whether a coordinator's peer syncs, or its diff and dry
+// run, stop over one Mac's names not in NFD, by the sync's rules: the push
+// preflight (nfdPushRefusal) and its plan on the coordinator; under a
+// marked coordinator, the ssh normalize of the other Mac (whose plan must
+// succeed) and the inventory gate its diff and dry run apply; under an
+// unmarked one, the pull that brings the other Mac's names as they are, for
+// its next preflight to refuse. TestDoctorNFDVerdictMatchesTheSync runs the
+// real syncs for each case.
+func nfdVerdict(s, o *PeerSideFacts, host, other string) (level, detail, fix string) {
+	fix = "on " + host + ": dot sync names normalize --profile=peer --yes"
+	var quoted []string
+	for _, name := range s.NonNFDSample {
+		quoted = append(quoted, fmt.Sprintf("%q", name))
+	}
+	names := fmt.Sprintf("%d name(s) not in NFD", s.NonNFD)
+	if len(quoted) > 0 {
+		names += " (" + strings.Join(quoted, ", ") + ")"
+	}
+	switch {
+	case s.Coordinator && s.NonNFDError != "":
+		return DoctorFail, host + " (coordinator): cannot plan its names, and its sync stops there too: " + s.NonNFDError, ""
+	case s.Coordinator && nfdPushRefusal(s.NFDMarked, s.NonNFD, PeerProfile) != nil:
+		return DoctorFail, host + " (coordinator, unmarked): " + names + "; its sync refuses before anything moves", fix
+	case s.Coordinator && s.NonNFD > 0:
+		return DoctorWarn, host + " (coordinator, NFD-marked): " + names + "; its next sync renames them", ""
+	case o.Coordinator && o.NFDMarked && s.NonNFDError != "":
+		return DoctorFail, host + ": cannot plan its names, and " + other + "'s sync normalizes them here: " + s.NonNFDError, ""
+	case o.Coordinator && o.NFDMarked && s.NonNFD > 0:
+		return DoctorFail, host + ": " + names + "; " + other + ", the NFD-marked coordinator, stops its diff and dry run on them (its sync renames them first)", fix
+	case o.Coordinator && s.NonNFD > 0:
+		return DoctorFail, host + ": " + names + "; the next sync pulls them to " + other + ", unmarked, whose following sync refuses them", fix
+	case s.NonNFDError != "":
+		return DoctorWarn, host + ": cannot count non-NFD names: " + s.NonNFDError, ""
+	case s.NonNFD > 0:
+		return DoctorWarn, host + ": " + names, fix
+	}
+	marker := "unmarked"
+	if s.NFDMarked {
+		marker = "NFD-marked"
+	}
+	return DoctorPass, host + ": every name in NFD (" + marker + ")", ""
 }
 
 // IsPeerCoordinator reports whether this machine is the peer pair's
@@ -208,41 +258,10 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		add("rsync", DoctorPass, there+": "+peer.RsyncPath+" ("+peer.RsyncVersion+")", "")
 	}
 
-	// NFD: what the coordinator's sync does before anything moves, by the
-	// sync's own rules. Its push preflight (nfdPushRefusal) refuses an
-	// unmarked workspace with names to rename, and any plan error stops it;
-	// a marked coordinator normalizes the other Mac's names over ssh (a plan
-	// error there stops it) and its diff and dry run require NFD from it.
 	for i, s := range sides {
 		o := sides[1-i]
-		fix := "on " + s.host + ": dot sync names normalize --profile=peer --yes"
-		sample := ""
-		if len(s.f.NonNFDSample) > 0 {
-			sample = " (" + strings.Join(s.f.NonNFDSample, ", ") + ")"
-		}
-		marker := "unmarked"
-		if s.f.NFDMarked {
-			marker = "NFD-marked"
-		}
-		switch {
-		case s.f.Coordinator && s.f.NonNFDError != "":
-			add("nfd", DoctorFail, s.host+" (coordinator): cannot plan its names, and its sync stops there too: "+s.f.NonNFDError, "")
-		case s.f.Coordinator && nfdPushRefusal(s.f.NFDMarked, s.f.NonNFD, PeerProfile) != nil:
-			add("nfd", DoctorFail, fmt.Sprintf("%s (coordinator, unmarked): %d name(s) not in NFD%s; its sync refuses before anything moves", s.host, s.f.NonNFD, sample), fix)
-		case o.f.Coordinator && o.f.NFDMarked && s.f.NonNFDError != "":
-			add("nfd", DoctorFail, s.host+": cannot plan its names, and "+o.host+"'s sync normalizes them there: "+s.f.NonNFDError, "")
-		case o.f.Coordinator && o.f.NFDMarked && s.f.NonNFD > 0:
-			add("nfd", DoctorFail, fmt.Sprintf("%s: %d name(s) not in NFD%s; %s, the NFD-marked coordinator, stops its peer diff and dry run on them (its sync renames them first)",
-				s.host, s.f.NonNFD, sample, o.host), fix)
-		case s.f.NonNFDError != "":
-			add("nfd", DoctorWarn, s.host+": cannot count non-NFD names: "+s.f.NonNFDError, "")
-		case s.f.NonNFD > 0 && s.f.Coordinator:
-			add("nfd", DoctorWarn, fmt.Sprintf("%s (coordinator, NFD-marked): %d name(s) not in NFD%s; its next sync renames them", s.host, s.f.NonNFD, sample), "")
-		case s.f.NonNFD > 0:
-			add("nfd", DoctorWarn, fmt.Sprintf("%s: %d name(s) not in NFD%s", s.host, s.f.NonNFD, sample), fix)
-		default:
-			add("nfd", DoctorPass, fmt.Sprintf("%s: every name in NFD (%s)", s.host, marker), "")
-		}
+		level, detail, fix := nfdVerdict(s.f, o.f, s.host, o.host)
+		add("nfd", level, detail, fix)
 	}
 	if local.NFDMarked != peer.NFDMarked {
 		marked, other := here, there
@@ -272,8 +291,12 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		// adopts itself above both epochs; the other records the same owner
 		// and epoch, which the fence also needs when it has no epoch yet.
 		e := max(local.OwnerEpoch, peer.OwnerEpoch) + 1
+		name := local.PreferredName
+		if name == "" {
+			name = "<this Mac's name>"
+		}
 		add("roles", DoctorFail, fmt.Sprintf("neither machine is the coordinator (owner %q here, %q on %s)", local.Owner, peer.Owner, there),
-			fmt.Sprintf("on the Mac in use: dot peer adopt --self --epoch %d; then on the other: dot peer adopt --owner <that Mac's name> --epoch %d", e, e))
+			fmt.Sprintf("to coordinate from %s: dot peer adopt --self --epoch %d here, then on %s: dot peer adopt --owner %s --epoch %d", here, e, there, name, e))
 	default:
 		c, n, coord, other := local, peer, here, there
 		if peer.Coordinator {

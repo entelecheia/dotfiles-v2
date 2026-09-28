@@ -22,8 +22,9 @@ Checks, and why each exists:
 
 Then both machines are compared, each check with the command that fixes it
 and the Mac to run it on: rsync on each side; names not in NFD, judged by
-the sync's own rules (an unmarked coordinator's sync refuses its own; an
-NFD-marked one's diff and dry run stop on the other Mac's); which
+the sync's own rules (an unmarked coordinator's sync refuses its own, and
+the other Mac's once a pull brings them; an NFD-marked one's diff and dry
+run stop on the other Mac's); which
 machine is the coordinator and their owner epochs (a takeover's pending fence
 settles at the lower epoch's next run); a scheduler only on the coordinator;
 a takeover replica on the other Mac that a takeover would accept; max_delete,

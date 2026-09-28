@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,13 +66,13 @@ func TestEvaluatePeerSides(t *testing.T) {
 		}
 	}
 
-	// Only the coordinator's marker stops an inventory: a marked
-	// non-coordinator's own names are a warning.
+	// Under an unmarked coordinator the other Mac's names are pulled as they
+	// are and refused by its next sync, whatever the other Mac's marker.
 	local, peer = doctorFacts()
 	peer.NFDMarked, peer.NonNFD = true, 3
 	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
-	if c := checkFor(checks, "nfd", DoctorFail); c != nil {
-		t.Errorf("a marked non-coordinator's names failed: %+v", c)
+	if c := checkFor(checks, "nfd", DoctorFail); c == nil || c.Fix != "on m3x23: dot sync names normalize --profile=peer --yes" {
+		t.Errorf("the other Mac's names under an unmarked coordinator: %+v", c)
 	}
 
 	// A takeover's pending fence is the fence's to settle, not two
@@ -255,20 +256,52 @@ func TestPeerSyncCountsQuarantinedDeletions(t *testing.T) {
 	}
 }
 
-// Parity: on an unmarked coordinator holding a name not in NFD, the doctor
-// fails exactly where the sync's own push preflight refuses.
-func TestDoctorNFDVerdictMatchesThePushPreflight(t *testing.T) {
-	cfg, _ := peerDryRunSandbox(t)
-	if err := os.WriteFile(filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), norm.NFC.String("한글.md")), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	facts := LocalPeerSideFacts(context.Background(), peerScheduleRunner(false), cfg, "9.9.9")
-	facts.Coordinator = true // the verdict is the coordinator's
-	_, peer := doctorFacts()
-	peer.Owner, peer.OwnerEpoch = facts.Owner, facts.OwnerEpoch
-	doctorFails := checkFor(evaluatePeerSides(facts, peer, "here", "there"), "nfd", DoctorFail) != nil
-	syncRefuses := NormalizeWorkspaceNamesBeforePush(cfg) != nil
-	if !doctorFails || !syncRefuses {
-		t.Fatalf("doctor fails %v, push preflight refuses %v (facts %+v)", doctorFails, syncRefuses, facts)
+// Parity (#182): the doctor's NFD verdict is FAIL exactly when a real peer
+// diff, or one of two real syncs in a row, stops, for each coordinator
+// marker and each Mac holding a name not in NFD. Real rsync, fake ssh.
+func TestDoctorNFDVerdictMatchesTheSync(t *testing.T) {
+	requirePeerRsync(t)
+	nfc := norm.NFC.String("한글.md")
+	for _, marked := range []bool{false, true} {
+		for _, where := range []string{"none", "coordinator", "other"} {
+			t.Run(fmt.Sprintf("marked=%v names=%s", marked, where), func(t *testing.T) {
+				sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1)
+				if marked {
+					if err := MarkNFDMigration(sb.local); err != nil {
+						t.Fatal(err)
+					}
+				}
+				other := &PeerSideFacts{Owner: sb.owner, OwnerEpoch: 1}
+				switch where {
+				case "coordinator":
+					if err := os.WriteFile(filepath.Join(sb.local, nfc), []byte("x"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				case "other":
+					if err := os.WriteFile(filepath.Join(sb.peer, nfc), []byte("x"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					other.NonNFD, other.NonNFDSample = 1, []string{nfc}
+				}
+				facts := LocalPeerSideFacts(context.Background(), peerScheduleRunner(false), sb.cfg, "9.9.9")
+				if !facts.Coordinator {
+					t.Fatal("the sandbox Mac is not the coordinator")
+				}
+				doctorFails := false
+				for _, c := range evaluatePeerSides(facts, other, "here", "there") {
+					doctorFails = doctorFails || c.Name == "nfd" && c.Level == DoctorFail
+				}
+
+				_, diffErr := PeerDiff(context.Background(), PeerDiffOptions{Config: sb.cfg, Probe: peerScheduleRunner(false)})
+				stops := diffErr != nil
+				for run := 1; run <= 2 && !stops; run++ {
+					_, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true})
+					stops = err != nil
+				}
+				if doctorFails != stops {
+					t.Fatalf("doctor fails %v, sync stops %v (diff: %v)", doctorFails, stops, diffErr)
+				}
+			})
+		}
 	}
 }
