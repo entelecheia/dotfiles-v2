@@ -567,6 +567,11 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 		Progress: nil,
 	})
 	if err != nil {
+		if syncRes != nil && syncRes.Demoted {
+			// The demotion's hooks ran before it failed; they belong in the output.
+			result.Hooks = syncRes.Hooks
+			return result, fmt.Errorf("peer handover: the sync demoted this machine and then failed: %w", err)
+		}
 		return nil, fmt.Errorf("peer handover: the required complete sync failed: %w", err)
 	}
 	if syncRes.Unreachable {
@@ -630,7 +635,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 
 	// 3. Local scheduler off.
 	if err := removePeerSchedulerArtifacts(ctx, opts.Runner, cfg); err != nil {
-		return nil, fmt.Errorf("peer handover: removing the local scheduler (owner already moved): %w; finish with `dot peer setup --off` here, which also runs on_deactivate", err)
+		return nil, fmt.Errorf("peer handover: removing the local scheduler (owner already moved): %w; finish with `dot peer setup --off` here, which also runs on_deactivate, then `dot peer sync` and `dot peer setup` on %s", err, cfg.Target.Host)
 	}
 	step("local scheduler removed")
 	// This Mac's on_deactivate runs last, whatever happens from here: an

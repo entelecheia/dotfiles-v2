@@ -267,9 +267,10 @@ tool):
 - launchd jobs and apps named by the operator in the peer profile's
   `hooks` (`.dotfiles/peer/config.yaml`): the jobs of their existing
   `~/Library/LaunchAgents/<label>.plist` disabled and booted out, or
-  re-enabled and bootstrapped, apps quit or opened, only as listed, when
-  `dot peer setup`, a handover or a fence demotion changes this machine's
-  coordinator role. The disable and enable write those labels' entries in
+  re-enabled and bootstrapped, apps quit or opened, only as listed: by
+  `dot peer setup` (on_activate, also on a refresh), `dot peer setup --off`
+  (on_deactivate), a handover (on_deactivate here, last) and a fence
+  demotion (on_deactivate). The disable and enable write those labels' entries in
   launchd's per-user override database (`launchctl disable/enable
   gui/<uid>/<label>`), so a bootout survives a reboot; only labels dot
   disabled are enabled again. dot never writes those plists or the apps'

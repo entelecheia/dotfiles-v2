@@ -12,7 +12,7 @@ import (
 )
 
 // installHookServiceStubs plants launchctl, osascript and open stubs that
-// append their argv to record; `launchctl list` answers with the given
+// append their argv to record; `launchctl print` answers with the given
 // loaded labels.
 func installHookServiceStubs(t *testing.T, record string, loaded ...string) {
 	t.Helper()
@@ -365,7 +365,7 @@ func TestRunPeerHooks_TimeoutSaysSo(t *testing.T) {
 		t.Skip("app actions run on macOS only")
 	}
 	bin := t.TempDir()
-	writeStub(t, filepath.Join(bin, "osascript"), "#!/bin/sh\nsleep 5\n")
+	writeStub(t, filepath.Join(bin, "osascript"), "#!/bin/sh\nexec sleep 5\n")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	old := peerHookTimeout
 	peerHookTimeout = 200 * time.Millisecond
