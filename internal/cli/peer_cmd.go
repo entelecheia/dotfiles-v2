@@ -298,6 +298,19 @@ on a laptop.`,
 			} else {
 				p.Warn("peer sync held destructive transitions; baseline unchanged")
 			}
+			// Deletions are quarantined, not removed; say how many, so the
+			// workspace entries are not lost among the host-path ones (#182).
+			verb, dir := "quarantined", ".sync-conflicts/"+res.ConflictStamp+"/"
+			if dryRun {
+				// A dry run creates no stamp directory.
+				verb, dir = "would quarantine", ".sync-conflicts/"
+			}
+			if res.QuarantinedHere > 0 {
+				p.Line("%s %d deletion(s) from the peer under %s here", verb, res.QuarantinedHere, dir)
+			}
+			if res.QuarantinedOnPeer > 0 {
+				p.Line("%s %d deletion(s) from here under %s on the peer", verb, res.QuarantinedOnPeer, dir)
+			}
 			p.Line("Conflicting edits keep both versions; list them with:")
 			p.Line("  dot sync conflicts --profile=%s", PeerProfile)
 			return nil
