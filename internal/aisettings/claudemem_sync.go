@@ -27,6 +27,9 @@ import (
 type SyncPeer struct {
 	Target   string `json:"target"`              // ssh target, e.g. user@host
 	RemoteDB string `json:"remote_db,omitempty"` // remote DB path; empty = peer default
+	// RemoteDot pins the peer's dot, from the peer profile's remote_dot when
+	// the target is that profile's host; empty picks the newest release.
+	RemoteDot string `json:"-"`
 }
 
 // Bundle is the unit of replication: the rows one side offers the other,
