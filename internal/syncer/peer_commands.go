@@ -399,11 +399,9 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 	if err := CheckSSH(ctx, opts.Probe, cfg.Target.Host); err != nil {
 		return &PeerDiffResult{Unreachable: true}, nil
 	}
-	rp, err := RemoteRsyncPath(ctx, opts.Probe, cfg.Target.Host)
-	if err != nil {
+	if err := resolvePeerRsync(ctx, opts.Probe, cfg); err != nil {
 		return nil, err
 	}
-	cfg.RemoteRsyncPath = rp
 
 	// The plan must apply the same sticky worktree exclude a real run would,
 	// or the displayed divergence disagrees with the transaction that follows
@@ -491,11 +489,9 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err := CheckSSH(ctx, probe, cfg.Target.Host); err != nil {
 		return &PeerSyncResult{Unreachable: true}, nil
 	}
-	rp, err := RemoteRsyncPath(ctx, probe, cfg.Target.Host)
-	if err != nil {
+	if err := resolvePeerRsync(ctx, probe, cfg); err != nil {
 		return nil, err
 	}
-	cfg.RemoteRsyncPath = rp
 	// The fence runs on first contact, before any transfer. A previous-
 	// release peer (no dotVersion, no epoch) gets exactly the pre-epoch
 	// owner-mismatch behavior; an epoch pair resolves coordinator divergence
@@ -906,24 +902,27 @@ type PeerDoctorOptions struct {
 // degrades into a field rather than aborting the report, so one broken probe
 // does not hide the rest.
 type PeerDoctorReport struct {
-	Target          string
-	LocalDotPath    string
-	LocalDotVersion string
-	RemoteDot       string   // "path (banner)" of the binary peer runs use
-	RemoteDotPassed []string // candidates the probe passed over
-	RemoteDotErr    error
-	DotMismatch     bool
-	DotUnreleased   bool // only a non-release dot, and no remote_dot pin
-	Unreachable     bool
-	UnreachableErr  error
-	RemoteRsyncPath string
-	RemoteRsyncErr  error
-	ClockSkew       time.Duration
-	ClockSkewErr    error
-	ClockSkewOK     bool
-	Disk            string
-	DiskKnown       bool
-	Problems        int
+	Target            string
+	LocalRsyncPath    string
+	LocalRsyncVersion string
+	LocalRsyncErr     error
+	LocalDotPath      string
+	LocalDotVersion   string
+	RemoteDot         string   // "path (banner)" of the binary peer runs use
+	RemoteDotPassed   []string // candidates the probe passed over
+	RemoteDotErr      error
+	DotMismatch       bool
+	DotUnreleased     bool // only a non-release dot, and no remote_dot pin
+	Unreachable       bool
+	UnreachableErr    error
+	RemoteRsyncPath   string
+	RemoteRsyncErr    error
+	ClockSkew         time.Duration
+	ClockSkewErr      error
+	ClockSkewOK       bool
+	Disk              string
+	DiskKnown         bool
+	Problems          int
 }
 
 // PeerDoctor probes everything that silently breaks a peer transfer.
@@ -936,6 +935,15 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 	report := &PeerDoctorReport{Target: cfg.Target.String(), LocalDotVersion: opts.LocalDotVersion}
 	if exe, err := peerExecutable(); err == nil {
 		report.LocalDotPath = exe
+	}
+
+	// The local client is checked first: it needs no peer, and a run on this
+	// machine fails with it no matter how healthy the peer is.
+	if path, ver, err := LocalRsyncPath(ctx, runner); err != nil {
+		report.LocalRsyncErr = err
+		report.Problems++
+	} else {
+		report.LocalRsyncPath, report.LocalRsyncVersion = path, ver
 	}
 
 	if err := CheckSSH(ctx, runner, host); err != nil {
@@ -1094,9 +1102,9 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, cfg *Config, progres
 
 func runPeerRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
 	if cfg.Verbose {
-		return ClassifyRsyncError(runner.RunAttached(ctx, "rsync", args...))
+		return ClassifyRsyncError(runner.RunAttached(ctx, cfg.rsyncBin(), args...))
 	}
-	_, err := runner.Run(ctx, "rsync", args...)
+	_, err := runner.Run(ctx, cfg.rsyncBin(), args...)
 	return ClassifyRsyncError(err)
 }
 

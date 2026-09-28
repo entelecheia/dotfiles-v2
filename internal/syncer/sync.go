@@ -318,7 +318,13 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		return nil, fmt.Errorf("loading allow patterns: %w", err)
 	}
 
-	rsyncPath, _ := osexec.LookPath("rsync")
+	// A relative PATH entry makes LookPath return a relative path with
+	// exec.ErrDot; keep only a clean result, since exec.Command would run a
+	// relative path as given.
+	rsyncPath, err := osexec.LookPath("rsync")
+	if err != nil {
+		rsyncPath = ""
+	}
 
 	return &Config{
 		Profile:           profile,
@@ -883,9 +889,9 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
 	var err error
 	if cfg.Verbose {
-		err = runner.RunAttached(ctx, "rsync", args...)
+		err = runner.RunAttached(ctx, cfg.rsyncBin(), args...)
 	} else {
-		_, err = runner.Run(ctx, "rsync", args...)
+		_, err = runner.Run(ctx, cfg.rsyncBin(), args...)
 	}
 	return classifyRsyncError(err)
 }

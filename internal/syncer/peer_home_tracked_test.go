@@ -47,6 +47,7 @@ func peerHomeFP(t *testing.T, root, rel string) Fingerprint {
 // or tracked-home transfers would land in the test process's cwd.
 func installFakePeerHomeSSH(t *testing.T, statusJSON, peerHome string) {
 	t.Helper()
+	requirePeerRsync(t)
 	if strings.Contains(statusJSON, "'") || strings.Contains(peerHome, "'") {
 		t.Fatal("fixture values must not contain a single quote")
 	}
