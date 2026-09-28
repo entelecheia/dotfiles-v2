@@ -353,7 +353,7 @@ func peerHomeRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Conf
 	}
 	defer os.RemoveAll(root)
 
-	args := []string{"-r", "--dry-run", "--no-links", "--ignore-missing-args", "--from0",
+	args := []string{"-r", "-8", "--dry-run", "--no-links", "--ignore-missing-args", "--from0",
 		"--out-format=@@%l\t%M\t%n", "--files-from=" + listFile}
 	remoteRsync := cfg.RemoteRsyncPath
 	if remoteRsync == "" {
@@ -363,7 +363,7 @@ func peerHomeRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Conf
 	// inventory does.
 	args = append(args, "--rsync-path=env TZ=UTC "+remoteRsync)
 	args = append(args, "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", cfg.Target.Host+":", root+"/")
-	res, err := runner.Run(ctx, "env", append([]string{"TZ=UTC", "rsync"}, args...)...)
+	res, err := runner.Run(ctx, "env", append([]string{"TZ=UTC", cfg.rsyncBin()}, args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("peer home inventory: %w", err)
 	}
