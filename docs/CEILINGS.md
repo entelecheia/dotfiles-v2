@@ -134,12 +134,15 @@ of a `host_merge` file, merges them and writes the result on both machines.
 An app that rewrites the file between that read and the write (Claude Code
 saving `~/.claude.json` while `dot peer sync` runs, often from inside a Claude
 session) loses its rewrite, and a running app holding a stale copy can later
-save it over the merged file.
+save it over the merged file: if that save lands before the same run's
+additive pass finishes, the pass carries it to the other Mac too, and the
+entries only the other copy had are gone from both.
 
 No lock exists that Claude Code honors for `~/.claude.json`. The merge
 re-reads both copies right before it writes and re-checks the local file's
-size and mtime just before the write, so the window is a few hundred
-milliseconds per run. Replace this if the app gains a lock or an
+size and mtime just before the write; a file saved in between is decided
+again from the new copy (three attempts, then the run stops before the
+additive pass), so the window is a few hundred milliseconds per run. Replace this if the app gains a lock or an
 atomic update protocol, or if lost entries are reported in practice.
 
 ## Replica bootstrap trust

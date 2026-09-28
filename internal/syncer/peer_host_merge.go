@@ -187,10 +187,11 @@ func readPeerHostFile(ctx context.Context, runner *exec.Runner, cfg *Config, rel
 
 var errPeerHostSymlink = errors.New("a symlink; host_merge writes regular files only")
 
-// skillRootPrefixes are the tool skill roots dot must not write
-// (docs/BOUNDARIES.md); host_merge refuses files under them.
+// skillRootPrefixes are the tool skill roots and Maru trees dot must not
+// write (docs/BOUNDARIES.md); host_merge refuses files under them.
 var skillRootPrefixes = []string{".claude/skills/", ".codex/skills/", ".agents/skills/", ".gemini/skills/",
-	".gemini/antigravity/skills/", ".kimi-code/skills/", ".qwen/skills/", ".grok/skills/", ".config/opencode/skills/"}
+	".gemini/antigravity/skills/", ".kimi-code/skills/", ".qwen/skills/", ".grok/skills/", ".config/opencode/skills/",
+	".maru/skills/", ".maru/env/"}
 
 // validateHostMerge checks every host_merge key is a clean path relative to
 // $HOME, like .claude.json, outside the tool skill roots.
@@ -200,7 +201,8 @@ func validateHostMerge(m map[string][]string) error {
 			return fmt.Errorf("host_merge: %q must be a path relative to $HOME, like .claude.json", rel)
 		}
 		for _, root := range skillRootPrefixes {
-			if strings.HasPrefix(rel, root) {
+			// APFS is case-insensitive: .Claude/skills is the same directory.
+			if strings.HasPrefix(strings.ToLower(rel), root) {
 				return fmt.Errorf("host_merge: %q is under a tool skill root, which dot does not write", rel)
 			}
 		}
@@ -370,6 +372,7 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		byRel[merges[i].rel] = &merges[i]
 	}
 	rendered := map[string]bool{}
+	dup := map[int]bool{}
 	for i := range items {
 		it := &items[i]
 		if it.Scope == PlanScopeWorkspace {
@@ -378,6 +381,12 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		keys, merge := hostKeyPolicy(cfg, it.Path)
 		it.Hot = isHotHostPath(it.Path) || merge
 		if m := byRel[it.Path]; m != nil && twoWay && it.Scope == PlanScopeHost {
+			// rsync can list a file both ways (equal mtime, other size); the
+			// merge is one write on both machines.
+			if rendered[m.rel] {
+				dup[i] = true
+				continue
+			}
 			renderHostMerge(it, m)
 			rendered[m.rel] = true
 			continue
@@ -421,6 +430,15 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 			it.Warning = "newest wins: " + strings.Join(warnings, "; ") + "; " + hint
 		}
 	}
+	if len(dup) > 0 {
+		kept := items[:0]
+		for i, it := range items {
+			if !dup[i] {
+				kept = append(kept, it)
+			}
+		}
+		items = kept
+	}
 	if twoWay {
 		// A merge rsync lists nothing for (equal size and mtime) is still a
 		// write on both machines.
@@ -455,33 +473,55 @@ func renderHostMerge(it *PeerPlanItem, m *hostMerge) {
 //
 // ponytail: known ceiling. See docs/CEILINGS.md (host_merge read-merge-write race).
 func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Config) ([]string, error) {
-	merges, err := planHostMerges(ctx, probe, cfg)
-	if err != nil {
-		return nil, err
-	}
-	if err := hostMergeRefusal(merges); err != nil {
-		return nil, err
-	}
 	var merged []string
+	// An app saving a file between the read and the write makes that
+	// decision stale: decide again from the new copy. Skipping it instead
+	// would hand the file to the additive pass, whose newest-wins push then
+	// drops the peer-only entries on both machines.
+	for attempt := 1; ; attempt++ {
+		merges, err := planHostMerges(ctx, probe, cfg)
+		if err != nil {
+			return merged, err
+		}
+		if err := hostMergeRefusal(merges); err != nil {
+			return merged, err
+		}
+		changed, err := writeHostMerges(ctx, runner, cfg, merges, &merged)
+		if err != nil || changed == "" {
+			return merged, err
+		}
+		if attempt == hostMergeAttempts {
+			// Stop before the additive pass: the run is partial, the baseline
+			// stays, and the next run merges from both copies again.
+			return merged, fmt.Errorf("host_merge %s: the file kept changing during the merge (%d attempts); the host pass did not run, the next run merges it", changed, hostMergeAttempts)
+		}
+	}
+}
+
+// hostMergeAttempts bounds how often a file saved during the merge is
+// decided again.
+const hostMergeAttempts = 3
+
+// writeHostMerges writes each decided merge on both machines, in order. It
+// stops at a file changed here since planHostMerges read it and names it.
+func writeHostMerges(ctx context.Context, runner *exec.Runner, cfg *Config, merges []hostMerge, merged *[]string) (string, error) {
 	for _, m := range merges {
 		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(m.rel))
-		// An app that saved the file since it was read wins this run; the
-		// next run merges again.
 		if now, err := os.Stat(localPath); err != nil || now.Size() != m.localInfo.Size() || !now.ModTime().Equal(m.localInfo.ModTime()) {
-			continue
+			return m.rel, nil
 		}
 		body, err := encodeJSONObject(m.result)
 		if err != nil {
-			return merged, err
+			return "", err
 		}
 		// Keeps the mode (~/.claude.json holds tokens, 0600) and owner, and
 		// refuses a symlink rather than replacing it.
 		if err := runner.WriteFileAtomic(localPath, body, 0o600); err != nil {
-			return merged, fmt.Errorf("host_merge %s: %w", m.rel, err)
+			return "", fmt.Errorf("host_merge %s: %w", m.rel, err)
 		}
 		now := time.Now()
 		if err := os.Chtimes(localPath, now, now); err != nil {
-			return merged, err
+			return "", err
 		}
 		args := []string{"-t", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5"}
 		if cfg.RemoteRsyncPath != "" {
@@ -489,11 +529,11 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		}
 		args = append(args, localPath, cfg.Target.Host+":"+m.rel)
 		if _, err := runner.Run(ctx, cfg.rsyncBin(), args...); err != nil {
-			return merged, fmt.Errorf("host_merge %s: pushing the merged copy: %w", m.rel, err)
+			return "", fmt.Errorf("host_merge %s: pushing the merged copy: %w", m.rel, err)
 		}
-		merged = append(merged, m.rel)
+		*merged = append(*merged, m.rel)
 	}
-	return merged, nil
+	return "", nil
 }
 
 func peerHostMtime(ctx context.Context, runner *exec.Runner, cfg *Config, rel string) (time.Time, error) {

@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -323,4 +324,69 @@ func TestHostMergePlanMatchesWhatTheRunDid(t *testing.T) {
 			t.Fatalf("the workspace pass ran before the refusal: %v", err)
 		}
 	})
+}
+
+// An app saving ~/.claude.json while the merge step reads it: the merge is
+// decided again from the new copy, so the peer-only entries survive on both
+// machines. One that keeps saving stops the run before the additive pass,
+// whose newest-wins push would otherwise drop them.
+func TestHostMergeSurvivesALocalSaveDuringTheMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		saveOn  string // which peer mtime reads trigger a local save: "2" or "2+"
+		wantErr bool
+	}{{"saved once", "2", false}, {"keeps saving", "2+", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, localHome, peerHome := claudeJSONFixture(t,
+				`{"mcpServers":{"a":{},"mine":{}}}`,
+				`{"mcpServers":{"a":{},"kimi-cu":{},"pencil":{}}}`)
+			cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers", "projects"}}
+			real, err := osexec.LookPath("ssh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Wrap the fake ssh: the Nth peer-mtime read (the merge step's
+			// decision; the first is the preflight's) saves the local file.
+			bin, count := t.TempDir(), filepath.Join(t.TempDir(), "count")
+			local := filepath.Join(localHome, ".claude.json")
+			cond := `[ "$n" -eq 2 ]`
+			if tc.saveOn == "2+" {
+				cond = `[ "$n" -ge 2 ]`
+			}
+			writeStub(t, filepath.Join(bin, "ssh"), "#!/bin/sh\n"+
+				"case \"$*\" in *'stat -c %Y'*)\n"+
+				"  n=$(( $(cat '"+count+"' 2>/dev/null || echo 0) + 1 )); echo $n > '"+count+"'\n"+
+				"  if "+cond+"; then printf '{\"mcpServers\":{\"a\":{},\"mine\":{}},\"numStartups\":%s}' \"$n\" > '"+local+"'; fi ;;\n"+
+				"esac\n"+
+				"exec '"+real+"' \"$@\"\n")
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			_, err = PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)})
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
+			}
+			for _, home := range []string{localHome, peerHome} {
+				body := string(gitStateFileBytes(t, filepath.Join(home, ".claude.json")))
+				if !tc.wantErr && (!strings.Contains(body, "kimi-cu") || !strings.Contains(body, "mine")) {
+					t.Errorf("%s lost entries: %s", home, body)
+				}
+			}
+			if peer := string(gitStateFileBytes(t, filepath.Join(peerHome, ".claude.json"))); !strings.Contains(peer, "kimi-cu") {
+				t.Errorf("the peer's own entries are gone: %s", peer)
+			}
+		})
+	}
+}
+
+// host_merge never writes where BOUNDARIES forbids: skill roots and Maru's
+// trees, in any letter case (APFS is case-insensitive).
+func TestValidateHostMergeRefusesForbiddenRoots(t *testing.T) {
+	for _, rel := range []string{".claude/skills/x/manifest.json", ".Claude/Skills/x.json", ".maru/skills/registry.json", ".maru/env/x.json"} {
+		if err := validateHostMerge(map[string][]string{rel: {"k"}}); err == nil {
+			t.Errorf("%s accepted", rel)
+		}
+	}
+	if err := validateHostMerge(map[string][]string{".claude.json": {"mcpServers"}}); err != nil {
+		t.Fatal(err)
+	}
 }
