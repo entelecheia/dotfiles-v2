@@ -531,6 +531,10 @@ type PeerHandoverOptions struct {
 	Probe  *exec.Runner
 	Peer   string
 	DryRun bool
+	// LocalDotVersion is this binary's version ("2.70.22 (sha)"); Warn
+	// hears, before the peer adopts, that the peer's release is older.
+	LocalDotVersion string
+	Warn            func(string)
 }
 
 // PeerHandoverResult lists the steps a handover took or would take.
@@ -609,6 +613,12 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 		return nil, fmt.Errorf(
 			"peer handover: the peer's dot %s predates handover support (its status document carries no dotVersion); upgrade dot on %s first",
 			cfg.remoteDot.String(), cfg.Target.Host)
+	}
+	if older := peerDotOlder(opts.LocalDotVersion, cfg.remoteDot); older != "" && opts.Warn != nil {
+		// Its dot runs the adopt and then coordinates: config keys newer
+		// than its release do not apply there, and a release without role
+		// hooks runs no on_activate while this Mac's on_deactivate runs.
+		opts.Warn(fmt.Sprintf("the peer's dot %s is older than this machine's %s: config keys newer than its release (hooks, remote_dot, owner_aliases) do not apply there; upgrade dot on %s first", older, strings.Fields(opts.LocalDotVersion)[0], cfg.Target.Host))
 	}
 	epoch := cfg.OwnerEpoch + 1
 	generation, err := readPeerReplicaGeneration(cfg.LocalPaths)

@@ -140,6 +140,19 @@ func dotVersionsDiffer(local string, remote *remoteDot) bool {
 	return mine != nil && (releaseNewer(mine, remote.release) || releaseNewer(remote.release, mine))
 }
 
+// peerDotOlder names the peer's dot when its release is older than local;
+// "" otherwise, and for a dev build on either side.
+func peerDotOlder(local string, remote *remoteDot) string {
+	fields := strings.Fields(local)
+	if len(fields) == 0 || remote == nil || remote.release == nil {
+		return ""
+	}
+	if mine := parseRelease(fields[0]); mine != nil && releaseNewer(mine, remote.release) {
+		return remote.String()
+	}
+	return ""
+}
+
 func releaseNewer(a, b []int) bool {
 	for i := range a {
 		if a[i] != b[i] {

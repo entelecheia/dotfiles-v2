@@ -732,16 +732,31 @@ func TestPeerHandover(t *testing.T) {
 	sb.installFakeRemoteDot(t)
 	plist := sb.plantPeerPlist(t)
 
+	// The peer's release is older than this one: said before it adopts
+	// (#196).
+	var warned []string
 	res, err := PeerHandover(context.Background(), PeerHandoverOptions{
-		Config: sb.cfg,
-		Runner: peerScheduleRunner(false),
-		Probe:  peerScheduleRunner(false),
+		Config:          sb.cfg,
+		Runner:          peerScheduleRunner(false),
+		Probe:           peerScheduleRunner(false),
+		LocalDotVersion: "99.0.0 (local)",
+		Warn: func(msg string) {
+			for _, line := range sb.recordLines(t) {
+				if strings.HasPrefix(line, "dot peer adopt") {
+					t.Errorf("warned after the adopt: %q", msg)
+				}
+			}
+			warned = append(warned, msg)
+		},
 	})
 	if err != nil {
 		t.Fatalf("PeerHandover: %v", err)
 	}
 	if res.NewOwner != "peer-mac" || res.Epoch != 2 {
 		t.Fatalf("result = %+v, want peer-mac/2", res)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "9.9.9") || !strings.Contains(warned[0], "older than this machine's 99.0.0") {
+		t.Errorf("warnings = %q", warned)
 	}
 
 	// Owner and epoch moved on both sides (local first assertion, remote via

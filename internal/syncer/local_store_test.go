@@ -500,3 +500,34 @@ func TestLoadLocalState_MissingReturnsZero(t *testing.T) {
 		t.Errorf("expected zero state, got %+v", got)
 	}
 }
+
+// #196: a key this dot does not know survives its save, value intact, while
+// a key it owns follows the struct (cleared stays cleared).
+func TestSaveLocalConfigKeepsUnknownKeys(t *testing.T) {
+	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	on := "target: ssh:peer:/w\nowner: a\nowner_aliases:\n    - old-a\nfuture_key:\n    nested: [1, 2]\n    text: 'keep me'\npropagation:\n    create: true\n    update: true\n    delete: true\n"
+	if err := os.WriteFile(paths.ConfigFile, []byte(on), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OwnerAliases = nil
+	if err := SaveLocalConfig(paths, cfg); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(paths.ConfigFile)
+	if !strings.Contains(string(body), "future_key:\n    nested: [1, 2]\n    text: 'keep me'\n") {
+		t.Errorf("the unknown key changed or went:\n%s", body)
+	}
+	if strings.Contains(string(body), "owner_aliases") {
+		t.Errorf("a cleared key came back:\n%s", body)
+	}
+	if again, _, err := LoadLocalConfig(paths); err != nil || again.Owner != "a" {
+		t.Fatalf("reload: %+v %v", again, err)
+	}
+}

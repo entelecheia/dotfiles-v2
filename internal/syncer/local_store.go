@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -565,7 +566,57 @@ func SaveLocalConfig(paths *LocalPaths, cfg *LocalConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshaling local config: %w", err)
 	}
+	if data, err = keepUnknownConfigKeys(paths.ConfigFile, data); err != nil {
+		return err
+	}
 	return atomicWrite(paths.ConfigFile, data)
+}
+
+// keepUnknownConfigKeys carries over the top-level keys of the config on
+// disk that LocalConfig does not own, so a dot older than the key (a
+// handover's adopt on the peer, a stale binary) no longer drops it on
+// save (#196). A key LocalConfig owns is the struct's, cleared or not. An
+// unreadable file on disk keeps nothing: loading it already failed.
+func keepUnknownConfigKeys(path string, data []byte) ([]byte, error) {
+	old, err := os.ReadFile(path)
+	if err != nil {
+		return data, nil
+	}
+	var was, now yaml.Node
+	if yaml.Unmarshal(old, &was) != nil || len(was.Content) == 0 || was.Content[0].Kind != yaml.MappingNode {
+		return data, nil
+	}
+	if err := yaml.Unmarshal(data, &now); err != nil || len(now.Content) == 0 || now.Content[0].Kind != yaml.MappingNode {
+		return data, err
+	}
+	known := localConfigKeys()
+	kept := false
+	for i := 0; i+1 < len(was.Content[0].Content); i += 2 {
+		if key := was.Content[0].Content[i]; !known[key.Value] {
+			now.Content[0].Content = append(now.Content[0].Content, key, was.Content[0].Content[i+1])
+			kept = true
+		}
+	}
+	if !kept {
+		return data, nil
+	}
+	out, err := yaml.Marshal(&now)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling local config: %w", err)
+	}
+	return out, nil
+}
+
+// localConfigKeys are the top-level keys LocalConfig owns.
+func localConfigKeys() map[string]bool {
+	keys := map[string]bool{}
+	t := reflect.TypeOf(LocalConfig{})
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ","); name != "" && name != "-" {
+			keys[name] = true
+		}
+	}
+	return keys
 }
 
 // LoadLocalState reads state.yaml or returns a zero-value if missing.
