@@ -13,7 +13,13 @@ machines reachable:
   4. On the peer, set the old baselines aside and run the first sync as an
      additive bootstrap (no baseline means no deletes can be planned, and
      right after step 1 almost nothing transfers).
-  5. Install the peer's scheduler.
+  5. Install the peer's scheduler; its setup runs the peer's on_activate.
+  6. Run this Mac's on_deactivate hooks, last: an app-quit may end the
+     process running the handover.
+
+A lost terminal (SIGHUP) does not stop a handover once it has started. If
+one stops after step 3 anyway, finish by hand: dot peer setup --off here,
+then dot peer sync and dot peer setup on the peer.
 
 The takeover replica is not used here: right after a complete run the safest
 baseline is no baseline. After the switch, realign the repos on the new
