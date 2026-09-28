@@ -363,15 +363,23 @@ func rolesVerdict(local, peer *PeerSideFacts, here, there string) (checks []Doct
 		}
 		adopt := fmt.Sprintf("to coordinate from %s: on %s: dot peer adopt --self --epoch %d, then on %s: dot peer adopt --owner %s --epoch %d", coord, coord, e, other, arg, e)
 		if renamed {
-			rename := "dot sync owner --rename " + shellQuote(local.Owner) + " <its name now>"
+			// Each Mac renames the owner it records itself (after an offline
+			// rename they differ, one known to the other as an alias):
+			// RenameOwner refuses any other, and --local-only would pass over
+			// it as nothing to rename.
 			if local.Scheduler == peer.Scheduler {
 				// Neither Mac can prove it runs the owner's scheduler, so the
 				// rename needs its explicit override on both, and the operator
 				// chooses.
-				add(DoctorFail, detail, fmt.Sprintf("if one of these Macs was %q: on it, %s --local-only, then the same on the other Mac with that Mac's new name; otherwise %s", local.Owner, rename, adopt))
+				was, old := fmt.Sprintf("%q", local.Owner), shellQuote(local.Owner)
+				if NormalizeHostname(local.Owner) != NormalizeHostname(peer.Owner) {
+					was = "the owner"
+					old = fmt.Sprintf("<the owner it records: %s here, %s on %s>", shellQuote(local.Owner), shellQuote(peer.Owner), there)
+				}
+				add(DoctorFail, detail, fmt.Sprintf("if one of these Macs was %s: on it, dot sync owner --rename %s <its name now> --local-only, then the same on the other Mac with that Mac's new name; otherwise %s", was, old, adopt))
 				return checks, false, false, false
 			}
-			adopt = fmt.Sprintf("if %s was %q: on %s: %s; otherwise %s", coord, local.Owner, coord, rename, adopt)
+			adopt = fmt.Sprintf("if %s was %q: on %s: dot sync owner --rename %s <its name now>; otherwise %s", coord, c.Owner, coord, shellQuote(c.Owner), adopt)
 		}
 		add(DoctorFail, detail, adopt)
 		return checks, coord == here, coord == there, true
@@ -456,10 +464,11 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 	sides := []side{{here, &el, local.Coordinator}, {there, &ep, peer.Coordinator}}
 
 	// This machine's client is the doctor's first line. Every Mac that passes
-	// its owner guard runs one: a sync checks rsync before its fence, so a
-	// coordinator about to be demoted needs it to get there.
+	// its owner guard runs one (a sync checks rsync before its fence, so a
+	// coordinator about to be demoted needs it to get there), and so does the
+	// Mac the roles fix makes the coordinator.
 	switch {
-	case peer.RsyncError != "" && peer.Coordinator:
+	case peer.RsyncError != "" && (peer.Coordinator || ep.Coordinator):
 		add("rsync", DoctorFail, there+": "+peer.RsyncError, "on "+there+": brew install rsync")
 	case peer.RsyncError != "":
 		add("rsync", DoctorWarn, there+": "+peer.RsyncError+" (its client once it coordinates; see remote rsync above for the server this Mac uses)", "on "+there+": brew install rsync")

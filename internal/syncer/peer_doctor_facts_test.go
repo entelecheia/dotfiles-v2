@@ -377,6 +377,26 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 		t.Errorf("renamed coordinator: %+v", c)
 	}
 
+	// After an offline rename and a second host rename the two Macs record
+	// different owners, one the other's alias: each renames the owner it
+	// records, which RenameOwner accepts (#193 round 13). The Mac the fix
+	// makes the coordinator needs rsync 3.x like one that coordinates now.
+	local, peer = doctorFacts()
+	local.Coordinator, local.Scheduler, local.Owner, local.MachineNames = false, false, "a", []string{"m5x26"}
+	peer.Scheduler, peer.Owner, peer.OwnerAliases, peer.MachineNames = true, "b", []string{"a"}, []string{"m3x23"}
+	peer.RsyncError = "openrsync is not rsync 3.x"
+	checks := evaluatePeerSides(local, peer, "m5x26", "m3x23")
+	if c := checkFor(checks, "roles", DoctorFail); c == nil || !strings.Contains(c.Fix, `if m3x23 was "b": on m3x23: dot sync owner --rename 'b' <its name now>`) {
+		t.Errorf("rename of the owner the coordinator records: %+v", c)
+	}
+	if checkFor(checks, "rsync", DoctorFail) == nil {
+		t.Errorf("the settled coordinator's missing rsync is not a failure: %+v", checks)
+	}
+	peer.Scheduler = false
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Fix, "<the owner it records: 'a' here, 'b' on m3x23>") {
+		t.Errorf("undecided rename with two recorded owners: %+v", c)
+	}
+
 	// A Mac judged as the coordinator after the roles fix is counted as its
 	// own sync walks it (without linked worktrees).
 	local, peer = doctorFacts()
