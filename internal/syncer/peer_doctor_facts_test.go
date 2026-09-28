@@ -52,7 +52,6 @@ func TestEvaluatePeerSides(t *testing.T) {
 	for _, want := range []struct{ name, level, fix string }{
 		{"roles", DoctorFail, "dot sync owner --profile=peer --set"},
 		{"nfd", DoctorFail, "on m3x23: dot sync names normalize --profile=peer"},
-		{"nfd", DoctorWarn, "on m5x26: dot sync names normalize --profile=peer"},
 		{"nfd", DoctorWarn, "on m3x23: dot sync names normalize --profile=peer"},
 		{"rsync", DoctorFail, "on m3x23: brew install rsync"},
 		{"config", DoctorWarn, ""},
@@ -99,6 +98,34 @@ func TestEvaluatePeerSides(t *testing.T) {
 		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner m5x26 --epoch 2" {
 			t.Errorf("owner %q epoch %d: fence refusal not flagged: %+v", tc.owner, tc.epoch, c)
 		}
+	}
+
+	// The coordinator's own push preflight (nfdPushRefusal) and plan errors
+	// stop its sync: the doctor fails where the sync stops.
+	for _, tc := range []struct {
+		name   string
+		mutate func(local, peer *PeerSideFacts)
+		fix    string
+	}{
+		{"unmarked coordinator with names", func(l, _ *PeerSideFacts) { l.NonNFD = 16 }, "on m5x26: dot sync names normalize --profile=peer --yes"},
+		{"coordinator cannot plan", func(l, _ *PeerSideFacts) { l.NonNFDError = "permission denied" }, ""},
+		{"marked coordinator, peer cannot plan", func(l, p *PeerSideFacts) { l.NFDMarked, p.NFDMarked, p.NonNFDError = true, true, "collision" }, ""},
+	} {
+		local, peer = doctorFacts()
+		tc.mutate(local, peer)
+		c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "nfd", DoctorFail)
+		if c == nil || c.Fix != tc.fix {
+			t.Errorf("%s: %+v", tc.name, c)
+		}
+	}
+
+	// The fence's topology check comes first: a peer profile that does not
+	// point back here refuses every sync.
+	local, peer = doctorFacts()
+	local.WorkspacePath, local.TargetPath = "/Users/a/work", "/Users/b/work"
+	peer.WorkspacePath, peer.TargetPath = "/Users/b/work", "/Users/a/elsewhere"
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "does not point back") {
+		t.Errorf("topology mismatch passed: %+v", c)
 	}
 
 	// The other Mac holds a higher epoch: the coordinator's next sync
@@ -225,5 +252,23 @@ func TestPeerSyncCountsQuarantinedDeletions(t *testing.T) {
 	}
 	if res.QuarantinedHere != 1 || res.QuarantinedOnPeer != 0 || res.ConflictStamp == "" {
 		t.Fatalf("result = %+v, want one deletion quarantined here", res)
+	}
+}
+
+// Parity: on an unmarked coordinator holding a name not in NFD, the doctor
+// fails exactly where the sync's own push preflight refuses.
+func TestDoctorNFDVerdictMatchesThePushPreflight(t *testing.T) {
+	cfg, _ := peerDryRunSandbox(t)
+	if err := os.WriteFile(filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), norm.NFC.String("한글.md")), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	facts := LocalPeerSideFacts(context.Background(), peerScheduleRunner(false), cfg, "9.9.9")
+	facts.Coordinator = true // the verdict is the coordinator's
+	_, peer := doctorFacts()
+	peer.Owner, peer.OwnerEpoch = facts.Owner, facts.OwnerEpoch
+	doctorFails := checkFor(evaluatePeerSides(facts, peer, "here", "there"), "nfd", DoctorFail) != nil
+	syncRefuses := NormalizeWorkspaceNamesBeforePush(cfg) != nil
+	if !doctorFails || !syncRefuses {
+		t.Fatalf("doctor fails %v, push preflight refuses %v (facts %+v)", doctorFails, syncRefuses, facts)
 	}
 }

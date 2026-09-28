@@ -349,14 +349,18 @@ func fetchRemotePeerWorktrees(ctx context.Context, runner *exec.Runner, cfg *Con
 // checkRemotePeerTopology proves the remote profile points back at this
 // workspace: the pair must be exactly two machines, each naming the other.
 func checkRemotePeerTopology(cfg *Config, status *remotePeerStatus) error {
-	remoteWorkspace := filepath.Clean(status.Profile.WorkspacePath)
-	wantRemoteWorkspace := filepath.Clean(cfg.Target.Path)
-	remoteTarget := filepath.Clean(status.Profile.Target.Path)
-	wantRemoteTarget := filepath.Clean(strings.TrimRight(cfg.LocalPath, "/"))
-	if remoteWorkspace != wantRemoteWorkspace || remoteTarget != wantRemoteTarget {
+	return topologyError(cfg.LocalPath, cfg.Target.Path, status.Profile.WorkspacePath, status.Profile.Target.Path)
+}
+
+// topologyError is the fence's first check: the remote profile must point
+// back at this workspace. The doctor asks it from the coordinator's side.
+func topologyError(localWorkspace, localTarget, remoteWorkspace, remoteTarget string) error {
+	wantRemoteWorkspace := filepath.Clean(localTarget)
+	wantRemoteTarget := filepath.Clean(strings.TrimRight(localWorkspace, "/"))
+	if filepath.Clean(remoteWorkspace) != wantRemoteWorkspace || filepath.Clean(remoteTarget) != wantRemoteTarget {
 		return fmt.Errorf(
 			"peer coordinator check: remote profile does not point back to this workspace (remote workspace %q target %q; expected %q -> %q)",
-			status.Profile.WorkspacePath, status.Profile.Target.Path, wantRemoteWorkspace, wantRemoteTarget)
+			remoteWorkspace, remoteTarget, wantRemoteWorkspace, wantRemoteTarget)
 	}
 	return nil
 }
