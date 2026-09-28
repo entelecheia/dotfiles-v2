@@ -831,7 +831,25 @@ func (r *gitStateRun) realign(ctx context.Context, abs, gitdir string, rep *GitR
 }
 
 // gitDir resolves the absolute gitdir of the checkout at abs.
+//
+// abs must be the top level of that checkout. git searches upward from a
+// directory without its own .git, so an uninitialized submodule (an empty
+// directory, a deinit, files peer sync delivered without the gitfile) would
+// otherwise resolve to the parent: the parent would be classified, fetched
+// and re-pointed as if it were the child, and ls-tree there lists the
+// child's own gitlink as "./", recursing forever.
 func (r *gitStateRun) gitDir(ctx context.Context, abs string) (string, error) {
+	top, err := r.read(ctx, abs, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	want, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	if got, err := filepath.EvalSymlinks(top); err != nil || got != want {
+		return "", fmt.Errorf("%s is not the top of a checkout (git resolves it to %s)", abs, top)
+	}
 	return r.read(ctx, abs, "rev-parse", "--absolute-git-dir")
 }
 

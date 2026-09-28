@@ -167,7 +167,9 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 			return
 		}
 	}
-	if _, err := r.runOutput(ctx, abs, nil, false, "fetch", "-q", "origin"); err != nil {
+	// The URL comes from a committed .gitmodules, so the fetch runs with the
+	// protocol restrictions git submodule itself applies to such URLs.
+	if _, err := r.runOutput(ctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0"}, false, "fetch", "-q", "origin"); err != nil {
 		rep.Reason = gitlinkMissing + "; fetch failed: " + shortErr(err)
 		if move != nil && rawOrigin != "" {
 			if _, rerr := r.runOutput(ctx, abs, nil, false, "remote", "set-url", "--", "origin", rawOrigin); rerr == nil {
@@ -181,6 +183,11 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 	if fresh.Reason == gitlinkMissing {
 		fresh.Class = GitClassGitlinkMissing
 		fresh.Suggestion = "origin was fetched but " + shortRev(gitlink) + " is still missing; check that the parent's commit was pushed with its submodule"
+	}
+	if move != nil && rawOrigin != "" {
+		// The re-pointed origin is part of what this run changed.
+		fresh.URLMoves = []string{"origin: " + rawOrigin + " -> " + move.new}
+		fresh.Undo = "git -C " + shellWord(abs) + " remote set-url origin " + shellWord(rawOrigin)
 	}
 	*rep = *fresh
 }

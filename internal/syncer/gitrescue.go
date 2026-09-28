@@ -27,10 +27,21 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		label = "a detached HEAD"
 	}
 
+	// The branch's own upstream is read first: a feature branch rebased and
+	// force-pushed on the other Mac must realign to its own upstream, not be
+	// taken for a branch whose work landed on the default branch.
+	upstream, _ := r.read(ctx, abs, "rev-parse", "--symbolic-full-name", "@{upstream}")
+	upCand, upDiffs, upOK := "", 0, false
+	if upstream != "" {
+		upCand, upDiffs, upOK = r.bestOnChain(ctx, abs, gitdir, rep.Head, upstream, rep.HeadDiffs)
+	}
+
 	// A checkout on another branch (the dev/maru case: a squash-merged
-	// feature branch) whose files match the default branch.
-	if def, ref := r.defaultBranch(ctx, abs); ref != "" && rep.branch != def {
-		if cand, diffs, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok {
+	// feature branch) whose files match the default branch better than
+	// anything on its own upstream. A detached HEAD, the normal state of a
+	// submodule, is not a branch to rescue.
+	if def, ref := r.defaultBranch(ctx, abs); ref != "" && rep.branch != "" && rep.branch != def {
+		if cand, diffs, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok && (!upOK || diffs < upDiffs) {
 			rep.Class = GitClassBranchMismatch
 			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, "origin"
 			rep.rescueDiffs = diffs
@@ -40,8 +51,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		}
 	}
 
-	upstream, err := r.read(ctx, abs, "rev-parse", "--symbolic-full-name", "@{upstream}")
-	if err != nil || upstream == "" {
+	if upstream == "" {
 		return
 	}
 	upName := strings.TrimPrefix(upstream, "refs/remotes/")
@@ -73,11 +83,11 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 				rep.remote = remote
 			}
 		}
-		if cand, diffs, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, upstream, rep.HeadDiffs); ok {
-			rep.RescueTarget = cand
-			rep.rescueDiffs = diffs
+		if upOK {
+			rep.RescueTarget = upCand
+			rep.rescueDiffs = upDiffs
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s; keep the local commits on a rescue branch and realign: %s",
-				ahead, behind, upName, matchWords(diffs), shortRev(cand), rescueCommand(rep.Path))
+				ahead, behind, upName, matchWords(upDiffs), shortRev(upCand), rescueCommand(rep.Path))
 		} else {
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and no upstream commit matches the files better than HEAD; rebase or merge by hand",
 				ahead, behind, upName)
@@ -161,6 +171,20 @@ func (r *gitStateRun) bestOnChain(ctx context.Context, abs, gitdir, head, tip st
 // --rescue: the target is the matching commit and HEAD's commits get a
 // rescue branch named after today and the branch.
 func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoReport) {
+	// The switch's own preconditions are read-only, so they decide here,
+	// before a rescue branch is created or pushed for a move that would be
+	// refused.
+	if rep.rescueBranch != "" {
+		defRef := "refs/heads/" + rep.rescueBranch
+		if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
+			rep.Suggestion += "; not rescued: " + rep.rescueBranch + " is checked out in the linked worktree " + other
+			return
+		}
+		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
+			rep.Suggestion += "; not rescued: local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks"
+			return
+		}
+	}
 	name := rep.branch
 	if name == "" {
 		name = "detached"

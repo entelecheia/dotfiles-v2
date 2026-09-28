@@ -272,7 +272,9 @@ tool):
   missing (peer sync never carries it), then `git submodule sync` for the
   URLs it moves
   (`.git/config` and the submodule's origin URL). With `--apply --fetch`
-  a submodule whose gitlink commit is missing gets `git fetch`, after
+  a submodule whose gitlink commit is missing (and is a checkout of its
+  own, never a directory git resolves to the parent) gets `git fetch` under
+  git submodule's protocol rules (`GIT_PROTOCOL_FROM_USER=0`), after
   `remote set-url origin` when its URL moved (both URLs compared as git
   resolves them, `url.<base>.insteadOf` included); the old URL is put back
   if that fetch fails.

@@ -41,6 +41,9 @@ func urlMoveFixture(t *testing.T) (ws, sub, oldURL, newURL, p1, s2 string) {
 	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
 	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init")
 	sub = filepath.Join(ws, "sub")
+	// --fetch applies git submodule's protocol rules; the fixtures' remotes
+	// are local paths, which those rules refuse unless allowed.
+	gitStateRun_(t, sub, "config", "protocol.file.allow", "always")
 	gitStateRewriteTracked(t, filepath.Join(sub, "file.txt"), "v2\n")
 	return ws, sub, oldURL, newURL, p1, s2
 }
@@ -133,11 +136,16 @@ func TestPeerGitRealign_URLMoveDetectedFromTheParentCommit(t *testing.T) {
 	if child := gitStateReport(t, res, "sub"); child.Class != GitClassURLMoved || !strings.Contains(child.Suggestion, newURL) {
 		t.Fatalf("child = %+v", child)
 	}
-	if _, err := PeerGitRealign(context.Background(), ws, []string{"sub"}, RealignOptions{Apply: true, Fetch: true}); err != nil {
+	applied, err := PeerGitRealign(context.Background(), ws, []string{"sub"}, RealignOptions{Apply: true, Fetch: true})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got := gitStateHead(t, sub); got != s2 {
 		t.Fatalf("child HEAD = %s, want %s", got, s2)
+	}
+	// The child re-pointed its own origin; the report says so, with the undo.
+	if child := gitStateReport(t, applied, "sub"); len(child.URLMoves) != 1 || !strings.Contains(child.Undo, "remote set-url origin") {
+		t.Fatalf("the re-pointed origin left no record: %+v", child)
 	}
 }
 
@@ -189,6 +197,7 @@ func gitlinkBumpFixture(t *testing.T, empty bool) (ws, sub, subSrc, s2 string) {
 	gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules", "origin")
 	gitStateRun_(t, ws, "reset", "-q", "--mixed", "origin/main")
 	sub = filepath.Join(ws, "sub")
+	gitStateRun_(t, sub, "config", "protocol.file.allow", "always")
 	if !empty {
 		gitStateRewriteTracked(t, filepath.Join(sub, "file.txt"), "v2\n")
 	}
@@ -240,5 +249,32 @@ func TestPeerGitRealign_InsteadOfIsNotAMove(t *testing.T) {
 	}
 	if got := gitStateHead(t, sub); got != s2 {
 		t.Fatalf("child HEAD = %s, want %s", got, s2)
+	}
+}
+
+// An uninitialized submodule (an empty directory) is no checkout: git would
+// resolve it to the parent, and --apply --fetch must not re-point or fetch
+// the parent as if it were the child, nor recurse into it forever.
+func TestPeerGitRealign_UninitializedSubmoduleNeverTouchesTheParent(t *testing.T) {
+	ws, sub, _, _ := gitlinkBumpFixture(t, false)
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := gitStateRun_(t, ws, "config", "--get", "remote.origin.url")
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child := gitStateReport(t, res, "sub"); child.Status != GitRepoSkipped || child.Reason != "no checkout at the gitlink path" {
+		t.Fatalf("child = %+v", child)
+	}
+	if got := gitStateRun_(t, ws, "config", "--get", "remote.origin.url"); got != before {
+		t.Fatalf("the parent's origin moved from %s to %s", before, got)
+	}
+	if len(res.Repos) != 2 {
+		t.Fatalf("repos = %d, want the root and the child once each", len(res.Repos))
 	}
 }

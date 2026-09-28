@@ -283,14 +283,42 @@ func TestPeerGitRescue_SkipsDefaultBranchCheckedOutElsewhere(t *testing.T) {
 	gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
 	before := gitStateRun_(t, f.ws, "rev-parse", "main")
 
+	// Refused at plan time: no rescue branch is created for a move that
+	// cannot happen.
 	rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true})
-	if rep.Status != GitRepoSkipped || !strings.Contains(rep.Reason, "linked worktree") {
+	if rep.Status != GitRepoNoMatch || !strings.Contains(rep.Suggestion, "linked worktree") {
 		t.Fatalf("rescue = %+v", rep)
+	}
+	if out := gitStateRun_(t, f.ws, "branch", "--list", "rescue/*"); out != "" {
+		t.Fatalf("a rescue branch was created: %s", out)
 	}
 	if got := gitStateRun_(t, f.ws, "rev-parse", "main"); got != before {
 		t.Fatalf("main moved to %s under its worktree", got)
 	}
 	if out := gitStateRun_(t, wt, "status", "--porcelain"); out != "" {
 		t.Fatalf("the linked worktree shows changes:\n%s", out)
+	}
+}
+
+// A feature branch rebased and force-pushed on the other Mac is diverged
+// from its own upstream, whose tip the files match; it is not a branch
+// whose work landed on main.
+func TestPeerGitClass_ForcePushedFeatureIsDivergedFromItsUpstream(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.writer, "checkout", "-q", "-b", "feature")
+	gitStateCommitFile(t, f.writer, "feat.txt", "f1\n", "f1")
+	gitStateRun_(t, f.writer, "push", "-q", "-u", "origin", "feature")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature", "--track", "origin/feature")
+	gitStateRun_(t, f.writer, "commit", "-q", "--amend", "-m", "f1 rebased")
+	gitStateCommitFile(t, f.writer, "feat.txt", "f2\n", "f2")
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "feature")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	tip := gitStateRun_(t, f.ws, "rev-parse", "origin/feature")
+	f.deliver(t, tip)
+
+	rep := rescueRealign(t, f.ws, RealignOptions{})
+	if rep.Class != GitClassDiverged || rep.RescueTarget != tip {
+		t.Fatalf("class %q target %q, want diverged -> origin/feature %s", rep.Class, rep.RescueTarget, tip)
 	}
 }

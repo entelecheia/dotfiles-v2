@@ -70,12 +70,13 @@ func newPeerGitCmd() *cobra.Command {
 the machine that did not make the commits. After a switch, the newly active
 Mac realigns instead of pulling: each repo's HEAD and index move forward to
 the descendant commit its files already match, through git's compare-and-swap
-ref update. The worktree is never written by git, uncommitted modifications
-survive, and untracked files never block.
+ref update. Uncommitted modifications survive and untracked files never block;
+the only worktree file git may write is a stale .gitmodules that realign
+--apply restores.
 
 Repos with a lock, an operation in progress, unmerged entries or staged
-changes are skipped and reported. The commands never fetch; run git fetch
-first when fresh upstream state is wanted.`,
+changes are skipped and reported. Nothing is fetched unless realign runs with
+--apply --fetch; run git fetch first when fresh upstream state is wanted.`,
 		RunE: func(c *cobra.Command, _ []string) error { return c.Help() },
 	}
 	cmd.AddCommand(newPeerGitStatusCmd())
@@ -150,8 +151,9 @@ local), then HEAD and the index move to the matching commit, on the default
 branch for a branch mismatch. The worktree is never written; every move
 prints its undo command.
 
-Peer sync never carries .gitmodules. After a repo moves, a worktree
-.gitmodules equal to an older committed version is reported as stale;
+Peer sync never carries .gitmodules. A worktree .gitmodules that is missing,
+or equal to an older committed version of the commit a repo sits on or moves
+to, is reported as stale;
 --apply restores it from HEAD and runs git submodule sync for the URLs it
 moves. A submodule whose gitlink commit is missing is reported with the
 fetch (and set-url, for a moved URL) commands; --apply --fetch runs them and
