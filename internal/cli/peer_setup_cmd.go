@@ -123,7 +123,7 @@ action fails and the app keeps running. --dry-run lists what each would do.
 Each action has a one-minute limit. Results are printed and appended to the
 peer log; a failed hook never stops the command or a sync. Upgrade dot on
 both Macs before adding hooks: a dot without them runs none (and one from
-before #196 drops the key when it saves).`,
+before #196 drops the key when it saves; later ones keep top-level keys).`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if goos != "darwin" {
 				return fmt.Errorf("peer scheduler requires macOS launchd (host OS %s); no scheduler artifact was changed", goos)

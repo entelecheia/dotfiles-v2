@@ -579,8 +579,13 @@ func SaveLocalConfig(paths *LocalPaths, cfg *LocalConfig) error {
 // keepUnknownConfigKeys carries over the top-level keys of the config on
 // disk that LocalConfig does not own, so a dot older than the key (a
 // handover's adopt on the peer, a stale binary) no longer drops it on
-// save (#196). A key LocalConfig owns is the struct's, cleared or not. An
-// unreadable file on disk keeps nothing: loading it already failed.
+// save (#196). A key LocalConfig owns is the struct's, cleared or not; a
+// key nested under one is not carried. An unreadable file on disk keeps
+// nothing: loading it already failed. Carried values are copied with their
+// aliases resolved (an anchor on a key the struct rewrote is gone), and
+// the result must load as a config, or the save refuses.
+//
+// ponytail: known ceiling. See docs/CEILINGS.md (unknown config keys, top level only).
 func keepUnknownConfigKeys(path string, data []byte) ([]byte, error) {
 	old, err := os.ReadFile(path)
 	if err != nil {
@@ -597,7 +602,7 @@ func keepUnknownConfigKeys(path string, data []byte) ([]byte, error) {
 	kept := false
 	for i := 0; i+1 < len(was.Content[0].Content); i += 2 {
 		if key := was.Content[0].Content[i]; !known[key.Value] {
-			now.Content[0].Content = append(now.Content[0].Content, key, was.Content[0].Content[i+1])
+			now.Content[0].Content = append(now.Content[0].Content, resolveYAMLAliases(key), resolveYAMLAliases(was.Content[0].Content[i+1]))
 			kept = true
 		}
 	}
@@ -608,7 +613,26 @@ func keepUnknownConfigKeys(path string, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshaling local config: %w", err)
 	}
+	var check LocalConfig
+	if err := yaml.Unmarshal(out, &check); err != nil {
+		return nil, fmt.Errorf("refusing to save %s: keeping its unknown keys would not load again: %w", path, err)
+	}
 	return out, nil
+}
+
+// resolveYAMLAliases copies n with every alias replaced by a copy of what
+// it names, anchors dropped, so the copy stands alone in another document.
+func resolveYAMLAliases(n *yaml.Node) *yaml.Node {
+	for n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	c := *n
+	c.Anchor = ""
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, child := range n.Content {
+		c.Content[i] = resolveYAMLAliases(child)
+	}
+	return &c
 }
 
 // localConfigKeys are the top-level keys LocalConfig owns.

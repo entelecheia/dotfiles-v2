@@ -172,3 +172,27 @@ func TestPeerDoctor_ReportsLocalAndPeerDot(t *testing.T) {
 		t.Errorf("peer dot = %q mismatch=%v; want the fake release flagged", report.RemoteDot, report.DotMismatch)
 	}
 }
+
+// The handover warns only for a peer release older than this one; equal,
+// newer and dev builds on either side stay silent (#196).
+func TestPeerDotOlder(t *testing.T) {
+	for _, tc := range []struct {
+		local, banner string
+		warns         bool
+	}{
+		{"2.70.22 (x)", "dot version 2.70.21 (y)", true},
+		{"2.70.22 (x)", "dot version 2.70.22 (y)", false},
+		{"2.70.22 (x)", "dot version 2.71.0 (y)", false},
+		{"2.70.22 (x)", "dot version dev (y)", false},
+		{"dev (x)", "dot version 2.70.21 (y)", false},
+		{"", "dot version 2.70.21 (y)", false},
+	} {
+		remote, err := pickRemoteDot("/opt/homebrew/bin/dot\t"+tc.banner+"\n", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := peerDotOlder(tc.local, remote) != ""; got != tc.warns {
+			t.Errorf("local %q peer %q: warns %v, want %v", tc.local, tc.banner, got, tc.warns)
+		}
+	}
+}

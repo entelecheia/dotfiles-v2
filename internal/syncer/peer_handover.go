@@ -618,7 +618,11 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 		// Its dot runs the adopt and then coordinates: config keys newer
 		// than its release do not apply there, and a release without role
 		// hooks runs no on_activate while this Mac's on_deactivate runs.
-		opts.Warn(fmt.Sprintf("the peer's dot %s is older than this machine's %s: config keys newer than its release (hooks, remote_dot, owner_aliases) do not apply there; upgrade dot on %s first", older, strings.Fields(opts.LocalDotVersion)[0], cfg.Target.Host))
+		msg := fmt.Sprintf("the peer's dot %s is older than this machine's %s: config keys newer than its release (hooks, remote_dot, host_merge, owner_aliases) may not apply there", older, strings.Fields(opts.LocalDotVersion)[0])
+		if len(cfg.Hooks.OnDeactivate)+len(cfg.Hooks.OnActivate) > 0 {
+			msg += "; this Mac's on_deactivate still runs while a release without role hooks runs no on_activate there"
+		}
+		opts.Warn(msg + "; to avoid it, upgrade dot on " + cfg.Target.Host + " and hand over again (dot peer handover --dry-run shows this first)")
 	}
 	epoch := cfg.OwnerEpoch + 1
 	generation, err := readPeerReplicaGeneration(cfg.LocalPaths)
