@@ -217,7 +217,14 @@ func TestCoauthorGuardIntegration(t *testing.T) {
 			diag.Env = gitEnv()
 			origins, _ := diag.CombinedOutput()
 			ver, _ := exec.Command("git", "version").CombinedOutput()
-			t.Logf("commit output:\n%s\ngit: %s\nhook config:\n%s", out, ver, origins)
+			var envDbg []string
+			for _, e := range gitEnv() {
+				if strings.HasPrefix(e, "HOME=") || strings.HasPrefix(e, "XDG_") || strings.HasPrefix(e, "GIT_") {
+					envDbg = append(envDbg, e)
+				}
+			}
+			cfgBody, _ := os.ReadFile(filepath.Join(home, ".config", "git", "config"))
+			t.Logf("commit output:\n%s\ngit: %s\nhook config:\n%s\nconfig file:\n%s\nenv: %s", out, ver, origins, cfgBody, strings.Join(envDbg, " "))
 		}
 		if err != nil {
 			t.Logf("commit output:\n%s", out)
