@@ -200,18 +200,21 @@ coordinator's). The coordinator retires its aliases at the first complete
 peer sync that finds the peer recording the new owner, once this Mac answers
 to the new name. At equal epochs the peer fence refuses a peer that passes
 its own owner guard. When the peer cannot be reached, the rename runs only
-on a Mac that still answers to <old> (or with --local-only). The epoch, targets and baselines are untouched, so no
-run plans a deletion. It refuses when this Mac answers to neither name, when
+on a Mac that still answers to <old> (or with --local-only). The epoch,
+targets and baselines are untouched, so no run plans a deletion. It refuses when this Mac answers to neither name, when
 the peer (or the peer target's host) answers to either one, and, once this
 Mac no longer answers to <old>, unless it runs the peer scheduler and the
 peer, asked then, runs none (without a peer, or a peer that cannot answer,
 only --local-only renames it): moving ownership between the Macs is --set or
 dot peer handover. --local-only skips these checks; it is the step the
-command runs on the peer. A retry after a peer failure goes on to the peer.
+command runs on the peer. A retry after a peer failure goes on to the peer
+(unless <old> was a generic name, which is not kept: then run the printed
+--local-only command there).
 --dry-run shows the change without writing anything.
 
 With --profile=peer, a --set or --clear that leaves this Mac without the
-coordinator role also removes its peer scheduler, as a demotion does.
+coordinator role also removes its peer scheduler and runs its on_deactivate
+hooks, as a demotion does.
 
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer
@@ -479,7 +482,12 @@ func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
 		after.Owner, after.OwnerAliases = owner, nil
 		if strings.TrimSpace(owner) == "" || syncer.CheckOwner(&after) != nil {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			if _, err := syncer.PeerSchedule(cmd.Context(), syncer.PeerScheduleOptions{Config: cfg, Runner: bs.Runner, Probe: probeRunner(), Off: true, DryRun: dryRun}); err != nil {
+			// Like setup --off it runs on_deactivate; the outcomes print.
+			res, err := syncer.PeerSchedule(cmd.Context(), syncer.PeerScheduleOptions{Config: cfg, Runner: bs.Runner, Probe: probeRunner(), Off: true, DryRun: dryRun})
+			if err != nil {
+				if res != nil {
+					printPeerHooks(p, res.Hooks)
+				}
 				return fmt.Errorf("owner set, but removing this Mac's peer scheduler failed: %w; run dot peer setup --off", err)
 			}
 			if dryRun {
@@ -487,6 +495,7 @@ func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
 			} else {
 				p.Success("peer scheduler removed: this Mac no longer coordinates")
 			}
+			printPeerHooks(p, res.Hooks)
 		}
 	}
 	return nil

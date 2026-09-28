@@ -735,7 +735,7 @@ func peerRemoteDotResult(ctx context.Context, runner *exec.Runner, cfg *Config, 
 	if err != nil {
 		return nil, err
 	}
-	// Shared by handover, rename and doctor: the caller names its step.
+	// Shared by handover and rename: the caller names its step.
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", cfg.Target.Host, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("remote `dot %s` on %s failed: %w", strings.Join(args, " "), cfg.Target.Host, err)

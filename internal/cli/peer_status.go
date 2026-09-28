@@ -193,6 +193,7 @@ func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string,
 		return snapshot
 	}
 	if home == "" {
+		snapshot.State = "unknown: no home directory"
 		return snapshot
 	}
 	plist := filepath.Join(home, "Library", "LaunchAgents", label+".plist")

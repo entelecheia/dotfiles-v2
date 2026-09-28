@@ -198,7 +198,7 @@ func TestSyncOwnerSetAwayRemovesThePeerScheduler(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", "peer", "config.yaml"),
-		"target: ssh:peer-alias:/remote/work\nowner: "+self+"\nowner_epoch: 2\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+		"target: ssh:peer-alias:/remote/work\nowner: "+self+"\nowner_epoch: 2\npropagation:\n  create: true\n  update: true\n  delete: true\nhooks:\n  on_deactivate:\n    - launchd-bootout com.none.job.*\n")
 	plist := filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
 	writeCLITestFile(t, plist, "<plist/>")
 
@@ -209,11 +209,16 @@ func TestSyncOwnerSetAwayRemovesThePeerScheduler(t *testing.T) {
 	if _, err := os.Stat(plist); err != nil {
 		t.Fatalf("the coordinator's own --set removed its scheduler: %v", err)
 	}
-	if _, errOut, err := runDotForTest("sync", "owner", "--profile=peer", "--set", "other-mac"); err != nil {
+	out, errOut, err := runDotForTest("sync", "owner", "--profile=peer", "--set", "other-mac")
+	if err != nil {
 		t.Fatalf("--set other: %v\n%s", err, errOut)
 	}
 	if _, err := os.Stat(plist); !os.IsNotExist(err) {
 		t.Fatalf("the plist stayed after the role moved away: %v", err)
+	}
+	// The demotion's on_deactivate outcome is reported, as setup --off does.
+	if !strings.Contains(out+errOut, "hook on_deactivate launchd-bootout com.none.job.*") {
+		t.Fatalf("no hook line:\n%s%s", out, errOut)
 	}
 }
 
