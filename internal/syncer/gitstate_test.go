@@ -1050,6 +1050,112 @@ func TestPeerGitRealign_UndeliveredSubmoduleAdditionKeepsTheParent(t *testing.T)
 	}
 }
 
+// A child this run leaves alone (a stale index.lock, or outside the
+// restriction) stays at its HEAD whatever its files show: the parent must
+// not move past it, or it records a rewind (#189 round 13).
+func TestPeerGitRealign_ParentStaysWithAChildLeftAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		lock     bool
+		restrict []string
+	}{{"lock", true, nil}, {"restricted to the parent", false, []string{"."}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			subSrc := filepath.Join(tmp, "sub-src")
+			gitStateInitRepo(t, subSrc)
+			s1 := gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+			s2 := gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+			origin := filepath.Join(tmp, "origin")
+			gitStateInitRepo(t, origin)
+			gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+			gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+			gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+			gitStateRun_(t, origin, "add", "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+			p0 := gitStateHead(t, origin)
+			gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+			gitStateRun_(t, origin, "add", "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p1")
+
+			ws := filepath.Join(tmp, "ws")
+			gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+			gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+			gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+			sub := filepath.Join(ws, "sub")
+			gitStateRewriteTracked(t, filepath.Join(sub, "file.txt"), "v2\n") // delivered
+			if tc.lock {
+				gitdir := gitStateRun_(t, sub, "rev-parse", "--absolute-git-dir")
+				if err := os.WriteFile(filepath.Join(gitdir, "index.lock"), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res, err := PeerGitRealign(context.Background(), ws, tc.restrict, RealignOptions{Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if root := gitStateReport(t, res, "."); gitStateHead(t, ws) != p0 || !strings.Contains(root.TieBreak, "left alone") {
+				t.Fatalf("root = %+v, want HEAD kept with the child named", root)
+			}
+			if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "rewind") {
+				t.Fatalf("the parent records a rewind:\n%s", log)
+			}
+		})
+	}
+}
+
+// Same-content commits in a grandchild: "newest" is the one that descends
+// from the others, whichever order a run lists them in, so the parent's
+// question and the middle repo's own run agree (#189 round 13).
+func TestPeerGitRealign_NewestDoesNotDependOnOrder(t *testing.T) {
+	tmp := t.TempDir()
+	xSrc := filepath.Join(tmp, "x-src")
+	gitStateInitRepo(t, xSrc)
+	x0 := gitStateCommitFile(t, xSrc, "file.txt", "v0\n", "x0")
+	x1 := gitStateCommitFile(t, xSrc, "file.txt", "v1\n", "x1")
+	gitStateRun_(t, xSrc, "commit", "-q", "--allow-empty", "-m", "x2 empty")
+	x2 := gitStateHead(t, xSrc)
+
+	mSrc := filepath.Join(tmp, "m-src")
+	gitStateInitRepo(t, mSrc)
+	gitStateCommitFile(t, mSrc, "readme.md", "m\n", "base")
+	gitStateRun_(t, mSrc, "-c", "protocol.file.allow=always", "submodule", "add", "-q", xSrc, "x")
+	var ms []string
+	for _, x := range []string{x0, x1, x2} {
+		gitStateRun_(t, mSrc, "-C", "x", "checkout", "-q", x)
+		gitStateRun_(t, mSrc, "add", "x")
+		gitStateRun_(t, mSrc, "commit", "-q", "-m", "m records "+shortRev(x))
+		ms = append(ms, gitStateHead(t, mSrc))
+	}
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "root\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", mSrc, "m")
+	gitStateRun_(t, origin, "-C", "m", "checkout", "-q", ms[0])
+	gitStateRun_(t, origin, "add", "m")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "r0")
+	r0 := gitStateHead(t, origin)
+	gitStateRun_(t, origin, "-C", "m", "checkout", "-q", ms[2])
+	gitStateRun_(t, origin, "add", "m")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "r1")
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", r0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--recursive")
+	m := filepath.Join(ws, "m")
+	gitStateRun_(t, m, "checkout", "-q", "-B", "main", ms[0])
+	gitStateRun_(t, m, "branch", "-q", "--set-upstream-to=origin/main")
+	gitStateRewriteTracked(t, filepath.Join(m, "x", "file.txt"), "v1\n")
+
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true}); err != nil {
+		t.Fatal(err)
+	}
+	if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "rewind") {
+		t.Fatalf("the root records a rewind:\n%s", log)
+	}
+}
+
 // Children that disagree keep HEAD: moving would take one child's bump in
 // and leave the other's content behind its new gitlink. A count of votes
 // ties here, and the tie went to the candidate.

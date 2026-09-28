@@ -171,6 +171,7 @@ func PeerGitRealign(ctx context.Context, root string, repos []string, opts Reali
 // gitStateRun carries the per-run state: the resolved git binary, the
 // options and the optional repo restriction.
 type gitStateRun struct {
+	root     string // the workspace, for the restriction's relative paths
 	git      string
 	opts     RealignOptions
 	restrict map[string]bool // nil means all repos
@@ -215,7 +216,7 @@ func runGitState(ctx context.Context, root string, repos []string, opts RealignO
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	run := &gitStateRun{git: gitPath, opts: opts, env: gitCleanEnv(ctx, gitPath)}
+	run := &gitStateRun{root: root, git: gitPath, opts: opts, env: gitCleanEnv(ctx, gitPath)}
 	if len(repos) > 0 {
 		run.restrict = map[string]bool{}
 		for _, arg := range repos {
@@ -484,7 +485,7 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 			return
 		}
 		rep.Status = GitRepoNoMatch
-		rep.Reason = "the children match HEAD's gitlinks better than any descendant's"
+		rep.Reason = "HEAD wins the tie with its descendants (see tie)"
 		r.classifyNoMatch(ctx, abs, gitdir, rep)
 		return
 	}
@@ -544,9 +545,20 @@ func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, i
 			return cand, prefix + "parent gitlink", false
 		}
 	}
-	// Candidate order is the parent gitlink first, then the first-parent
-	// chain nearest HEAD first; without the gitlink, the last is the newest.
-	return pool[len(pool)-1], prefix + "newest candidate", false
+	return r.newest(ctx, abs, pool), prefix + "newest candidate", false
+}
+
+// newest is the pool member that descends from every other one, so the
+// choice does not depend on list order (a child's own run and its parent's
+// question list its commits differently). Without one, the last in order:
+// the first-parent chain runs nearest HEAD first.
+func (r *gitStateRun) newest(ctx context.Context, abs string, pool []string) string {
+	for _, cand := range pool {
+		if !slices.ContainsFunc(pool, func(o string) bool { return o != cand && !r.strictDescendant(ctx, abs, o, cand) }) {
+			return cand
+		}
+	}
+	return pool[len(pool)-1]
 }
 
 // bestByChildren is childrenEvidence for breakTie: the candidates left
@@ -639,16 +651,20 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 			for i := range tied {
 				if links[i][path] != "" && (!withHead || links[0][path] == "") {
 					behind[i] = true
+					if !slices.Contains(ev.behind, path) {
+						ev.behind = append(ev.behind, path)
+					}
 				}
-			}
-			if !slices.Contains(ev.behind, path) {
-				ev.behind = append(ev.behind, path)
 			}
 			continue
 		}
-		target, exact, ok := r.childTarget(ctx, child, shas)
+		target, exact, ok, held := r.childTarget(ctx, child, shas)
 		if !ok {
 			continue // no checkout to ask (a delivered addition has no .git)
+		}
+		label := path
+		if held != "" {
+			label += " (left alone: " + held + ")"
 		}
 		placed := false
 		for i := range tied {
@@ -675,8 +691,8 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 				// The child is ahead of it: a forward change to record.
 			default:
 				behind[i] = true
-				if !slices.Contains(ev.behind, path) {
-					ev.behind = append(ev.behind, path)
+				if !slices.Contains(ev.behind, label) {
+					ev.behind = append(ev.behind, label)
 				}
 			}
 		}
@@ -719,19 +735,24 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 // on a tie, the same breakTie (its own children, recursively). HEAD is the
 // answer when nothing improves on it, uncommitted edits included (#197).
 // exact says the content matches it with no difference; ok is false when
-// there is no checkout to read.
-func (r *gitStateRun) childTarget(ctx context.Context, abs string, extra []string) (string, bool, bool) {
+// there is no checkout to read. A child this run leaves alone (a lock, an
+// operation, staged changes, a linked worktree, outside the restriction)
+// stays at HEAD whatever its files show, and held says why.
+func (r *gitStateRun) childTarget(ctx context.Context, abs string, extra []string) (string, bool, bool, string) {
 	gitdir, err := r.gitDir(ctx, abs)
 	if err != nil {
-		return "", false, false
+		return "", false, false, ""
 	}
 	head, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "HEAD")
 	if err != nil {
-		return "", false, false
+		return "", false, false, ""
 	}
 	headDiffs, err := r.contentDiffs(ctx, abs, gitdir, head)
 	if err != nil {
-		return "", false, false
+		return "", false, false, ""
+	}
+	if held := r.leftAlone(ctx, abs, gitdir); held != "" {
+		return head, headDiffs == 0, true, held
 	}
 	cands, _ := r.candidates(ctx, abs, head, "")
 	for _, sha := range extra {
@@ -754,7 +775,7 @@ func (r *gitStateRun) childTarget(ctx context.Context, abs string, extra []strin
 		}
 	}
 	if len(tied) == 0 || bestDiffs > headDiffs {
-		return head, headDiffs == 0, true
+		return head, headDiffs == 0, true, ""
 	}
 	headTie := ""
 	if bestDiffs == headDiffs {
@@ -762,9 +783,21 @@ func (r *gitStateRun) childTarget(ctx context.Context, abs string, extra []strin
 	}
 	target, _, stay := r.breakTie(ctx, abs, "", headTie, headDiffs > 0, tied)
 	if stay {
-		return head, headDiffs == 0, true
+		return head, headDiffs == 0, true, ""
 	}
-	return target, bestDiffs == 0, true
+	return target, bestDiffs == 0, true, ""
+}
+
+// leftAlone says why process will not realign the checkout at abs, as it
+// decides: a linked worktree, a repo outside the restriction, a block.
+func (r *gitStateRun) leftAlone(ctx context.Context, abs, gitdir string) string {
+	if _, err := os.Stat(filepath.Join(gitdir, "commondir")); err == nil {
+		return "linked worktree"
+	}
+	if rel, err := filepath.Rel(r.root, abs); err == nil && !r.included(filepath.ToSlash(rel)) {
+		return "not named in the restriction"
+	}
+	return r.blockReason(ctx, abs, gitdir)
 }
 
 // sameOwnContent reports two commits with the same content outside their
