@@ -198,7 +198,12 @@ func TestCoauthorGuardIntegration(t *testing.T) {
 	trailer := "feat: change\n\nCo-authored-by: Bot <bot@example.com>\n"
 	clean := "feat: change\n"
 
-	gitEnv := func() []string { return append(os.Environ(), "HOME="+home) }
+	// Git resolves its global config at $XDG_CONFIG_HOME/git/config when
+	// XDG_CONFIG_HOME is set (it is, on GitHub's ubuntu runners), not at
+	// $HOME/.config/git/config — both must point at the sandbox home.
+	gitEnv := func() []string {
+		return append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"))
+	}
 	gitCommit := func(t *testing.T, repo, message string) error {
 		t.Helper()
 		msg := filepath.Join(repo, "MSG")
