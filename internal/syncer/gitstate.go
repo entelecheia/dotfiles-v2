@@ -505,8 +505,8 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 //  2. the parent's gitlink, which keeps the parent's status clean;
 //  3. the newest candidate, the upstream tip side of the chain.
 //
-// It returns the choice and a one-line account of the rule, empty when
-// nothing had to be decided.
+// It returns the choice and a one-line account of the rule, empty only
+// when a lone candidate had nothing to beat.
 func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, tied []string) (string, string, bool) {
 	contenders := tied
 	prefix := fmt.Sprintf("%d candidates tie on content; ", len(tied))
@@ -523,7 +523,7 @@ func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, t
 	}
 	if len(pool) == 1 {
 		if children == "" {
-			return pool[0], "", false
+			children = "no child tells them apart"
 		}
 		return pool[0], prefix + children, false
 	}
@@ -540,25 +540,59 @@ func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, t
 	return pool[len(pool)-1], prefix + "newest candidate", false
 }
 
-// bestByChildren asks each child whose gitlink differs between the
+// bestByChildren is childrenEvidence for breakTie: the candidates left
+// (none when HEAD stays) and an account of the votes, empty when they
+// decided nothing and no commit was missing.
+func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []string, withHead bool) ([]string, string) {
+	ev := r.childrenEvidence(ctx, abs, tied, withHead)
+	note := ""
+	if len(ev.unknown) > 0 {
+		note = " (" + strings.Join(ev.unknown, ", ") + "; fetch it there, from the URL the candidate's .gitmodules names if it moved, then realign again)"
+	}
+	pool := ev.pool
+	if withHead {
+		if len(pool) == 1 && pool[0] == tied[0] {
+			return nil, "the children favor HEAD's gitlinks" + note
+		}
+		pool = slices.DeleteFunc(slices.Clone(pool), func(c string) bool { return c == tied[0] })
+	}
+	switch {
+	case ev.split:
+		return pool, fmt.Sprintf("children favor %d of %d differing gitlinks", ev.best, ev.decided) + note
+	case note != "":
+		return pool, "children cannot tell" + note
+	}
+	return pool, ""
+}
+
+// tieEvidence is what the children say about contenders that tie on
+// content.
+type tieEvidence struct {
+	pool    []string // the top contenders, in order, HEAD among them when it is
+	decided int      // differing gitlinks whose child told the contenders apart
+	best    int      // the votes each of the pool got
+	split   bool     // the votes, or a dropped candidate, told them apart
+	unknown []string // "<path> lacks <sha>": commits a child could not compare with
+}
+
+// childrenEvidence asks each child whose gitlink differs between the
 // contenders which of those commits its worktree content is closest to (its
-// vote). A child that lacks a commit cannot compare with it, so that commit
-// gets no vote (unknown), and the child's known answers still count.
+// vote, childVote). A child that lacks a commit cannot compare with it, so
+// that commit gets no vote (unknown), and the child's known answers still
+// count.
 //
 // With withHead, tied[0] is HEAD. A candidate that gives up a gitlink a
 // child votes for in HEAD would move the parent past a bump whose content
 // that child does not have (a later commit -a records it reverted), so it
-// drops out; with none left the pool is empty: HEAD stays. The rest are
-// scored by the votes they get. It returns the top candidates in their
-// original order and an account of the votes, empty when they decided
-// nothing and no commit was missing.
-func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []string, withHead bool) ([]string, string) {
+// drops out; with none left, HEAD alone is the pool. The rest are scored by
+// the votes they get.
+func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []string, withHead bool) tieEvidence {
 	links := make([]map[string]string, len(tied))
 	varying := map[string]bool{}
 	for i, cand := range tied {
 		entries, err := r.childGitlinks(ctx, abs, cand)
 		if err != nil {
-			return candidatesOnly(tied, withHead), ""
+			return tieEvidence{pool: tied}
 		}
 		links[i] = map[string]string{}
 		for _, e := range entries {
@@ -577,17 +611,24 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 	paths := slices.Sorted(maps.Keys(varying))
 	scores := make([]int, len(tied))
 	gives := make([]bool, len(tied)) // gives up a gitlink a child votes for in HEAD
-	decided := 0
-	var unknown []string
+	var ev tieEvidence
 	for _, path := range paths {
 		var shas []string
+		absent := false
 		for i := range tied {
-			if sha := links[i][path]; sha != "" && !slices.Contains(shas, sha) {
+			switch sha := links[i][path]; {
+			case sha == "":
+				absent = true
+			case !slices.Contains(shas, sha):
 				shas = append(shas, sha)
 			}
 		}
-		vote, missing := r.childVote(ctx, abs, path, shas)
-		unknown = append(unknown, missing...)
+		headSha := ""
+		if withHead {
+			headSha = links[0][path]
+		}
+		vote, missing := r.childVote(ctx, abs, path, shas, headSha, absent)
+		ev.unknown = append(ev.unknown, missing...)
 		split := false
 		for i := range tied {
 			if !vote[links[i][path]] {
@@ -597,23 +638,15 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 		if len(vote) == 0 || !split {
 			continue
 		}
-		decided++
+		ev.decided++
 		for i := range tied {
 			switch {
 			case vote[links[i][path]]:
 				scores[i]++
-			case withHead && vote[links[0][path]]:
+			case withHead && vote[headSha]:
 				gives[i] = true
 			}
 		}
-	}
-	note := ""
-	if len(unknown) > 0 {
-		note = " (" + strings.Join(unknown, ", ") + "; fetch it there, then realign again)"
-	}
-	first := 0
-	if withHead {
-		first = 1
 	}
 	// HEAD never gives anything up, so it bounds the scores too.
 	best, worst, dropped := -1, -1, false
@@ -627,28 +660,14 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 			worst = scores[i]
 		}
 	}
-	var pool []string
-	for i := first; i < len(tied); i++ {
+	for i := range tied {
 		if !gives[i] && scores[i] == best {
-			pool = append(pool, tied[i])
+			ev.pool = append(ev.pool, tied[i])
 		}
 	}
-	switch {
-	case len(pool) == 0:
-		return nil, "the children favor HEAD's gitlinks" + note
-	case decided > 0 && (best != worst || dropped):
-		return pool, fmt.Sprintf("children favor %d of %d differing gitlinks", best, decided) + note
-	case note != "":
-		return pool, "children cannot tell" + note
-	}
-	return pool, ""
-}
-
-func candidatesOnly(tied []string, withHead bool) []string {
-	if withHead {
-		return tied[1:]
-	}
-	return tied
+	ev.best = best
+	ev.split = ev.decided > 0 && (best != worst || dropped)
+	return ev
 }
 
 // childVote returns the commits among shas whose content the child checkout
@@ -656,11 +675,9 @@ func candidatesOnly(tied []string, withHead bool) []string {
 // with. Closest, not equal: a child with uncommitted edits still votes for
 // the commit it was edited from (#197). A missing checkout votes for
 // nothing; a commit the child lacks, or cannot compare with, gets no vote.
-// It might be closer than any known one, so with one missing, only a known
-// commit the child matches exactly gets the vote; otherwise the child
-// abstains (peer sync delivered a bump whose commit is not fetched yet, the
-// #179 case: the parent moves on and the child reports the missing commit).
-func (r *gitStateRun) childVote(ctx context.Context, abs, path string, shas []string) (map[string]bool, []string) {
+// headSha is HEAD's gitlink when HEAD contends, and absent says a contender
+// has no such submodule.
+func (r *gitStateRun) childVote(ctx context.Context, abs, path string, shas []string, headSha string, absent bool) (map[string]bool, []string) {
 	child := filepath.Join(abs, filepath.FromSlash(path))
 	gitdir, err := r.gitDir(ctx, child)
 	if err != nil {
@@ -683,8 +700,42 @@ func (r *gitStateRun) childVote(ctx context.Context, abs, path string, shas []st
 			vote[sha] = true
 		}
 	}
-	if len(missing) > 0 && closest != 0 {
+	// A commit it cannot compare with, or a contender without the submodule
+	// (a delivered removal leaves the child's .git, which peer sync never
+	// carries, and deletes its files), might be closer than any known
+	// commit: only an exact match votes then. Otherwise the child abstains
+	// (the #179 case: peer sync delivered a bump whose commit is not
+	// fetched yet; the parent moves on and the child reports it missing).
+	if (len(missing) > 0 || absent) && closest != 0 {
 		return nil, missing
+	}
+	if len(vote) > 1 {
+		// An inexact tie that includes HEAD's gitlink: the child's edits sit
+		// on the files the bump changed, and staying is the safe side.
+		if closest > 0 && vote[headSha] {
+			return map[string]bool{headSha: true}, missing
+		}
+		// An exact tie (an empty or gitlink-only bump): the child's own
+		// children tell the commits apart, down the nested checkouts.
+		var tied []string
+		if vote[headSha] {
+			tied = append(tied, headSha)
+		}
+		for _, sha := range shas {
+			if vote[sha] && sha != headSha {
+				tied = append(tied, sha)
+			}
+		}
+		ev := r.childrenEvidence(ctx, child, tied, vote[headSha])
+		for _, u := range ev.unknown {
+			missing = append(missing, path+"/"+u)
+		}
+		if ev.split {
+			vote = map[string]bool{}
+			for _, sha := range ev.pool {
+				vote[sha] = true
+			}
+		}
 	}
 	return vote, missing
 }
