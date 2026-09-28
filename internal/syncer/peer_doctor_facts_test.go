@@ -144,10 +144,36 @@ func TestEvaluatePeerSides(t *testing.T) {
 		local, peer = doctorFacts()
 		local.MachineNames = []string{"m5x26"}
 		peer.Owner, peer.OwnerEpoch = tc.owner, 3
-		c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", tc.level)
+		checks := evaluatePeerSides(local, peer, "m5x26", "m3x23")
+		c := checkFor(checks, "roles", tc.level)
 		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner m5x26 --epoch 2" || !strings.Contains(c.Detail, "demotes") {
 			t.Errorf("peer owner %q at a higher epoch: %+v", tc.owner, c)
 		}
+		// The other rows judge the state that fix leaves: m5x26 stays the
+		// coordinator, so its scheduler stays and it needs no replica.
+		for _, c := range checks {
+			if (c.Name == "scheduler" || c.Name == "replica") && c.Level != DoctorPass {
+				t.Errorf("peer owner %q at a higher epoch contradicts the roles fix: %+v", tc.owner, c)
+			}
+		}
+	}
+
+	// A coordinator the fence demotes still runs that sync, which checks
+	// rsync before the fence: without rsync 3.x it never gets demoted.
+	local, peer = doctorFacts()
+	local.OwnerEpoch = 3
+	peer.Coordinator, peer.Scheduler, peer.RsyncError = true, true, "openrsync"
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "rsync", DoctorFail); c == nil {
+		t.Errorf("the demoting coordinator's missing rsync passed")
+	}
+
+	// A takeover from a coordinator that never had an epoch: the higher
+	// side's fence refuses until the lower one's sync demotes it.
+	local, peer = doctorFacts()
+	local.OwnerEpoch, local.FencePending = 1, true
+	peer.Coordinator, peer.Scheduler, peer.Owner, peer.OwnerEpoch = true, true, "m3x23", 0
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorWarn); c == nil || !strings.Contains(c.Detail, "refused until m3x23's next sync") || c.Fix != "on m3x23: dot peer sync (its fence demotes it)" {
+		t.Errorf("the higher side's refusal went unsaid: %+v", c)
 	}
 	// The coordinator holds the higher epoch: it proceeds; the other Mac is
 	// told to catch up, since it never syncs.

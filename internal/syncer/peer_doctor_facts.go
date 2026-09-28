@@ -198,24 +198,15 @@ func nfdVerdict(s, o *PeerSideFacts, host, other string) (level, detail, fix str
 	return DoctorPass, host + ": every name in NFD (" + marker + ")", ""
 }
 
-// syncingCoordinators is who runs peer syncs once the fence has spoken
-// (fenceDecision): of two coordinators at different epochs the lower one's
-// next sync only demotes it, before it normalizes or moves anything; a sole
-// coordinator the fence demotes keeps the role only when it answers to the
-// owner it adopts. Equal epochs are the roles row's two-coordinator FAIL.
+// syncingCoordinators is who normalizes and moves names once the fence has
+// spoken: of two coordinators at different epochs the lower one's next sync
+// only demotes it (fenceDecision), before it normalizes or moves anything.
+// Equal epochs are the roles row's two-coordinator FAIL. A sole coordinator
+// stays one: the roles row's fix keeps it the coordinator.
 func syncingCoordinators(local, peer *PeerSideFacts) (bool, bool) {
 	l, p := local.Coordinator, peer.Coordinator
-	demoted := func(c, n *PeerSideFacts) bool {
-		demote, err := fenceDecision(c.Owner, c.OwnerEpoch, n.Owner, n.OwnerEpoch)
-		return err == nil && demote && !answersTo(c.MachineNames, n.Owner)
-	}
-	switch {
-	case l && p && local.OwnerEpoch != peer.OwnerEpoch:
+	if l && p && local.OwnerEpoch != peer.OwnerEpoch {
 		return local.OwnerEpoch > peer.OwnerEpoch, peer.OwnerEpoch > local.OwnerEpoch
-	case l && !p && demoted(local, peer):
-		return false, false
-	case p && !l && demoted(peer, local):
-		return false, false
 	}
 	return l, p
 }
@@ -269,18 +260,19 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		host string
 		f    *PeerSideFacts
 	}
-	// The rows that depend on who syncs (rsync client, NFD) take the Mac
-	// that syncs once the fence has spoken, not every Mac that passes its
-	// owner guard; the roles rows below judge the guards themselves.
+	sides := []side{{here, local}, {there, peer}}
+	// The NFD rows take the Mac that normalizes and moves names once the
+	// fence has spoken, not every Mac that passes its owner guard.
 	lc, pc := syncingCoordinators(local, peer)
 	el, ep := *local, *peer
 	el.Coordinator, ep.Coordinator = lc, pc
-	sides := []side{{here, &el}, {there, &ep}}
+	synced := []side{{here, &el}, {there, &ep}}
 
-	// This machine's client is the doctor's first line. Only the coordinator
-	// runs one, so the other Mac's matters after a takeover.
+	// This machine's client is the doctor's first line. Every Mac that passes
+	// its owner guard runs one: a sync checks rsync before its fence, so a
+	// coordinator about to be demoted needs it to get there.
 	switch {
-	case peer.RsyncError != "" && ep.Coordinator:
+	case peer.RsyncError != "" && peer.Coordinator:
 		add("rsync", DoctorFail, there+": "+peer.RsyncError, "on "+there+": brew install rsync")
 	case peer.RsyncError != "":
 		add("rsync", DoctorWarn, there+": "+peer.RsyncError+" (it needs rsync 3.x once it coordinates)", "on "+there+": brew install rsync")
@@ -288,8 +280,8 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		add("rsync", DoctorPass, there+": "+peer.RsyncPath+" ("+peer.RsyncVersion+")", "")
 	}
 
-	for i, s := range sides {
-		o := sides[1-i]
+	for i, s := range synced {
+		o := synced[1-i]
 		level, detail, fix := nfdVerdict(s.f, o.f, s.host, o.host)
 		add("nfd", level, detail, fix)
 	}
@@ -318,10 +310,22 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		// The fence refuses on both sides, or both write: an operator settles it.
 		add("roles", DoctorFail, fmt.Sprintf("both machines pass their owner guard at epoch %d: two coordinators", local.OwnerEpoch), "set one owner on both: dot sync owner --profile=peer --set <coordinator>")
 	case local.Coordinator && peer.Coordinator:
-		// A takeover's pending fence: the lower epoch demotes at its next run.
-		add("roles", DoctorWarn, fmt.Sprintf("both machines pass their owner guard; the fence settles it: %s (epoch %d) wins over %s (epoch %d)",
-			higher, max(local.OwnerEpoch, peer.OwnerEpoch), lower, min(local.OwnerEpoch, peer.OwnerEpoch)),
-			"on "+lower+": dot peer sync (its fence demotes it)")
+		// A takeover's pending fence: the lower epoch demotes at its next
+		// run. Each side's fence is asked, as each side's sync would.
+		lo, hi := local, peer
+		if local.OwnerEpoch > peer.OwnerEpoch {
+			lo, hi = peer, local
+		}
+		// The lower side always demotes (the higher epoch is at least 1).
+		settle := "on " + lower + ": dot peer sync (its fence demotes it)"
+		switch _, herr := fenceDecision(hi.Owner, hi.OwnerEpoch, lo.Owner, lo.OwnerEpoch); {
+		case herr != nil:
+			add("roles", DoctorWarn, fmt.Sprintf("both machines pass their owner guard; %s (epoch %d) wins, but its syncs are refused until %s's next sync demotes it (%v)",
+				higher, hi.OwnerEpoch, lower, herr), settle)
+		default:
+			add("roles", DoctorWarn, fmt.Sprintf("both machines pass their owner guard; the fence settles it: %s (epoch %d) wins over %s (epoch %d)",
+				higher, hi.OwnerEpoch, lower, lo.OwnerEpoch), settle)
+		}
 	case !local.Coordinator && !peer.Coordinator:
 		// Each owner guard refuses, so no peer sync runs. The Mac in use
 		// adopts itself above both epochs; the other records the same owner
@@ -346,7 +350,7 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		case err != nil:
 			add("roles", DoctorFail, fmt.Sprintf("%s's next sync is refused: %v", coord, err), align)
 		case demote && answersTo(c.MachineNames, n.Owner):
-			add("roles", DoctorWarn, fmt.Sprintf("%s records epoch %d over %s's %d: %s's next sync demotes it and removes its scheduler, though it stays the owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
+			add("roles", DoctorWarn, fmt.Sprintf("%s records epoch %d over %s's %d: %s's next sync demotes it, removing its scheduler and running its on_deactivate hooks, though it stays the owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
 		case demote:
 			add("roles", DoctorFail, fmt.Sprintf("%s records owner %q at epoch %d over %s's %d: %s's next sync demotes it to that owner, which it does not answer to, leaving no coordinator", other, n.Owner, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
 		case n.OwnerEpoch != c.OwnerEpoch:
