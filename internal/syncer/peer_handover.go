@@ -570,6 +570,12 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	if syncRes.Unreachable {
 		return nil, fmt.Errorf("peer handover: peer %s is unreachable; a planned switch needs both machines", cfg.Target.Host)
 	}
+	if syncRes.Demoted {
+		// The peer took over while this Mac was away: the sync's fence
+		// already demoted it, and its on_deactivate hooks ran.
+		result.Hooks = syncRes.Hooks
+		return result, fmt.Errorf("peer handover: this machine lost the coordinator fence to %s during the sync and was demoted; nothing to hand over", cfg.Target.Host)
+	}
 	if !syncRes.Complete {
 		return nil, fmt.Errorf("peer handover: the sync held destructive transitions; resolve them and re-run `dot peer sync` cleanly before handing over")
 	}

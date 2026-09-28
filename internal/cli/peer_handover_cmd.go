@@ -49,6 +49,9 @@ coordinator with ` + "`dot peer git realign --apply`" + ` (fetch first).`,
 				DryRun: dryRun,
 			})
 			if err != nil {
+				if res != nil {
+					printPeerHooks(p, res.Hooks) // a demotion's hooks ran
+				}
 				return err
 			}
 			if res.DryRun {

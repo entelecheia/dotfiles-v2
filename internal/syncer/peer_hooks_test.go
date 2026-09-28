@@ -75,7 +75,7 @@ func TestRunPeerHooks_Actions(t *testing.T) {
 		}
 		return
 	}
-	if !strings.Contains(preview[0].Detail, "3 jobs to boot out") {
+	if !strings.Contains(preview[0].Detail, "4 jobs to disable, 3 loaded jobs to boot out") {
 		t.Fatalf("preview detail = %q", preview[0].Detail)
 	}
 
@@ -83,9 +83,15 @@ func TestRunPeerHooks_Actions(t *testing.T) {
 	on := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnActivate, false)
 	got := readRecord(t, record)
 	for _, want := range []string{
+		// Disabled first, the not-loaded plist included: a reboot must not
+		// load them again.
+		"launchctl disable " + uid + "/com.maru.job.fresh\n",
+		"launchctl disable " + uid + "/com.maru.job.mail-digest.1\n",
 		"launchctl bootout " + uid + "/com.maru.job.mail-digest.1",
 		"launchctl bootout " + uid + "/com.maru.job.morning-brief.1",
-		`osascript -e if application "Maru" is running then tell application "Maru" to quit`,
+		"with timeout of 20 seconds\ntell application \"Maru\" to quit",
+		"launchctl enable " + uid + "/com.maru.job.fresh\n",
+		"launchctl enable " + uid + "/com.maru.job.loaded\n",
 		"launchctl bootstrap " + uid + " " + filepath.Join(agents, "com.maru.job.fresh.plist"),
 		"open -g -a Maru",
 	} {
@@ -93,7 +99,10 @@ func TestRunPeerHooks_Actions(t *testing.T) {
 			t.Errorf("record lacks %q:\n%s", want, got)
 		}
 	}
-	for _, never := range []string{"com.other.agent", "com.maru.job.loaded.plist"} {
+	if strings.Index(got, "launchctl enable "+uid+"/com.maru.job.fresh") > strings.Index(got, "launchctl bootstrap") {
+		t.Errorf("bootstrap before enable:\n%s", got)
+	}
+	for _, never := range []string{"com.other.agent", "com.maru.job.loaded.plist", "com.dotfiles.peer"} {
 		if strings.Contains(got, never) {
 			t.Errorf("record touched %q:\n%s", never, got)
 		}
@@ -167,7 +176,7 @@ func TestPeerSyncDemotion_RunsOnDeactivateFirst(t *testing.T) {
 	}
 	lines := sb.recordLines(t)
 	uid := strconv.Itoa(os.Getuid())
-	if len(lines) != 2 || lines[0] != "launchctl bootout gui/"+uid+"/com.maru.job.mail-digest.1" || lines[1] != "launchctl bootout gui/"+uid+"/com.dotfiles.peer" {
+	if len(lines) != 3 || lines[0] != "launchctl disable gui/"+uid+"/com.maru.job.mail-digest.1" || lines[1] != "launchctl bootout gui/"+uid+"/com.maru.job.mail-digest.1" || lines[2] != "launchctl bootout gui/"+uid+"/com.dotfiles.peer" {
 		t.Fatalf("service actions = %v, want the hook first and the peer scheduler last", lines)
 	}
 }
@@ -175,10 +184,14 @@ func TestPeerSyncDemotion_RunsOnDeactivateFirst(t *testing.T) {
 func TestRunPeerHooks_BadGlobAndTargetUserHome(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "record.log")
 	installHookServiceStubs(t, record, "com.maru.job.a")
-	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.[", "app-quit Maru"}}}
+	t.Setenv("HOME", t.TempDir())
+	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.[", "app-quit Maru", "launchd-bootout *"}}}
 	res := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
 	if res[0].Err == nil || !strings.Contains(res[0].Err.Error(), "bad label glob") {
 		t.Fatalf("malformed glob reported as %+v", res[0])
+	}
+	if res[2].Err == nil || !strings.Contains(res[2].Err.Error(), "literal prefix") || strings.Contains(readRecord(t, record), "launchctl") {
+		t.Fatalf("a bare * glob ran: %+v", res[2])
 	}
 	if runtime.GOOS != "darwin" {
 		return
@@ -231,12 +244,40 @@ func TestLoadedLaunchdLabelsReadsTheGuiServices(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		return
 	}
-	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.*", "launchd-bootstrap ../x"}}}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	agents := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"com.maru.job.a.plist", "com.dotfiles.peer.plist"} {
+		if err := os.WriteFile(filepath.Join(agents, name), []byte("<plist/>"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Neither action may touch dot's own scheduler, loaded or not.
+	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.*", "launchd-bootstrap ../x", "launchd-bootstrap com.*"}}}
 	res := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
-	if strings.Contains(readRecord(t, record), "com.dotfiles.peer") || !strings.Contains(res[0].Detail, "1 job booted out") {
-		t.Fatalf("the peer scheduler was booted out: %+v / %q", res[0], readRecord(t, record))
+	if strings.Contains(readRecord(t, record), "com.dotfiles.peer") || !strings.Contains(res[0].Detail, "1 loaded job booted out") {
+		t.Fatalf("the peer scheduler was touched: %+v / %q", res, readRecord(t, record))
 	}
 	if res[1].Err == nil || !strings.Contains(res[1].Err.Error(), "slash") {
 		t.Fatalf("a path escape was accepted: %+v", res[1])
+	}
+}
+
+// The peer took over while this Mac was away: the handover's own sync
+// demotes it, and the on_deactivate results reach the caller with the error.
+func TestPeerHandover_DemotedDuringSyncReportsHooks(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{owner: "mac-b", epoch: 5, dotVersion: "9.9.9 (fake)"}, 1)
+	installHookServiceStubs(t, sb.record, "com.maru.job.mail-digest.1")
+	sb.plantPeerPlist(t)
+	sb.cfg.Hooks = PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.*"}}
+	res, err := PeerHandover(context.Background(), PeerHandoverOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)})
+	if err == nil || !strings.Contains(err.Error(), "demoted") {
+		t.Fatalf("err = %v", err)
+	}
+	if res == nil || len(res.Hooks) != 1 || res.Hooks[0].Phase != HookOnDeactivate {
+		t.Fatalf("hooks lost: %+v", res)
 	}
 }

@@ -265,11 +265,15 @@ tool):
   locked, staged, conflicting or in-progress repositories are never
   touched.
 - launchd jobs and apps named by the operator in the peer profile's
-  `hooks` (`.dotfiles/peer/config.yaml`): booted out, bootstrapped from
-  their existing `~/Library/LaunchAgents/<label>.plist`, quit or opened,
-  only as listed, when `dot peer setup`, a handover or a fence demotion
-  changes this machine's coordinator role. dot never writes those plists
-  or the apps' files; an unset `hooks` touches nothing.
+  `hooks` (`.dotfiles/peer/config.yaml`): disabled and booted out, or
+  enabled and bootstrapped from their existing
+  `~/Library/LaunchAgents/<label>.plist`, quit or opened, only as listed,
+  when `dot peer setup`, a handover or a fence demotion changes this
+  machine's coordinator role. The disable and enable write those labels'
+  entries in launchd's per-user override database (`launchctl
+  disable/enable gui/<uid>/<label>`), so a bootout survives a reboot. dot
+  never writes those plists or the apps' files; an unset `hooks` touches
+  nothing.
 
 ## dotfiles-v2 Must Not Write Directly
 

@@ -26,9 +26,12 @@ write the workspace. List them in .dotfiles/peer/config.yaml:
 on_activate runs after this command installs the scheduler (also the step a
 handover runs on the new coordinator, and the one a takeover names next);
 on_deactivate runs after --off, on the old coordinator in a handover, and on
-a machine that demotes itself at the fence. --dry-run lists what each would
-do. Results are printed and appended to the peer log; a failed hook never
-stops the command or a sync.
+a machine that demotes itself at the fence. launchd-bootout also disables
+the jobs, so a reboot does not load them again; launchd-bootstrap enables
+them. app-quit needs dot allowed to control the app (Automation), granted
+once at the first interactive run. --dry-run lists what each would do.
+Results are printed and appended to the peer log; a failed hook never stops
+the command or a sync.
 
 ```
 dot peer setup [flags]

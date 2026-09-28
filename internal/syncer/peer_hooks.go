@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,10 +25,15 @@ import (
 // next); on_deactivate runs when it gives the role up (dot peer setup --off,
 // handover on the old coordinator, demotion at the fence). Actions:
 //
-//	launchd-bootout <label-glob>    boot out loaded gui jobs, e.g. com.maru.job.*
-//	launchd-bootstrap <label-glob>  bootstrap ~/Library/LaunchAgents/<glob>.plist not yet loaded
+//	launchd-bootout <label-glob>    disable and boot out gui jobs, e.g. com.maru.job.*
+//	launchd-bootstrap <label-glob>  enable and bootstrap ~/Library/LaunchAgents/<glob>.plist not yet loaded
 //	app-quit <App>                  quit a running app
 //	app-open <App>                  open an app in the background
+//
+// A bootout alone lasts until the next login, when launchd loads every
+// plist in ~/Library/LaunchAgents again; the disable (launchd's override
+// database) keeps the jobs off across a reboot until on_activate enables
+// them. com.dotfiles.peer is never matched: it is dot's own scheduler.
 //
 // Failures are reported and logged; they never abort a sync or a switch.
 type PeerHooks struct {
@@ -104,6 +110,10 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 		if strings.Contains(arg, "/") {
 			return "", fmt.Errorf("label glob %q holds a slash", arg)
 		}
+		if strings.IndexAny(arg, "*?[") == 0 {
+			// A bare * would match every gui agent, com.apple.* included.
+			return "", fmt.Errorf("label glob %q must start with a literal prefix, e.g. com.maru.job.*", arg)
+		}
 	}
 	if runtime.GOOS != "darwin" {
 		return "skipped: needs macOS", nil
@@ -120,7 +130,12 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 		if err != nil {
 			return "", err
 		}
-		var matched []string
+		// Disable what is loaded and what the next login would load.
+		plists, err := agentPlists(cfg, arg)
+		if err != nil {
+			return "", err
+		}
+		var matched, disable []string
 		for _, label := range loaded {
 			// The peer scheduler is dot's own; booting it out from inside a
 			// demotion would end the run before its plist is removed.
@@ -128,21 +143,33 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 				matched = append(matched, label)
 			}
 		}
+		disable = append(disable, matched...)
+		for _, label := range baseNames(plists) {
+			if !slices.Contains(disable, label) {
+				disable = append(disable, label)
+			}
+		}
+		sort.Strings(disable)
 		if dryRun {
-			return plural(len(matched), "job") + " to boot out" + listSuffix(matched), nil
+			return plural(len(disable), "job") + " to disable, " + plural(len(matched), "loaded job") + " to boot out" + listSuffix(disable), nil
 		}
 		var failed []string
+		for _, label := range disable {
+			if _, err := runner.Run(ctx, "launchctl", "disable", domain+"/"+label); err != nil {
+				failed = append(failed, label+" ("+firstLine(err.Error())+")")
+			}
+		}
 		for _, label := range matched {
 			if _, err := runner.Run(ctx, "launchctl", "bootout", domain+"/"+label); err != nil {
 				failed = append(failed, label+" ("+firstLine(err.Error())+")")
 			}
 		}
 		if len(failed) > 0 {
-			return "", fmt.Errorf("booting out %s failed", strings.Join(failed, ", "))
+			return "", fmt.Errorf("disabling or booting out %s failed", strings.Join(failed, ", "))
 		}
-		return plural(len(matched), "job") + " booted out" + listSuffix(matched), nil
+		return plural(len(disable), "job") + " disabled, " + plural(len(matched), "loaded job") + " booted out" + listSuffix(disable), nil
 	case "launchd-bootstrap":
-		plists, err := filepath.Glob(filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", arg+".plist"))
+		plists, err := agentPlists(cfg, arg)
 		if err != nil {
 			return "", err
 		}
@@ -161,25 +188,38 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 			}
 		}
 		if dryRun {
-			return plural(len(todo), "job") + " to bootstrap" + listSuffix(baseNames(todo)), nil
+			return plural(len(plists), "job") + " to enable, " + plural(len(todo), "job") + " to bootstrap" + listSuffix(baseNames(todo)), nil
 		}
 		var failed []string
+		// A disabled job refuses to bootstrap; enable every match first so a
+		// loaded one also survives the next login.
+		for _, label := range baseNames(plists) {
+			if _, err := runner.Run(ctx, "launchctl", "enable", domain+"/"+label); err != nil {
+				failed = append(failed, label+" ("+firstLine(err.Error())+")")
+			}
+		}
 		for _, plist := range todo {
 			if _, err := runner.Run(ctx, "launchctl", "bootstrap", domain, plist); err != nil {
 				failed = append(failed, filepath.Base(plist)+" ("+firstLine(err.Error())+")")
 			}
 		}
 		if len(failed) > 0 {
-			return "", fmt.Errorf("bootstrapping %s failed", strings.Join(failed, ", "))
+			return "", fmt.Errorf("enabling or bootstrapping %s failed", strings.Join(failed, ", "))
 		}
 		return plural(len(todo), "job") + " bootstrapped" + listSuffix(baseNames(todo)), nil
 	case "app-quit":
 		if dryRun {
 			return "would quit " + arg + " if running", nil
 		}
-		script := `if application "` + arg + `" is running then tell application "` + arg + `" to quit`
+		// An Apple Event: dot needs Automation consent for the app once
+		// (README). The timeout bounds an app that never answers.
+		script := `if application "` + arg + `" is running then
+with timeout of 20 seconds
+tell application "` + arg + `" to quit
+end timeout
+end if`
 		if _, err := runner.Run(ctx, "osascript", "-e", script); err != nil {
-			return "", err
+			return "", fmt.Errorf("%s", firstLine(err.Error()))
 		}
 		return "quit " + arg, nil
 	default: // app-open
@@ -187,7 +227,7 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 			return "would open " + arg, nil
 		}
 		if _, err := runner.Run(ctx, "open", "-g", "-a", arg); err != nil {
-			return "", err
+			return "", fmt.Errorf("%s", firstLine(err.Error()))
 		}
 		return "opened " + arg, nil
 	}
@@ -219,6 +259,15 @@ func loadedLaunchdLabels(ctx context.Context, runner *exec.Runner, domain string
 	}
 	sort.Strings(labels)
 	return labels, nil
+}
+
+// agentPlists lists ~/Library/LaunchAgents/<glob>.plist, dot's own
+// scheduler excluded.
+func agentPlists(cfg *Config, glob string) ([]string, error) {
+	plists, err := filepath.Glob(filepath.Join(cfg.HomeDir(), "Library", "LaunchAgents", glob+".plist"))
+	return slices.DeleteFunc(plists, func(p string) bool {
+		return filepath.Base(p) == peerSchedulerLabel+".plist"
+	}), err
 }
 
 func plural(n int, noun string) string {
