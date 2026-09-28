@@ -187,6 +187,9 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 			line += "  (" + rep.Reason + ")"
 		}
 		p.Bullet(peerGitStatusMarker(rep.Status), rep.Path+"  "+line)
+		if rep.TieBreak != "" && (withMoves || rep.Status == syncer.GitRepoRealigned) {
+			p.Line("      tie: %s", rep.TieBreak)
+		}
 		if rep.Status == syncer.GitRepoRealigned {
 			p.Line("      undo: git -C %s reset --mixed -q %s", peerGitRepoAbs(res.Root, rep.Path), rep.PreviousHead)
 		}

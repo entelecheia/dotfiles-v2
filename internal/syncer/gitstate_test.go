@@ -516,3 +516,91 @@ func TestPeerGitRealign_SameTreeDescendant(t *testing.T) {
 		t.Fatalf("HEAD = %q, want %q", got, c2)
 	}
 }
+
+// #177: a parent whose commits after HEAD only bump a child's gitlink ties on
+// its own content across every candidate. The child's files already match
+// the tip, so one realign run must move the parent to the tip and the child
+// to the tip's gitlink, and the preview must say the children decided.
+func TestPeerGitRealign_GitlinkOnlyDescendantsFollowChildren(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	s1 := gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+	gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+	s3 := gitStateCommitFile(t, subSrc, "file.txt", "v3\n", "s3")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "p0 base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0 add sub at s1")
+	p0 := gitStateHead(t, origin)
+	for _, rev := range []string{"HEAD~1", "HEAD"} { // gitlink-only commits: s2, then s3
+		gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", gitStateRun_(t, subSrc, "rev-parse", rev))
+		gitStateRun_(t, origin, "add", "sub")
+		gitStateRun_(t, origin, "commit", "-q", "-m", "bump sub")
+	}
+	tip := gitStateHead(t, origin)
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	// The switched-to Mac: HEADs stayed at p0/s1 while peer sync delivered
+	// the tip's files, so the child's worktree holds s3's content.
+	gitStateRun_(t, ws, "reset", "-q", "--mixed", p0)
+	sub := filepath.Join(ws, "sub")
+	gitStateRun_(t, sub, "checkout", "-q", s1)
+	gitStateRewriteTracked(t, filepath.Join(sub, "file.txt"), "v3\n")
+
+	ctx := context.Background()
+	preview, err := PeerGitRealign(ctx, ws, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := gitStateReport(t, preview, ".")
+	if root.Status != GitRepoRealignable || root.Target != tip || !strings.Contains(root.TieBreak, "children") {
+		t.Fatalf("preview root = %q -> %q tie %q, want realignable -> tip %q decided by children", root.Status, root.Target, root.TieBreak, tip)
+	}
+	if child := gitStateReport(t, preview, "sub"); child.Status != GitRepoRealignable || child.Target != s3 {
+		t.Fatalf("preview child = %q -> %q, want realignable -> %q (the tip's gitlink)", child.Status, child.Target, s3)
+	}
+
+	res, err := PeerGitRealign(ctx, ws, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitStateHead(t, ws); got != tip {
+		t.Fatalf("parent HEAD = %s, want the tip %s (status %+v)", got, tip, gitStateReport(t, res, "."))
+	}
+	if got := gitStateHead(t, sub); got != s3 {
+		t.Fatalf("child HEAD = %s, want the tip gitlink %s (status %+v)", got, s3, gitStateReport(t, res, "sub"))
+	}
+	if out := gitStateRun_(t, ws, "status", "--porcelain"); out != "" {
+		t.Fatalf("workspace not clean after one realign run:\n%s", out)
+	}
+}
+
+// Ties without children fall back to the newest candidate.
+func TestPeerGitRealign_TieWithoutChildrenTakesNewest(t *testing.T) {
+	tmp := t.TempDir()
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	c1 := gitStateCommitFile(t, origin, "file.txt", "v1\n", "c1")
+	gitStateRun_(t, origin, "commit", "-q", "--allow-empty", "-m", "e1")
+	gitStateRun_(t, origin, "commit", "-q", "--allow-empty", "-m", "e2")
+	tip := gitStateHead(t, origin)
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "clone", "-q", origin, ws)
+	gitStateRun_(t, ws, "reset", "--hard", "-q", c1)
+
+	res, err := PeerGitStatus(context.Background(), ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := gitStateReport(t, res, ".")
+	if rep.Target != tip || !strings.Contains(rep.TieBreak, "newest candidate") {
+		t.Fatalf("target = %q tie %q, want the newest %q", rep.Target, rep.TieBreak, tip)
+	}
+}
