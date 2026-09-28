@@ -236,3 +236,91 @@ func TestHostMergeGuards(t *testing.T) {
 		t.Fatal("the peer symlink was replaced")
 	}
 }
+
+// #180 AC2 for host_merge: the dry-run plan lists exactly the merges the
+// real run performs (its merge events), and a file it cannot merge stops the
+// run before anything moves. Both come from planHostMerges.
+func TestHostMergePlanMatchesWhatTheRunDid(t *testing.T) {
+	planned := func(t *testing.T, cfg *Config) []string {
+		t.Helper()
+		res, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, Itemize: true})
+		if err != nil {
+			t.Fatalf("dry run: %v", err)
+		}
+		var out []string
+		for _, it := range res.Plan.Items {
+			if it.Action == "merge" {
+				out = append(out, it.Path)
+			}
+		}
+		return out
+	}
+	did := func(t *testing.T, cfg *Config) []string {
+		t.Helper()
+		var out []string
+		_, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false),
+			Progress: func(e PeerEvent) {
+				if e.Kind == PeerEventHostMerged {
+					out = append(out, e.Path)
+				}
+			}})
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name        string
+		local, peer string
+		setup       func(t *testing.T, cfg *Config, localHome, peerHome string)
+		want        []string
+	}{
+		{"entries on both sides merge", `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`, nil, []string{".claude.json"}},
+		{"equal in substance needs no merge", `{"mcpServers":{"a":{}}}`, `{ "mcpServers": { "a": {} } }`, nil, nil},
+		{"a file the additive pass does not move", `{"mcpServers":{"a":{}}}`, `{"mcpServers":{"a":{}}}`, func(t *testing.T, cfg *Config, localHome, peerHome string) {
+			// .claude holds a tracked entry, so the additive pass drops it.
+			cfg.HostMerge = map[string][]string{".claude/settings.json": {"permissions"}}
+			writePeerHomeFile(t, localHome, ".claude/settings.json", `{"permissions":{"a":1}}`, peerHomeFixedTime)
+			writePeerHomeFile(t, peerHome, ".claude/settings.json", `{"permissions":{"b":1}}`, peerHomeFixedTime)
+			if err := os.WriteFile(PeerHomePathsFile(cfg.LocalPaths), []byte(".claude.json\n.claude\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(PeerHomeTrackedFile(cfg.LocalPaths), []byte("mem\n.claude/skills/own\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, localHome, peerHome := claudeJSONFixture(t, tc.local, tc.peer)
+			cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+			if tc.setup != nil {
+				tc.setup(t, cfg, localHome, peerHome)
+			}
+			plan := planned(t, cfg)
+			ran := did(t, cfg)
+			if !slices.Equal(plan, tc.want) || !slices.Equal(ran, tc.want) {
+				t.Fatalf("planned %v, ran %v, want %v", plan, ran, tc.want)
+			}
+		})
+	}
+
+	t.Run("a refused file stops the run before anything moves", func(t *testing.T) {
+		cfg, localHome, _ := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+		cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+		path := filepath.Join(localHome, ".claude.json")
+		if err := os.Rename(path, path+".real"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path+".real", path); err != nil {
+			t.Fatal(err)
+		}
+		for _, dry := range []bool{true, false} {
+			if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(dry), Probe: peerScheduleRunner(false), DryRun: dry}); err == nil || !strings.Contains(err.Error(), "nothing was transferred") {
+				t.Fatalf("dry=%v: err = %v", dry, err)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), "peer-only.txt")); !os.IsNotExist(err) {
+			t.Fatalf("the workspace pass ran before the refusal: %v", err)
+		}
+	})
+}

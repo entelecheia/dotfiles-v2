@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -174,7 +175,7 @@ func readPeerHostFile(ctx context.Context, runner *exec.Runner, cfg *Config, rel
 		"if [ -L "+q+" ]; then echo __dot_symlink__ >&2; exit 4; elif [ -f "+q+" ]; then cat -- "+q+"; else echo __dot_absent__ >&2; exit 3; fi")
 	if err != nil {
 		if res != nil && strings.Contains(res.Stderr, "__dot_symlink__") {
-			return nil, fmt.Errorf("%s on %s is a symlink; host_merge writes regular files only", rel, cfg.Target.Host)
+			return nil, fmt.Errorf("%s on %s: %w", rel, cfg.Target.Host, errPeerHostSymlink)
 		}
 		if res != nil && strings.Contains(res.Stderr, "__dot_absent__") {
 			return nil, nil
@@ -184,31 +185,166 @@ func readPeerHostFile(ctx context.Context, runner *exec.Runner, cfg *Config, rel
 	return []byte(res.Stdout), nil
 }
 
-// homeListCovers reports whether a home-paths list names rel or a directory
-// holding it.
-func homeListCovers(list, rel string) bool {
-	for _, line := range strings.Split(list, "\n") {
-		entry := strings.TrimSuffix(filepath.ToSlash(strings.TrimSpace(line)), "/")
-		entry = strings.TrimPrefix(entry, "./")
-		if entry == "" || strings.HasPrefix(entry, "#") {
-			continue
-		}
-		if rel == entry || strings.HasPrefix(rel, entry+"/") {
-			return true
-		}
-	}
-	return false
-}
+var errPeerHostSymlink = errors.New("a symlink; host_merge writes regular files only")
+
+// skillRootPrefixes are the tool skill roots dot must not write
+// (docs/BOUNDARIES.md); host_merge refuses files under them.
+var skillRootPrefixes = []string{".claude/skills/", ".codex/skills/", ".agents/skills/", ".gemini/skills/",
+	".gemini/antigravity/skills/", ".kimi-code/skills/", ".qwen/skills/", ".grok/skills/", ".config/opencode/skills/"}
 
 // validateHostMerge checks every host_merge key is a clean path relative to
-// $HOME, like .claude.json.
+// $HOME, like .claude.json, outside the tool skill roots.
 func validateHostMerge(m map[string][]string) error {
 	for rel := range m {
 		if validateTombstoneRel(rel) != nil || strings.HasPrefix(rel, "~") {
 			return fmt.Errorf("host_merge: %q must be a path relative to $HOME, like .claude.json", rel)
 		}
+		for _, root := range skillRootPrefixes {
+			if strings.HasPrefix(rel, root) {
+				return fmt.Errorf("host_merge: %q is under a tool skill root, which dot does not write", rel)
+			}
+		}
 	}
 	return nil
+}
+
+// hostMerge is one host_merge file's decision. planHostMerges takes it for
+// the plan, the preflight and the run alike, so the plan shows what the run
+// does (#180 AC2, #181).
+type hostMerge struct {
+	rel         string
+	keys        []string
+	local, peer map[string]any // both copies, decoded
+	result      map[string]any // what both machines get
+	localInfo   os.FileInfo    // re-checked right before the write
+	refused     string         // why the run cannot merge it; it stops before anything moves
+}
+
+// planHostMerges decides every host_merge file the additive pass moves
+// (home-paths.txt without the tracked entries) that exists on both
+// machines: copies equal in substance need nothing; a symlink or another
+// non-regular copy, or one that is not a JSON object, is a refusal;
+// anything else merges into the newer copy. It only reads.
+func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hostMerge, error) {
+	if len(cfg.HostMerge) == 0 {
+		return nil, nil
+	}
+	if err := validateHostMerge(cfg.HostMerge); err != nil {
+		return nil, err
+	}
+	entries, err := additiveHomeEntries(cfg)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(cfg.HostMerge))
+	for rel, keys := range cfg.HostMerge {
+		if len(keys) > 0 && homeEntriesCover(entries, rel) {
+			files = append(files, rel)
+		}
+	}
+	sort.Strings(files)
+	var merges []hostMerge
+	for _, rel := range files {
+		m := hostMerge{rel: rel, keys: cfg.HostMerge[rel]}
+		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(rel))
+		info, err := os.Lstat(localPath)
+		if os.IsNotExist(err) {
+			continue // absent here: the pass copies the peer's
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			m.refused = "not a regular file here (a symlink?)"
+			merges = append(merges, m)
+			continue
+		}
+		localData, err := os.ReadFile(localPath)
+		if err != nil {
+			return nil, err
+		}
+		peerData, err := readPeerHostFile(ctx, probe, cfg, rel)
+		if errors.Is(err, errPeerHostSymlink) {
+			m.refused = "a symlink on " + cfg.Target.Host
+			merges = append(merges, m)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if peerData == nil {
+			continue // absent there: the pass copies this one
+		}
+		local, lerr := decodeJSONObject(localData)
+		peer, perr := decodeJSONObject(peerData)
+		if lerr != nil || perr != nil {
+			m.refused = "both copies must be JSON objects"
+			merges = append(merges, m)
+			continue
+		}
+		if jsonEqual(local, peer) {
+			continue // equal in substance: the pass copies the newer whole
+		}
+		peerMtime, err := peerHostMtime(ctx, probe, cfg, rel)
+		if err != nil {
+			return nil, err
+		}
+		newer, older := local, peer
+		if peerMtime.After(info.ModTime()) {
+			newer, older = peer, local
+		}
+		m.local, m.peer, m.localInfo = local, peer, info
+		m.result = mergeJSONKeys(newer, older, m.keys)
+		merges = append(merges, m)
+	}
+	return merges, nil
+}
+
+// hostMergeRefusal is the run's stop: any refused file, before anything moves.
+func hostMergeRefusal(merges []hostMerge) error {
+	for _, m := range merges {
+		if m.refused != "" {
+			return fmt.Errorf("host_merge %s: %s; fix it or drop it from host_merge (nothing was transferred)", m.rel, m.refused)
+		}
+	}
+	return nil
+}
+
+// additiveHomeEntries is the additive pass's list: home-paths.txt without
+// the entries the tracked pass owns (peerHomeUntrackedList's rule).
+func additiveHomeEntries(cfg *Config) ([]string, error) {
+	body, err := os.ReadFile(PeerHomePathsFile(cfg.LocalPaths))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var active []string
+	for _, line := range strings.Split(string(body), "\n") {
+		entry := strings.TrimSpace(line)
+		if entry != "" && !strings.HasPrefix(entry, "#") {
+			active = append(active, entry)
+		}
+	}
+	tracked, err := readPeerHomeTrackedEntries(PeerHomeTrackedFile(cfg.LocalPaths))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	kept, _ := filterUntrackedHomeEntries(active, tracked)
+	return kept, nil
+}
+
+// homeEntriesCover reports whether an entry names rel or a directory
+// holding it.
+func homeEntriesCover(entries []string, rel string) bool {
+	for _, e := range entries {
+		entry := strings.TrimPrefix(strings.TrimSuffix(filepath.ToSlash(e), "/"), "./")
+		if rel == entry || strings.HasPrefix(rel, entry+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // hostKeyPolicy is the key list to compare or merge for a host file, and
@@ -223,12 +359,17 @@ func hostKeyPolicy(cfg *Config, rel string) ([]string, bool) {
 	return nil, false
 }
 
-// annotateHotItems marks hot host items and, for JSON files with a key
-// policy, lists the key-level differences between the two copies. Unless
-// host_merge merges the file in this run (two-way runs, additive host
-// paths only), a losing copy that holds entries the winner lacks is called
-// out: newest-wins would drop them.
-func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, items []PeerPlanItem, twoWay bool) {
+// annotateHotItems marks hot host items and lists the key-level
+// differences of hot JSON files. A file planHostMerges merges in this run
+// (two-way runs only) becomes a merge item, added when rsync listed none;
+// a refused one carries the refusal. Any other losing copy that holds
+// entries the winner lacks is called out: newest-wins would drop them.
+func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, items []PeerPlanItem, twoWay bool, merges []hostMerge) []PeerPlanItem {
+	byRel := map[string]*hostMerge{}
+	for i := range merges {
+		byRel[merges[i].rel] = &merges[i]
+	}
+	rendered := map[string]bool{}
 	for i := range items {
 		it := &items[i]
 		if it.Scope == PlanScopeWorkspace {
@@ -236,6 +377,11 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		}
 		keys, merge := hostKeyPolicy(cfg, it.Path)
 		it.Hot = isHotHostPath(it.Path) || merge
+		if m := byRel[it.Path]; m != nil && twoWay && it.Scope == PlanScopeHost {
+			renderHostMerge(it, m)
+			rendered[m.rel] = true
+			continue
+		}
 		if len(keys) == 0 {
 			continue
 		}
@@ -252,8 +398,6 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		if lerr != nil || perr != nil {
 			continue
 		}
-		// The merge writes a file present on both sides whose copies differ.
-		merging := merge && twoWay && it.Scope == PlanScopeHost && it.Action == "update"
 		hint := "set host_merge for this file to keep them"
 		switch {
 		case merge && it.Scope != PlanScopeHost:
@@ -269,99 +413,71 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 			if it.Direction == "push" {
 				lost = d.onlyPeer
 			}
-			if len(lost) == 0 {
-				continue
-			}
-			if !merging {
+			if len(lost) > 0 {
 				warnings = append(warnings, fmt.Sprintf("%s entries %s exist only in the overwritten copy", d.key, strings.Join(lost, ", ")))
 			}
 		}
 		if len(warnings) > 0 {
 			it.Warning = "newest wins: " + strings.Join(warnings, "; ") + "; " + hint
 		}
-		if merging {
-			// Both machines get the merged file; the pass then moves nothing.
-			it.Action, it.Direction = "merge", "both"
-			it.Reason = "merged on both machines before the transfer (host_merge: " + strings.Join(keys, ", ") + ")"
+	}
+	if twoWay {
+		// A merge rsync lists nothing for (equal size and mtime) is still a
+		// write on both machines.
+		for i := range merges {
+			if !rendered[merges[i].rel] {
+				items = append(items, PeerPlanItem{Path: merges[i].rel, Scope: PlanScopeHost, Hot: true})
+				renderHostMerge(&items[len(items)-1], &merges[i])
+			}
 		}
 	}
+	return items
 }
 
-// mergePeerHostFiles applies the host_merge policies before the additive
-// pass: for each listed file present on both machines with different
-// content, the configured keys' entries of both copies are merged into the
-// newer one, written here with a fresh mtime and pushed with it, so the
-// additive pass then finds two equal copies. Both sides are always written:
-// the result must not depend on which copy the pass would call newer (the
-// peer's mtime is read to the second). A file under a tracked host entry is
-// left to the tracked pass. It returns the files it merged.
+func renderHostMerge(it *PeerPlanItem, m *hostMerge) {
+	if m.refused != "" {
+		it.Warning = "host_merge cannot merge it: " + m.refused + "; the run stops before anything moves"
+		return
+	}
+	for _, d := range diffJSONKeys(m.local, m.peer, m.keys) {
+		it.Keys = append(it.Keys, d.String())
+	}
+	it.Action, it.Direction = "merge", "both"
+	it.Reason = "merged on both machines before the transfer (host_merge: " + strings.Join(m.keys, ", ") + ")"
+}
+
+// mergePeerHostFiles runs planHostMerges again right before the additive
+// pass, so it merges what the plan listed from the copies as they are now:
+// each result is written here with a fresh mtime and pushed with it, so the
+// pass then finds two equal copies. Both sides are always written: the
+// result must not depend on which copy the pass would call newer (the
+// peer's mtime is read to the second). It returns the files it merged.
 //
 // ponytail: known ceiling. See docs/CEILINGS.md (host_merge read-merge-write race).
 func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Config) ([]string, error) {
-	tracked, err := readPeerHomeTrackedEntries(PeerHomeTrackedFile(cfg.LocalPaths))
-	if err != nil && !os.IsNotExist(err) {
+	merges, err := planHostMerges(ctx, probe, cfg)
+	if err != nil {
 		return nil, err
 	}
-	// Only files the additive pass moves: the plan's host scope is that
-	// pass's list, so a merge outside it would be a write the plan omits.
-	additive, err := os.ReadFile(PeerHomePathsFile(cfg.LocalPaths))
-	if err != nil && !os.IsNotExist(err) {
+	if err := hostMergeRefusal(merges); err != nil {
 		return nil, err
 	}
-	files := make([]string, 0, len(cfg.HostMerge))
-	for rel := range cfg.HostMerge {
-		if _, covered := filterUntrackedHomeEntries([]string{rel}, tracked); !covered && homeListCovers(string(additive), rel) {
-			files = append(files, rel)
-		}
-	}
-	sort.Strings(files)
 	var merged []string
-	for _, rel := range files {
-		keys := cfg.HostMerge[rel]
-		if len(keys) == 0 {
+	for _, m := range merges {
+		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(m.rel))
+		// An app that saved the file since it was read wins this run; the
+		// next run merges again.
+		if now, err := os.Stat(localPath); err != nil || now.Size() != m.localInfo.Size() || !now.ModTime().Equal(m.localInfo.ModTime()) {
 			continue
 		}
-		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(rel))
-		info, err := os.Stat(localPath)
-		if err != nil {
-			continue // absent here: the pass copies the peer's
-		}
-		localData, err := os.ReadFile(localPath)
-		if err != nil {
-			return merged, err
-		}
-		peerData, err := readPeerHostFile(ctx, probe, cfg, rel)
-		if err != nil {
-			return merged, err
-		}
-		if peerData == nil {
-			continue
-		}
-		local, lerr := decodeJSONObject(localData)
-		peer, perr := decodeJSONObject(peerData)
-		if lerr != nil || perr != nil {
-			return merged, fmt.Errorf("host_merge %s: both copies must be JSON objects", rel)
-		}
-		peerMtime, err := peerHostMtime(ctx, probe, cfg, rel)
-		if err != nil {
-			return merged, err
-		}
-		newer, older := local, peer
-		if peerMtime.After(info.ModTime()) {
-			newer, older = peer, local
-		}
-		result := mergeJSONKeys(newer, older, keys)
-		if jsonEqual(result, newer) && jsonEqual(result, older) {
-			continue // identical in substance
-		}
-		body, err := encodeJSONObject(result)
+		body, err := encodeJSONObject(m.result)
 		if err != nil {
 			return merged, err
 		}
 		// Keeps the mode (~/.claude.json holds tokens, 0600) and owner, and
 		// refuses a symlink rather than replacing it.
 		if err := runner.WriteFileAtomic(localPath, body, 0o600); err != nil {
-			return merged, fmt.Errorf("host_merge %s: %w", rel, err)
+			return merged, fmt.Errorf("host_merge %s: %w", m.rel, err)
 		}
 		now := time.Now()
 		if err := os.Chtimes(localPath, now, now); err != nil {
@@ -371,11 +487,11 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		if cfg.RemoteRsyncPath != "" {
 			args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
 		}
-		args = append(args, localPath, cfg.Target.Host+":"+rel)
+		args = append(args, localPath, cfg.Target.Host+":"+m.rel)
 		if _, err := runner.Run(ctx, cfg.rsyncBin(), args...); err != nil {
-			return merged, fmt.Errorf("host_merge %s: pushing the merged copy: %w", rel, err)
+			return merged, fmt.Errorf("host_merge %s: pushing the merged copy: %w", m.rel, err)
 		}
-		merged = append(merged, rel)
+		merged = append(merged, m.rel)
 	}
 	return merged, nil
 }

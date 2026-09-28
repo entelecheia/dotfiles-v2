@@ -475,9 +475,17 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 			return nil, err
 		}
 		items.Items = append(items.Items, additive...)
-		annotateHotItems(ctx, opts.Probe, cfg, items.Items, true)
+		merges, err := planHostMerges(ctx, opts.Probe, cfg)
+		if err != nil {
+			return nil, err
+		}
+		items.Items = annotateHotItems(ctx, opts.Probe, cfg, items.Items, true, merges)
 		items.sortItems()
 		res.Items = items
+		// peer sync stops on the same refusal before anything moves.
+		if err := hostMergeRefusal(merges); err != nil {
+			return res, err
+		}
 	}
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
 		if opts.Itemize {
@@ -620,6 +628,22 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
 		return nil, err
 	}
+	// host_merge decides here, before anything moves: a file it cannot merge
+	// stops the run now, not after the workspace pass (#181). The same
+	// decision draws the plan; the merge step takes it again from the
+	// copies as they are then.
+	twoWay := !opts.PushOnly && !opts.PullOnly
+	var merges []hostMerge
+	if twoWay && !opts.SkipHome {
+		m, err := planHostMerges(ctx, probe, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := hostMergeRefusal(m); err != nil {
+			return nil, err
+		}
+		merges = m
+	}
 	conflict := NewConflictDir()
 	complete := true
 	baselineReady, err := PeerBaselineReady(cfg)
@@ -735,11 +759,11 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 				return nil, err
 			}
 			runPlan.Items = append(runPlan.Items, additive...)
-			annotateHotItems(ctx, probe, cfg, runPlan.Items, !opts.PushOnly && !opts.PullOnly)
+			runPlan.Items = annotateHotItems(ctx, probe, cfg, runPlan.Items, twoWay, merges)
 		}
 		// host_merge runs before the additive pass and only in a two-way run:
 		// it writes both machines.
-		if !dryRun && !opts.PushOnly && !opts.PullOnly && len(cfg.HostMerge) > 0 {
+		if !dryRun && twoWay && len(cfg.HostMerge) > 0 {
 			merged, err := mergePeerHostFiles(ctx, runner, probe, cfg)
 			for _, rel := range merged {
 				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostMerged, Path: rel})

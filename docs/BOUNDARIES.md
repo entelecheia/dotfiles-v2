@@ -270,7 +270,9 @@ tool):
   top-level JSON keys from both copies are merged into the newer copy,
   which is written here (atomic rename, mode and owner kept, a symlink
   refused) and pushed to the peer with its mtime. Other keys are the newer
-  copy's; an unlisted file is only ever copied whole, as before.
+  copy's; an unlisted file is only ever copied whole, as before. Never a
+  file under a tool skill root (refused before a run starts), or one the
+  additive host pass does not move.
 
 ## dotfiles-v2 Must Not Write Directly
 

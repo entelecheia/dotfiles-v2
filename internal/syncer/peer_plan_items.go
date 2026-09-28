@@ -27,8 +27,8 @@ type PlanSide struct {
 }
 
 // PeerPlanItem is one action a peer run plans (#180). Direction is "pull"
-// (peer to this machine) or "push"; Action is create, update, delete or
-// conflict. Local and Peer describe each side's copy where it is known: the
+// (peer to this machine), "push", or "both" for a host_merge write on both
+// machines; Action is create, update, delete, conflict or merge. Local and Peer describe each side's copy where it is known: the
 // additive host pass only sees the sending side.
 type PeerPlanItem struct {
 	Path      string    `json:"path"`

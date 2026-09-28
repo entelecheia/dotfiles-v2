@@ -136,8 +136,10 @@ saving `~/.claude.json` while `dot peer sync` runs, often from inside a Claude
 session) loses its rewrite, and a running app holding a stale copy can later
 save it over the merged file.
 
-No lock exists that Claude Code honors for `~/.claude.json`, and the window is
-a few hundred milliseconds per run. Replace this if the app gains a lock or an
+No lock exists that Claude Code honors for `~/.claude.json`. The merge
+re-reads both copies right before it writes and re-checks the local file's
+size and mtime just before the write, so the window is a few hundred
+milliseconds per run. Replace this if the app gains a lock or an
 atomic update protocol, or if lost entries are reported in practice.
 
 ## Replica bootstrap trust
