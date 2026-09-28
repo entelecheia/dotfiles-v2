@@ -18,9 +18,13 @@ name; the peer's copies stay until its owner next changes. At equal epochs
 the peer fence refuses a peer that passes its own owner guard. When the peer
 cannot be reached, the rename runs only on a Mac that still answers to <old>
 (or with --local-only). The epoch, targets and baselines are untouched, so no run plans
-a deletion. It refuses when this Mac answers to neither name, and when the
-peer answers to either one: moving ownership between the Macs is --set or
-dot peer handover. --dry-run shows the change without writing anything.
+a deletion. It refuses when this Mac answers to neither name, when the peer
+(or the peer target's host) answers to either one, and, once this Mac no
+longer answers to <old>, unless this Mac runs dot's scheduler for these
+profiles (the owner does, the inactive Mac does not): moving ownership
+between the Macs is --set or dot peer handover. --local-only skips these
+checks; it is the step the command runs on the peer. --dry-run shows the
+change without writing anything.
 
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer

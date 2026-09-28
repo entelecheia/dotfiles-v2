@@ -75,8 +75,44 @@ func TestSyncOwnerRenameFailsClosedWithoutThePeer(t *testing.T) {
 	}
 	// This Mac owns the profiles, but the new name is the peer's target.
 	writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", "peer", "config.yaml"),
-		"target: ssh:asleep-peer:/remote/work\nowner: "+self+"\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+		"target: ssh:user.name@asleep-peer.example.net:/remote/work\nowner: "+self+"\npropagation:\n  create: true\n  update: true\n  delete: true\n")
 	if _, _, err := runDotForTest("sync", "owner", "--rename", self, "asleep-peer"); err == nil || !strings.Contains(err.Error(), "peer target") {
 		t.Fatalf("renaming to the peer target's name: %v", err)
+	}
+}
+
+// Round 4: after both host renames, neither Mac answers to <old>. The Mac
+// without dot's scheduler (the inactive one) must not rename itself into the
+// owner; the Mac with it may.
+func TestSyncOwnerRenameNeedsTheOwnersScheduler(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	self := syncer.PreferredMachineName()
+	if self == "" {
+		t.Skip("no machine name")
+	}
+	status := `{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"owner":"gone-mac","machineNames":["other-mac"],"workspacePath":"/remote/work","target":{"path":"` + f.local + `"}}}`
+	bin := t.TempDir()
+	writeCLITestFile(t, filepath.Join(bin, "ssh"), "#!/bin/sh\ncase \"$*\" in\n"+
+		"  *\"list dot candidates\"*) printf '/fake/dot\\tdot version 9.9.9 (fake)\\n' ;;\n"+
+		"  *\"peer status --json\"*) printf '%s\\n' '"+status+"' ;;\n"+
+		"  *) exit 0 ;;\nesac\n")
+	if err := os.Chmod(filepath.Join(bin, "ssh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, profile := range []string{"sync", "peer"} {
+		writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", profile, "config.yaml"),
+			"target: ssh:user@peer-alias:/remote/work\nowner: gone-mac\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	}
+	if _, _, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err == nil || !strings.Contains(err.Error(), "runs no dot scheduler") {
+		t.Fatalf("the inactive Mac renamed itself into the owner: %v", err)
+	}
+	writeCLITestFile(t, filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist"), "<plist/>")
+	if _, _, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err != nil {
+		t.Fatalf("the coordinator could not rename: %v", err)
+	}
+	local, _, _ := syncer.LoadLocalConfig(syncer.ResolveLocalPathsForProfile(f.local, "peer"))
+	if local.Owner != self {
+		t.Fatalf("owner = %q, want %q", local.Owner, self)
 	}
 }

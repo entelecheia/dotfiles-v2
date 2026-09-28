@@ -663,7 +663,7 @@ func peerRemoteDotCommand(dot string, args ...string) (string, error) {
 func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args ...string) (string, error) {
 	dot, err := resolveRemoteDot(ctx, runner, cfg)
 	if err != nil {
-		return "", fmt.Errorf("peer handover: %w", err)
+		return "", err
 	}
 	cmd, err := peerRemoteDotCommand(dot.Path, args...)
 	if err != nil {

@@ -98,6 +98,7 @@ func SetLocalOwner(cfg *Config, owner string, dryRun bool) error {
 		}
 	}
 	cfg.Owner = owner
+	cfg.OwnerAliases = local.OwnerAliases
 	return nil
 }
 
@@ -524,6 +525,9 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
 	if oldName == "" || newName == "" || strings.ContainsAny(newName, " \t\r\n'\"/") {
 		return nil, fmt.Errorf("owner rename needs an old and a new machine name, the new one without spaces, quotes or slashes (got %q -> %q)", oldName, newName)
+	}
+	if strings.HasPrefix(oldName, "-") || strings.HasPrefix(newName, "-") {
+		return nil, fmt.Errorf("owner rename: a machine name cannot start with '-' (got %q -> %q)", oldName, newName)
 	}
 	if strings.ContainsAny(oldName, "'\"\n") {
 		return nil, fmt.Errorf("owner rename: the old name %q holds a quote; record the owner with dot sync owner --set instead", oldName)

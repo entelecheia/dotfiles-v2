@@ -208,6 +208,7 @@ func applyLocalConfigPreview(cfg *syncer.Config, local *syncer.LocalConfig, home
 		cfg.Target = target
 	}
 	cfg.Owner = local.Owner
+	cfg.OwnerAliases = local.OwnerAliases
 	if local.FilterMode != "" {
 		cfg.FilterMode = local.FilterMode
 	}
