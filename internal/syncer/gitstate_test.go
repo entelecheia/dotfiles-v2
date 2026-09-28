@@ -1282,3 +1282,115 @@ func TestGitStateCachesSkipRefNames(t *testing.T) {
 		t.Fatalf("diffs after the ref moved to b = %d, %v; want 0 (a stale cached answer?)", after, err)
 	}
 }
+
+// A parent's question to a child is the child's own turn with the gitlink
+// the contender records, so the parent never records a commit the child's
+// turn will not take (#189 round 17). Single level: the newest contender
+// reverts the child's gitlink to a commit whose files the child is past.
+func TestPeerGitRealign_ParentFollowsTheChildsOwnTurn(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	gitStateCommitFile(t, subSrc, "a.txt", "0\n", "a0")
+	gitStateCommitFile(t, subSrc, "c.txt", "0\n", "c0 file")
+	c0 := gitStateCommitFile(t, subSrc, "b.txt", "0\n", "c0")
+	cG := gitStateCommitFile(t, subSrc, "a.txt", "G\n", "cG")
+	gitStateCommitFile(t, subSrc, "a.txt", "0\n", "revert a")
+	cT := gitStateCommitFile(t, subSrc, "b.txt", "T\n", "cT")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	for _, c := range []struct{ sha, msg string }{{c0, "r0"}, {cT, "r1 sub@cT"}, {cG, "r2 sub@cG"}} {
+		gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", c.sha)
+		gitStateRun_(t, origin, "add", "sub")
+		gitStateRun_(t, origin, "commit", "-q", "-m", c.msg)
+	}
+	r0 := gitStateRun_(t, origin, "rev-parse", "HEAD~2")
+	r1 := gitStateRun_(t, origin, "rev-parse", "HEAD~1")
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", r0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	sub := filepath.Join(ws, "sub")
+	gitStateRewriteTracked(t, filepath.Join(sub, "b.txt"), "T\n") // cT's files delivered
+	gitStateRewriteTracked(t, filepath.Join(sub, "c.txt"), "wip\n")
+
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitStateHead(t, ws); got != r1 {
+		t.Fatalf("parent HEAD = %s, want r1 %s (the contender the child's turn follows)", got, r1)
+	}
+	if got := gitStateHead(t, sub); got != cT {
+		t.Fatalf("child HEAD = %s, want %s", got, cT)
+	}
+	if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "rewind") {
+		t.Fatalf("the parent records a rewind:\n%s", log)
+	}
+}
+
+// Nested, the workspace shape: root -> dev -> maru, dev's upstream past
+// the root's record, maru holding its tip's files with edits. Every level
+// ends where its own turn takes it, and nothing records a rewind.
+func TestPeerGitRealign_NestedTurnsAgree(t *testing.T) {
+	tmp := t.TempDir()
+	maruSrc := filepath.Join(tmp, "maru-src")
+	gitStateInitRepo(t, maruSrc)
+	gitStateCommitFile(t, maruSrc, "w.txt", "0\n", "w")
+	m0 := gitStateCommitFile(t, maruSrc, "a.txt", "0\n", "m0")
+	mG := gitStateCommitFile(t, maruSrc, "a.txt", "G\n", "mG")
+	mT := gitStateCommitFile(t, maruSrc, "a.txt", "T\n", "mT")
+
+	devSrc := filepath.Join(tmp, "dev-src")
+	gitStateInitRepo(t, devSrc)
+	gitStateCommitFile(t, devSrc, "readme.md", "dev\n", "base")
+	gitStateRun_(t, devSrc, "-c", "protocol.file.allow=always", "submodule", "add", "-q", maruSrc, "maru")
+	var ds []string
+	for _, m := range []string{m0, mG, mT} {
+		gitStateRun_(t, devSrc, "-C", "maru", "checkout", "-q", m)
+		gitStateRun_(t, devSrc, "add", "maru")
+		gitStateRun_(t, devSrc, "commit", "-q", "-m", "d@"+shortRev(m))
+		ds = append(ds, gitStateHead(t, devSrc))
+	}
+	d0, d1, d2 := ds[0], ds[1], ds[2]
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "work\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", devSrc, "dev")
+	var ws0 []string
+	for _, d := range []string{d0, d1} {
+		gitStateRun_(t, origin, "-C", "dev", "checkout", "-q", d)
+		gitStateRun_(t, origin, "add", "dev")
+		gitStateRun_(t, origin, "commit", "-q", "-m", "w@"+shortRev(d))
+		ws0 = append(ws0, gitStateHead(t, origin))
+	}
+	w0, w1 := ws0[0], ws0[1]
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", w0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q", "--recursive")
+	dev, maru := filepath.Join(ws, "dev"), filepath.Join(ws, "dev", "maru")
+	gitStateRun_(t, dev, "checkout", "-q", "-B", "main", d0)
+	gitStateRun_(t, dev, "branch", "-q", "--set-upstream-to=origin/main")
+	gitStateRewriteTracked(t, filepath.Join(maru, "a.txt"), "T\n") // mT's files delivered
+	gitStateRewriteTracked(t, filepath.Join(maru, "w.txt"), "wip\n")
+
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ repo, want, name string }{{ws, w1, "root"}, {dev, d2, "dev"}, {maru, mT, "maru"}} {
+		if got := gitStateHead(t, c.repo); got != c.want {
+			t.Errorf("%s HEAD = %s, want %s", c.name, shortRev(got), shortRev(c.want))
+		}
+	}
+	for _, repo := range []string{ws, dev} {
+		if log := gitStateRun_(t, repo, "diff", "--submodule=log"); strings.Contains(log, "rewind") {
+			t.Errorf("%s records a rewind:\n%s", repo, log)
+		}
+	}
+}

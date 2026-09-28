@@ -186,6 +186,8 @@ type gitStateRun struct {
 	// compares (gitlinks and .gitmodules are left out), so a child scored
 	// for its parent's question is not scored again in its own turn.
 	diffs map[string]int
+	// childTarget's answers by child and the gitlink asked about.
+	targets map[string]childAnswer
 }
 
 // gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
@@ -509,9 +511,10 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 // ties, and taking the nearest one (the old rule) moved a parent to its
 // oldest candidate and every child to a stale gitlink (#177). In order:
 //
-//  1. children: each child tells where its content is (childTarget), and a
-//     candidate may not record a gitlink the child has not reached; of the
-//     rest, those whose gitlinks name exactly where the children are win.
+//  1. children: each child tells where its own turn ends with the gitlink a
+//     candidate records (childTarget), and a candidate may not record a
+//     gitlink the child does not end at or past; of the rest, those whose
+//     gitlinks name exactly where the children end win.
 //     When HEAD ties too (head is set), it competes, and stay reports that
 //     it won or that no candidate was left. On an inexact tie (edited
 //     files) a candidate whose own content differs from HEAD's drops out
@@ -616,12 +619,13 @@ type tieEvidence struct {
 }
 
 // childrenEvidence asks each child whose gitlink differs between the
-// contenders where its content is (childTarget) and judges each contender
-// by it. A contender that records a commit the child has not reached (not
-// that commit, and not an ancestor of it) would move the parent past a bump
-// whose content the child lacks, and a later commit -a would record it
-// reverted; the same holds for a submodule it adds whose checkout was never
-// delivered. With withHead, tied[0] is HEAD, which such a record never
+// contenders where it ends once each contender is recorded (childTarget:
+// its own turn with that gitlink) and judges the contender by it. A
+// contender whose commit the child does not end at or past would move the
+// parent past a bump the child never takes, and a later commit -a would
+// record it reverted; the same holds for a submodule it adds whose checkout
+// was never delivered, and for a commit the child lacks while its files, or
+// a run that leaves it alone, hold it elsewhere. With withHead, tied[0] is HEAD, which such a record never
 // drops: the others are dropped, and with none left HEAD alone is the pool.
 // Without it (the parent's own content needs a move) they are only a last
 // resort. The rest are scored by how many gitlinks name exactly where their
@@ -652,12 +656,6 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 	scores := make([]int, len(tied))
 	behind := make([]bool, len(tied))
 	for _, path := range slices.Sorted(maps.Keys(varying)) {
-		var shas []string
-		for i := range tied {
-			if sha := links[i][path]; sha != "" && !slices.Contains(shas, sha) {
-				shas = append(shas, sha)
-			}
-		}
 		child := filepath.Join(abs, filepath.FromSlash(path))
 		if _, err := os.Lstat(child); os.IsNotExist(err) {
 			// Not delivered: a contender that adds the submodule would leave
@@ -672,50 +670,53 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 			}
 			continue
 		}
-		target, exact, ok, held := r.childTarget(ctx, child, shas)
-		if !ok {
-			continue // no checkout to ask (a delivered addition has no .git)
-		}
-		label := path
-		if held != "" {
-			label += " (left alone: " + held + ")"
+		dropped := func(i int, held string) {
+			behind[i] = true
+			label := path
+			if held != "" {
+				label += " (left alone: " + held + ")"
+			}
+			if !slices.Contains(ev.behind, label) {
+				ev.behind = append(ev.behind, label)
+			}
 		}
 		placed := false
 		for i := range tied {
 			sha := links[i][path]
+			if sha == "" {
+				continue // a removal: the checkout stays as an untracked directory
+			}
+			if !r.hasCommit(ctx, child, sha) {
+				// It could be where the content is; only an exact match
+				// elsewhere, or a child left alone, says it is not (the #179
+				// case moves on).
+				_, exact, ok, held := r.childTarget(ctx, child, "")
+				if !ok {
+					continue
+				}
+				if note := path + " lacks " + shortRev(sha); !slices.Contains(ev.unknown, note) {
+					ev.unknown = append(ev.unknown, note)
+				}
+				if exact || held != "" {
+					dropped(i, held)
+				}
+				continue
+			}
+			// Where the child ends once this contender is recorded: its own
+			// turn, with that gitlink.
+			target, exact, ok, held := r.childTarget(ctx, child, sha)
 			switch {
-			case sha == "":
-				// A removal: the checkout stays as an untracked directory.
-			case sha == target:
+			case !ok:
+				// No checkout to ask (a delivered addition has no .git).
+			case target == sha:
 				if exact {
 					scores[i]++
 					placed = true
 				}
-			case !r.hasCommit(ctx, child, sha):
-				// It could be where the content is; only an exact match
-				// elsewhere says it is not (the #179 case moves on).
-				note := path + " lacks " + shortRev(sha)
-				if !slices.Contains(ev.unknown, note) {
-					ev.unknown = append(ev.unknown, note)
-				}
-				switch {
-				case held != "":
-					// A child left alone stays at HEAD, which cannot reach a
-					// commit it does not have.
-					behind[i] = true
-					if !slices.Contains(ev.behind, label) {
-						ev.behind = append(ev.behind, label)
-					}
-				case exact:
-					behind[i] = true
-				}
 			case r.strictDescendant(ctx, child, sha, target):
-				// The child is ahead of it: a forward change to record.
+				// The child ends ahead of it: a forward change to record.
 			default:
-				behind[i] = true
-				if !slices.Contains(ev.behind, label) {
-					ev.behind = append(ev.behind, label)
-				}
+				dropped(i, held)
 			}
 		}
 		if placed {
@@ -754,63 +755,63 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 	return ev
 }
 
-// childTarget is where a child checkout's content is: the commit it
-// realigns to among its HEAD, its first-parent chain to the upstream and
-// the gitlinks the parent weighs (extra), by the same content rule and,
-// on a tie, the same breakTie (its own children, recursively). HEAD is the
-// answer when nothing improves on it, uncommitted edits included (#197).
-// exact says the content matches it with no difference; ok is false when
-// there is no checkout to read. A child this run leaves alone (a lock, an
-// operation, staged changes, a linked worktree, outside the restriction)
-// stays at HEAD whatever its files show, and held says why.
-func (r *gitStateRun) childTarget(ctx context.Context, abs string, extra []string) (string, bool, bool, string) {
+// childTarget is where the child checkout at abs ends when its parent
+// records gitlink ("" asks where it is without one): the child's own turn
+// (classify, then a planned rescue) run on a report that is thrown away, so
+// the parent's question and the child's answer cannot differ (#189 round
+// 17). A child this run leaves alone (a lock, an operation, staged changes,
+// a linked worktree, outside the restriction) stays at HEAD whatever its
+// files show, and held says why. exact says its files match that commit
+// with no difference; ok is false when there is no checkout to read.
+func (r *gitStateRun) childTarget(ctx context.Context, abs, gitlink string) (string, bool, bool, string) {
+	key := abs + "\x00" + gitlink
+	if a, ok := r.targets[key]; ok {
+		return a.target, a.exact, a.ok, a.held
+	}
+	target, exact, ok, held := r.childTurn(ctx, abs, gitlink)
+	if r.targets == nil {
+		r.targets = map[string]childAnswer{}
+	}
+	r.targets[key] = childAnswer{target, exact, ok, held}
+	return target, exact, ok, held
+}
+
+func (r *gitStateRun) childTurn(ctx context.Context, abs, gitlink string) (string, bool, bool, string) {
 	gitdir, err := r.gitDir(ctx, abs)
 	if err != nil {
 		return "", false, false, ""
 	}
-	head, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "HEAD")
-	if err != nil {
-		return "", false, false, ""
-	}
-	headDiffs, err := r.contentDiffs(ctx, abs, gitdir, head)
-	if err != nil {
-		return "", false, false, ""
-	}
 	if held := r.leftAlone(ctx, abs, gitdir); held != "" {
-		return head, headDiffs == 0, true, held
-	}
-	cands, _ := r.candidates(ctx, abs, head, "")
-	for _, sha := range extra {
-		if !slices.Contains(cands, sha) && r.hasCommit(ctx, abs, sha) && r.strictDescendant(ctx, abs, head, sha) {
-			cands = append(cands, sha)
-		}
-	}
-	var tied []string
-	bestDiffs := -1
-	for _, cand := range cands {
-		diffs, err := r.contentDiffs(ctx, abs, gitdir, cand)
+		head, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "HEAD")
 		if err != nil {
-			continue
+			return "", false, false, ""
 		}
-		switch {
-		case bestDiffs < 0 || diffs < bestDiffs:
-			bestDiffs, tied = diffs, []string{cand}
-		case diffs == bestDiffs:
-			tied = append(tied, cand)
+		diffs, err := r.contentDiffs(ctx, abs, gitdir, head)
+		if err != nil {
+			return "", false, false, ""
 		}
+		return head, diffs == 0, true, held
 	}
-	if len(tied) == 0 || bestDiffs > headDiffs {
-		return head, headDiffs == 0, true, ""
+	rep := &GitRepoReport{}
+	r.classify(ctx, abs, gitdir, gitlink, rep)
+	if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
+		r.planRescue(ctx, abs, rep)
 	}
-	headTie := ""
-	if bestDiffs == headDiffs {
-		headTie = head
+	switch {
+	case rep.Head == "":
+		return "", false, false, ""
+	case rep.Status == GitRepoRealignable:
+		return rep.Target, rep.TargetDiffs == 0, true, ""
 	}
-	target, _, stay := r.breakTie(ctx, abs, "", headTie, headDiffs > 0, tied)
-	if stay {
-		return head, headDiffs == 0, true, ""
-	}
-	return target, bestDiffs == 0, true, ""
+	return rep.Head, rep.HeadDiffs == 0, true, ""
+}
+
+// childAnswer is a remembered childTarget. A child is asked only before its
+// own turn moves anything, so an answer holds for the run.
+type childAnswer struct {
+	target    string
+	exact, ok bool
+	held      string
 }
 
 // leftAlone says why process will not realign the checkout at abs, as it

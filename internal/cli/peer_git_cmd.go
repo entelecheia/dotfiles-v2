@@ -151,9 +151,10 @@ local), then HEAD and the index move to the matching commit, on the default
 branch for a branch mismatch. The worktree is never written; every move
 prints its undo command.
 
-Peer sync never carries .gitmodules. A worktree .gitmodules that is missing,
-or equal to an older committed version of the commit a repo sits on or moves
-to, is reported (missing or stale); --apply restores it from HEAD and runs
+Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
+at its upstream tip, a worktree .gitmodules that is missing, or equal to an
+older committed version of the commit it sits on or moves to, is reported
+(missing or stale); --apply restores it from HEAD and runs
 git submodule sync for the URLs it moves, in children the run may touch,
 printing an undo for each origin it rewrites. A URL counts as moved when git
 resolves the two spellings (insteadOf applied) differently. A submodule
