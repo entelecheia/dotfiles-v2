@@ -10,54 +10,7 @@
       "url": "https://github.com/entelecheia/dotfiles-v2",
       "provider": "github",
       "revision": "388a398a32a82c86f68ecabf8f6bfe56686ccbf6"
-    },
-    "views": [
-      {
-        "id": "apply-path",
-        "label": "Check and apply path",
-        "focus": [
-          "user",
-          "cli",
-          "config",
-          "module",
-          "home"
-        ],
-        "note": "The profile selects modules; each module runs Check() and Apply() and writes through exec.Runner."
-      },
-      {
-        "id": "ai-path",
-        "label": "AI tooling and admission",
-        "focus": [
-          "cli",
-          "module",
-          "aitool",
-          "admission",
-          "home"
-        ],
-        "note": "dot ai and the ai module manage agent CLIs and instruction files; tooling changes take the maintenance slot."
-      },
-      {
-        "id": "sync-path",
-        "label": "Sync and peer path",
-        "focus": [
-          "cli",
-          "syncer",
-          "targets"
-        ],
-        "note": "dot sync pushes to a mirror; dot peer exchanges with one SSH peer behind an owner epoch fence."
-      },
-      {
-        "id": "host-path",
-        "label": "Host guard and secrets",
-        "focus": [
-          "cli",
-          "watchdog",
-          "secrets",
-          "home"
-        ],
-        "note": "The watchdog LaunchAgent reaps runaway processes; dot secrets keeps age-encrypted archives."
-      }
-    ]
+    }
   },
   "components": [
     {
@@ -521,6 +474,7 @@
       "dot": "violet",
       "title": "AI tooling and admission",
       "items": [
+        "dot ai tools and dot ai update reconcile only the selected agent CLIs and tools",
         "dot ai agents renders ~/.config/dotfiles/agents/AGENTS.md into each tool's instruction file",
         "The coauthor guard wires a commit-msg hook through git config-based hooks",
         "dot admit, dot ai run and tooling updates share one controller: a heavy slot per repo, one maintenance slot per host",
