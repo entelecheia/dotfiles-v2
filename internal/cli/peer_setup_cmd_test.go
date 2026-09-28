@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -66,5 +68,15 @@ func TestPrintPeerScheduleDryRunTargetUserGuidance(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A started handover ignores SIGHUP: a dropped ssh session must not stop it
+// between moving the owner and running this Mac's on_deactivate.
+func TestPeerHandoverIgnoresHangup(t *testing.T) {
+	goldenSyncFixture(t)
+	_, _, _ = runDotForTest("peer", "handover") // fails without a peer; the handler is set first
+	if !signal.Ignored(syscall.SIGHUP) {
+		t.Fatal("SIGHUP is not ignored during a handover")
 	}
 }

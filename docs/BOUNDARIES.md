@@ -264,6 +264,19 @@ tool):
   default `realign`, `--dry-run`) writes nothing; linked worktrees and
   locked, staged, conflicting or in-progress repositories are never
   touched.
+- launchd jobs and apps named by the operator in the peer profile's
+  `hooks` (`.dotfiles/peer/config.yaml`): the jobs of their existing
+  `~/Library/LaunchAgents/<label>.plist` disabled and booted out, or
+  re-enabled and bootstrapped, apps quit or opened, only as listed: by
+  `dot peer setup` (on_activate, also on a refresh), `dot peer setup --off`
+  (on_deactivate), a handover (on_deactivate here, last) and a fence
+  demotion (on_deactivate). The disable and enable write those labels' entries in
+  launchd's per-user override database (`launchctl disable/enable
+  gui/<uid>/<label>`), so a bootout survives a reboot; only labels dot
+  disabled are enabled again. dot never writes those plists or the apps'
+  files; an unset `hooks` touches nothing.
+- `<workspace>/.dotfiles/peer/hooks-disabled.txt`: the launchd labels the
+  role hooks disabled, one per line, so `on_activate` re-enables only those.
 
 ## dotfiles-v2 Must Not Write Directly
 
