@@ -70,15 +70,18 @@ type GitRepoReport struct {
 	Rescue       string `json:"rescue,omitempty"`
 	RescueRemote string `json:"rescueRemote,omitempty"` // empty: kept local (--no-push)
 	RescuePushed bool   `json:"rescuePushed,omitempty"`
-	// Undo is the exact command that reverses an applied rescue.
+	// Undo is the exact command that reverses an applied realign or rescue.
 	Undo string `json:"undo,omitempty"`
 	// Gitmodules reports the worktree .gitmodules against the commit the
 	// repo sits on (or moves to): "stale" (an older committed version peer
-	// sync never replaced), "restored" (put back from HEAD by --apply) or
-	// "modified" (local edits, left alone). URLMoves lists the submodule URLs
-	// that version changes, "path: old -> new" (#179).
+	// sync never replaced), "missing" (absent from the worktree), "restored"
+	// (put back from HEAD by --apply) or "modified" (local edits, left
+	// alone). URLMoves lists the submodule URLs that version changes, or the
+	// origin --fetch re-pointed, "path: old -> new" (#179); URLUndo puts a
+	// re-pointed origin back.
 	Gitmodules string   `json:"gitmodules,omitempty"`
 	URLMoves   []string `json:"urlMoves,omitempty"`
+	URLUndo    string   `json:"urlUndo,omitempty"`
 
 	branch       string // HEAD's branch, empty when detached
 	rescueBranch string // branch-mismatch: the default branch HEAD moves onto
@@ -164,6 +167,30 @@ type gitStateRun struct {
 	git      string
 	opts     RealignOptions
 	restrict map[string]bool // nil means all repos
+	env      []string        // the environment without git's repo-local variables
+}
+
+// gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
+// GIT_WORK_TREE, GIT_INDEX_FILE, ...): run from a git hook, they would aim
+// every per-repo command at the hook's repository, as git itself clears
+// them before it enters a submodule.
+func gitCleanEnv(ctx context.Context, git string) []string {
+	out, err := exec.CommandContext(ctx, git, "rev-parse", "--local-env-vars").Output()
+	if err != nil {
+		return os.Environ()
+	}
+	local := map[string]bool{}
+	for _, name := range strings.Fields(string(out)) {
+		local[name] = true
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if !local[name] {
+			env = append(env, kv)
+		}
+	}
+	return env
 }
 
 func runGitState(ctx context.Context, root string, repos []string, opts RealignOptions) (*GitStateResult, error) {
@@ -180,7 +207,7 @@ func runGitState(ctx context.Context, root string, repos []string, opts RealignO
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	run := &gitStateRun{git: gitPath, opts: opts}
+	run := &gitStateRun{git: gitPath, opts: opts, env: gitCleanEnv(ctx, gitPath)}
 	if len(repos) > 0 {
 		run.restrict = map[string]bool{}
 		for _, arg := range repos {
@@ -828,6 +855,7 @@ func (r *gitStateRun) realign(ctx context.Context, abs, gitdir string, rep *GitR
 	}
 	rep.PreviousHead = rep.Head
 	rep.Status = GitRepoRealigned
+	rep.Undo = "git -C " + shellWord(abs) + " reset --mixed -q " + rep.Head
 }
 
 // gitDir resolves the absolute gitdir of the checkout at abs.
@@ -843,11 +871,13 @@ func (r *gitStateRun) gitDir(ctx context.Context, abs string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	want, err := filepath.EvalSymlinks(abs)
+	want, err := os.Stat(abs)
 	if err != nil {
 		return "", err
 	}
-	if got, err := filepath.EvalSymlinks(top); err != nil || got != want {
+	// SameFile, not a path compare: symlinks and a case-insensitive volume
+	// spell one directory several ways.
+	if got, err := os.Stat(top); err != nil || !os.SameFile(got, want) {
 		return "", fmt.Errorf("%s is not the top of a checkout (git resolves it to %s)", abs, top)
 	}
 	return r.read(ctx, abs, "rev-parse", "--absolute-git-dir")
@@ -916,7 +946,7 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.git, full...)
 	cmd.Dir = abs
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append([]string{}, r.env...), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -143,9 +143,14 @@ func TestPeerGitRealign_URLMoveDetectedFromTheParentCommit(t *testing.T) {
 	if got := gitStateHead(t, sub); got != s2 {
 		t.Fatalf("child HEAD = %s, want %s", got, s2)
 	}
-	// The child re-pointed its own origin; the report says so, with the undo.
-	if child := gitStateReport(t, applied, "sub"); len(child.URLMoves) != 1 || !strings.Contains(child.Undo, "remote set-url origin") {
+	// The child re-pointed its own origin and moved HEAD: the report keeps
+	// both undo commands.
+	child := gitStateReport(t, applied, "sub")
+	if len(child.URLMoves) != 1 || !strings.Contains(child.URLUndo, "remote set-url origin") {
 		t.Fatalf("the re-pointed origin left no record: %+v", child)
+	}
+	if child.Status != GitRepoRealigned || !strings.Contains(child.Undo, "reset --mixed -q") {
+		t.Fatalf("the HEAD move left no undo: %+v", child)
 	}
 }
 

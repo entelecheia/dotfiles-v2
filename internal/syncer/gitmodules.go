@@ -187,7 +187,7 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 	if move != nil && rawOrigin != "" {
 		// The re-pointed origin is part of what this run changed.
 		fresh.URLMoves = []string{"origin: " + rawOrigin + " -> " + move.new}
-		fresh.Undo = "git -C " + shellWord(abs) + " remote set-url origin " + shellWord(rawOrigin)
+		fresh.URLUndo = "git -C " + shellWord(abs) + " remote set-url origin " + shellWord(rawOrigin)
 	}
 	*rep = *fresh
 }

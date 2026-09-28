@@ -647,3 +647,19 @@ func TestPeerGitRealign_CleanParentStaysBehindUndeliveredGitlinkBump(t *testing.
 		t.Fatalf("parent not clean:\n%s", out)
 	}
 }
+
+// Run from a git hook, GIT_DIR and friends would aim every per-repo command
+// at the hook's repository; realign clears them like git does for a
+// submodule.
+func TestPeerGitStatus_IgnoresRepoPinningEnv(t *testing.T) {
+	ws, _, _, c2 := gitStateBehindFixture(t)
+	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "not-a-repo"))
+	t.Setenv("GIT_WORK_TREE", t.TempDir())
+	res, err := PeerGitStatus(context.Background(), ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep := gitStateReport(t, res, "sub"); rep.Status != GitRepoRealignable || rep.Target != c2 {
+		t.Fatalf("sub = %+v", rep)
+	}
+}

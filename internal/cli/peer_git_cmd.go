@@ -248,16 +248,15 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 		}
 		if rep.Gitmodules != "" {
 			p.Line("      .gitmodules: %s", rep.Gitmodules)
-			for _, move := range rep.URLMoves {
-				p.Line("        url moved: %s", move)
-			}
 		}
-		if rep.Status == syncer.GitRepoRealigned {
-			undo := rep.Undo
-			if undo == "" {
-				undo = "git -C " + peerGitRepoAbs(res.Root, rep.Path) + " reset --mixed -q " + rep.PreviousHead
-			}
-			p.Line("      undo: %s", undo)
+		for _, move := range rep.URLMoves {
+			p.Line("        url moved: %s", move)
+		}
+		if rep.Status == syncer.GitRepoRealigned && rep.Undo != "" {
+			p.Line("      undo: %s", rep.Undo)
+		}
+		if rep.URLUndo != "" {
+			p.Line("      undo url: %s", rep.URLUndo)
 		}
 	}
 	summary := peerGitSummary(res)
@@ -293,11 +292,4 @@ func shortSHA(sha string) string {
 		return sha[:12]
 	}
 	return sha
-}
-
-func peerGitRepoAbs(root, rel string) string {
-	if rel == "." {
-		return root
-	}
-	return root + "/" + rel
 }
