@@ -125,10 +125,29 @@ func newPeerGitStatusCmd() *cobra.Command {
 }
 
 func newPeerGitRealignCmd() *cobra.Command {
-	var apply bool
+	var apply, rescue, noPush bool
 	cmd := &cobra.Command{
-		Use:          "realign [--apply] [<repo>...]",
-		Short:        "Move HEAD and index to the descendant commit the files already match",
+		Use:   "realign [--apply] [--rescue [--no-push]] [<repo>...]",
+		Short: "Move HEAD and index to the descendant commit the files already match",
+		Long: `Move each repo's HEAD and index forward to the descendant commit its files
+already match. The default is a preview; --apply moves.
+
+A repo with no such descendant is reported as no-match with a class and the
+next step:
+  at-tip            at the upstream tip; only uncommitted changes differ
+  ahead-unpushed    local-only commits the upstream lacks; push them
+  diverged          local-only commits and upstream commits; the files match
+                    an upstream commit
+  branch-mismatch   HEAD is on another branch, the files match the default
+                    branch
+A leftover REBASE_HEAD with no rebase in progress is skipped as
+stale-rebase-head with the command that clears it.
+
+--rescue also moves diverged and branch-mismatch repos: HEAD's commits are
+kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
+local), then HEAD and the index move to the matching commit, on the default
+branch for a branch mismatch. The worktree is never written; every move
+prints its undo command.`,
 		Args:         cobra.ArbitraryArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -141,7 +160,11 @@ func newPeerGitRealignCmd() *cobra.Command {
 			// either peer store (#99, #103).
 			dryRun, _ := c.Flags().GetBool("dry-run")
 			apply = apply && !dryRun
-			res, err := syncer.PeerGitRealign(c.Context(), root, args, apply)
+			res, err := syncer.PeerGitRealign(c.Context(), root, args, syncer.RealignOptions{
+				Apply:  apply,
+				Rescue: rescue,
+				NoPush: noPush,
+			})
 			if err != nil {
 				return err
 			}
@@ -168,6 +191,8 @@ func newPeerGitRealignCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&apply, "apply", false, "move HEAD and index (default is a dry-run preview)")
+	cmd.Flags().BoolVar(&rescue, "rescue", false, "also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch")
+	cmd.Flags().BoolVar(&noPush, "no-push", false, "with --rescue, keep rescue branches local")
 	return cmd
 }
 
@@ -190,8 +215,25 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 		if rep.TieBreak != "" && (withMoves || rep.Status == syncer.GitRepoRealigned) {
 			p.Line("      tie: %s", rep.TieBreak)
 		}
+		if rep.Rescue != "" && (withMoves || rep.Status == syncer.GitRepoRealigned) {
+			where := "pushed to origin"
+			switch {
+			case rep.RescuePushed:
+				where = "pushed"
+			case rep.Status == syncer.GitRepoRealigned:
+				where = "local only"
+			}
+			p.Line("      rescue: %s keeps %s (%s)", rep.Rescue, shortSHA(rep.Head), where)
+		}
+		if rep.Class != "" && rep.Status != syncer.GitRepoRealignable && rep.Status != syncer.GitRepoRealigned {
+			p.Line("      %s: %s", rep.Class, rep.Suggestion)
+		}
 		if rep.Status == syncer.GitRepoRealigned {
-			p.Line("      undo: git -C %s reset --mixed -q %s", peerGitRepoAbs(res.Root, rep.Path), rep.PreviousHead)
+			undo := rep.Undo
+			if undo == "" {
+				undo = "git -C " + peerGitRepoAbs(res.Root, rep.Path) + " reset --mixed -q " + rep.PreviousHead
+			}
+			p.Line("      undo: %s", undo)
 		}
 	}
 	summary := peerGitSummary(res)

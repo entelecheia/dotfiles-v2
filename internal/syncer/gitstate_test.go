@@ -162,7 +162,7 @@ func TestPeerGitRealign_DescendantMatch(t *testing.T) {
 	objectsBefore := gitStateObjectCount(t, sub)
 	worktreeBefore := gitStateFileBytes(t, filepath.Join(sub, "file.txt"))
 
-	res, err = PeerGitRealign(ctx, ws, nil, true)
+	res, err = PeerGitRealign(ctx, ws, nil, RealignOptions{Apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestPeerGitRealign_UpstreamChainCandidate(t *testing.T) {
 	gitStateRun_(t, ws, "reset", "--hard", "-q", c1)
 	gitStateRewriteTracked(t, filepath.Join(ws, "file.txt"), "v2\n")
 
-	res, err := PeerGitRealign(context.Background(), ws, nil, true)
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestPeerGitRealign_PreviewChangesNothing(t *testing.T) {
 	indexBefore := gitStateIndexBytes(t, sub)
 	objectsBefore := gitStateObjectCount(t, sub)
 
-	res, err := PeerGitRealign(context.Background(), ws, nil, false)
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestPeerGit_SkipConditions(t *testing.T) {
 				t.Fatalf("reason = %q, want %q", rep.Reason, tc.wantReason)
 			}
 
-			res, err = PeerGitRealign(context.Background(), repo, nil, true)
+			res, err = PeerGitRealign(context.Background(), repo, nil, RealignOptions{Apply: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -445,7 +445,7 @@ func TestPeerGit_LinkedWorktreeListedNotRealigned(t *testing.T) {
 	sub := filepath.Join(ws, "sub")
 	gitStateRun_(t, subSrc, "worktree", "add", "--detach", sub, c1)
 
-	res, err := PeerGitRealign(context.Background(), ws, nil, true)
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestPeerGit_RepoRestriction(t *testing.T) {
 	if _, err := PeerGitStatus(ctx, ws, []string{"nosuch"}); err == nil {
 		t.Fatal("unknown repo argument did not error")
 	}
-	if _, err := PeerGitRealign(ctx, ws, []string{"nosuch"}, true); err == nil {
+	if _, err := PeerGitRealign(ctx, ws, []string{"nosuch"}, RealignOptions{Apply: true}); err == nil {
 		t.Fatal("unknown repo argument did not error before an applied realign")
 	}
 }
@@ -504,7 +504,7 @@ func TestPeerGitRealign_SameTreeDescendant(t *testing.T) {
 		t.Fatalf("status = %q target = %q, want realignable -> same-tree descendant %q", rep.Status, rep.Target, c2)
 	}
 
-	res, err = PeerGitRealign(context.Background(), ws, nil, true)
+	res, err = PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestPeerGitRealign_GitlinkOnlyDescendantsFollowChildren(t *testing.T) {
 	gitStateRewriteTracked(t, filepath.Join(sub, "file.txt"), "v3\n")
 
 	ctx := context.Background()
-	preview, err := PeerGitRealign(ctx, ws, nil, false)
+	preview, err := PeerGitRealign(ctx, ws, nil, RealignOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +566,7 @@ func TestPeerGitRealign_GitlinkOnlyDescendantsFollowChildren(t *testing.T) {
 		t.Fatalf("preview child = %q -> %q, want realignable -> %q (the tip's gitlink)", child.Status, child.Target, s3)
 	}
 
-	res, err := PeerGitRealign(ctx, ws, nil, true)
+	res, err := PeerGitRealign(ctx, ws, nil, RealignOptions{Apply: true})
 	if err != nil {
 		t.Fatal(err)
 	}

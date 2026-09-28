@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // GitRepoStatus classifies one discovered repository in a peer git run.
@@ -55,7 +56,34 @@ type GitRepoReport struct {
 	// PreviousHead is the undo record after an applied realign; restore with
 	// `git reset --mixed -q <PreviousHead>`.
 	PreviousHead string `json:"previousHead,omitempty"`
+	// Class refines a no-match or skipped outcome and Suggestion is the
+	// one-line next step for it (#178).
+	Class      string `json:"class,omitempty"`
+	Suggestion string `json:"suggestion,omitempty"`
+	// RescueTarget is the commit on the upstream or default branch the files
+	// match, for a diverged or branch-mismatch repo; --rescue moves there.
+	RescueTarget string `json:"rescueTarget,omitempty"`
+	// Rescue names the branch that keeps HEAD's commits when --rescue moves
+	// the repo; RescuePushed says it reached the remote.
+	Rescue       string `json:"rescue,omitempty"`
+	RescuePushed bool   `json:"rescuePushed,omitempty"`
+	// Undo is the exact command that reverses an applied rescue.
+	Undo string `json:"undo,omitempty"`
+
+	branch       string // HEAD's branch, empty when detached
+	rescueBranch string // branch-mismatch: the default branch HEAD moves onto
+	remote       string // remote a rescue branch is pushed to
+	rescueDiffs  int    // worktree differences against RescueTarget
 }
+
+// Classes of no-match and skipped outcomes (#178).
+const (
+	GitClassAtTip           = "at-tip"
+	GitClassAheadUnpushed   = "ahead-unpushed"
+	GitClassDiverged        = "diverged"
+	GitClassBranchMismatch  = "branch-mismatch"
+	GitClassStaleRebaseHead = "stale-rebase-head"
+)
 
 // GitStateResult is one status or realign run over the workspace tree.
 type GitStateResult struct {
@@ -91,25 +119,39 @@ var GitRepoStatuses = []GitRepoStatus{
 // worktree files. repos optionally restricts the report to
 // workspace-relative paths ("." is the root).
 func PeerGitStatus(ctx context.Context, root string, repos []string) (*GitStateResult, error) {
-	return runGitState(ctx, root, repos, false)
+	return runGitState(ctx, root, repos, RealignOptions{})
 }
 
-// PeerGitRealign runs the same classification and, when apply is true, moves
+// RealignOptions controls PeerGitRealign.
+type RealignOptions struct {
+	// Apply moves HEAD and index; false is a pure preview.
+	Apply bool
+	// Rescue also moves diverged and branch-mismatch repos to the commit
+	// their files match, after keeping HEAD on a rescue branch (#178).
+	Rescue bool
+	// NoPush keeps rescue branches local instead of pushing them.
+	NoPush bool
+	// Now dates rescue branch names; nil means time.Now.
+	Now func() time.Time
+}
+
+// PeerGitRealign runs the same classification and, with opts.Apply, moves
 // each realignable repo's HEAD and index to its best candidate through git's
-// lockfile protocol. With apply false it is a pure preview and changes
-// nothing under .git.
-func PeerGitRealign(ctx context.Context, root string, repos []string, apply bool) (*GitStateResult, error) {
-	return runGitState(ctx, root, repos, apply)
+// lockfile protocol. Without Apply it is a pure preview and changes nothing
+// under .git.
+func PeerGitRealign(ctx context.Context, root string, repos []string, opts RealignOptions) (*GitStateResult, error) {
+	return runGitState(ctx, root, repos, opts)
 }
 
-// gitStateRun carries the per-run state: the resolved git binary and the
-// optional repo restriction.
+// gitStateRun carries the per-run state: the resolved git binary, the
+// options and the optional repo restriction.
 type gitStateRun struct {
 	git      string
+	opts     RealignOptions
 	restrict map[string]bool // nil means all repos
 }
 
-func runGitState(ctx context.Context, root string, repos []string, apply bool) (*GitStateResult, error) {
+func runGitState(ctx context.Context, root string, repos []string, opts RealignOptions) (*GitStateResult, error) {
 	root = strings.TrimRight(root, "/")
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
@@ -120,7 +162,10 @@ func runGitState(ctx context.Context, root string, repos []string, apply bool) (
 	if gitPath, err = filepath.Abs(gitPath); err != nil {
 		return nil, fmt.Errorf("resolving git path: %w", err)
 	}
-	run := &gitStateRun{git: gitPath}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	run := &gitStateRun{git: gitPath, opts: opts}
 	if len(repos) > 0 {
 		run.restrict = map[string]bool{}
 		for _, arg := range repos {
@@ -143,7 +188,7 @@ func runGitState(ctx context.Context, root string, repos []string, apply bool) (
 		}
 	}
 
-	run.process(ctx, root, ".", "", apply, result)
+	run.process(ctx, root, ".", "", opts.Apply, result)
 	return result, nil
 }
 
@@ -231,8 +276,15 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, app
 
 	if included {
 		r.classify(ctx, abs, gitdir, gitlink, rep)
+		if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
+			r.planRescue(ctx, abs, rep)
+		}
 		if apply && rep.Status == GitRepoRealignable {
-			r.realign(ctx, abs, gitdir, rep)
+			if rep.Rescue != "" {
+				r.rescue(ctx, abs, gitdir, rep)
+			} else {
+				r.realign(ctx, abs, gitdir, rep)
+			}
 		}
 	}
 
@@ -268,6 +320,10 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 	if reason := r.blockReason(ctx, abs, gitdir); reason != "" {
 		rep.Status = GitRepoSkipped
 		rep.Reason = reason
+		if reason == staleRebaseHead {
+			rep.Class = GitClassStaleRebaseHead
+			rep.Suggestion = "no rebase is in progress; clear it: git -C " + abs + " update-ref -d REBASE_HEAD"
+		}
 		return
 	}
 
@@ -311,6 +367,7 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 		}
 		rep.Status = GitRepoNoMatch
 		rep.Reason = "no strict descendant candidate"
+		r.classifyNoMatch(ctx, abs, gitdir, rep)
 		return
 	}
 
@@ -343,6 +400,7 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 		rep.Reason = "no descendant commit improves on HEAD"
 		rep.Target = tied[0]
 		rep.TargetDiffs = bestDiffs
+		r.classifyNoMatch(ctx, abs, gitdir, rep)
 		return
 	}
 	// A tie with HEAD (best == headDiffs) is still a realign: moving to a
@@ -476,6 +534,8 @@ func (r *gitStateRun) childMatches(ctx context.Context, abs, path, sha string) b
 	return err == nil && diffs == 0
 }
 
+const staleRebaseHead = "stale REBASE_HEAD"
+
 // blockReason reports why a repo must be skipped and reported rather than
 // classified or realigned: a lock, an operation in progress, unmerged
 // entries or staged changes (the 09-24 stale-lock incident class).
@@ -490,7 +550,7 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 	} else if strings.TrimSpace(out) != "" {
 		return "unmerged index entries"
 	}
-	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"} {
+	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
 		if _, err := os.Stat(filepath.Join(gitdir, marker)); err == nil {
 			return "operation in progress (" + marker + ")"
 		}
@@ -499,6 +559,11 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 		if st, err := os.Stat(filepath.Join(gitdir, dir)); err == nil && st.IsDir() {
 			return "operation in progress (" + dir + ")"
 		}
+	}
+	// A rebase in progress always has one of the directories above; a
+	// REBASE_HEAD without them is a leftover (#178).
+	if _, err := os.Stat(filepath.Join(gitdir, "REBASE_HEAD")); err == nil {
+		return staleRebaseHead
 	}
 	if _, err := r.read(ctx, abs, "diff", "--cached", "--quiet"); err != nil {
 		var exitErr *gitExitError
