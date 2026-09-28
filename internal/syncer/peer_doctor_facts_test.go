@@ -268,46 +268,58 @@ func TestPeerSyncCountsQuarantinedDeletions(t *testing.T) {
 func TestDoctorNFDVerdictMatchesTheSync(t *testing.T) {
 	requirePeerRsync(t)
 	nfc := norm.NFC.String("한글.md")
-	for _, marked := range []bool{false, true} {
-		for _, where := range []string{"none", "coordinator", "other"} {
-			t.Run(fmt.Sprintf("marked=%v names=%s", marked, where), func(t *testing.T) {
-				sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1)
-				if marked {
-					if err := MarkNFDMigration(sb.local); err != nil {
-						t.Fatal(err)
+	// The other Mac is a plain peer, or a coordinator the fence will demote
+	// (a takeover's reunion: it still passes its own owner guard at a lower
+	// epoch, NFD-marked). Its names are judged against the Mac that syncs.
+	for _, demoted := range []bool{false, true} {
+		for _, marked := range []bool{false, true} {
+			for _, where := range []string{"none", "coordinator", "other"} {
+				t.Run(fmt.Sprintf("otherDemoted=%v marked=%v names=%s", demoted, marked, where), func(t *testing.T) {
+					fields, localEpoch := peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1
+					if demoted {
+						fields.owner, localEpoch = "old-coordinator", 2
 					}
-				}
-				other := &PeerSideFacts{Owner: sb.owner, OwnerEpoch: 1}
-				switch where {
-				case "coordinator":
-					if err := os.WriteFile(filepath.Join(sb.local, nfc), []byte("x"), 0o644); err != nil {
-						t.Fatal(err)
+					sb := newPeerHandoverSandbox(t, fields, localEpoch)
+					if marked {
+						if err := MarkNFDMigration(sb.local); err != nil {
+							t.Fatal(err)
+						}
 					}
-				case "other":
-					if err := os.WriteFile(filepath.Join(sb.peer, nfc), []byte("x"), 0o644); err != nil {
-						t.Fatal(err)
+					other := &PeerSideFacts{Owner: sb.owner, OwnerEpoch: 1}
+					if demoted {
+						other = &PeerSideFacts{Owner: "old-coordinator", OwnerEpoch: 1, Coordinator: true, NFDMarked: true}
 					}
-					other.NonNFD, other.NonNFDSample = 1, []string{nfc}
-				}
-				facts := LocalPeerSideFacts(context.Background(), peerScheduleRunner(false), sb.cfg, "9.9.9")
-				if !facts.Coordinator {
-					t.Fatal("the sandbox Mac is not the coordinator")
-				}
-				doctorFails := false
-				for _, c := range evaluatePeerSides(facts, other, "here", "there") {
-					doctorFails = doctorFails || c.Name == "nfd" && c.Level == DoctorFail
-				}
+					switch where {
+					case "coordinator":
+						if err := os.WriteFile(filepath.Join(sb.local, nfc), []byte("x"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "other":
+						if err := os.WriteFile(filepath.Join(sb.peer, nfc), []byte("x"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+						other.NonNFD, other.NonNFDSample = 1, []string{nfc}
+					}
+					facts := LocalPeerSideFacts(context.Background(), peerScheduleRunner(false), sb.cfg, "9.9.9")
+					if !facts.Coordinator {
+						t.Fatal("the sandbox Mac is not the coordinator")
+					}
+					doctorFails := false
+					for _, c := range evaluatePeerSides(facts, other, "here", "there") {
+						doctorFails = doctorFails || c.Name == "nfd" && c.Level == DoctorFail
+					}
 
-				_, diffErr := PeerDiff(context.Background(), PeerDiffOptions{Config: sb.cfg, Probe: peerScheduleRunner(false)})
-				stops := diffErr != nil
-				for run := 1; run <= 2 && !stops; run++ {
-					_, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true})
-					stops = err != nil
-				}
-				if doctorFails != stops {
-					t.Fatalf("doctor fails %v, sync stops %v (diff: %v)", doctorFails, stops, diffErr)
-				}
-			})
+					_, diffErr := PeerDiff(context.Background(), PeerDiffOptions{Config: sb.cfg, Probe: peerScheduleRunner(false)})
+					stops := diffErr != nil
+					for run := 1; run <= 2 && !stops; run++ {
+						_, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true})
+						stops = err != nil
+					}
+					if doctorFails != stops {
+						t.Fatalf("doctor fails %v, sync stops %v (diff: %v)", doctorFails, stops, diffErr)
+					}
+				})
+			}
 		}
 	}
 }

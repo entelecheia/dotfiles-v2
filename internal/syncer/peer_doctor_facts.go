@@ -92,12 +92,14 @@ func LocalPeerSideFacts(ctx context.Context, probe *exec.Runner, cfg *Config, do
 	// linked worktrees a peer run excludes; the other Mac is normalized by
 	// `dot sync names normalize` over ssh, which walks them.
 	planCfg := *cfg
+	var wtErr error
 	if f.Coordinator {
-		if wt, err := MergePeerWorktrees(cfg, nil, false); err == nil {
-			planCfg.WorktreeExcludes = wt
-		}
+		// PeerSync stops on this error before it walks: so does the count.
+		planCfg.WorktreeExcludes, wtErr = MergePeerWorktrees(cfg, nil, false)
 	}
-	if plan, err := PlanWorkspaceNameNormalization(&planCfg); err != nil {
+	if wtErr != nil {
+		f.NonNFDError = "linked worktrees: " + wtErr.Error()
+	} else if plan, err := PlanWorkspaceNameNormalization(&planCfg); err != nil {
 		f.NonNFDError = err.Error()
 	} else {
 		f.NonNFD = len(plan.Renames)
@@ -196,6 +198,28 @@ func nfdVerdict(s, o *PeerSideFacts, host, other string) (level, detail, fix str
 	return DoctorPass, host + ": every name in NFD (" + marker + ")", ""
 }
 
+// syncingCoordinators is who runs peer syncs once the fence has spoken
+// (fenceDecision): of two coordinators at different epochs the lower one's
+// next sync only demotes it, before it normalizes or moves anything; a sole
+// coordinator the fence demotes keeps the role only when it answers to the
+// owner it adopts. Equal epochs are the roles row's two-coordinator FAIL.
+func syncingCoordinators(local, peer *PeerSideFacts) (bool, bool) {
+	l, p := local.Coordinator, peer.Coordinator
+	demoted := func(c, n *PeerSideFacts) bool {
+		demote, err := fenceDecision(c.Owner, c.OwnerEpoch, n.Owner, n.OwnerEpoch)
+		return err == nil && demote && !answersTo(c.MachineNames, n.Owner)
+	}
+	switch {
+	case l && p && local.OwnerEpoch != peer.OwnerEpoch:
+		return local.OwnerEpoch > peer.OwnerEpoch, peer.OwnerEpoch > local.OwnerEpoch
+	case l && !p && demoted(local, peer):
+		return false, false
+	case p && !l && demoted(peer, local):
+		return false, false
+	}
+	return l, p
+}
+
 // IsPeerCoordinator reports whether this machine is the peer pair's
 // coordinator: a set owner that passes the owner guard here.
 func IsPeerCoordinator(cfg *Config) bool {
@@ -245,12 +269,18 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		host string
 		f    *PeerSideFacts
 	}
-	sides := []side{{here, local}, {there, peer}}
+	// The rows that depend on who syncs (rsync client, NFD) take the Mac
+	// that syncs once the fence has spoken, not every Mac that passes its
+	// owner guard; the roles rows below judge the guards themselves.
+	lc, pc := syncingCoordinators(local, peer)
+	el, ep := *local, *peer
+	el.Coordinator, ep.Coordinator = lc, pc
+	sides := []side{{here, &el}, {there, &ep}}
 
 	// This machine's client is the doctor's first line. Only the coordinator
 	// runs one, so the other Mac's matters after a takeover.
 	switch {
-	case peer.RsyncError != "" && peer.Coordinator:
+	case peer.RsyncError != "" && ep.Coordinator:
 		add("rsync", DoctorFail, there+": "+peer.RsyncError, "on "+there+": brew install rsync")
 	case peer.RsyncError != "":
 		add("rsync", DoctorWarn, there+": "+peer.RsyncError+" (it needs rsync 3.x once it coordinates)", "on "+there+": brew install rsync")
@@ -322,7 +352,7 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		case n.OwnerEpoch != c.OwnerEpoch:
 			// The coordinator proceeds; the other Mac never syncs to catch up.
 			add("roles", DoctorPass, fmt.Sprintf("coordinator: %s, owner %q (epoch %d here, %d on %s)", coord, c.Owner, local.OwnerEpoch, peer.OwnerEpoch, there), "")
-			add("roles", DoctorWarn, fmt.Sprintf("%s still records epoch %d (the coordinator's is %d)", other, n.OwnerEpoch, c.OwnerEpoch), align)
+			add("roles", DoctorWarn, fmt.Sprintf("%s still records owner %q at epoch %d (the coordinator's: %q at %d); `dot peer setup` there needs both to name the same owner", other, n.Owner, n.OwnerEpoch, c.Owner, c.OwnerEpoch), align)
 		default:
 			add("roles", DoctorPass, fmt.Sprintf("coordinator: %s, owner %q (epoch %d here, %d on %s)", coord, c.Owner, local.OwnerEpoch, peer.OwnerEpoch, there), "")
 		}
