@@ -294,10 +294,47 @@ func TestPeerGitRealign_RestoresStaleGitmodulesAtTip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root := gitStateReport(t, res, "."); root.Class != GitClassAtTip || root.Gitmodules != "restored" {
+	// Restricted to the root: .gitmodules is restored, the child's origin is
+	// the child's to change.
+	if root := gitStateReport(t, res, "."); root.Class != GitClassAtTip || root.Gitmodules != "restored; submodule sync skipped for sub (not named)" {
 		t.Fatalf("root = %+v", root)
 	}
 	if out := gitStateRun_(t, ws, "status", "--porcelain", "--", ".gitmodules"); out != "" {
 		t.Fatalf(".gitmodules still differs: %q", out)
+	}
+}
+
+// submodule sync follows the child's own rules: a locked child's origin is
+// left alone and reported, and a rewritten origin gets an undo command.
+func TestPeerGitRealign_SubmoduleSyncRespectsTheChild(t *testing.T) {
+	ws, sub, oldURL, _, _, _ := urlMoveFixture(t)
+	gitStateRun_(t, sub, "remote", "set-url", "origin", oldURL)
+	lock := filepath.Join(gitStateRun_(t, sub, "rev-parse", "--absolute-git-dir"), "index.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); !strings.Contains(root.Gitmodules, "submodule sync skipped for sub (index.lock present)") {
+		t.Fatalf("root = %+v", root)
+	}
+	if got := gitStateRun_(t, sub, "remote", "get-url", "origin"); got != oldURL {
+		t.Fatalf("a locked child's origin was rewritten to %s", got)
+	}
+
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	gitStateRun_(t, ws, "checkout", "-q", "--", ".")
+	ws2, sub2, oldURL2, _, _, _ := urlMoveFixture(t)
+	gitStateRun_(t, sub2, "remote", "set-url", "origin", oldURL2)
+	res, err = PeerGitRealign(context.Background(), ws2, nil, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); !strings.Contains(root.URLUndo, "remote set-url origin "+shellWord(oldURL2)) {
+		t.Fatalf("no undo for the rewritten origin: %+v", root)
 	}
 }

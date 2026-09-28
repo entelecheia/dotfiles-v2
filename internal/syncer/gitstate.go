@@ -18,7 +18,9 @@ import (
 type GitRepoStatus string
 
 const (
-	// GitRepoAligned means the worktree already matches HEAD's tree.
+	// GitRepoAligned means the worktree already matches HEAD's own content
+	// (gitlinks and .gitmodules aside: the children and peer sync's
+	// exclusion account for those).
 	GitRepoAligned GitRepoStatus = "aligned"
 	// GitRepoRealignable means a strict descendant of HEAD matches the
 	// worktree at least as well as HEAD does.

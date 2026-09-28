@@ -72,11 +72,49 @@ func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, appl
 		return
 	}
 	rep.Gitmodules = "restored"
-	if len(paths) > 0 {
-		args := append([]string{"submodule", "sync", "-q", "--"}, paths...)
+	// submodule sync rewrites each moved child's origin, so it follows the
+	// child's own rules: only children this run may touch (named, not
+	// locked or mid-operation), and each rewrite gets an undo command.
+	var syncPaths, skipped []string
+	before := map[string]string{}
+	for _, p := range paths {
+		childAbs := filepath.Join(abs, filepath.FromSlash(p))
+		if !r.included(filepath.ToSlash(filepath.Join(rep.Path, p))) {
+			skipped = append(skipped, p+" (not named)")
+			continue
+		}
+		if gitdir, err := r.gitDir(ctx, childAbs); err == nil {
+			if reason := r.blockReason(ctx, childAbs, gitdir); reason != "" {
+				skipped = append(skipped, p+" ("+reason+")")
+				continue
+			}
+			before[p], _ = r.read(ctx, childAbs, "config", "--get", "remote.origin.url")
+		}
+		syncPaths = append(syncPaths, p)
+	}
+	if len(syncPaths) > 0 {
+		args := append([]string{"submodule", "sync", "-q", "--"}, syncPaths...)
 		if _, err := r.runOutput(ctx, abs, nil, false, args...); err != nil {
 			rep.Gitmodules = "restored (submodule sync failed: " + shortErr(err) + ")"
 		}
+	}
+	var undo []string
+	for _, p := range syncPaths {
+		childAbs := filepath.Join(abs, filepath.FromSlash(p))
+		if old := before[p]; old != "" {
+			if now, _ := r.read(ctx, childAbs, "config", "--get", "remote.origin.url"); now != old {
+				undo = append(undo, "git -C "+shellWord(childAbs)+" remote set-url origin "+shellWord(old))
+			}
+		}
+	}
+	if len(undo) > 0 {
+		if rep.URLUndo != "" {
+			undo = append([]string{rep.URLUndo}, undo...)
+		}
+		rep.URLUndo = strings.Join(undo, " && ")
+	}
+	if len(skipped) > 0 {
+		rep.Gitmodules += "; submodule sync skipped for " + strings.Join(skipped, ", ")
 	}
 }
 
@@ -175,7 +213,8 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 	// protocol restrictions git submodule itself applies to such URLs.
 	// Like the rescue push: no prompt anyone can answer, and a time bound.
 	fctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	_, err := r.runOutput(fctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0"}, false, "fetch", "-q", "origin")
+	// Only this child: its nested submodules get their own pass.
+	_, err := r.runOutput(fctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0"}, false, "fetch", "-q", "--no-recurse-submodules", "origin")
 	cancel()
 	if err != nil {
 		rep.Reason = gitlinkMissing + "; fetch failed: " + shortErr(err)

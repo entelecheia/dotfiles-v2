@@ -382,15 +382,23 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 		fail(GitRepoSkipped, "HEAD moved during the rescue; repo untouched (rescue branch "+rep.Rescue+" kept)")
 		return
 	}
-	restoreDef := func() {
+	// restoreDef puts the default branch back and says whether it could.
+	restoreDef := func() string {
 		if oldDef == target {
-			return
+			return def + " unchanged"
 		}
+		var err error
+		manual := "git -C " + shellWord(abs) + " update-ref -d " + defRef
 		if oldDef == "" {
-			_, _ = r.runOutput(ctx, abs, nil, false, "update-ref", "-d", defRef, target)
+			_, err = r.runOutput(ctx, abs, nil, false, "update-ref", "-d", defRef, target)
 		} else {
-			_, _ = r.runOutput(ctx, abs, nil, false, "update-ref", defRef, oldDef, target)
+			manual = "git -C " + shellWord(abs) + " update-ref " + defRef + " " + oldDef
+			_, err = r.runOutput(ctx, abs, nil, false, "update-ref", defRef, oldDef, target)
 		}
+		if err != nil {
+			return "restoring " + def + " failed (" + shortErr(err) + "; by hand: " + manual + ")"
+		}
+		return def + " restored"
 	}
 	if oldDef != target {
 		if _, err := r.runOutput(ctx, abs, nil, false, "update-ref", "-m", "dot peer rescue", defRef, target, oldDef); err != nil {
@@ -399,8 +407,7 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 		}
 	}
 	if _, err := r.runOutput(ctx, abs, nil, false, "symbolic-ref", "-m", "dot peer rescue", "HEAD", defRef); err != nil {
-		restoreDef()
-		fail(GitRepoUnresolvable, "cannot point HEAD at "+def+"; "+def+" restored: "+shortErr(err))
+		fail(GitRepoUnresolvable, "cannot point HEAD at "+def+"; "+restoreDef()+": "+shortErr(err))
 		return
 	}
 	restoreHead := "git -C " + shellWord(abs) + " update-ref --no-deref HEAD " + rep.Head
@@ -408,13 +415,17 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 		restoreHead = "git -C " + shellWord(abs) + " symbolic-ref HEAD " + shellWord("refs/heads/"+rep.branch)
 	}
 	if err := os.Rename(lockPath, index); err != nil {
+		var herr error
 		if rep.branch != "" {
-			_, _ = r.runOutput(ctx, abs, nil, false, "symbolic-ref", "HEAD", "refs/heads/"+rep.branch)
+			_, herr = r.runOutput(ctx, abs, nil, false, "symbolic-ref", "HEAD", "refs/heads/"+rep.branch)
 		} else {
-			_, _ = r.runOutput(ctx, abs, nil, false, "update-ref", "--no-deref", "HEAD", rep.Head)
+			_, herr = r.runOutput(ctx, abs, nil, false, "update-ref", "--no-deref", "HEAD", rep.Head)
 		}
-		restoreDef()
-		fail(GitRepoUnresolvable, "index rename failed after HEAD moved; HEAD and "+def+" restored: "+shortErr(err))
+		headState := "HEAD restored"
+		if herr != nil {
+			headState = "restoring HEAD failed (" + shortErr(herr) + "; by hand: " + restoreHead + ")"
+		}
+		fail(GitRepoUnresolvable, "index rename failed after HEAD moved; "+headState+", "+restoreDef()+": "+shortErr(err))
 		return
 	}
 	if oldDef == "" {

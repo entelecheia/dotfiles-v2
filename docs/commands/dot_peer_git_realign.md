@@ -26,8 +26,11 @@ prints its undo command.
 
 Peer sync never carries .gitmodules. A worktree .gitmodules that is missing,
 or equal to an older committed version of the commit a repo sits on or moves
-to, is reported (missing or stale); --apply restores it from HEAD and runs git submodule sync for the URLs it
-moves. A submodule whose gitlink commit is missing is reported with the
+to, is reported (missing or stale); --apply restores it from HEAD and runs
+git submodule sync for the URLs it moves, in children the run may touch,
+printing an undo for each origin it rewrites. A URL counts as moved when git
+resolves the two spellings (insteadOf applied) differently. A submodule
+whose gitlink commit is missing is reported with the
 fetch (and set-url, for a moved URL) commands; --apply --fetch runs them and
 retries it.
 
