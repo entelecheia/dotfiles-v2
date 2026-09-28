@@ -55,5 +55,6 @@
   "runCount": null,
   "lastHeldAt": null,
   "homePathsPath": "@ROOT@/.dotfiles/peer/home-paths.txt",
-  "dotVersion": "dev (test)"
+  "dotVersion": "dev (test)",
+  "role": "peer"
 }

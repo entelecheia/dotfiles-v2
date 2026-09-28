@@ -443,3 +443,22 @@ func TestSyncMirrorCLI_HonorsHomeOverride(t *testing.T) {
 		t.Errorf("current-user state wrongly written under --home:\n%s", cur)
 	}
 }
+
+// The doctor's topology fix: a peer target set this way keeps the owner,
+// epoch and every other key of the peer store (dot peer init would record
+// this Mac as the owner).
+func TestSyncTargetOnThePeerProfileKeepsOwnerAndEpoch(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	store := filepath.Join(f.local, ".dotfiles", "peer", "config.yaml")
+	writeCLITestFile(t, store, "target: ssh:peer-alias:/Users/a/elsewhere\nowner: the-coordinator\nowner_epoch: 2\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	if _, errOut, err := runDotForTest("sync", "target", "--profile=peer", "ssh:peer-alias:/Users/a/work"); err != nil {
+		t.Fatalf("%v\n%s", err, errOut)
+	}
+	got, _, err := syncer.LoadLocalConfig(syncer.ResolveLocalPathsForProfile(f.local, "peer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Target != "ssh:peer-alias:/Users/a/work" || got.Owner != "the-coordinator" || got.OwnerEpoch != 2 {
+		t.Fatalf("store = %+v", got)
+	}
+}

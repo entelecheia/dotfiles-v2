@@ -54,8 +54,17 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 		return nil, fmt.Errorf("peer inventory: %w", runErr)
 	}
 	requireNFD := NFDMigrationMarked(cfg.LocalPaths.WorkspaceRoot)
-	return parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
+	snap, err := parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
+	if errors.Is(err, errPeerNameNotNFD) {
+		// The name lives on the peer, so the fix runs there (#182).
+		return nil, fmt.Errorf("%w on %s; run there: dot sync names normalize --profile=peer --yes (dot peer doctor counts them)", err, cfg.Target.Host)
+	}
+	return snap, err
 }
+
+// errPeerNameNotNFD marks an inventory name the NFD-marked workspace
+// requires in NFD but the peer holds in another form.
+var errPeerNameNotNFD = errors.New("not NFD-normalized")
 
 // remoteDotCandidates are the shell words the peer probe expands into dot
 // candidates, in preference order for equal versions. Tests replace them so
@@ -395,14 +404,18 @@ func fetchRemotePeerWorktrees(ctx context.Context, runner *exec.Runner, cfg *Con
 // checkRemotePeerTopology proves the remote profile points back at this
 // workspace: the pair must be exactly two machines, each naming the other.
 func checkRemotePeerTopology(cfg *Config, status *remotePeerStatus) error {
-	remoteWorkspace := filepath.Clean(status.Profile.WorkspacePath)
-	wantRemoteWorkspace := filepath.Clean(cfg.Target.Path)
-	remoteTarget := filepath.Clean(status.Profile.Target.Path)
-	wantRemoteTarget := filepath.Clean(strings.TrimRight(cfg.LocalPath, "/"))
-	if remoteWorkspace != wantRemoteWorkspace || remoteTarget != wantRemoteTarget {
+	return topologyError(cfg.LocalPath, cfg.Target.Path, status.Profile.WorkspacePath, status.Profile.Target.Path)
+}
+
+// topologyError is the fence's first check: the remote profile must point
+// back at this workspace. The doctor asks it from the coordinator's side.
+func topologyError(localWorkspace, localTarget, remoteWorkspace, remoteTarget string) error {
+	wantRemoteWorkspace := filepath.Clean(localTarget)
+	wantRemoteTarget := filepath.Clean(strings.TrimRight(localWorkspace, "/"))
+	if filepath.Clean(remoteWorkspace) != wantRemoteWorkspace || filepath.Clean(remoteTarget) != wantRemoteTarget {
 		return fmt.Errorf(
 			"peer coordinator check: remote profile does not point back to this workspace (remote workspace %q target %q; expected %q -> %q)",
-			status.Profile.WorkspacePath, status.Profile.Target.Path, wantRemoteWorkspace, wantRemoteTarget)
+			remoteWorkspace, remoteTarget, wantRemoteWorkspace, wantRemoteTarget)
 	}
 	return nil
 }
@@ -410,15 +423,19 @@ func checkRemotePeerTopology(cfg *Config, status *remotePeerStatus) error {
 // checkRemotePeerOwnerMatch is the pre-epoch refusal: without an epoch to
 // order them, two different owners can never both proceed.
 func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
-	if status.Profile.CanPush {
+	return ownerMatchError(localFenceSide(cfg), remoteFenceSide(status))
+}
+
+func ownerMatchError(local, remote fenceSide) error {
+	if remote.CanPush {
 		return fmt.Errorf(
 			"peer coordinator check: the peer also passes its own owner guard (its owner %q, local %q); two coordinators would write to each other. Set one owner on both machines with `dot sync owner --profile=peer --set <coordinator>`",
-			status.Profile.Owner, cfg.Owner)
+			remote.Owner, local.Owner)
 	}
-	if NormalizeHostname(cfg.Owner) == "" || !sameOwner(cfg.Owner, cfg.OwnerAliases, status.Profile.Owner, status.Profile.OwnerAliases) {
+	if NormalizeHostname(local.Owner) == "" || !sameOwner(local.Owner, local.Aliases, remote.Owner, remote.Aliases) {
 		return fmt.Errorf(
 			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
-			cfg.Owner, status.Profile.Owner, cfg.Owner)
+			local.Owner, remote.Owner, local.Owner)
 	}
 	return nil
 }
@@ -477,7 +494,7 @@ func parsePeerRemoteInventory(stdout string, remoteLoc *time.Location, baseline 
 			return nil, fmt.Errorf("peer inventory: rsync printed the name %q with \\#ooo octal escapes, not an NFD problem: the name holds a control character (Finder's Icon\\r, say) or a literal \\# before digits, which rsync always escapes, or the client is openrsync; rename or exclude that file", rel)
 		}
 		if requireNFD && rel != "" && !NFDPathNormalized(rel) {
-			return nil, fmt.Errorf("peer inventory: path %q is not NFD-normalized; normalize the peer before retrying", rel)
+			return nil, fmt.Errorf("peer inventory: path %q is %w", rel, errPeerNameNotNFD)
 		}
 		// The dry-run listing includes directory traversal records. Inventory is
 		// file-only, so skip them before trimming the rsync directory marker.

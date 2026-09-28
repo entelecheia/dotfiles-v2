@@ -531,6 +531,12 @@ type PeerSyncResult struct {
 	Unreachable bool
 	Complete    bool
 	Demoted     bool
+	// QuarantinedHere and QuarantinedOnPeer count the workspace deletions
+	// this run moved into .sync-conflicts/<ConflictStamp>/ on each machine
+	// instead of removing them (#182).
+	QuarantinedHere   int
+	QuarantinedOnPeer int
+	ConflictStamp     string
 	// Plan is the itemized plan under Itemize.
 	Plan *PeerRunPlan
 	// Hooks are the on_deactivate results of a demotion.
@@ -675,6 +681,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	}
 	conflict := NewConflictDir()
 	complete := true
+	quarantinedHere, quarantinedOnPeer := 0, 0
 	baselineReady, err := PeerBaselineReady(cfg)
 	if err != nil {
 		return nil, err
@@ -699,6 +706,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			if err := DeletePeerLocal(cfg, conflict, plan.DeleteLocal, dryRun); err != nil {
 				return nil, err
 			}
+			quarantinedHere = len(plan.DeleteLocal)
 		} else if len(plan.DeleteLocal) > 0 {
 			complete = false
 			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventRemoteDeletesHeld})
@@ -723,6 +731,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			if err := PropagateDeletes(ctx, runner, cfg, conflict, deleteSet, dryRun); err != nil {
 				return nil, err
 			}
+			quarantinedOnPeer = len(deleteSet)
 		} else if len(plan.DeleteRemote) > 0 {
 			complete = false
 			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventLocalDeletesHeld})
@@ -867,7 +876,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if runPlan != nil {
 		runPlan.sortItems()
 	}
-	return &PeerSyncResult{Complete: complete, Plan: runPlan}, nil
+	return &PeerSyncResult{Complete: complete, QuarantinedHere: quarantinedHere, QuarantinedOnPeer: quarantinedOnPeer, ConflictStamp: conflict.Timestamp, Plan: runPlan}, nil
 }
 
 // recordPeerRun stamps a finished peer run onto state.yaml. A held run still
@@ -1095,7 +1104,13 @@ type PeerDoctorReport struct {
 	ClockSkewOK       bool
 	Disk              string
 	DiskKnown         bool
-	Problems          int
+	// Local and Peer are both machines' facts and Checks their comparison
+	// (#182); both stay nil when the peer cannot say (PeerFactsErr says why).
+	Local        *PeerSideFacts
+	Peer         *PeerSideFacts
+	PeerFactsErr error
+	Checks       []DoctorCheck
+	Problems     int
 }
 
 // PeerDoctor probes everything that silently breaks a peer transfer.
@@ -1160,6 +1175,28 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 	if out, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", host, "df -h / | tail -1"); err == nil {
 		report.Disk = strings.Join(strings.Fields(strings.TrimSpace(out.Stdout)), " ")
 		report.DiskKnown = true
+	}
+
+	if report.RemoteDotErr == nil {
+		report.Peer, report.PeerFactsErr = remotePeerSideFacts(ctx, runner, cfg)
+		if report.PeerFactsErr != nil {
+			// None of the both-machines checks ran: unknown is not a pass.
+			report.Problems++
+		}
+	}
+	if report.Peer != nil {
+		// Only now: the NFD count walks the whole workspace.
+		report.Local = LocalPeerSideFacts(ctx, runner, cfg, opts.LocalDotVersion)
+		here := PreferredMachineName()
+		if here == "" {
+			here = "this machine"
+		}
+		report.Checks = evaluatePeerSides(report.Local, report.Peer, here, host)
+		for _, c := range report.Checks {
+			if c.Level == DoctorFail {
+				report.Problems++
+			}
+		}
 	}
 	return report, nil
 }

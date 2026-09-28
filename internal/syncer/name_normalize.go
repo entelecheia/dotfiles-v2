@@ -360,13 +360,19 @@ func NormalizeWorkspaceNamesBeforePush(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if len(plan.Renames) == 0 {
+	return nfdPushRefusal(false, len(plan.Renames), NormalizeProfile(cfg.Profile))
+}
+
+// nfdPushRefusal is the push preflight's verdict from a plan: an unmarked
+// workspace with names to rename refuses; a marked one renames them. `dot
+// peer doctor` asks it with a Mac's facts (#182).
+func nfdPushRefusal(marked bool, renames int, profile string) error {
+	if marked || renames == 0 {
 		return nil
 	}
-	profile := NormalizeProfile(cfg.Profile)
 	return fmt.Errorf(
 		"found %d selected filename(s) requiring NFD migration; run `dot sync names normalize --profile=%s --dry-run`, then rerun with `--yes`",
-		len(plan.Renames), profile)
+		renames, profile)
 }
 
 func applyNameNormalizationPlan(plan *NameNormalizationPlan) error {

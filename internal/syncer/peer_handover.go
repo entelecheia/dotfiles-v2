@@ -192,35 +192,62 @@ func peerFence(cfg *Config, remote *remotePeerStatus) (demote, legacy bool, err 
 	if err := checkRemotePeerTopology(cfg, remote); err != nil {
 		return false, false, err
 	}
-	if strings.TrimSpace(cfg.Owner) == "" {
-		return false, false, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+	demote, err = fenceDecision(localFenceSide(cfg), remoteFenceSide(remote))
+	if remote.OwnerEpoch == 0 && strings.TrimSpace(cfg.Owner) != "" {
+		legacy = remote.DotVersion == ""
 	}
-	legacy = remote.DotVersion == ""
-	if remote.OwnerEpoch == 0 {
+	return demote, legacy, err
+}
+
+// fenceSide is one machine's owner record as the fence compares it.
+// CanPush is that machine's own owner guard, as the remote reports it.
+type fenceSide struct {
+	Owner   string
+	Aliases []string
+	Epoch   int
+	CanPush bool
+}
+
+func localFenceSide(cfg *Config) fenceSide {
+	return fenceSide{Owner: cfg.Owner, Aliases: cfg.OwnerAliases, Epoch: cfg.OwnerEpoch}
+}
+
+func remoteFenceSide(r *remotePeerStatus) fenceSide {
+	return fenceSide{Owner: r.Profile.Owner, Aliases: r.Profile.OwnerAliases, Epoch: r.OwnerEpoch, CanPush: r.Profile.CanPush}
+}
+
+// fenceDecision is peerFence's verdict from the two owner records once the
+// topology matches. `dot peer doctor` asks it from the coordinator's side,
+// so the doctor cannot drift from the fence (#182).
+func fenceDecision(local, remote fenceSide) (demote bool, err error) {
+	if strings.TrimSpace(local.Owner) == "" {
+		return false, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+	}
+	if remote.Epoch == 0 {
 		// A remote without epoch support refuses (or proceeds) through the
 		// existing owner-mismatch check, exactly as before epochs existed.
-		return false, legacy, checkRemotePeerOwnerMatch(cfg, remote)
+		return false, ownerMatchError(local, remote)
 	}
 	switch {
-	case remote.OwnerEpoch > cfg.OwnerEpoch:
-		return true, false, nil
-	case cfg.OwnerEpoch > remote.OwnerEpoch:
-		return false, false, nil
+	case remote.Epoch > local.Epoch:
+		return true, nil
+	case local.Epoch > remote.Epoch:
+		return false, nil
 	}
 	// At equal epochs only one machine may pass its owner guard. The peer's
 	// canPush is its own verdict, so names and aliases that happen to match
 	// cannot admit a second coordinator.
-	if remote.Profile.CanPush {
-		return false, false, fmt.Errorf(
+	if remote.CanPush {
+		return false, fmt.Errorf(
 			"peer fence: equal owner epochs (%d) and the peer also passes its own owner guard (its owner %q, local %q); both sides refuse — set one coordinator with `dot sync owner --profile=peer --set <machine>` on both machines",
-			cfg.OwnerEpoch, remote.Profile.Owner, cfg.Owner)
+			local.Epoch, remote.Owner, local.Owner)
 	}
-	if !sameOwner(cfg.Owner, cfg.OwnerAliases, remote.Profile.Owner, remote.Profile.OwnerAliases) {
-		return false, false, fmt.Errorf(
+	if !sameOwner(local.Owner, local.Aliases, remote.Owner, remote.Aliases) {
+		return false, fmt.Errorf(
 			"peer fence: equal owner epochs (%d) with different owners (local %q, remote %q); both sides refuse — pick one coordinator and set it with `dot sync owner --profile=peer --set <machine>`",
-			cfg.OwnerEpoch, cfg.Owner, remote.Profile.Owner)
+			local.Epoch, local.Owner, remote.Owner)
 	}
-	return false, false, nil
+	return false, nil
 }
 
 // recheckPeerOwnerBeforeMutation re-reads the remote owner immediately before
