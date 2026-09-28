@@ -19,6 +19,7 @@ import (
 // git, not just ssh.
 func installFakePeerSSH(t *testing.T, statusJSON string) {
 	t.Helper()
+	requirePeerRsync(t)
 	if strings.Contains(statusJSON, "'") {
 		t.Fatal("canned status JSON must not contain a single quote")
 	}

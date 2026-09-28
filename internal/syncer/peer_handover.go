@@ -167,7 +167,7 @@ func PushPeerReplica(ctx context.Context, runner *exec.Runner, cfg *Config) erro
 		args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
 	}
 	args = append(args, "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", replicaDir+"/", cfg.Target.Host+":"+remoteDir)
-	if _, err := runner.Run(ctx, "rsync", args...); err != nil {
+	if _, err := runner.Run(ctx, cfg.rsyncBin(), args...); err != nil {
 		return fmt.Errorf("peer replica: pushing to %s: %w", cfg.Target.Host, err)
 	}
 	if err := writePeerReplicaGeneration(cfg.LocalPaths, generation); err != nil {
