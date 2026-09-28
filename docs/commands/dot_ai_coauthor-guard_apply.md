@@ -9,11 +9,10 @@ dot ai coauthor-guard apply [flags]
 ### Options
 
 ```
-      --apply-agents       Reapply agents SSOT to live tool targets after updating the instruction
-      --force-hooks-path   Replace an existing non-dotfiles core.hooksPath
-  -h, --help               help for apply
-      --mode string        Guard mode: off, warn, or block (default "warn")
-      --persist            Persist modules.git.coauthor_guard for future dot apply runs
+      --apply-agents   Reapply agents SSOT to live tool targets after updating the instruction
+  -h, --help           help for apply
+      --mode string    Guard mode: off, warn, or block (default "block")
+      --persist        Persist modules.git.coauthor_guard for future dot apply runs
 ```
 
 ### Options inherited from parent commands

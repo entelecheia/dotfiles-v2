@@ -10,7 +10,7 @@ dot ai coauthor-guard status [flags]
 
 ```
   -h, --help          help for status
-      --mode string   Guard mode: off, warn, or block (default "warn")
+      --mode string   Guard mode: off, warn, or block (default "block")
 ```
 
 ### Options inherited from parent commands
