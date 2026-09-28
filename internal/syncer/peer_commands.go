@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -470,15 +471,18 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 				return res, err
 			}
 		}
+		// The merge decision first: the additive listing leaves its files
+		// out, as the pass does.
+		merges, err := planHostMerges(ctx, opts.Probe, cfg)
+		if err != nil {
+			return nil, err
+		}
+		cfg.hostMergeExcluded = hostMergeRels(merges)
 		additive, err := peerHomeAdditiveItems(ctx, opts.Probe, cfg, false, false)
 		if err != nil {
 			return nil, err
 		}
 		items.Items = append(items.Items, additive...)
-		merges, err := planHostMerges(ctx, opts.Probe, cfg)
-		if err != nil {
-			return nil, err
-		}
 		items.Items = annotateHotItems(ctx, opts.Probe, cfg, items.Items, true, merges)
 		items.sortItems()
 		res.Items = items
@@ -537,12 +541,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer target is not an ssh target; run: dot peer init --host <user@host>")
 	}
-	// Before anything moves: a bad key would otherwise stop every run
-	// halfway, after the workspace pass.
-	if err := validateHostMerge(cfg.HostMerge); err != nil {
-		return nil, err
-	}
-	cfg.hostMerged = nil // this run's merges only
+	cfg.hostMergeExcluded = nil // this run's decision only
 	// The profile owner is the coordinator. This guard is intentionally
 	// before any probe or transfer: a second machine must not perform a
 	// half-run and then leave a different baseline behind.
@@ -589,6 +588,14 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		hooks, err := demotePeer(ctx, runner, cfg, remoteStatus.Profile.Owner, remoteStatus.OwnerEpoch, dryRun)
 		// The hook outcomes return with a failed demotion too.
 		return &PeerSyncResult{Demoted: true, Hooks: hooks}, err
+	}
+	// After the fence (a bad key must not keep a losing Mac from demoting)
+	// and before anything moves: a bad key would otherwise stop every run
+	// halfway, after the workspace pass. Only a run that merges reads it.
+	if !opts.PushOnly && !opts.PullOnly && !opts.SkipHome {
+		if err := validateHostMerge(cfg.HostMerge); err != nil {
+			return nil, err
+		}
 	}
 
 	// The linked-worktree exclude is a sticky union of the stored list, local
@@ -645,6 +652,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			return nil, err
 		}
 		merges = m
+		cfg.hostMergeExcluded = hostMergeRels(m)
 	}
 	conflict := NewConflictDir()
 	complete := true
@@ -767,7 +775,11 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		// it writes both machines.
 		if !dryRun && twoWay && len(cfg.HostMerge) > 0 {
 			merged, err := mergePeerHostFiles(ctx, runner, probe, cfg)
-			cfg.hostMerged = merged
+			for _, rel := range merged {
+				if !slices.Contains(cfg.hostMergeExcluded, rel) {
+					cfg.hostMergeExcluded = append(cfg.hostMergeExcluded, rel)
+				}
+			}
 			for _, rel := range merged {
 				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostMerged, Path: rel})
 			}
@@ -1235,11 +1247,13 @@ func peerHomeAdditiveArgs(cfg *Config, list string, report bool) []string {
 		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
 		"--exclude=/.codex/config.toml",
 		"--exclude=.DS_Store")
-	// A file host_merge wrote on both machines this run is not newest-wins
-	// input any more: a stale save by a running app stays on its own Mac,
-	// and the next run's merge restores it there (#181).
-	for _, rel := range cfg.hostMerged {
-		args = append(args, "--exclude=/"+rel)
+	// A host_merge file on both machines is host_merge's, merged or equal:
+	// never newest-wins input, so a stale save by a running app stays on
+	// its own Mac and the next run's merge restores it there (#181).
+	for _, rel := range cfg.hostMergeExcluded {
+		if pattern, err := literalRsyncPattern(rel); err == nil {
+			args = append(args, "--exclude=/"+pattern)
+		}
 	}
 	args = append(args, "--files-from="+list)
 	if cfg.RemoteRsyncPath != "" {

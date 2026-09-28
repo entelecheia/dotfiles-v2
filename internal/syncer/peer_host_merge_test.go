@@ -442,3 +442,63 @@ func TestHostMergeSurvivesAStaleSaveAfterTheMerge(t *testing.T) {
 		}
 	}
 }
+
+// Copies equal at the merge step are still host_merge's for the rest of
+// the run: a stale save during the additive pass must not reach the other
+// Mac (it stays here; the next run's merge restores it).
+func TestHostMergeKeepsEqualCopiesOutOfNewestWins(t *testing.T) {
+	full := `{"mcpServers":{"a":{},"mine":{},"kimi-cu":{}}}`
+	cfg, localHome, peerHome := claudeJSONFixture(t, full, full)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	real, err := osexec.LookPath("ssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// After the merge step's read of the peer copy (the second; the first is
+	// the preflight's), the next rsync starts with a stale save here.
+	bin, dir := t.TempDir(), t.TempDir()
+	count, done := filepath.Join(dir, "reads"), filepath.Join(dir, "done")
+	local := filepath.Join(localHome, ".claude.json")
+	later := time.Now().Add(2 * time.Hour).Format("200601021504.05")
+	writeStub(t, filepath.Join(bin, "ssh"), "#!/bin/sh\n"+
+		"case \"$*\" in\n"+
+		"  *__dot_absent__*) echo x >> '"+count+"' ;;\n"+
+		"  *'rsync --server'*)\n"+
+		"    if [ ! -f '"+done+"' ] && [ \"$(wc -l < '"+count+"' 2>/dev/null || echo 0)\" -ge 2 ]; then\n"+
+		"      printf '{\"mcpServers\":{\"a\":{},\"mine\":{}},\"numStartups\":99}' > '"+local+"'; touch -t "+later+" '"+local+"'; touch '"+done+"'\n"+
+		"    fi ;;\n"+
+		"esac\n"+
+		"exec '"+real+"' \"$@\"\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	run := func() {
+		t.Helper()
+		if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run()
+	if _, err := os.Stat(done); err != nil {
+		t.Fatal("the stale save never happened; the test proves nothing")
+	}
+	if peer := string(gitStateFileBytes(t, filepath.Join(peerHome, ".claude.json"))); !strings.Contains(peer, "kimi-cu") {
+		t.Fatalf("the stale save reached the peer: %s", peer)
+	}
+	run()
+	if body := string(gitStateFileBytes(t, local)); !strings.Contains(body, "kimi-cu") {
+		t.Fatalf("the next run did not restore this Mac: %s", body)
+	}
+}
+
+// Only a single JSON object merges: null (a nil map) or trailing data would
+// merge as a partial object and drop the file's other keys.
+func TestDecodeJSONObjectRefusesNullAndTrailingData(t *testing.T) {
+	for _, bad := range []string{"null", `{"a":1} {"b":2}`, "[1]"} {
+		if _, err := decodeJSONObject([]byte(bad)); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	if _, err := decodeJSONObject([]byte(`{"a":1}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+}

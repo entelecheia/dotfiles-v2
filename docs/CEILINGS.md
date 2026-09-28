@@ -132,7 +132,7 @@ safe machine-to-machine state channel is ever designed.
 `internal/syncer/peer_host_merge.go` (`mergePeerHostFiles`) reads both copies
 of a `host_merge` file, merges them and writes the result on both machines,
 pushing the merged bytes from a private copy; the additive pass of the same
-run then leaves the file alone. An app that rewrites the file between that
+run leaves every such file present on both machines alone, merged or equal. An app that rewrites the file between that
 read and the write (Claude Code saving `~/.claude.json` while `dot peer sync`
 runs, often from inside a Claude session) loses that rewrite. A running app
 that later saves a stale copy changes only its own Mac, and the next run's

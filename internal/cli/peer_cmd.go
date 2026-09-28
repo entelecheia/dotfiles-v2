@@ -240,13 +240,22 @@ on a laptop.`,
 
 				LocalDotVersion: c.Root().Version,
 			})
+			// Under --json stdout carries the document only: hook outcomes go
+			// to stderr, like the progress lines.
+			hookOut := p
+			if jsonOut {
+				hookOut = &Printer{Out: c.ErrOrStderr(), Err: c.ErrOrStderr()}
+			}
 			if err != nil {
 				if res != nil && res.Demoted {
-					printPeerHooks(p, res.Hooks) // they ran before the failure
+					printPeerHooks(hookOut, res.Hooks) // they ran before the failure
 				}
 				return quietScheduledContention(bs.Runner, err)
 			}
 			if jsonOut {
+				if res.Demoted {
+					printPeerHooks(hookOut, res.Hooks)
+				}
 				doc := peerPlanJSON{Unreachable: res.Unreachable, Demoted: res.Demoted, PeerRunPlan: res.Plan}
 				if !res.Unreachable && !res.Demoted {
 					doc.Complete = &res.Complete

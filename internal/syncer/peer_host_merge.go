@@ -65,6 +65,11 @@ func decodeJSONObject(data []byte) (map[string]any, error) {
 	if err := dec.Decode(&obj); err != nil {
 		return nil, err
 	}
+	// null decodes to a nil map, which would merge as an empty object and
+	// drop every other key of the file (its tokens among them).
+	if obj == nil || dec.More() {
+		return nil, fmt.Errorf("not a single JSON object")
+	}
 	return obj, nil
 }
 
@@ -221,6 +226,17 @@ type hostMerge struct {
 	result      map[string]any // what both machines get
 	localInfo   os.FileInfo    // re-checked right before the write
 	refused     string         // why the run cannot merge it; it stops before anything moves
+	same        bool           // equal in substance: nothing to write, still host_merge's
+}
+
+// hostMergeRels names the files a decision covers: present on both
+// machines, so host_merge owns them for the run.
+func hostMergeRels(merges []hostMerge) []string {
+	rels := make([]string, 0, len(merges))
+	for _, m := range merges {
+		rels = append(rels, m.rel)
+	}
+	return rels
 }
 
 // planHostMerges decides every host_merge file the additive pass moves
@@ -286,7 +302,11 @@ func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hos
 			continue
 		}
 		if jsonEqual(local, peer) {
-			continue // equal in substance: the pass copies the newer whole
+			// Nothing to write, and still not newest-wins input: a stale
+			// save later in the run must not reach the other Mac.
+			m.same = true
+			merges = append(merges, m)
+			continue
 		}
 		peerMtime, err := peerHostMtime(ctx, probe, cfg, rel)
 		if err != nil {
@@ -384,8 +404,9 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		it.Hot = isHotHostPath(it.Path) || merge
 		if m := byRel[it.Path]; m != nil && twoWay && it.Scope == PlanScopeHost {
 			// rsync can list a file both ways (equal mtime, other size); the
-			// merge is one write on both machines.
-			if rendered[m.rel] {
+			// merge is one write on both machines. An equal file moves not at
+			// all: the pass leaves it out.
+			if rendered[m.rel] || m.same {
 				dup[i] = true
 				continue
 			}
@@ -445,7 +466,7 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		// A merge rsync lists nothing for (equal size and mtime) is still a
 		// write on both machines.
 		for i := range merges {
-			if !rendered[merges[i].rel] {
+			if !rendered[merges[i].rel] && !merges[i].same {
 				items = append(items, PeerPlanItem{Path: merges[i].rel, Scope: PlanScopeHost, Hot: true})
 				renderHostMerge(&items[len(items)-1], &merges[i])
 			}
@@ -534,6 +555,9 @@ const hostMergeAttempts = 3
 // stops at a file changed here since planHostMerges read it and names it.
 func writeHostMerges(ctx context.Context, runner *exec.Runner, cfg *Config, merges []hostMerge, merged *[]string) (string, error) {
 	for _, m := range merges {
+		if m.same {
+			continue
+		}
 		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(m.rel))
 		if now, err := os.Stat(localPath); err != nil || now.Size() != m.localInfo.Size() || !now.ModTime().Equal(m.localInfo.ModTime()) {
 			return m.rel, nil
