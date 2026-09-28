@@ -516,10 +516,8 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	}
 	if demote {
 		hooks, err := demotePeer(ctx, runner, cfg, remoteStatus.Profile.Owner, remoteStatus.OwnerEpoch, dryRun)
-		if err != nil {
-			return nil, err
-		}
-		return &PeerSyncResult{Demoted: true, Hooks: hooks}, nil
+		// The hook outcomes return with a failed demotion too.
+		return &PeerSyncResult{Demoted: true, Hooks: hooks}, err
 	}
 
 	// The linked-worktree exclude is a sticky union of the stored list, local

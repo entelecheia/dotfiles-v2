@@ -306,12 +306,14 @@ func demotePeer(ctx context.Context, runner *exec.Runner, cfg *Config, adoptedOw
 	if dryRun {
 		return runPeerHooks(ctx, runner, cfg, HookOnDeactivate, true), nil
 	}
-	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: adoptedOwner, Epoch: epoch}); err != nil {
-		return nil, fmt.Errorf("peer demotion: %w", err)
-	}
-	// The hooks run before the scheduler goes: from inside the scheduled
-	// job, its bootout ends the process.
+	// The hooks run first, while this Mac still passes its owner guard: an
+	// interrupted demotion (a restart during a slow hook) is then retried by
+	// the next run's fence. They are idempotent. The scheduler goes last:
+	// from inside the scheduled job, its bootout ends the process.
 	hooks := runPeerHooks(ctx, runner, cfg, HookOnDeactivate, false)
+	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: adoptedOwner, Epoch: epoch}); err != nil {
+		return hooks, fmt.Errorf("peer demotion: %w", err)
+	}
 	return hooks, removePeerSchedulerArtifacts(ctx, runner, cfg)
 }
 
@@ -621,8 +623,8 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	result.NewOwner = remoteOwner
 	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: remoteOwner, Epoch: epoch}); err != nil {
 		return nil, fmt.Errorf(
-			"peer handover: the peer adopted %q (epoch %d) but the local write failed: %w. The peer is now coordinator; set this machine's owner with `dot sync owner --profile=peer --set %s`",
-			remoteOwner, epoch, err, remoteOwner)
+			"peer handover: the peer adopted %q (epoch %d) but the local write failed: %w. The peer is now coordinator; set this machine's owner with `dot sync owner --profile=peer --set %s`, run `dot peer setup --off` here, then `dot peer sync` and `dot peer setup` on %s",
+			remoteOwner, epoch, err, remoteOwner, cfg.Target.Host)
 	}
 	step("owner is %q (epoch %d) on both machines", remoteOwner, epoch)
 
@@ -631,17 +633,21 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 		return nil, fmt.Errorf("peer handover: removing the local scheduler (owner already moved): %w; finish with `dot peer setup --off` here, which also runs on_deactivate", err)
 	}
 	step("local scheduler removed")
-	result.Hooks = runPeerHooks(ctx, opts.Runner, cfg, HookOnDeactivate, false)
+	// This Mac's on_deactivate runs last, whatever happens from here: an
+	// app-quit can end the process running the handover (a terminal inside
+	// the app it quits), and by then the peer must already be set up. Its
+	// outcomes return with any error.
+	deactivate := func() { result.Hooks = runPeerHooks(ctx, opts.Runner, cfg, HookOnDeactivate, false) }
 
 	// 4. On the peer: old baselines aside, then the first sync as an additive
 	// bootstrap. No baseline means no deletes can be planned, and right after
 	// step 1 almost nothing transfers.
-	// From here a failure still returns result: the on_deactivate outcomes
-	// above belong in the output.
 	if err := peerRemoteBaselinesAside(ctx, opts.Runner, cfg); err != nil {
+		deactivate()
 		return result, err
 	}
 	if _, err := peerRemoteDot(ctx, opts.Runner, cfg, "peer", "sync"); err != nil {
+		deactivate()
 		return result, fmt.Errorf(
 			"peer handover: the peer's bootstrap sync failed: %w. Ownership already moved; re-run `dot peer sync` on %s, then `dot peer setup` there",
 			err, cfg.Target.Host)
@@ -653,6 +659,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	// relayed from its output (successes on stdout, failures on stderr).
 	res, err := peerRemoteDotResult(ctx, opts.Runner, cfg, "peer", "setup")
 	if err != nil {
+		deactivate()
 		return result, fmt.Errorf(
 			"peer handover: installing the peer's scheduler failed: %w. Ownership already moved; run `dot peer setup` on %s to finish",
 			err, cfg.Target.Host)
@@ -662,6 +669,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 		step("peer %s", line)
 	}
 	result.RemoteHookFailures = hookLines(res.Stderr)
+	deactivate()
 	return result, nil
 }
 

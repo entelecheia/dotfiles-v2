@@ -45,8 +45,8 @@ type PeerHooks struct {
 	OnDeactivate []string `yaml:"on_deactivate,omitempty"`
 }
 
-// peerHookTimeout bounds one hook action.
-const peerHookTimeout = time.Minute
+// peerHookTimeout bounds one hook action (a var for tests).
+var peerHookTimeout = time.Minute
 
 // Hook phases.
 const (
@@ -78,6 +78,9 @@ func runPeerHooks(ctx context.Context, runner *exec.Runner, cfg *Config, phase s
 		// a consent prompt nobody sees in a scheduled run, times out.
 		actx, cancel := context.WithTimeout(ctx, peerHookTimeout)
 		res.Detail, res.Err = runPeerHook(actx, runner, cfg, action, dryRun)
+		if res.Err != nil && errors.Is(actx.Err(), context.DeadlineExceeded) {
+			res.Err = fmt.Errorf("timed out after %s (an app that does not answer, or a consent prompt nobody saw)", peerHookTimeout)
+		}
 		cancel()
 		results = append(results, res)
 		if !dryRun && cfg.LogFile != "" {
@@ -145,6 +148,10 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 		plists, err := agentPlists(cfg, arg)
 		if err != nil {
 			return "", err
+		}
+		if len(plists) == 0 {
+			// Most likely a typo: the jobs it meant keep running.
+			return "", fmt.Errorf("no ~/Library/LaunchAgents/%s.plist matches", arg)
 		}
 		loaded, err := loadedLaunchdLabels(ctx, runner, domain)
 		if err != nil {
@@ -216,7 +223,7 @@ func writeHookDisabled(cfg *Config, set map[string]bool) error {
 	if body != "" {
 		body += "\n"
 	}
-	return os.WriteFile(hookDisabledFile(cfg), []byte(body), 0o644)
+	return atomicWrite(hookDisabledFile(cfg), []byte(body))
 }
 
 // launchdBootout disables the plist-backed jobs that are not disabled yet,
@@ -240,16 +247,20 @@ func launchdBootout(ctx context.Context, runner *exec.Runner, cfg *Config, domai
 	if err != nil {
 		return "", err
 	}
-	var failed []string
+	// Recorded before any disable: a job disabled but not recorded would
+	// later read as stopped outside dot and never come back. A recorded
+	// label whose disable fails is dropped again by on_activate.
 	for _, label := range disable {
-		if _, err := runner.Run(ctx, "launchctl", "disable", domain+"/"+label); err != nil {
-			failed = append(failed, label+" ("+hookErr(err)+")")
-			continue
-		}
 		recorded[label] = true
 	}
 	if err := writeHookDisabled(cfg, recorded); err != nil {
 		return "", err
+	}
+	var failed []string
+	for _, label := range disable {
+		if _, err := runner.Run(ctx, "launchctl", "disable", domain+"/"+label); err != nil {
+			failed = append(failed, label+" ("+hookErr(err)+")")
+		}
 	}
 	for _, label := range bootout {
 		if _, err := runner.Run(ctx, "launchctl", "bootout", domain+"/"+label); err != nil {
@@ -293,9 +304,11 @@ func launchdBootstrap(ctx context.Context, runner *exec.Runner, cfg *Config, dom
 		return "would: " + summary, nil
 	}
 	var failed []string
+	stillOff := map[string]bool{}
 	for _, label := range enable {
 		if _, err := runner.Run(ctx, "launchctl", "enable", domain+"/"+label); err != nil {
 			failed = append(failed, label+" ("+hookErr(err)+")")
+			stillOff[label] = true // a disabled job would fail its bootstrap too
 			continue
 		}
 		delete(recorded, label)
@@ -310,6 +323,9 @@ func launchdBootstrap(ctx context.Context, runner *exec.Runner, cfg *Config, dom
 		return "", err
 	}
 	for _, plist := range todo {
+		if stillOff[strings.TrimSuffix(filepath.Base(plist), ".plist")] {
+			continue
+		}
 		if _, err := runner.Run(ctx, "launchctl", "bootstrap", domain, plist); err != nil {
 			failed = append(failed, filepath.Base(plist)+" ("+hookErr(err)+")")
 		}

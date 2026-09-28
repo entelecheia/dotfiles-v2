@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // installHookServiceStubs plants launchctl, osascript and open stubs that
@@ -176,6 +177,11 @@ func TestPeerHandover_RunsRoleHooks(t *testing.T) {
 	if !strings.Contains(lines, "dot peer setup") {
 		t.Fatalf("the new coordinator's setup (its on_activate) did not run:\n%s", lines)
 	}
+	// This Mac's on_deactivate runs last: an app-quit may end the process
+	// running the handover, and the peer must be set up by then.
+	if runtime.GOOS == "darwin" && strings.Index(lines, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/com.maru.job.mail-digest.1") < strings.Index(lines, "dot peer setup") {
+		t.Fatalf("on_deactivate ran before the peer's setup:\n%s", lines)
+	}
 	if runtime.GOOS == "darwin" && !strings.Contains(lines, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/com.maru.job.mail-digest.1") {
 		t.Fatalf("on_deactivate did not boot out the job:\n%s", lines)
 	}
@@ -228,13 +234,16 @@ func TestRunPeerHooks_BadGlobAndTargetUserHome(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "record.log")
 	installHookServiceStubs(t, record, "com.maru.job.a")
 	t.Setenv("HOME", t.TempDir())
-	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.[", "app-quit Maru", "launchd-bootout *"}}}
+	cfg := &Config{LocalPaths: &LocalPaths{StoreDir: t.TempDir()}, Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.[", "app-quit Maru", "launchd-bootout *", "launchd-bootout com.maru.jobs.*"}}}
 	res := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
 	if res[0].Err == nil || !strings.Contains(res[0].Err.Error(), "bad label glob") {
 		t.Fatalf("malformed glob reported as %+v", res[0])
 	}
 	if res[2].Err == nil || !strings.Contains(res[2].Err.Error(), "literal prefix") || strings.Contains(readRecord(t, record), "launchctl") {
 		t.Fatalf("a bare * glob ran: %+v", res[2])
+	}
+	if runtime.GOOS == "darwin" && (res[3].Err == nil || !strings.Contains(res[3].Err.Error(), "matches")) {
+		t.Fatalf("a glob matching no plist passed: %+v", res[3])
 	}
 	if runtime.GOOS != "darwin" {
 		return
@@ -347,5 +356,23 @@ func TestPeerHandover_LateFailureKeepsHookResults(t *testing.T) {
 	}
 	if res == nil || len(res.Hooks) != 1 || res.Hooks[0].Phase != HookOnDeactivate {
 		t.Fatalf("hook results lost: %+v", res)
+	}
+}
+
+// A hook that outlives its limit says it timed out.
+func TestRunPeerHooks_TimeoutSaysSo(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("app actions run on macOS only")
+	}
+	bin := t.TempDir()
+	writeStub(t, filepath.Join(bin, "osascript"), "#!/bin/sh\nsleep 5\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	old := peerHookTimeout
+	peerHookTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { peerHookTimeout = old })
+	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"app-quit Maru"}}}
+	res := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
+	if res[0].Err == nil || !strings.Contains(res[0].Err.Error(), "timed out") {
+		t.Fatalf("result = %+v", res[0])
 	}
 }
