@@ -3,9 +3,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -171,6 +171,10 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 			p.Warn("peer dot %s is not a release build; install a release there, or pin it with remote_dot in the peer config", e.Path)
 		case syncer.PeerEventDotVersionMismatch:
 			p.Warn("peer dot %s is a different release from this machine's; upgrade the older side", e.Path)
+		case syncer.PeerEventHostMerged:
+			p.Success("merged ~/%s from both machines (host_merge)", e.Path)
+		case syncer.PeerEventHostMergeHeld:
+			p.Warn("held ~/%s: host_merge merges it only in a two-way dot peer sync", e.Path)
 		case syncer.PeerEventOwnerAliasesRetired:
 			if e.Err != nil {
 				p.Warn("retiring the earlier owner names failed (retried on the next run): %v", e.Err)
@@ -192,68 +196,8 @@ func reportPartial(p *Printer, err error) {
 	p.Line("  Peer transaction stopped; baseline unchanged. Re-run to retry it.")
 }
 
-// newPeerDiffCmd reports paths where the two machines disagree.
-//
-// This exists because "no data loss" and "no surprises" are different
-// properties. Peer sync runs with --update, so when the same path was edited on
-// both machines and the timestamps do not order cleanly, rsync skips it in both
-// directions: nothing is destroyed, but the machines quietly stop agreeing and
-// no one is told. Measured on a real round trip.
-//
-// The detector is a metadata-only dry run in each direction. A path that both
-// sides want to send is a path where they differ. That misses two files with
-// identical size and mtime but different content - rsync cannot see that without
-// reading every byte, and a checksum pass over 60 GB is not something to do on a
-// schedule.
-func newPeerDiffCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "diff",
-		Short: "List paths where this machine and the peer disagree",
-		Args:  cobra.NoArgs,
-		RunE: func(c *cobra.Command, _ []string) error {
-			p := printerFrom(c)
-			bs, err := syncer.Bootstrap(peerBootstrapOptions(c))
-			if err != nil {
-				return err
-			}
-			res, err := syncer.PeerDiff(context.Background(), syncer.PeerDiffOptions{
-				Config: bs.Config,
-				Probe:  probeRunner(),
-			})
-			if err != nil {
-				return err
-			}
-			if res.Unreachable {
-				p.Warn("peer %s unreachable", bs.Config.Target.Host)
-				return nil
-			}
-			plan := res.Plan
-
-			p.Section("peer divergence")
-			p.KV("would send", strconv.Itoa(len(plan.Push)+len(plan.DeleteRemote)))
-			p.KV("would receive", strconv.Itoa(len(plan.Pull)+len(plan.DeleteLocal)))
-			if !plan.HasConflicts() {
-				p.Success("no path is contested")
-				return nil
-			}
-			p.Warn("%d path(s) changed on BOTH machines:", len(plan.Conflicts))
-			for i, conflict := range plan.Conflicts {
-				if i >= 40 {
-					p.Line("  ... and %d more", len(plan.Conflicts)-i)
-					break
-				}
-				p.Line("  %s", conflict.RelPath)
-			}
-			p.Blank()
-			p.Line("The profile owner is the coordinator; its version wins on the next peer sync.")
-			p.Line("The losing peer payload is quarantined once under .sync-conflicts/.")
-			return nil
-		},
-	}
-}
-
 func newPeerSyncCmd() *cobra.Command {
-	var pushOnly, pullOnly, skipHome bool
+	var pushOnly, pullOnly, skipHome, list, jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Exchange workspace and host paths with the peer (both directions)",
@@ -281,6 +225,16 @@ on a laptop.`,
 				return err
 			}
 			dryRun, _ := c.Flags().GetBool("dry-run")
+			// A JSON document owns stdout; progress lines would corrupt it.
+			progress := renderPeerEvent(p)
+			if jsonOut {
+				if bs.Config.Verbose {
+					return fmt.Errorf("--json and --verbose both write to stdout; drop one")
+				}
+				// Warnings still reach the operator, on stderr.
+				progress = renderPeerEvent(&Printer{Out: c.ErrOrStderr(), Err: c.ErrOrStderr()})
+				bs.Config.Out = c.ErrOrStderr()
+			}
 			res, err := syncer.PeerSync(context.Background(), syncer.PeerSyncOptions{
 				Config:   bs.Config,
 				Runner:   bs.Runner,
@@ -289,15 +243,37 @@ on a laptop.`,
 				PullOnly: pullOnly,
 				SkipHome: skipHome,
 				DryRun:   dryRun,
-				Progress: renderPeerEvent(p),
+				Progress: progress,
+				Itemize:  list || jsonOut,
 
 				LocalDotVersion: c.Root().Version,
 			})
+			// Under --json stdout carries the document only: hook outcomes go
+			// to stderr, like the progress lines.
+			hookOut := p
+			if jsonOut {
+				hookOut = &Printer{Out: c.ErrOrStderr(), Err: c.ErrOrStderr()}
+			}
 			if err != nil {
 				if res != nil && res.Demoted {
-					printPeerHooks(p, res.Hooks) // they ran before the failure
+					printPeerHooks(hookOut, res.Hooks) // they ran before the failure
 				}
 				return quietScheduledContention(bs.Runner, err)
+			}
+			if jsonOut {
+				if res.Demoted {
+					printPeerHooks(hookOut, res.Hooks)
+				}
+				doc := peerPlanJSON{Unreachable: res.Unreachable, Demoted: res.Demoted, PeerRunPlan: res.Plan}
+				if !res.Unreachable && !res.Demoted {
+					doc.Complete = &res.Complete
+				}
+				return writePeerPlanJSON(c, doc)
+			}
+			if res.Plan != nil {
+				if err := printPeerRunPlan(p, res.Plan); err != nil {
+					return err
+				}
 			}
 			if res.Unreachable {
 				p.Warn("peer %s unreachable; nothing to do", bs.Config.Target.Host)
@@ -341,5 +317,7 @@ on a laptop.`,
 	cmd.Flags().BoolVar(&pushOnly, "push-only", false, "send local changes without pulling first")
 	cmd.Flags().BoolVar(&pullOnly, "pull-only", false, "receive peer changes without pushing")
 	cmd.Flags().BoolVar(&skipHome, "skip-home", false, "workspace only; skip the host-path pass")
+	cmd.Flags().BoolVar(&list, "list", false, "print every planned action (with --dry-run: exactly what a run would do)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "print the itemized plan as JSON")
 	return cmd
 }

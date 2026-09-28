@@ -96,6 +96,8 @@ type Config struct {
 	// While set, PeerSchedule skips the reachability and remote-owner checks.
 	FencePending bool
 
+	// HostMerge is the peer profile's host_merge policy (#181).
+	HostMerge map[string][]string
 	// Hooks are the peer role hooks from the store config (#184).
 	Hooks PeerHooks
 	// RemoteDot is the peer profile's remote_dot pin; empty picks the newest
@@ -333,6 +335,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Profile:           profile,
 		Home:              override,
 		Owner:             localCfg.Owner,
+		HostMerge:         localCfg.HostMerge,
 		OwnerAliases:      localCfg.OwnerAliases,
 		Hooks:             localCfg.Hooks,
 		RemoteDot:         localCfg.RemoteDot,
