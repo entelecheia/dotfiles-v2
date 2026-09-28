@@ -278,6 +278,49 @@ func TestPeerSync_RetiresAliasesOnceBothMachinesAgree(t *testing.T) {
 	}
 }
 
+// After an offline rename the peer still records the earlier name: the run
+// keeps the alias and says what to run there.
+func TestPeerSync_SaysWhenThePeerStillRecordsTheEarlierName(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{owner: "old-mac-name", epoch: 2, dotVersion: "9.9.9 (fake)"}, 2)
+	if err := SaveLocalConfig(sb.paths, &LocalConfig{
+		Target: "ssh:fake-peer:" + sb.peer, Owner: sb.owner, OwnerAliases: []string{"old-mac-name"}, OwnerEpoch: 2,
+		Propagation: PropagationPolicy{Create: true, Update: true, Delete: true}, MaxDelete: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sb.cfg.OwnerAliases = []string{"old-mac-name"}
+	var pending string
+	// A preview says so too: the check is past the fence and writes nothing.
+	if _, err := PeerSync(context.Background(), PeerSyncOptions{
+		Config: sb.cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), SkipHome: true, DryRun: true,
+		Progress: func(e PeerEvent) {
+			if e.Kind == PeerEventOwnerRenamePending {
+				pending = e.Path
+			}
+		},
+	}); err != nil || pending == "" {
+		t.Fatalf("dry run: pending %q, err %v", pending, err)
+	}
+	pending = ""
+	res, err := PeerSync(context.Background(), PeerSyncOptions{
+		Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true,
+		Progress: func(e PeerEvent) {
+			if e.Kind == PeerEventOwnerRenamePending {
+				pending = e.Path
+			}
+		},
+	})
+	if err != nil || !res.Complete {
+		t.Fatalf("PeerSync: %+v %v", res, err)
+	}
+	if want := "dot sync owner --rename 'old-mac-name' '" + sb.owner + "' --local-only"; pending != want {
+		t.Fatalf("pending = %q, want %q", pending, want)
+	}
+	if got := loadPeerStoreConfig(t, sb.paths); len(got.OwnerAliases) != 1 {
+		t.Fatalf("the alias was retired while the peer records it: %+v", got)
+	}
+}
+
 // A rename recorded before the host rename keeps its aliases until this Mac
 // answers to the new name: retiring earlier would lock it out.
 func TestPeerSync_KeepsAliasesUntilTheHostAnswersToTheNewName(t *testing.T) {
