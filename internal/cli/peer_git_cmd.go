@@ -125,9 +125,9 @@ func newPeerGitStatusCmd() *cobra.Command {
 }
 
 func newPeerGitRealignCmd() *cobra.Command {
-	var apply, rescue, noPush bool
+	var apply, rescue, noPush, fetch bool
 	cmd := &cobra.Command{
-		Use:   "realign [--apply] [--rescue [--no-push]] [<repo>...]",
+		Use:   "realign [--apply [--fetch]] [--rescue [--no-push]] [<repo>...]",
 		Short: "Move HEAD and index to the descendant commit the files already match",
 		Long: `Move each repo's HEAD and index forward to the descendant commit its files
 already match. The default is a preview; --apply moves.
@@ -147,7 +147,14 @@ stale-rebase-head with the command that clears it.
 kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
 local), then HEAD and the index move to the matching commit, on the default
 branch for a branch mismatch. The worktree is never written; every move
-prints its undo command.`,
+prints its undo command.
+
+Peer sync never carries .gitmodules. After a repo moves, a worktree
+.gitmodules equal to an older committed version is reported as stale;
+--apply restores it from HEAD and runs git submodule sync for the URLs it
+moves. A submodule whose gitlink commit is missing is reported with the
+fetch (and set-url, for a moved URL) commands; --apply --fetch runs them and
+retries it.`,
 		Args:         cobra.ArbitraryArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -164,6 +171,7 @@ prints its undo command.`,
 				Apply:  apply,
 				Rescue: rescue,
 				NoPush: noPush,
+				Fetch:  fetch,
 			})
 			if err != nil {
 				return err
@@ -193,6 +201,7 @@ prints its undo command.`,
 	cmd.Flags().BoolVar(&apply, "apply", false, "move HEAD and index (default is a dry-run preview)")
 	cmd.Flags().BoolVar(&rescue, "rescue", false, "also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch")
 	cmd.Flags().BoolVar(&noPush, "no-push", false, "with --rescue, keep rescue branches local")
+	cmd.Flags().BoolVar(&fetch, "fetch", false, "with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it")
 	return cmd
 }
 
@@ -227,6 +236,12 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 		}
 		if rep.Class != "" && rep.Status != syncer.GitRepoRealignable && rep.Status != syncer.GitRepoRealigned {
 			p.Line("      %s: %s", rep.Class, rep.Suggestion)
+		}
+		if rep.Gitmodules != "" {
+			p.Line("      .gitmodules: %s", rep.Gitmodules)
+			for _, move := range rep.URLMoves {
+				p.Line("        url moved: %s", move)
+			}
 		}
 		if rep.Status == syncer.GitRepoRealigned {
 			undo := rep.Undo

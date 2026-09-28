@@ -24,14 +24,22 @@ local), then HEAD and the index move to the matching commit, on the default
 branch for a branch mismatch. The worktree is never written; every move
 prints its undo command.
 
+Peer sync never carries .gitmodules. After a repo moves, a worktree
+.gitmodules equal to an older committed version is reported as stale;
+--apply restores it from HEAD and runs git submodule sync for the URLs it
+moves. A submodule whose gitlink commit is missing is reported with the
+fetch (and set-url, for a moved URL) commands; --apply --fetch runs them and
+retries it.
+
 ```
-dot peer git realign [--apply] [--rescue [--no-push]] [<repo>...] [flags]
+dot peer git realign [--apply [--fetch]] [--rescue [--no-push]] [<repo>...] [flags]
 ```
 
 ### Options
 
 ```
       --apply     move HEAD and index (default is a dry-run preview)
+      --fetch     with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it
   -h, --help      help for realign
       --no-push   with --rescue, keep rescue branches local
       --rescue    also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch

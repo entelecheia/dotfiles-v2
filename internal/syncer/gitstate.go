@@ -69,6 +69,13 @@ type GitRepoReport struct {
 	RescuePushed bool   `json:"rescuePushed,omitempty"`
 	// Undo is the exact command that reverses an applied rescue.
 	Undo string `json:"undo,omitempty"`
+	// Gitmodules reports the worktree .gitmodules against the commit the
+	// repo sits on (or moves to): "stale" (an older committed version peer
+	// sync never replaced), "restored" (put back from HEAD by --apply) or
+	// "modified" (local edits, left alone). URLMoves lists the submodule URLs
+	// that version changes, "path: old -> new" (#179).
+	Gitmodules string   `json:"gitmodules,omitempty"`
+	URLMoves   []string `json:"urlMoves,omitempty"`
 
 	branch       string // HEAD's branch, empty when detached
 	rescueBranch string // branch-mismatch: the default branch HEAD moves onto
@@ -83,6 +90,8 @@ const (
 	GitClassDiverged        = "diverged"
 	GitClassBranchMismatch  = "branch-mismatch"
 	GitClassStaleRebaseHead = "stale-rebase-head"
+	GitClassURLMoved        = "url-moved"
+	GitClassGitlinkMissing  = "gitlink-missing"
 )
 
 // GitStateResult is one status or realign run over the workspace tree.
@@ -131,6 +140,9 @@ type RealignOptions struct {
 	Rescue bool
 	// NoPush keeps rescue branches local instead of pushing them.
 	NoPush bool
+	// Fetch lets an applied run fetch a child whose parent gitlink object is
+	// missing, after pointing it at a moved submodule URL, then retry it.
+	Fetch bool
 	// Now dates rescue branch names; nil means time.Now.
 	Now func() time.Time
 }
@@ -188,7 +200,7 @@ func runGitState(ctx context.Context, root string, repos []string, opts RealignO
 		}
 	}
 
-	run.process(ctx, root, ".", "", opts.Apply, result)
+	run.process(ctx, root, ".", "", nil, opts.Apply, result)
 	return result, nil
 }
 
@@ -246,7 +258,7 @@ func (r *gitStateRun) discoverPaths(ctx context.Context, root string) (map[strin
 // its submodule gitlinks. Children are enumerated AFTER the parent has been
 // processed, so a child's candidate gitlink is read from the parent's
 // realigned HEAD.
-func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, apply bool, result *GitStateResult) {
+func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, move *urlMove, apply bool, result *GitStateResult) {
 	rep := &GitRepoReport{Path: rel}
 	included := r.included(rel)
 	defer func() {
@@ -276,6 +288,9 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, app
 
 	if included {
 		r.classify(ctx, abs, gitdir, gitlink, rep)
+		if rep.Status == GitRepoUnresolvable && rep.Reason == gitlinkMissing {
+			r.missingGitlink(ctx, abs, gitdir, gitlink, move, apply, rep)
+		}
 		if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
 			r.planRescue(ctx, abs, rep)
 		}
@@ -294,6 +309,10 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, app
 	if included && !apply && rep.Status == GitRepoRealignable {
 		rev = rep.Target
 	}
+	var moves map[string]*urlMove
+	if included {
+		moves = r.checkGitmodules(ctx, abs, rev, apply, rep)
+	}
 	gitlinks, err := r.childGitlinks(ctx, abs, rev)
 	if err != nil {
 		// Children of a repo whose HEAD cannot be read cannot be discovered;
@@ -311,7 +330,7 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, app
 		if rel != "." {
 			childRel = rel + "/" + child.path
 		}
-		r.process(ctx, filepath.Join(abs, filepath.FromSlash(child.path)), childRel, child.sha, apply, result)
+		r.process(ctx, filepath.Join(abs, filepath.FromSlash(child.path)), childRel, child.sha, moves[child.path], apply, result)
 	}
 }
 
@@ -534,7 +553,10 @@ func (r *gitStateRun) childMatches(ctx context.Context, abs, path, sha string) b
 	return err == nil && diffs == 0
 }
 
-const staleRebaseHead = "stale REBASE_HEAD"
+const (
+	staleRebaseHead = "stale REBASE_HEAD"
+	gitlinkMissing  = "parent gitlink object is not present locally"
+)
 
 // blockReason reports why a repo must be skipped and reported rather than
 // classified or realigned: a lock, an operation in progress, unmerged
@@ -583,7 +605,7 @@ func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string)
 	var out []string
 	if gitlink != "" && gitlink != head {
 		if _, err := r.read(ctx, abs, "cat-file", "-e", gitlink+"^{commit}"); err != nil {
-			return nil, errors.New("parent gitlink object is not present locally")
+			return nil, errors.New(gitlinkMissing)
 		}
 		if r.strictDescendant(ctx, abs, head, gitlink) {
 			out = append(out, gitlink)
@@ -636,8 +658,9 @@ func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit stri
 	_, _ = r.run(ctx, abs, env, false, "update-index", "-q", "--refresh")
 	// Gitlinks are the children's business: a child realigns separately and
 	// its HEAD is stale until then, so counting it here would favor the
-	// parent commit that changed the fewest gitlinks (#177).
-	out, err := r.readEnv(ctx, abs, env, "diff-files", "--ignore-submodules", "--name-only")
+	// parent commit that changed the fewest gitlinks (#177). .gitmodules is
+	// never carried by peer sync, so it is no evidence either (#179).
+	out, err := r.readEnv(ctx, abs, env, "diff-files", "--ignore-submodules", "--name-only", "--", ":(exclude).gitmodules")
 	if err != nil {
 		return -1, err
 	}
