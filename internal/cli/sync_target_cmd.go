@@ -212,7 +212,8 @@ peer. An unreachable peer exits 0 with that step printed; a peer that fails
 the step exits 1. A retry after a peer failure goes on to the peer (unless
 <old> was a generic name, which is not kept: then run the printed
 --local-only command there).
---dry-run shows the change without writing anything.
+--dry-run shows the change, and the warnings about names it cannot check,
+without writing anything: run it first.
 
 With --profile=peer, a --set or --clear that leaves this Mac without the
 coordinator role also removes its peer scheduler and runs its on_deactivate
@@ -335,6 +336,16 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 	}
 
 	root := strings.TrimRight(bs.Config.LocalPath, "/")
+	// Said before anything is written: --dry-run shows them with no write.
+	switch {
+	case localOnly:
+	case peer == nil && peerStoreExists(root):
+		p.Warn("the peer was not checked: make sure %q is not the other Mac's name", newName)
+	case peer != nil && !answersTo(names, newName):
+		// Before this Mac's host rename, <new> is checked only against the
+		// other Mac's current names, not the one it may get next.
+		p.Warn("%q was checked only against the other Mac's current names: make sure it is not the name the other Mac will get", newName)
+	}
 	// Only a Mac that answers to one of the names keeps <old> as an alias;
 	// the other Mac's step (--local-only there) needs none.
 	keepAlias := answersTo(names, oldName) || answersTo(names, newName)
@@ -372,15 +383,9 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 		// An unreachable peer is the expected case (a laptop asleep): the
 		// alias keeps the pair working, so it exits 0 with the step to run.
 		if peerStoreExists(root) {
-			p.Warn("the peer was not checked: make sure %q is not the other Mac's name", newName)
 			p.Line("  On the other Mac, when reachable: %s", manual)
 		}
 		return nil
-	}
-	if !answersTo(names, newName) {
-		// Before this Mac's host rename, <new> was checked only against the
-		// other Mac's current names, not the one it may get next.
-		p.Warn("%q was checked only against the other Mac's current names: make sure it is not the name the other Mac will get", newName)
 	}
 	host := peer.Config.Target.Host
 	if dryRun {
@@ -413,8 +418,9 @@ func peerStoreExists(root string) bool {
 }
 
 // runsPeerScheduler reports the peer scheduler's plist on this machine.
-// Alone it proves nothing (a --set leaves the old coordinator's plist); the
-// rename also asks the peer.
+// Alone it proves nothing (a stale plist: by hand, from an older dot, or on
+// the old coordinator after a --set run on the other Mac, until its next
+// run demotes it); the rename also asks the peer.
 func runsPeerScheduler(bs *syncer.BootstrapResult) bool {
 	_, err := os.Stat(filepath.Join(bs.Config.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist"))
 	return err == nil

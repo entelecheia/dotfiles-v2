@@ -171,6 +171,8 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 			p.Warn("peer dot %s is not a release build; install a release there, or pin it with remote_dot in the peer config", e.Path)
 		case syncer.PeerEventDotVersionMismatch:
 			p.Warn("peer dot %s is a different release from this machine's; upgrade the older side", e.Path)
+		case syncer.PeerEventOwnerRenamePending:
+			p.Warn("the peer still records this Mac's earlier name, so it stays an alias here; run there: %s", e.Path)
 		case syncer.PeerEventHostMerged:
 			p.Success("merged ~/%s from both machines (host_merge)", e.Path)
 		case syncer.PeerEventHostMergeHeld:
