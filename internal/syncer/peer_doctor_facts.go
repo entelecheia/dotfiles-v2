@@ -325,7 +325,7 @@ func rolesVerdict(local, peer *PeerSideFacts, here, there string) (checks []Doct
 		// The lower side always demotes (the higher epoch is at least 1).
 		settle := "on " + lower + ": dot peer sync (its fence demotes it)"
 		switch _, herr := fenceDecision(factsFenceSide(hi), factsFenceSide(lo)); {
-		case answersTo(lo.MachineNames, hi.Owner):
+		case passesAfterAdopting(lo, hi.Owner):
 			// It adopts that owner and epoch and still passes its guard: two
 			// writers at one epoch, which the fence lets through.
 			add(DoctorFail, fmt.Sprintf("both machines pass their owner guard, and %s answers to %s's owner %q too: its demotion leaves two coordinators", lower, higher, hi.Owner), choose)
@@ -339,27 +339,42 @@ func rolesVerdict(local, peer *PeerSideFacts, here, there string) (checks []Doct
 		}
 		return checks, local.OwnerEpoch > peer.OwnerEpoch, peer.OwnerEpoch > local.OwnerEpoch, true
 	case !local.Coordinator && !peer.Coordinator:
-		// Each owner guard refuses, so no peer sync runs. The Mac in use
+		// Each owner guard refuses, so no peer sync runs. The chosen Mac
 		// adopts itself above both epochs; the other records the same owner
 		// and epoch, which the fence also needs when it has no epoch yet.
+		detail := fmt.Sprintf("neither machine is the coordinator (owner %q here, %q on %s)", local.Owner, peer.Owner, there)
 		e := max(local.OwnerEpoch, peer.OwnerEpoch) + 1
-		name := local.PreferredName
-		if name == "" {
-			name = "<this Mac's name>"
+		// Both record one owner neither answers to: most likely the
+		// coordinator was renamed. A rename keeps its epoch and baselines,
+		// and it runs only on the Mac with the peer scheduler while the
+		// other has none, so that Mac is the one to coordinate either way.
+		renamed := sameOwner(local.Owner, local.OwnerAliases, peer.Owner, peer.OwnerAliases)
+		coord, c, other, o := here, local, there, peer
+		if renamed && peer.Scheduler && !local.Scheduler {
+			coord, c, other, o = there, peer, here, local
 		}
-		if answersTo(peer.MachineNames, name) {
-			add(DoctorFail, fmt.Sprintf("neither machine is the coordinator, and %s answers to %q too: adopting it on both makes two coordinators", there, name), choose)
+		name, arg := c.PreferredName, shellQuote(c.PreferredName)
+		if name == "" {
+			arg = "<" + coord + "'s name>"
+		}
+		if answersTo(o.MachineNames, name) {
+			add(DoctorFail, fmt.Sprintf("neither machine is the coordinator, and %s answers to %q too: adopting it on both makes two coordinators", other, name), choose)
 			return checks, false, false, false
 		}
-		adopt := fmt.Sprintf("to coordinate from %s: dot peer adopt --self --epoch %d here, then on %s: dot peer adopt --owner %s --epoch %d", here, e, there, name, e)
-		if sameOwner(local.Owner, local.OwnerAliases, peer.Owner, peer.OwnerAliases) {
-			// Both record one owner neither answers to: most likely the
-			// coordinator was renamed. A rename keeps its epoch and baselines;
-			// adopting here would start from this Mac's, stale if it was not.
-			adopt = fmt.Sprintf("if one of these Macs was %q: on it, dot sync owner --rename %s <its name now>; otherwise %s", local.Owner, shellQuote(local.Owner), adopt)
+		adopt := fmt.Sprintf("to coordinate from %s: on %s: dot peer adopt --self --epoch %d, then on %s: dot peer adopt --owner %s --epoch %d", coord, coord, e, other, arg, e)
+		if renamed {
+			rename := "dot sync owner --rename " + shellQuote(local.Owner) + " <its name now>"
+			if local.Scheduler == peer.Scheduler {
+				// Neither Mac can prove it runs the owner's scheduler, so the
+				// rename needs its explicit override on both, and the operator
+				// chooses.
+				add(DoctorFail, detail, fmt.Sprintf("if one of these Macs was %q: on it, %s --local-only, then the same on the other Mac with that Mac's new name; otherwise %s", local.Owner, rename, adopt))
+				return checks, false, false, false
+			}
+			adopt = fmt.Sprintf("if %s was %q: on %s: %s; otherwise %s", coord, local.Owner, coord, rename, adopt)
 		}
-		add(DoctorFail, fmt.Sprintf("neither machine is the coordinator (owner %q here, %q on %s)", local.Owner, peer.Owner, there), adopt)
-		return checks, true, false, true
+		add(DoctorFail, detail, adopt)
+		return checks, coord == here, coord == there, true
 	}
 	c, n, coord, other := local, peer, here, there
 	if peer.Coordinator {
@@ -372,12 +387,14 @@ func rolesVerdict(local, peer *PeerSideFacts, here, there string) (checks []Doct
 	}
 	// The settled state: the other Mac records the coordinator's owner and
 	// epoch, so the fence proceeds.
-	align := fmt.Sprintf("on %s: dot peer adopt --owner %s --epoch %d", other, c.Owner, c.OwnerEpoch)
+	align := fmt.Sprintf("on %s: dot peer adopt --owner %s --epoch %d", other, shellQuote(c.Owner), c.OwnerEpoch)
 	demote, err := fenceDecision(factsFenceSide(c), factsFenceSide(n))
 	switch {
 	case err != nil:
 		add(DoctorFail, fmt.Sprintf("%s's next sync is refused: %v", coord, err), align)
-	case demote && answersTo(c.MachineNames, n.Owner):
+	case demote && NormalizeHostname(n.Owner) == "":
+		add(DoctorFail, fmt.Sprintf("%s records no owner at epoch %d over %s's %d: every sync of %s runs its on_deactivate hooks to demote it, then fails to adopt an empty owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
+	case demote && passesAfterAdopting(c, n.Owner):
 		add(DoctorWarn, fmt.Sprintf("%s records epoch %d over %s's %d: %s's next sync demotes it, removing its scheduler and running its on_deactivate hooks, though it stays the owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
 	case demote:
 		add(DoctorFail, fmt.Sprintf("%s records owner %q at epoch %d over %s's %d: %s's next sync demotes it to that owner, which it does not answer to, leaving no coordinator", other, n.Owner, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
@@ -391,8 +408,25 @@ func rolesVerdict(local, peer *PeerSideFacts, here, there string) (checks []Doct
 		add(DoctorWarn, fmt.Sprintf("%s still records owner %q at epoch %d (the coordinator's: %q at %d)%s", other, n.Owner, n.OwnerEpoch, c.Owner, c.OwnerEpoch, why), align)
 	default:
 		add(DoctorPass, fmt.Sprintf("coordinator: %s, owner %q (epoch %d here, %d on %s)", coord, c.Owner, local.OwnerEpoch, peer.OwnerEpoch, there), "")
+		// An offline rename whose --local-only step never ran there: the
+		// coordinator's sync says so on every run (PeerEventOwnerRenamePending).
+		if old := n.Owner; NormalizeHostname(old) != NormalizeHostname(c.Owner) && ownersMatch(old, nil, c.OwnerAliases...) {
+			add(DoctorWarn, fmt.Sprintf("%s still records the coordinator's earlier name %q; the alias keeps them working until it records %q", other, old, c.Owner),
+				"on "+other+": dot sync owner --rename "+shellQuote(old)+" "+shellQuote(c.Owner)+" --local-only")
+		}
 	}
 	return checks, local.Coordinator, peer.Coordinator, true
+}
+
+// passesAfterAdopting says whether s still passes its owner guard once it
+// adopts owner, as a demotion's PeerAdopt leaves it: AssignOwner keeps its
+// own aliases only when owner is the one it already records.
+func passesAfterAdopting(s *PeerSideFacts, owner string) bool {
+	var kept []string
+	if NormalizeHostname(owner) == NormalizeHostname(s.Owner) {
+		kept = s.OwnerAliases
+	}
+	return ownersMatch(owner, kept, s.MachineNames...)
 }
 
 // evaluatePeerSides compares both machines' facts (#182). here and there

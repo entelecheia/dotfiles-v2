@@ -98,7 +98,7 @@ func TestEvaluatePeerSides(t *testing.T) {
 		local, peer = doctorFacts()
 		peer.Owner, peer.OwnerEpoch = tc.owner, tc.epoch
 		c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail)
-		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner m5x26 --epoch 2" {
+		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner 'm5x26' --epoch 2" {
 			t.Errorf("owner %q epoch %d: fence refusal not flagged: %+v", tc.owner, tc.epoch, c)
 		}
 	}
@@ -168,7 +168,7 @@ func TestEvaluatePeerSides(t *testing.T) {
 		peer.Owner, peer.OwnerEpoch = tc.owner, 3
 		checks := evaluatePeerSides(local, peer, "m5x26", "m3x23")
 		c := checkFor(checks, "roles", tc.level)
-		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner m5x26 --epoch 2" || !strings.Contains(c.Detail, "demotes") {
+		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner 'm5x26' --epoch 2" || !strings.Contains(c.Detail, "demotes") {
 			t.Errorf("peer owner %q at a higher epoch: %+v", tc.owner, c)
 		}
 		// The other rows judge the state that fix leaves: m5x26 stays the
@@ -273,6 +273,16 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 			l.Coordinator, l.PreferredName = false, "m5x26"
 			p.MachineNames = []string{"m5x26"}
 		}, []string{"adopt --self"}, "a name only the chosen Mac answers to"},
+		// A renamed coordinator (#193 round 12): only the Mac with the peer
+		// scheduler can run the rename, so it is the one to coordinate.
+		{"neither, renamed, the peer keeps the plist", func(l, p *PeerSideFacts) {
+			l.Coordinator, l.Scheduler, l.Owner = false, false, "old-name"
+			p.Scheduler, p.Owner, p.PreferredName = true, "old-name", "m3x23"
+		}, []string{"on m5x26: dot sync owner --rename", "on m5x26: dot peer adopt --self"}, "on m3x23: dot sync owner --rename 'old-name' <its name now>"},
+		{"neither, renamed, no plists", func(l, p *PeerSideFacts) {
+			l.Coordinator, l.Scheduler, l.Owner = false, false, "old-name"
+			p.Owner = "old-name"
+		}, []string{"on m5x26: dot peer setup", "on m3x23: dot peer setup"}, "--local-only"},
 		{"sole coordinator demoted to no one", func(l, p *PeerSideFacts) {
 			l.MachineNames = []string{"m5x26"}
 			p.Owner, p.OwnerEpoch = "old-name", 3
@@ -291,8 +301,8 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 			for _, host := range []string{"m5x26", "m3x23"} {
 				off := strings.Contains(all, "on "+host+": dot peer setup --off")
 				on := strings.Contains(strings.ReplaceAll(all, "setup --off", ""), "on "+host+": dot peer setup")
-				adopt := host == "m5x26" && strings.Contains(all, "adopt --self")
-				if off && (on || adopt) {
+				takes := strings.Contains(all, "on "+host+": dot peer adopt --self") || strings.Contains(all, "on "+host+": dot sync owner --rename")
+				if off && (on || takes) {
 					t.Errorf("%s is told both ways:\n%s", host, all)
 				}
 			}
@@ -335,6 +345,28 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 	local.OwnerAliases, peer.Owner = []string{"old-m5"}, "old-m5"
 	if checks := evaluatePeerSides(local, peer, "m5x26", "m3x23"); checkFor(checks, "roles", DoctorFail) != nil || checkFor(checks, "roles", DoctorPass) == nil {
 		t.Errorf("a half-migrated rename fails the roles row: %+v", checks)
+	} else if c := checkFor(checks, "roles", DoctorWarn); c == nil || c.Fix != "on m3x23: dot sync owner --rename 'old-m5' 'm5x26' --local-only" {
+		// The sync names the pending step on every run; so does the doctor.
+		t.Errorf("the pending rename step is not named: %+v", checks)
+	}
+
+	// A demotion to the owner a Mac already records keeps its aliases, as
+	// PeerAdopt does, so it stays the coordinator through one of them.
+	local, peer = doctorFacts()
+	local.Owner, local.OwnerAliases, local.MachineNames = "new-a", []string{"m5x26"}, []string{"m5x26"}
+	peer.Owner, peer.OwnerEpoch, peer.MachineNames = "new-a", 3, []string{"m3x23"}
+	if checks := evaluatePeerSides(local, peer, "m5x26", "m3x23"); checkFor(checks, "roles", DoctorFail) != nil ||
+		checkFor(checks, "roles", DoctorWarn) == nil || !strings.Contains(checkFor(checks, "roles", DoctorWarn).Detail, "stays the owner") {
+		t.Errorf("an alias kept through the demotion: %+v", checks)
+	}
+
+	// A higher epoch with no owner: the demotion runs on_deactivate and
+	// then cannot adopt an empty owner, on every run.
+	local, peer = doctorFacts()
+	local.MachineNames = []string{"m5x26"}
+	peer.Owner, peer.OwnerEpoch = "", 3
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "fails to adopt an empty owner") {
+		t.Errorf("demotion to no owner: %+v", c)
 	}
 
 	// Neither answers to the one owner both record: a renamed coordinator,
