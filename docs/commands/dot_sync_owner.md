@@ -14,8 +14,9 @@ as an alias, so the guard and the peer's owner check keep matching while
 either Mac still answers to it; a generic name such as "Mac" is not kept.
 The coordinator retires its aliases at the first complete peer sync that
 finds the peer recording the new owner, once this Mac answers to the new
-name; the peer's copies stay until its owner next changes. At equal epochs
-the peer fence refuses a peer that passes its own owner guard. When the peer
+name; the other Mac records no alias (the fence reads the coordinator's).
+At equal epochs the peer fence refuses a peer that passes its own owner
+guard. When the peer
 cannot be reached, the rename runs only on a Mac that still answers to <old>
 (or with --local-only). The epoch, targets and baselines are untouched, so no
 run plans a deletion. It refuses when this Mac answers to neither name, when

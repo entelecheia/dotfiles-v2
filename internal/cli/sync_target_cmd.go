@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/entelecheia/dotfiles-v2/internal/appsettings"
@@ -196,8 +197,9 @@ as an alias, so the guard and the peer's owner check keep matching while
 either Mac still answers to it; a generic name such as "Mac" is not kept.
 The coordinator retires its aliases at the first complete peer sync that
 finds the peer recording the new owner, once this Mac answers to the new
-name; the peer's copies stay until its owner next changes. At equal epochs
-the peer fence refuses a peer that passes its own owner guard. When the peer
+name; the other Mac records no alias (the fence reads the coordinator's).
+At equal epochs the peer fence refuses a peer that passes its own owner
+guard. When the peer
 cannot be reached, the rename runs only on a Mac that still answers to <old>
 (or with --local-only). The epoch, targets and baselines are untouched, so no
 run plans a deletion. It refuses when this Mac answers to neither name, when
@@ -315,8 +317,10 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 				return fmt.Errorf("this machine no longer answers to %q and there is no peer to confirm which Mac is the owner; run --rename while the owner still answers to %q, or with --local-only on the owner", oldName, oldName)
 			case !checked:
 				return fmt.Errorf("the peer could not confirm that it is not %q or %q, and this machine no longer answers to %q; wake the peer and retry, or run with --local-only on the Mac being renamed", oldName, newName, oldName)
+			case runtime.GOOS != "darwin":
+				return fmt.Errorf("this machine no longer answers to %q, and the scheduler proof of ownership needs launchd (macOS); run with --local-only on the owner of each profile", oldName)
 			case !runsPeerScheduler(bs):
-				return fmt.Errorf("this machine no longer answers to %q and does not run the peer scheduler, so it cannot be shown to be the owner being renamed; run --rename on the coordinator (the Mac with the peer scheduler), where --local-only is also allowed", oldName)
+				return fmt.Errorf("this machine no longer answers to %q and does not run the peer scheduler, so it cannot be shown to be the owner being renamed; run --rename on the coordinator (the Mac with the peer scheduler), or, when the mirror and the peer have different owners, --local-only on the owner of each profile", oldName)
 			case peerView.Scheduler != syncer.SchedulerNotInstalled.String():
 				return fmt.Errorf("both Macs claim the owner's peer scheduler (the peer reports %q), so neither can be shown to be the owner being renamed; remove the stale one with dot peer setup --off there, or run with --local-only on the owner", peerView.Scheduler)
 			}
@@ -324,7 +328,10 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 	}
 
 	root := strings.TrimRight(bs.Config.LocalPath, "/")
-	res, err := syncer.RenameOwner(root, oldName, newName, dryRun)
+	// Only a Mac that answers to one of the names keeps <old> as an alias;
+	// the other Mac's step (--local-only there) needs none.
+	keepAlias := answersTo(names, oldName) || answersTo(names, newName)
+	res, err := syncer.RenameOwner(root, oldName, newName, dryRun, keepAlias)
 	if localOnly && errors.Is(err, syncer.ErrNoProfileOwned) {
 		// The peer step on a Mac that owns nothing by that name: done.
 		p.Line("no profile here is owned by %q; nothing to rename", oldName)
@@ -338,7 +345,10 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 		verb = "dry-run: would set owner"
 	}
 	kept := "kept as an alias"
-	if !res.OldKept {
+	switch {
+	case !keepAlias:
+		kept = "not kept: this Mac is neither name"
+	case !res.OldKept:
 		kept = "a generic name, not kept"
 	}
 	for _, profile := range res.Profiles {
@@ -439,13 +449,17 @@ func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
 	}
 
 	opts.Config = cfg
+	opts.DryRun, _ = cmd.Flags().GetBool("dry-run")
 	owner, err := syncer.SetOwner(opts)
 	if err != nil {
 		return err
 	}
-	if owner == "" {
+	switch {
+	case opts.DryRun:
+		p.Line("dry-run: would set the owner of profile %q to %q", cfg.Profile, owner)
+	case owner == "":
 		p.Success("owner cleared for profile %q (any machine may push)", cfg.Profile)
-	} else {
+	default:
 		p.Success("owner of profile %q is now %q", cfg.Profile, owner)
 	}
 	// Taking the coordinator role from this Mac takes its peer scheduler

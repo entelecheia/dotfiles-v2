@@ -592,7 +592,7 @@ secrets:
 
 | Key | Description |
 |-----|-------------|
-| `owner_aliases` | Earlier names of the owner, written by `dot sync owner --rename <old> <new>` (in every profile, the mirror's too) so a Mac still answering to the old name keeps its role during a rename. The coordinator retires them at the first complete peer sync where the peer records the new owner and this Mac answers to it; the peer's copies, and those of a mirror-only workspace, stay until the owner next changes (docs/CEILINGS.md). `--set`, `--set-self` and `--clear` always drop them; any other change to a different owner drops them. Not edited by hand. |
+| `owner_aliases` | Earlier names of the owner, written by `dot sync owner --rename <old> <new>` (in every profile, the mirror's too) so a Mac still answering to the old name keeps its role during a rename. Only the Mac being renamed records them; the coordinator retires them at the first complete peer sync where the peer records the new owner and this Mac answers to it; in a mirror-only workspace they stay until the owner next changes (docs/CEILINGS.md). `--set`, `--set-self` and `--clear` always drop them; any other change to a different owner drops them. Not edited by hand. |
 | `remote_dot` | Path of the `dot` binary to run on the other Mac (`~/` is that Mac's home). Unset, a peer run probes `~/.local/bin/dot`, `/opt/homebrew/bin/dot`, `/usr/local/bin/dot`, the Linuxbrew path and `command -v dot` there, and uses the newest release; a dev build is used only when nothing else is installed, with a warning. Set it to use a dev build; scheduled runs read it too. |
 
 ---

@@ -695,7 +695,9 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			if err == nil {
 				cfg.OwnerAliases = nil
 			}
-			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerAliasesRetired, Path: strings.Join(retired, ", "), Err: err})
+			if err != nil || len(retired) > 0 {
+				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerAliasesRetired, Path: strings.Join(retired, ", "), Err: err})
+			}
 		}
 		if cfg.FencePending {
 			// The first complete run after contact: the fence has done its

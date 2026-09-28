@@ -33,7 +33,7 @@ func TestRenameOwner_RewritesEveryOwnedProfileAndKeepsAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := RenameOwner(root, "youngs-macbook-pro", "m5x26", false)
+	res, err := RenameOwner(root, "youngs-macbook-pro", "m5x26", false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,19 +58,19 @@ func TestRenameOwner_RewritesEveryOwnedProfileAndKeepsAlias(t *testing.T) {
 
 	// A retry (the peer step failed) finds the stores already renamed and
 	// goes on; nothing is rewritten.
-	res, err = RenameOwner(root, "youngs-macbook-pro", "m5x26", false)
+	res, err = RenameOwner(root, "youngs-macbook-pro", "m5x26", false, true)
 	if err != nil || len(res.Profiles) != 0 || !slices.Equal(res.Already, []string{"peer", "sync"}) {
 		t.Fatalf("retry: %+v, %v", res, err)
 	}
 
 	// A second rename keeps both earlier names; the old name no longer owns.
-	if _, err := RenameOwner(root, "m5x26", "m5x27", false); err != nil {
+	if _, err := RenameOwner(root, "m5x26", "m5x27", false, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadPeerStoreConfig(t, peer); got.Owner != "m5x27" || len(got.OwnerAliases) != 2 {
 		t.Fatalf("second rename: %+v", got)
 	}
-	if _, err := RenameOwner(root, "nobody", "x", false); err == nil || !strings.Contains(err.Error(), "no profile") {
+	if _, err := RenameOwner(root, "nobody", "x", false, true); err == nil || !strings.Contains(err.Error(), "no profile") {
 		t.Fatalf("rename of an unknown owner: %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestPeerSync_AfterRenameWithUnmigratedPeer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RenameOwner(sb.local, "old-mac-name", sb.owner, false); err != nil {
+	if _, err := RenameOwner(sb.local, "old-mac-name", sb.owner, false, true); err != nil {
 		t.Fatal(err)
 	}
 	stored := loadPeerStoreConfig(t, sb.paths)
@@ -185,19 +185,19 @@ func TestOwnerChangesDropAliases(t *testing.T) {
 func TestRenameOwner_GenericNamesAndDryRun(t *testing.T) {
 	root := t.TempDir()
 	paths := seedProfile(t, root, DefaultProfile, &LocalConfig{Owner: "Mac"})
-	if _, err := RenameOwner(root, "mac", "m5x26", true); err != nil {
+	if _, err := RenameOwner(root, "mac", "m5x26", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadPeerStoreConfig(t, paths); got.Owner != "Mac" {
 		t.Fatalf("dry run wrote %+v", got)
 	}
-	if _, err := RenameOwner(root, "mac", "m5x26", false); err != nil {
+	if _, err := RenameOwner(root, "mac", "m5x26", false, true); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadPeerStoreConfig(t, paths); got.Owner != "m5x26" || got.OwnerAliases != nil {
 		t.Fatalf("generic name kept as an alias: %+v", got)
 	}
-	if _, err := RenameOwner(root, "young's pro", "x", false); err == nil || !strings.Contains(err.Error(), "--set") {
+	if _, err := RenameOwner(root, "young's pro", "x", false, true); err == nil || !strings.Contains(err.Error(), "--set") {
 		t.Fatalf("quoted old name: %v", err)
 	}
 }
@@ -218,13 +218,13 @@ func TestPeerOwnerViewReadsTheStatusDocument(t *testing.T) {
 func TestRenameOwner_OnlyTheCurrentOwnerIsRenamed(t *testing.T) {
 	root := t.TempDir()
 	peer := seedProfile(t, root, PeerProfile, &LocalConfig{Owner: "m5x26", OwnerAliases: []string{"youngs-macbook-pro"}, OwnerEpoch: 2})
-	if _, err := RenameOwner(root, "youngs-macbook-pro", "m3x23", false); err == nil || !strings.Contains(err.Error(), "no profile") {
+	if _, err := RenameOwner(root, "youngs-macbook-pro", "m3x23", false, true); err == nil || !strings.Contains(err.Error(), "no profile") {
 		t.Fatalf("rename through an alias: %v", err)
 	}
 	if got := loadPeerStoreConfig(t, peer); got.Owner != "m5x26" {
 		t.Fatalf("owner changed to %q", got.Owner)
 	}
-	if _, err := RenameOwner(root, "m5x26", "mac", false); err == nil || !strings.Contains(err.Error(), "generic") {
+	if _, err := RenameOwner(root, "m5x26", "mac", false, true); err == nil || !strings.Contains(err.Error(), "generic") {
 		t.Fatalf("generic new name accepted: %v", err)
 	}
 }

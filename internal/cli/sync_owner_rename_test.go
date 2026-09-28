@@ -41,7 +41,9 @@ func TestSyncOwnerRenameGuards(t *testing.T) {
 	if _, _, err := runDotForTest("sync", "owner", "--rename", "--local-only", "other-mac", "renamed-mac"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := syncer.LoadLocalConfig(paths); got.Owner != "renamed-mac" || len(got.OwnerAliases) != 1 {
+	// This Mac answers to neither name: it is the other Mac's step, which
+	// records no alias.
+	if got, _, _ := syncer.LoadLocalConfig(paths); got.Owner != "renamed-mac" || len(got.OwnerAliases) != 0 {
 		t.Fatalf("after --local-only rename: %+v", got)
 	}
 }
@@ -217,5 +219,44 @@ func TestSyncOwnerRenameLocalOnlyWithNothingOwned(t *testing.T) {
 	out, errOut, err := runDotForTest("sync", "owner", "--rename", "--local-only", "gone-mac", "new-mac")
 	if err != nil || !strings.Contains(out+errOut, "nothing to rename") {
 		t.Fatalf("err = %v\n%s%s", err, out, errOut)
+	}
+}
+
+// A dry-run --set writes nothing: not the owner, not the epoch, and the
+// scheduler stays.
+func TestSyncOwnerSetDryRunWritesNothing(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	self := syncer.PreferredMachineName()
+	if self == "" {
+		t.Skip("no machine name")
+	}
+	store := filepath.Join(f.local, ".dotfiles", "peer", "config.yaml")
+	writeCLITestFile(t, store, "target: ssh:peer-alias:/remote/work\nowner: "+self+"\nowner_epoch: 2\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	plist := filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist")
+	writeCLITestFile(t, plist, "<plist/>")
+	before, _ := os.ReadFile(store)
+	if _, errOut, err := runDotForTest("--dry-run", "sync", "owner", "--profile=peer", "--set", "other-mac"); err != nil {
+		t.Fatalf("%v\n%s", err, errOut)
+	}
+	if after, _ := os.ReadFile(store); string(after) != string(before) {
+		t.Fatalf("a dry run rewrote the store:\n%s", after)
+	}
+	if _, err := os.Stat(plist); err != nil {
+		t.Fatalf("a dry run removed the scheduler: %v", err)
+	}
+}
+
+// The other Mac's migration step records no alias: only the Mac being
+// renamed answers to one of the names.
+func TestSyncOwnerRenameLocalOnlyOnTheOtherMacKeepsNoAlias(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", "sync", "config.yaml"),
+		"owner: gone-mac\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+	if _, errOut, err := runDotForTest("sync", "owner", "--rename", "--local-only", "gone-mac", "new-mac"); err != nil {
+		t.Fatalf("%v\n%s", err, errOut)
+	}
+	local, _, _ := syncer.LoadLocalConfig(syncer.ResolveLocalPathsForProfile(f.local, "sync"))
+	if local.Owner != "new-mac" || len(local.OwnerAliases) != 0 {
+		t.Fatalf("owner %q aliases %v, want new-mac and none", local.Owner, local.OwnerAliases)
 	}
 }

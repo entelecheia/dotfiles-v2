@@ -111,6 +111,10 @@ Dot-owned state trees:
   `update-schedule.lock`, `update-schedule.out.log` and
   `update-schedule.err.log` in that directory — selected maintenance schedule
   state, nonblocking state-update lock and launchd run diagnostics
+- `~/Library/LaunchAgents/com.dotfiles.peer.plist`: the peer scheduler,
+  written by `dot peer setup` on the coordinator and removed by `dot peer
+  setup --off`, a handover, a fence demotion and a peer `dot sync owner
+  --set`/`--clear` that takes the coordinator role from this Mac.
 - `~/Library/LaunchAgents/com.dotfiles.ai.update.plist` — the macOS user
   stable-update job, owned by `dot ai update schedule enable|disable`
 - `dot ai run`, the selected-tooling updates and `dot ai update schedule

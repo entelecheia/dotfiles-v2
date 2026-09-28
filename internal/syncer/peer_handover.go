@@ -605,7 +605,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	// direction. The peer prints the exact owner it adopted.
 	remoteOwner, err := peerRemoteAdopt(ctx, opts.Runner, cfg, epoch, generation)
 	if err != nil {
-		return nil, fmt.Errorf("peer handover: the peer's adopt failed; nothing changed here: %w", err)
+		return nil, fmt.Errorf("peer handover: the peer's adopt failed or its answer was unusable; nothing changed here, check `dot peer status` on %s (the next sync's fence settles a half-done adopt): %w", cfg.Target.Host, err)
 	}
 	result.NewOwner = remoteOwner
 	if _, err := PeerAdopt(cfg, PeerAdoptOptions{Owner: remoteOwner, Epoch: epoch}); err != nil {
@@ -720,7 +720,7 @@ func peerRemoteAdopt(ctx context.Context, runner *exec.Runner, cfg *Config, epoc
 		owner = strings.TrimSpace(owner[i+1:])
 	}
 	if owner == "" || strings.ContainsAny(owner, " \t'\"/") {
-		return "", fmt.Errorf("peer handover: the peer reported an unusable owner name %q", owner)
+		return "", fmt.Errorf("the peer reported an unusable owner name %q", owner)
 	}
 	return owner, nil
 }

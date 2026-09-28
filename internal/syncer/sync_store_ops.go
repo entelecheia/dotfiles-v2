@@ -463,6 +463,7 @@ type OwnerOptions struct {
 	Clear   bool
 	SetSelf bool
 	SetTo   string
+	DryRun  bool // report the owner it would write; write nothing
 }
 
 // SetOwner records which machine may push this profile and returns the owner
@@ -505,6 +506,9 @@ func SetOwner(opts OwnerOptions) (string, error) {
 		local.OwnerEpoch++
 		local.FencePending = false
 	}
+	if opts.DryRun {
+		return local.Owner, nil
+	}
 	if err := SaveLocalConfig(paths, local); err != nil {
 		return "", err
 	}
@@ -530,7 +534,11 @@ var ErrNoProfileOwned = errors.New("no profile is owned by that name")
 // guard keeps matching a machine not renamed yet and a peer not migrated yet.
 // Nothing else changes: not the epoch (a rename is not a coordinator
 // change), not the target, not a baseline, so no run plans a deletion.
-func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRenameResult, error) {
+//
+// keepAlias records <old> as an alias; only a Mac that answers to <old> or
+// <new> needs it (the fence reads the coordinator's), so the other Mac's
+// migration step records none.
+func RenameOwner(workspaceRoot, oldName, newName string, dryRun, keepAlias bool) (*OwnerRenameResult, error) {
 	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
 	if oldName == "" || newName == "" || strings.ContainsAny(newName, " \t\r\n'\"/") {
 		return nil, fmt.Errorf("owner rename needs an old and a new machine name, the new one without spaces, quotes or slashes (got %q -> %q)", oldName, newName)
@@ -575,7 +583,11 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 		}
 		seen := map[string]bool{NormalizeHostname(newName): true}
 		var aliases []string
-		for _, alias := range append(slices.Clone(local.OwnerAliases), local.Owner) {
+		earlier := slices.Clone(local.OwnerAliases)
+		if keepAlias {
+			earlier = append(earlier, local.Owner)
+		}
+		for _, alias := range earlier {
 			// A generic name ("mac") identifies no machine; keeping it would
 			// let any Mac with an unset HostName pass the guard.
 			if n := NormalizeHostname(alias); n != "" && !seen[n] && !genericMachineNames[n] {
