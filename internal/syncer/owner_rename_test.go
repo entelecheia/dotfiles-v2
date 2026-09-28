@@ -56,6 +56,13 @@ func TestRenameOwner_RewritesEveryOwnedProfileAndKeepsAlias(t *testing.T) {
 		t.Fatal("baseline changed")
 	}
 
+	// A retry (the peer step failed) finds the stores already renamed and
+	// goes on; nothing is rewritten.
+	res, err = RenameOwner(root, "youngs-macbook-pro", "m5x26", false)
+	if err != nil || len(res.Profiles) != 0 || !slices.Equal(res.Already, []string{"peer", "sync"}) {
+		t.Fatalf("retry: %+v, %v", res, err)
+	}
+
 	// A second rename keeps both earlier names; the old name no longer owns.
 	if _, err := RenameOwner(root, "m5x26", "m5x27", false); err != nil {
 		t.Fatal(err)

@@ -127,6 +127,21 @@ conflict and loss risk. The window is one sync interval, and the workspace
 rule of pushing on every commit keeps it small. Replace this limit only if a
 safe machine-to-machine state channel is ever designed.
 
+## Owner aliases outside the coordinator's peer run
+
+`internal/syncer/sync_store_ops.go` (`RenameOwner`, `RetireOwnerAliases`)
+keeps a renamed owner's earlier names in `owner_aliases` so a Mac still
+answering to the old name keeps its role mid-rename. Only the coordinator
+retires them, at a complete peer sync. The other Mac's copies, and the aliases
+of a workspace with no peer profile, stay until the owner next changes, so a
+Mac that later answers to a retired name (a reinstall that comes back as the
+default `<Name>s-MacBook-Pro`) passes the mirror owner guard there.
+
+The peer profile is fenced (epochs, `canPush`), and a reused default name on
+a reinstalled Mac of the same user is the only trigger. Replace this if the
+peer run gains a remote step that can retire the other Mac's aliases, or if a
+reused name is seen in practice.
+
 ## Replica bootstrap trust
 
 A takeover validates the pushed replica (`<workspace>/.dotfiles/peer/replica/`

@@ -513,6 +513,9 @@ func SetOwner(opts OwnerOptions) (string, error) {
 // OwnerRenameResult names the profile stores RenameOwner rewrote.
 type OwnerRenameResult struct {
 	Profiles []string
+	// Already names the stores a previous run renamed (owner <new>, alias
+	// <old>), so a retry can go on to the peer.
+	Already []string
 }
 
 // RenameOwner records that the owner machine was renamed from oldName to
@@ -552,9 +555,16 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 		if err != nil {
 			return nil, err
 		}
+		if !ok || local == nil {
+			continue
+		}
+		if ownersMatch(local.Owner, nil, newName) && ownersMatch(oldName, nil, local.OwnerAliases...) {
+			result.Already = append(result.Already, entry.Name())
+			continue
+		}
 		// Only the current owner is renamed. An alias names a machine as it
 		// was; renaming through it would let a second Mac take the owner.
-		if !ok || local == nil || !ownersMatch(local.Owner, nil, oldName) {
+		if !ownersMatch(local.Owner, nil, oldName) {
 			continue
 		}
 		seen := map[string]bool{NormalizeHostname(newName): true}
@@ -575,7 +585,7 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 		}
 		result.Profiles = append(result.Profiles, entry.Name())
 	}
-	if len(result.Profiles) == 0 {
+	if len(result.Profiles)+len(result.Already) == 0 {
 		return nil, fmt.Errorf("owner rename: no profile under %s is owned by %q", filepath.Join(workspaceRoot, ".dotfiles"), oldName)
 	}
 	return result, nil

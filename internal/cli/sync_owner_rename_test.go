@@ -104,8 +104,14 @@ func TestSyncOwnerRenameNeedsTheOwnersScheduler(t *testing.T) {
 		writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", profile, "config.yaml"),
 			"target: ssh:user@peer-alias:/remote/work\nowner: gone-mac\npropagation:\n  create: true\n  update: true\n  delete: true\n")
 	}
-	if _, _, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err == nil || !strings.Contains(err.Error(), "runs no dot scheduler") {
+	if _, _, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err == nil || !strings.Contains(err.Error(), "owner's dot scheduler") {
 		t.Fatalf("the inactive Mac renamed itself into the owner: %v", err)
+	}
+	// `dot sync setup` installs the mirror unit on either Mac: with a peer
+	// it proves nothing.
+	writeCLITestFile(t, filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.sync.plist"), "<plist/>")
+	if _, _, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err == nil || !strings.Contains(err.Error(), "owner's dot scheduler") {
+		t.Fatalf("the mirror unit admitted the inactive Mac: %v", err)
 	}
 	writeCLITestFile(t, filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist"), "<plist/>")
 	if _, _, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err != nil {
