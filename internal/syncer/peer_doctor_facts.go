@@ -61,7 +61,7 @@ func LocalPeerSideFacts(ctx context.Context, probe *exec.Runner, cfg *Config, do
 		Owner:        cfg.Owner,
 		OwnerEpoch:   cfg.OwnerEpoch,
 		FencePending: cfg.FencePending,
-		Coordinator:  strings.TrimSpace(cfg.Owner) != "" && CheckOwner(cfg) == nil,
+		Coordinator:  IsPeerCoordinator(cfg),
 		MaxDelete:    cfg.MaxDelete,
 		Propagation:  cfg.Propagation,
 		Filters:      map[string]string{},
@@ -123,11 +123,20 @@ func localReplicaFacts(cfg *Config) (*PeerReplicaFacts, string) {
 	return &PeerReplicaFacts{Generation: meta.Generation, Coordinator: meta.Coordinator, Epoch: meta.Epoch, WrittenAt: info.ModTime().UTC()}, ""
 }
 
+// IsPeerCoordinator reports whether this machine is the peer pair's
+// coordinator: a set owner that passes the owner guard here.
+func IsPeerCoordinator(cfg *Config) bool {
+	return strings.TrimSpace(cfg.Owner) != "" && CheckOwner(cfg) == nil
+}
+
 // remotePeerSideFacts runs `dot peer doctor --self` on the peer.
 func remotePeerSideFacts(ctx context.Context, runner *exec.Runner, cfg *Config) (*PeerSideFacts, error) {
 	out, err := peerRemoteDot(ctx, runner, cfg, "peer", "doctor", "--self")
 	if err != nil {
-		return nil, fmt.Errorf("%w (a peer dot without `peer doctor --self` needs an upgrade)", err)
+		if strings.Contains(err.Error(), "unknown flag") {
+			return nil, fmt.Errorf("%w (the peer's dot predates `peer doctor --self`; upgrade it)", err)
+		}
+		return nil, err
 	}
 	var f PeerSideFacts
 	if err := json.Unmarshal([]byte(out), &f); err != nil {
@@ -165,12 +174,15 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 	}
 	sides := []side{{here, local}, {there, peer}}
 
-	for _, s := range sides {
-		if s.f.RsyncError != "" {
-			add("rsync", DoctorFail, s.host+": "+s.f.RsyncError, "on "+s.host+": brew install rsync")
-		} else {
-			add("rsync", DoctorPass, s.host+": "+s.f.RsyncPath+" ("+s.f.RsyncVersion+")", "")
-		}
+	// This machine's client is the doctor's first line. Only the coordinator
+	// runs one, so the other Mac's matters after a takeover.
+	switch {
+	case peer.RsyncError != "" && peer.Coordinator:
+		add("rsync", DoctorFail, there+": "+peer.RsyncError, "on "+there+": brew install rsync")
+	case peer.RsyncError != "":
+		add("rsync", DoctorWarn, there+": "+peer.RsyncError+" (it needs rsync 3.x once it coordinates)", "on "+there+": brew install rsync")
+	default:
+		add("rsync", DoctorPass, there+": "+peer.RsyncPath+" ("+peer.RsyncVersion+")", "")
 	}
 
 	// The inventory stop is the coordinator's: an NFD-marked coordinator
@@ -211,13 +223,21 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 			higher, max(local.OwnerEpoch, peer.OwnerEpoch), lower, min(local.OwnerEpoch, peer.OwnerEpoch)),
 			"on "+lower+": dot peer sync (its fence demotes it)")
 	case !local.Coordinator && !peer.Coordinator:
-		add("roles", DoctorWarn, fmt.Sprintf("neither machine is the coordinator (owner %q here, %q on %s)", local.Owner, peer.Owner, there), "on the Mac in use: dot sync owner --profile=peer --set-self")
+		// Each owner guard refuses, so no peer sync runs.
+		add("roles", DoctorFail, fmt.Sprintf("neither machine is the coordinator (owner %q here, %q on %s)", local.Owner, peer.Owner, there), "on the Mac in use: dot sync owner --profile=peer --set-self")
 	default:
-		coord := here
+		c, n, coord, other := local, peer, here, there
 		if peer.Coordinator {
-			coord = there
+			c, n, coord, other = peer, local, there, here
 		}
-		add("roles", DoctorPass, fmt.Sprintf("coordinator: %s (epoch %d here, %d on %s)", coord, local.OwnerEpoch, peer.OwnerEpoch, there), "")
+		// peerFence on the coordinator compares owners at equal epochs, and
+		// against a peer without an epoch; different owners refuse there.
+		if (n.OwnerEpoch == c.OwnerEpoch || n.OwnerEpoch == 0) && NormalizeHostname(n.Owner) != NormalizeHostname(c.Owner) {
+			add("roles", DoctorFail, fmt.Sprintf("the fence refuses: %s records owner %q (epoch %d), %s records %q (epoch %d)", coord, c.Owner, c.OwnerEpoch, other, n.Owner, n.OwnerEpoch),
+				fmt.Sprintf("on %s: dot peer adopt --owner %s --epoch %d", other, c.Owner, c.OwnerEpoch))
+		} else {
+			add("roles", DoctorPass, fmt.Sprintf("coordinator: %s (epoch %d here, %d on %s)", coord, local.OwnerEpoch, peer.OwnerEpoch, there), "")
+		}
 	}
 	if local.OwnerEpoch != peer.OwnerEpoch && (!local.Coordinator || !peer.Coordinator) {
 		add("roles", DoctorWarn, fmt.Sprintf("owner epochs differ (%d here, %d on %s); the higher wins at the next sync's fence and the other side demotes", local.OwnerEpoch, peer.OwnerEpoch, there), "")

@@ -87,6 +87,29 @@ func TestEvaluatePeerSides(t *testing.T) {
 		t.Errorf("pending fence not explained: %+v", checks)
 	}
 
+	// Owners the fence compares and refuses: a stale name at the same epoch,
+	// or an empty one on a peer without an epoch.
+	for _, tc := range []struct {
+		owner string
+		epoch int
+	}{{"m5x26-old", 2}, {"", 0}} {
+		local, peer = doctorFacts()
+		peer.Owner, peer.OwnerEpoch = tc.owner, tc.epoch
+		c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail)
+		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner m5x26 --epoch 2" {
+			t.Errorf("owner %q epoch %d: fence refusal not flagged: %+v", tc.owner, tc.epoch, c)
+		}
+	}
+
+	// No coordinator: no sync runs. The other Mac's rsync client only
+	// matters once it coordinates.
+	local, peer = doctorFacts()
+	local.Coordinator, peer.RsyncError = false, "openrsync"
+	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
+	if checkFor(checks, "roles", DoctorFail) == nil || checkFor(checks, "rsync", DoctorWarn) == nil || checkFor(checks, "rsync", DoctorFail) != nil {
+		t.Errorf("no coordinator / peer rsync: %+v", checks)
+	}
+
 	// A replica the takeover would refuse, or one the peer staged itself.
 	local, peer = doctorFacts()
 	peer.Replica, peer.ReplicaError = nil, "peer replica: exclude.txt sha256 mismatch"

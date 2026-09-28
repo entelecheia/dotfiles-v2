@@ -58,7 +58,7 @@ type peerStatusJSON struct {
 
 // peerRole names this machine's part in the peer pair.
 func peerRole(cfg *syncer.Config) string {
-	if strings.TrimSpace(cfg.Owner) != "" && syncer.CheckOwner(cfg) == nil {
+	if syncer.IsPeerCoordinator(cfg) {
 		return "coordinator"
 	}
 	return "peer"
