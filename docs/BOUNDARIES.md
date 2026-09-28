@@ -260,10 +260,21 @@ tool):
   together by `dot peer git realign --apply` through git's lockfile
   protocol (compare-and-swap `update-ref`, fast-forward only onto a
   strict descendant, the old value recorded in the reflog for undo).
-  The worktree is never written by git; preview (`dot peer git status`,
-  default `realign`, `--dry-run`) writes nothing; linked worktrees and
-  locked, staged, conflicting or in-progress repositories are never
-  touched.
+  Only `--rescue` moves a branch sideways: HEAD's commits are first kept
+  on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed to the
+  repo's remote unless `--no-push`; then the branch, or for a branch
+  mismatch the default branch (created or fast-forwarded, HEAD
+  re-pointed), moves under the same protocol.
+- `<workspace repo>/.gitmodules`: restored from the index by
+  `realign --apply` only when it equals an older committed version (peer
+  sync never carries it), then `git submodule sync` for the URLs it moves
+  (`.git/config` and the submodule's origin URL). With `--apply --fetch`
+  a submodule whose gitlink commit is missing gets `remote set-url
+  origin` for a moved URL and `git fetch`.
+  Otherwise the worktree is never written by git; preview (`dot peer git
+  status`, default `realign`, `--dry-run`) writes nothing; linked
+  worktrees and locked, staged, conflicting or in-progress repositories
+  are never touched.
 
 ## dotfiles-v2 Must Not Write Directly
 
