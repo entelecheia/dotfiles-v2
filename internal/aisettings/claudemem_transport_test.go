@@ -361,3 +361,43 @@ func TestServeOp_ImportKicksOnlyTheGivenHome(t *testing.T) {
 		t.Fatalf("empty home kicked: given home = %d, process HOME = %d, DB grandparent = %d; want 0, 0, 0", *hits, *trapHits, *grandHits)
 	}
 }
+
+// #195: the real ssh transport runs the peer's dot the way dot peer picks it
+// (#176): the release at /opt/homebrew/bin, not a stale dev build that comes
+// first on PATH. The probe runs once per target.
+func TestSSHTransportRunsThePeersReleaseDot(t *testing.T) {
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "ssh.log")
+	script := "#!/bin/sh\n" +
+		"for last; do :; done\n" +
+		"printf '%s\\n' \"$last\" | head -n 1 >> '" + log + "'\n" +
+		"case \"$last\" in\n" +
+		"  *'list dot candidates'*) printf '/h/.local/bin/dot\\tdot version dev (f467e65)\\n/opt/homebrew/bin/dot\\tdot version 2.70.22 (388a398)\\n' ;;\n" +
+		"  *) cat >/dev/null; printf '{\"max\":{}}\\n' ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	tr := &SSHTransport{}
+	for i := 0; i < 2; i++ {
+		if _, err := tr.Max(context.Background(), SyncPeer{Target: "peer-mac"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, _ := os.ReadFile(log)
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	var probes, serves int
+	for _, line := range lines {
+		switch {
+		case strings.Contains(line, "list dot candidates"):
+			probes++
+		case strings.HasPrefix(line, "exec '/opt/homebrew/bin/dot' 'ai' 'memory' 'sync' '--serve' 'max'"):
+			serves++
+		default:
+			t.Errorf("unexpected remote command %q", line)
+		}
+	}
+	if probes != 1 || serves != 2 {
+		t.Fatalf("probes %d, serves %d:\n%s", probes, serves, body)
+	}
+}

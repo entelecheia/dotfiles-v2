@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
 
 // Sync transport: the remote side is `ssh <target> dot ai memory sync
@@ -49,7 +53,26 @@ type SSHRunner func(ctx context.Context, target string, serveArgs []string, stdi
 // SSHTransport reaches the peer over ssh. The peer needs nothing but the
 // dot binary — no python, no jq, no claude-mem tooling.
 type SSHTransport struct {
-	Run SSHRunner // nil uses the real ssh
+	Run  SSHRunner         // nil uses the real ssh
+	dots map[string]string // the peer's dot per target, resolved once
+}
+
+// peerDot resolves the peer's dot the way dot peer does (#176, #195): the
+// newest release among its install locations, not the first on PATH, so a
+// stale dev build at ~/.local/bin does not shadow it.
+func (t *SSHTransport) peerDot(ctx context.Context, target string) (string, error) {
+	if dot, ok := t.dots[target]; ok {
+		return dot, nil
+	}
+	dot, err := syncer.ResolvePeerDotPath(ctx, dotexec.NewRunner(false, slog.New(slog.DiscardHandler)), target)
+	if err != nil {
+		return "", err
+	}
+	if t.dots == nil {
+		t.dots = map[string]string{}
+	}
+	t.dots[target] = dot
+	return dot, nil
 }
 
 func (t *SSHTransport) call(ctx context.Context, peer SyncPeer, op string, req serveRequest) (*serveResponse, error) {
@@ -66,7 +89,13 @@ func (t *SSHTransport) call(ctx context.Context, peer SyncPeer, op string, req s
 	}
 	run := t.Run
 	if run == nil {
-		run = sshServe
+		dot, err := t.peerDot(ctx, peer.Target)
+		if err != nil {
+			return nil, fmt.Errorf("ssh %s serve %s: %w", peer.Target, op, err)
+		}
+		run = func(ctx context.Context, target string, serveArgs []string, stdin []byte) ([]byte, error) {
+			return sshServe(ctx, target, dot, serveArgs, stdin)
+		}
 	}
 	out, err := run(ctx, peer.Target, args, body)
 	if err != nil {
@@ -132,8 +161,8 @@ func (t *SSHTransport) Counts(ctx context.Context, peer SyncPeer) (*TableCounts,
 // sshd hands non-interactive shells a minimal PATH that covers neither
 // ~/.local/bin nor the brew prefixes, so the remote command prefixes them —
 // the peer really does need nothing but the dot binary on disk.
-func sshServe(ctx context.Context, target string, serveArgs []string, stdin []byte) ([]byte, error) {
-	remote := `PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" dot`
+func sshServe(ctx context.Context, target, dot string, serveArgs []string, stdin []byte) ([]byte, error) {
+	remote := "exec " + shellQuote(dot)
 	for _, arg := range serveArgs {
 		remote += " " + shellQuote(arg)
 	}
