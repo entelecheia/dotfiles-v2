@@ -206,6 +206,7 @@ const (
 	PeerEventPartialTransfer                            // rsync moved some but not all of a pass; Err carries it
 	PeerEventPeerLacksHandover                          // peer dot predates epochs; Path names its version when known
 	PeerEventReplicaPushFailed                          // the replica push after a complete run failed; Err carries it
+	PeerEventOwnerAliasesRetired                        // both machines record the renamed owner; Path lists the profiles cleared
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -671,6 +672,16 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		// unplanned switch, not this run, so it is reported, not fatal.
 		if err := PushPeerReplica(ctx, runner, cfg); err != nil {
 			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventReplicaPushFailed, Err: err})
+		}
+		// A rename is finished once the peer records the same owner: the
+		// old names retire here so they stop admitting writes (#185).
+		if len(cfg.OwnerAliases) > 0 && NormalizeHostname(remoteStatus.Profile.Owner) == NormalizeHostname(cfg.Owner) {
+			retired, err := RetireOwnerAliases(strings.TrimRight(cfg.LocalPath, "/"), cfg.Owner)
+			if err != nil {
+				return nil, err
+			}
+			cfg.OwnerAliases = nil
+			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerAliasesRetired, Path: strings.Join(retired, ", ")})
 		}
 		if cfg.FencePending {
 			// The first complete run after contact: the fence has done its

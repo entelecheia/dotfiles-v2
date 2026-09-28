@@ -205,3 +205,68 @@ func TestPeerMachineNamesReadsTheStatusDocument(t *testing.T) {
 		t.Fatalf("names = %v, %v", names, err)
 	}
 }
+
+// Scenario A (review): after M5X26 renamed youngs-macbook-pro to m5x26, a
+// rename through the old name on the other Mac must not take the owner.
+func TestRenameOwner_OnlyTheCurrentOwnerIsRenamed(t *testing.T) {
+	root := t.TempDir()
+	peer := seedProfile(t, root, PeerProfile, &LocalConfig{Owner: "m5x26", OwnerAliases: []string{"youngs-macbook-pro"}, OwnerEpoch: 2})
+	if _, err := RenameOwner(root, "youngs-macbook-pro", "m3x23", false); err == nil || !strings.Contains(err.Error(), "no profile") {
+		t.Fatalf("rename through an alias: %v", err)
+	}
+	if got := loadPeerStoreConfig(t, peer); got.Owner != "m5x26" {
+		t.Fatalf("owner changed to %q", got.Owner)
+	}
+	if _, err := RenameOwner(root, "m5x26", "mac", false); err == nil || !strings.Contains(err.Error(), "generic") {
+		t.Fatalf("generic new name accepted: %v", err)
+	}
+}
+
+// Scenario B (review): the other Mac recorded itself with the coordinator's
+// name as an alias (a misused --local-only). Both sides now pass their own
+// guard at equal epochs; the peer's canPush makes the fence and the owner
+// check refuse instead of admitting two coordinators.
+func TestPeerFenceRefusesAPeerThatAlsoPassesItsGuard(t *testing.T) {
+	cfg := &Config{Owner: "a", OwnerEpoch: 3, LocalPath: "/w/", Target: Target{Kind: TargetSSH, Host: "p", Path: "/p"}}
+	remote := &remotePeerStatus{OwnerEpoch: 3, DotVersion: "9.9.9"}
+	remote.Profile.Owner, remote.Profile.OwnerAliases, remote.Profile.CanPush = "b", []string{"a"}, true
+	remote.Profile.WorkspacePath, remote.Profile.Target.Path = "/p", "/w"
+	if _, _, err := peerFence(cfg, remote); err == nil || !strings.Contains(err.Error(), "also passes its own owner guard") {
+		t.Fatalf("fence err = %v", err)
+	}
+	if err := checkRemotePeerOwnerMatch(cfg, remote); err == nil || !strings.Contains(err.Error(), "also passes its own owner guard") {
+		t.Fatalf("owner match err = %v", err)
+	}
+	remote.Profile.CanPush = false
+	if _, _, err := peerFence(cfg, remote); err != nil {
+		t.Fatalf("a half-migrated pair refused: %v", err)
+	}
+}
+
+// Once the peer records the renamed owner, a complete run retires the old
+// names so they stop admitting writes.
+func TestPeerSync_RetiresAliasesOnceBothMachinesAgree(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 2, dotVersion: "9.9.9 (fake)"}, 2)
+	if err := SaveLocalConfig(sb.paths, &LocalConfig{
+		Target: "ssh:fake-peer:" + sb.peer, Owner: sb.owner, OwnerAliases: []string{"old-mac-name"}, OwnerEpoch: 2,
+		Propagation: PropagationPolicy{Create: true, Update: true, Delete: true}, MaxDelete: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sb.cfg.OwnerAliases = []string{"old-mac-name"}
+	var retired string
+	res, err := PeerSync(context.Background(), PeerSyncOptions{
+		Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true,
+		Progress: func(e PeerEvent) {
+			if e.Kind == PeerEventOwnerAliasesRetired {
+				retired = e.Path
+			}
+		},
+	})
+	if err != nil || !res.Complete {
+		t.Fatalf("PeerSync: %+v %v", res, err)
+	}
+	if got := loadPeerStoreConfig(t, sb.paths); got.OwnerAliases != nil || retired != "peer" {
+		t.Fatalf("aliases %v, retired event %q", got.OwnerAliases, retired)
+	}
+}

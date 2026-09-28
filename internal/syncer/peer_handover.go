@@ -206,6 +206,14 @@ func peerFence(cfg *Config, remote *remotePeerStatus) (demote, legacy bool, err 
 	case cfg.OwnerEpoch > remote.OwnerEpoch:
 		return false, false, nil
 	}
+	// At equal epochs only one machine may pass its owner guard. The peer's
+	// canPush is its own verdict, so names and aliases that happen to match
+	// cannot admit a second coordinator.
+	if remote.Profile.CanPush {
+		return false, false, fmt.Errorf(
+			"peer fence: equal owner epochs (%d) and the peer also passes its own owner guard (its owner %q, local %q); both sides refuse — set one coordinator with `dot sync owner --profile=peer --set <machine>` on both machines",
+			cfg.OwnerEpoch, remote.Profile.Owner, cfg.Owner)
+	}
 	if !sameOwner(cfg.Owner, cfg.OwnerAliases, remote.Profile.Owner, remote.Profile.OwnerAliases) {
 		return false, false, fmt.Errorf(
 			"peer fence: equal owner epochs (%d) with different owners (local %q, remote %q); both sides refuse — pick one coordinator and set it with `dot sync owner --profile=peer --set <machine>`",

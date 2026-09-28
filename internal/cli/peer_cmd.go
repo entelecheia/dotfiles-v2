@@ -170,6 +170,8 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 				version = "unknown (pre-handover release)"
 			}
 			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", version)
+		case syncer.PeerEventOwnerAliasesRetired:
+			p.Success("both machines record the renamed owner; earlier names retired in: %s", e.Path)
 		case syncer.PeerEventReplicaPushFailed:
 			p.Warn("replica push failed: %v", e.Err)
 			p.Line("  The run itself is complete; the next unplanned switch may lack a fresh replica.")

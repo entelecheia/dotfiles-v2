@@ -528,6 +528,9 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 	if strings.ContainsAny(oldName, "'\"\n") {
 		return nil, fmt.Errorf("owner rename: the old name %q holds a quote; record the owner with dot sync owner --set instead", oldName)
 	}
+	if genericMachineNames[NormalizeHostname(newName)] {
+		return nil, fmt.Errorf("owner rename: %q is a generic name many Macs answer to; give the Mac a specific name first", newName)
+	}
 	if NormalizeHostname(oldName) == NormalizeHostname(newName) {
 		return nil, fmt.Errorf("owner rename: %q and %q are the same name", oldName, newName)
 	}
@@ -545,7 +548,9 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 		if err != nil {
 			return nil, err
 		}
-		if !ok || local == nil || !ownersMatch(local.Owner, local.OwnerAliases, oldName) {
+		// Only the current owner is renamed. An alias names a machine as it
+		// was; renaming through it would let a second Mac take the owner.
+		if !ok || local == nil || !ownersMatch(local.Owner, nil, oldName) {
 			continue
 		}
 		seen := map[string]bool{NormalizeHostname(newName): true}
@@ -570,6 +575,37 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 		return nil, fmt.Errorf("owner rename: no profile under %s is owned by %q", filepath.Join(workspaceRoot, ".dotfiles"), oldName)
 	}
 	return result, nil
+}
+
+// RetireOwnerAliases drops the recorded earlier names from every profile
+// store of the workspace owned by owner. A complete peer run calls it once
+// the peer records the same owner: both machines are migrated and the old
+// names must stop admitting writes. It returns the profiles it changed.
+func RetireOwnerAliases(workspaceRoot, owner string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, ".dotfiles"))
+	if err != nil {
+		return nil, err
+	}
+	var retired []string
+	for _, entry := range entries {
+		if !entry.IsDir() || ValidateProfile(entry.Name()) != nil {
+			continue
+		}
+		paths := ResolveLocalPathsForProfile(workspaceRoot, entry.Name())
+		local, ok, err := LoadLocalConfig(paths)
+		if err != nil {
+			return retired, err
+		}
+		if !ok || local == nil || len(local.OwnerAliases) == 0 || !ownersMatch(local.Owner, nil, owner) {
+			continue
+		}
+		local.OwnerAliases = nil
+		if err := SaveLocalConfig(paths, local); err != nil {
+			return retired, err
+		}
+		retired = append(retired, entry.Name())
+	}
+	return retired, nil
 }
 
 // RsyncOutcome names what EnsureRsync did about a missing rsync.
