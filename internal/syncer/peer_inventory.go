@@ -211,8 +211,12 @@ func probePeerDot(ctx context.Context, runner *exec.Runner, host, pin string) (*
 	if err != nil {
 		// The command is the whole probe script; say what failed instead.
 		var cmdErr *exec.CmdError
+		// %w keeps ssh's exit status for the process exit code.
 		if errors.As(err, &cmdErr) {
-			return nil, fmt.Errorf("peer dot probe on %s: %v: %s", host, cmdErr.Err, cmdErr.Details())
+			if details := cmdErr.Details(); details != "" {
+				return nil, fmt.Errorf("peer dot probe on %s: %w: %s", host, cmdErr.Err, details)
+			}
+			return nil, fmt.Errorf("peer dot probe on %s: %w", host, cmdErr.Err)
 		}
 		return nil, fmt.Errorf("peer dot probe on %s: %w", host, err)
 	}
