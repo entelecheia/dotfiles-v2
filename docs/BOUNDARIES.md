@@ -264,6 +264,13 @@ tool):
   default `realign`, `--dry-run`) writes nothing; linked worktrees and
   locked, staged, conflicting or in-progress repositories are never
   touched.
+- host files the operator lists under `host_merge` in the peer config
+  (for example `~/.claude.json`), on both machines: before the additive
+  host-path pass of a two-way `dot peer sync`, the entries of the listed
+  top-level JSON keys from both copies are merged into the newer copy,
+  which is written here (atomic rename, mode kept) and pushed to the peer
+  with its mtime. Other keys are the newer copy's; an unlisted file is only
+  ever copied whole, as before.
 
 ## dotfiles-v2 Must Not Write Directly
 
