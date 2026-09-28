@@ -7,6 +7,8 @@ Check that a peer sync would work before running one
 Probe everything that silently breaks a peer transfer.
 
 Checks, and why each exists:
+  local rsync    a non-login shell finds macOS openrsync before Homebrew's
+                 3.x; openrsync escapes non-ASCII names in the inventory
   reachability   an offline peer must be a clean no-op, not a failure
   remote rsync   macOS 26 ships openrsync, which cannot receive -aHAX from a
                  3.x client — and --dry-run never surfaces it, because a dry
