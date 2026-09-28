@@ -18,15 +18,16 @@ peer sync that finds the peer recording the new owner, once this Mac answers
 to the new name. At equal epochs the peer fence refuses a peer that passes
 its own owner guard. When the peer cannot be reached, the rename runs only
 on a Mac that still answers to <old> (or with --local-only). The epoch,
-targets and baselines are untouched, so no run plans a deletion. It refuses when this Mac answers to neither name, when
-the peer (or the peer target's host) answers to either one, and, once this
-Mac no longer answers to <old>, unless it runs the peer scheduler and the
-peer, asked then, runs none (without a peer, or a peer that cannot answer,
-only --local-only renames it): moving ownership between the Macs is --set or
-dot peer handover. --local-only skips these checks; it is the step the
-command runs on the peer. A retry after a peer failure goes on to the peer
-(unless <old> was a generic name, which is not kept: then run the printed
---local-only command there).
+targets and baselines are untouched, so no run plans a deletion. It refuses
+when this Mac answers to neither name, when the peer (or the peer target's
+host) answers to either one, and, once this Mac no longer answers to <old>,
+unless it runs the peer scheduler and the peer, asked then, runs none
+(without a peer, or a peer that cannot answer, only --local-only renames
+it): moving ownership between the Macs is --set or dot peer handover.
+--local-only skips these checks; it is the step the command runs on the
+peer. A retry after a peer failure goes on to the peer (unless <old> was a
+generic name, which is not kept: then run the printed --local-only command
+there).
 --dry-run shows the change without writing anything.
 
 With --profile=peer, a --set or --clear that leaves this Mac without the
