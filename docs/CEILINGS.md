@@ -181,7 +181,10 @@ retired from `LocalConfig` later stays in the file until it is deleted
 explicitly, and a new key that depends on a known one (the way
 `owner_aliases` depends on `owner`) is carried unchanged when an older dot
 changes the known key, so the newer dot must check it against that key on
-load. Releases from before #196 drop every unknown key.
+load. A top-level merge key (`<<`) is not carried: the known keys it set
+are written by the struct, and an unknown key it alone supplied is lost
+(the anchored source key stays). Releases from before #196 drop every
+unknown key.
 
 Replace this when a struct-valued key gains a sub-key that must survive an
 older dot's save, or when a key is retired.

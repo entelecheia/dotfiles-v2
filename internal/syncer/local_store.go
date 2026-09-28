@@ -601,7 +601,10 @@ func keepUnknownConfigKeys(path string, data []byte) ([]byte, error) {
 	known := localConfigKeys()
 	kept := false
 	for i := 0; i+1 < len(was.Content[0].Content); i += 2 {
-		if key := was.Content[0].Content[i]; !known[key.Value] {
+		// A merge key (<<) is not a key of its own: what it sets for the
+		// struct was loaded and is written, and carrying it would bring a
+		// cleared key back on the next load.
+		if key := was.Content[0].Content[i]; !known[key.Value] && key.ShortTag() != "!!merge" {
 			now.Content[0].Content = append(now.Content[0].Content, resolveYAMLAliases(key), resolveYAMLAliases(was.Content[0].Content[i+1]))
 			kept = true
 		}

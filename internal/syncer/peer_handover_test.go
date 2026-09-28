@@ -733,7 +733,22 @@ func TestPeerHandover(t *testing.T) {
 	plist := sb.plantPeerPlist(t)
 
 	// The peer's release is older than this one: said before it adopts
-	// (#196).
+	// (#196). A dry run advises the upgrade; a real run, which goes on to
+	// adopt, names the repair on the peer.
+	var dry []string
+	if _, err := PeerHandover(context.Background(), PeerHandoverOptions{
+		Config:          sb.cfg,
+		Runner:          peerScheduleRunner(false),
+		Probe:           peerScheduleRunner(false),
+		LocalDotVersion: "99.0.0 (local)",
+		DryRun:          true,
+		Warn:            func(msg string) { dry = append(dry, msg) },
+	}); err != nil {
+		t.Fatalf("PeerHandover --dry-run: %v", err)
+	}
+	if len(dry) != 1 || !strings.HasSuffix(dry[0], "upgrade dot on "+sb.cfg.Target.Host+" before handing over") {
+		t.Errorf("dry-run warnings = %q", dry)
+	}
 	var warned []string
 	res, err := PeerHandover(context.Background(), PeerHandoverOptions{
 		Config:          sb.cfg,
@@ -755,7 +770,8 @@ func TestPeerHandover(t *testing.T) {
 	if res.NewOwner != "peer-mac" || res.Epoch != 2 {
 		t.Fatalf("result = %+v, want peer-mac/2", res)
 	}
-	if len(warned) != 1 || !strings.Contains(warned[0], "9.9.9") || !strings.Contains(warned[0], "older than this machine's 99.0.0") {
+	if len(warned) != 1 || !strings.Contains(warned[0], "9.9.9") || !strings.Contains(warned[0], "older than this machine's 99.0.0") ||
+		!strings.Contains(warned[0], "run `dot peer setup` there") {
 		t.Errorf("warnings = %q", warned)
 	}
 

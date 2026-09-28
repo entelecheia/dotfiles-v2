@@ -562,6 +562,32 @@ func TestSaveLocalConfigResolvesAliasesInKeptKeys(t *testing.T) {
 	}
 }
 
+// A top-level merge key is not carried: what it set was loaded into the
+// struct, so a key it supplied and the operator cleared stays cleared
+// (#200 review).
+func TestSaveLocalConfigDropsAMergeKey(t *testing.T) {
+	paths := ResolveLocalPathsForProfile(t.TempDir(), PeerProfile)
+	if err := os.MkdirAll(paths.StoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	on := "x-base: &b {owner_aliases: [old]}\nowner: a\n<<: *b\n"
+	if err := os.WriteFile(paths.ConfigFile, []byte(on), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.OwnerAliases = nil
+	if err := SaveLocalConfig(paths, cfg); err != nil {
+		t.Fatal(err)
+	}
+	again, _, err := LoadLocalConfig(paths)
+	if body, _ := os.ReadFile(paths.ConfigFile); err != nil || len(again.OwnerAliases) != 0 || !strings.Contains(string(body), "x-base:") {
+		t.Fatalf("reload = %+v, %v, want no aliases and x-base kept:\n%s", again, err, body)
+	}
+}
+
 // Every LocalConfig field has an explicit yaml name, so the keys it owns
 // are exactly what it marshals (an untagged field would be carried twice).
 func TestLocalConfigKeysMatchWhatItMarshals(t *testing.T) {
