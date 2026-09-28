@@ -158,9 +158,12 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 	// that made them, so the peer's timestamps are its time as coordinator,
 	// not stale coordinator activity (#182).
 	role := peerRole(cfg)
-	if role == "coordinator" {
+	switch {
+	case role == "coordinator":
 		p.KV("Role", "coordinator")
-	} else {
+	case strings.TrimSpace(cfg.Owner) == "":
+		p.KV("Role", "peer; no coordinator set (dot sync owner --profile=peer --set <machine>)")
+	default:
 		p.KV("Role", "peer; syncs run on the coordinator "+cfg.Owner)
 	}
 	scheduler := snapshot.State
@@ -182,7 +185,11 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 		if st.LastPush.After(last) {
 			last = st.LastPush
 		}
-		p.KV("Last run here", formatLastSync(last)+" (while this Mac was the coordinator)")
+		if last.IsZero() {
+			p.KV("Last run here", formatLastSync(last))
+		} else {
+			p.KV("Last run here", formatLastSync(last)+" (while this Mac was the coordinator)")
+		}
 	}
 	if !st.LastHeld.IsZero() {
 		// A held run transferred files but left deletions pending, so the

@@ -932,7 +932,7 @@ type PeerDoctorReport struct {
 	Disk              string
 	DiskKnown         bool
 	// Local and Peer are both machines' facts and Checks their comparison
-	// (#182); Peer stays nil, with PeerFactsErr, when the peer cannot say.
+	// (#182); both stay nil when the peer cannot say (PeerFactsErr says why).
 	Local        *PeerSideFacts
 	Peer         *PeerSideFacts
 	PeerFactsErr error
@@ -951,7 +951,6 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 	if exe, err := peerExecutable(); err == nil {
 		report.LocalDotPath = exe
 	}
-	report.Local = LocalPeerSideFacts(ctx, runner, cfg, opts.LocalDotVersion)
 
 	// The local client is checked first: it needs no peer, and a run on this
 	// machine fails with it no matter how healthy the peer is.
@@ -1009,6 +1008,8 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 		report.Peer, report.PeerFactsErr = remotePeerSideFacts(ctx, runner, cfg)
 	}
 	if report.Peer != nil {
+		// Only now: the NFD count walks the whole workspace.
+		report.Local = LocalPeerSideFacts(ctx, runner, cfg, opts.LocalDotVersion)
 		here := PreferredMachineName()
 		if here == "" {
 			here = "this machine"

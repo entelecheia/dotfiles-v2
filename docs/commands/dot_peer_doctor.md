@@ -21,10 +21,12 @@ Checks, and why each exists:
                  verified over ssh — a reminder, not a failure
 
 Then both machines are compared, each check with the command that fixes it
-and the Mac to run it on: rsync on each side; names not in NFD (the peer
-inventory stops on them); which machine is the coordinator and their owner
-epochs; a scheduler only on the coordinator; the takeover replica on the
-other Mac; max_delete, propagation and filter files that differ.
+and the Mac to run it on: rsync on each side; names not in NFD (an
+NFD-marked coordinator's diff and dry run stop on the other Mac's); which
+machine is the coordinator and their owner epochs (a takeover's pending fence
+settles at the lower epoch's next run); a scheduler only on the coordinator;
+a takeover replica on the other Mac that a takeover would accept; max_delete,
+propagation and filter files that differ.
 
 ```
 dot peer doctor [flags]

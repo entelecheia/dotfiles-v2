@@ -42,8 +42,10 @@ func TestEvaluatePeerSides(t *testing.T) {
 
 	local, peer = doctorFacts()
 	peer.Coordinator, peer.Scheduler = true, true
-	peer.NFDMarked, peer.NonNFD, peer.NonNFDSample = true, 16, []string{"sites/x/한글.md"}
-	peer.MaxDelete, peer.Filters = 2000, map[string]string{"exclude.txt": "b"}
+	// The reunion: the marked coordinator's inventory stops on the peer's names.
+	local.NFDMarked, local.NonNFD, local.NonNFDSample = true, 1, []string{"a.md"}
+	peer.NonNFD, peer.NonNFDSample = 16, []string{"sites/x/한글.md"}
+	peer.MaxDelete, peer.Filters = 2000, map[string]string{"exclude.txt": "b", "allow.txt": "c"}
 	peer.RsyncError = "local rsync is openrsync or 2.x"
 	peer.Replica = nil
 	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
@@ -51,13 +53,50 @@ func TestEvaluatePeerSides(t *testing.T) {
 		{"roles", DoctorFail, "dot sync owner --profile=peer --set"},
 		{"nfd", DoctorFail, "on m3x23: dot sync names normalize --profile=peer"},
 		{"nfd", DoctorWarn, "on m5x26: dot sync names normalize --profile=peer"},
+		{"nfd", DoctorWarn, "on m3x23: dot sync names normalize --profile=peer"},
 		{"rsync", DoctorFail, "on m3x23: brew install rsync"},
 		{"config", DoctorWarn, ""},
 	} {
-		c := checkFor(checks, want.name, want.level)
-		if c == nil || !strings.Contains(c.Fix, want.fix) {
+		found := false
+		for _, c := range checks {
+			found = found || c.Name == want.name && c.Level == want.level && strings.Contains(c.Fix, want.fix)
+		}
+		if !found {
 			t.Errorf("no %s/%s check with fix %q in %+v", want.name, want.level, want.fix, checks)
 		}
+	}
+
+	// Only the coordinator's marker stops an inventory: a marked
+	// non-coordinator's own names are a warning.
+	local, peer = doctorFacts()
+	peer.NFDMarked, peer.NonNFD = true, 3
+	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
+	if c := checkFor(checks, "nfd", DoctorFail); c != nil {
+		t.Errorf("a marked non-coordinator's names failed: %+v", c)
+	}
+
+	// A takeover's pending fence is the fence's to settle, not two
+	// coordinators: the lower epoch demotes at its next run.
+	local, peer = doctorFacts()
+	peer.Coordinator, peer.Scheduler, peer.OwnerEpoch, peer.FencePending = true, true, 3, true
+	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
+	if c := checkFor(checks, "roles", DoctorFail); c != nil {
+		t.Errorf("a pending fence failed: %+v", c)
+	}
+	if c := checkFor(checks, "roles", DoctorWarn); c == nil || c.Fix != "on m5x26: dot peer sync (its fence demotes it)" {
+		t.Errorf("pending fence not explained: %+v", checks)
+	}
+
+	// A replica the takeover would refuse, or one the peer staged itself.
+	local, peer = doctorFacts()
+	peer.Replica, peer.ReplicaError = nil, "peer replica: exclude.txt sha256 mismatch"
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "replica", DoctorWarn); c == nil || !strings.Contains(c.Detail, "sha256 mismatch") {
+		t.Errorf("refused replica passed")
+	}
+	local, peer = doctorFacts()
+	peer.MachineNames, peer.Replica.Coordinator = []string{"m3x23"}, "m3x23"
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "replica", DoctorWarn); c == nil {
+		t.Errorf("self-staged replica passed")
 	}
 
 	local, peer = doctorFacts()
@@ -75,7 +114,7 @@ func TestEvaluatePeerSides(t *testing.T) {
 func TestPeerDoctor_ComparesBothMachines(t *testing.T) {
 	cfg, _ := peerDryRunSandbox(t)
 	_, peer := doctorFacts()
-	peer.Coordinator, peer.Scheduler = true, true
+	peer.Coordinator, peer.Scheduler, peer.OwnerEpoch = true, true, cfg.OwnerEpoch
 	doc, err := json.Marshal(peer)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +122,7 @@ func TestPeerDoctor_ComparesBothMachines(t *testing.T) {
 	dot := filepath.Join(t.TempDir(), "dot")
 	writeStub(t, dot, "#!/bin/sh\n"+
 		"[ \"$1\" = --version ] && { echo 'dot version 9.9.9 (fake)'; exit 0; }\n"+
-		"[ \"$1 $2 $3\" = 'peer doctor --self' ] && { printf '%s\\n' '"+string(doc)+"'; exit 0; }\n"+
+		"[ \"$*\" = 'peer doctor --self' ] && { printf '%s\\n' '"+string(doc)+"'; exit 0; }\n"+
 		"exit 1\n")
 	useRemoteDotCandidates(t, dot)
 	report, err := PeerDoctor(context.Background(), PeerDoctorOptions{Config: cfg, Probe: peerScheduleRunner(false), LocalDotVersion: "9.9.9 (fake)"})

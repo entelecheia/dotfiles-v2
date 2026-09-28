@@ -307,15 +307,16 @@ on a laptop.`,
 			}
 			// Deletions are quarantined, not removed; say how many, so the
 			// workspace entries are not lost among the host-path ones (#182).
-			verb := "quarantined"
+			verb, dir := "quarantined", ".sync-conflicts/"+res.ConflictStamp+"/"
 			if dryRun {
-				verb = "would quarantine"
+				// A dry run creates no stamp directory.
+				verb, dir = "would quarantine", ".sync-conflicts/"
 			}
 			if res.QuarantinedHere > 0 {
-				p.Line("%s %d deletion(s) from the peer under .sync-conflicts/%s/ here", verb, res.QuarantinedHere, res.ConflictStamp)
+				p.Line("%s %d deletion(s) from the peer under %s here", verb, res.QuarantinedHere, dir)
 			}
 			if res.QuarantinedOnPeer > 0 {
-				p.Line("%s %d deletion(s) from here under .sync-conflicts/%s/ on the peer", verb, res.QuarantinedOnPeer, res.ConflictStamp)
+				p.Line("%s %d deletion(s) from here under %s on the peer", verb, res.QuarantinedOnPeer, dir)
 			}
 			p.Line("Conflicting edits keep both versions; list them with:")
 			p.Line("  dot sync conflicts --profile=%s", PeerProfile)
