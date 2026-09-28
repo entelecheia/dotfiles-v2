@@ -142,7 +142,7 @@ func TestSyncOwnerRenameNeedsTheOwnersScheduler(t *testing.T) {
 	peerSays("running")
 	refused("both claim the scheduler", "both Macs claim")
 	peerSays("")
-	refused("peer scheduler unknown", "both Macs claim")
+	refused("peer scheduler unknown", "could not report its peer scheduler")
 
 	peerSays("not installed")
 	if _, _, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err != nil {
@@ -284,27 +284,46 @@ func TestSyncOwnerRenameTreatsAnUnsupportedPeerSchedulerAsNone(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("the scheduler proof needs launchd here")
 	}
-	f := newSyncCLIFixture(t)
 	self := syncer.PreferredMachineName()
 	if self == "" {
 		t.Skip("no machine name")
 	}
-	status := `{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"owner":"gone-mac","machineNames":["other-box"],"workspacePath":"/remote/work","target":{"path":"` + f.local + `"}},"job":{"state":"unsupported: peer scheduler requires macOS launchd"}}`
-	bin := t.TempDir()
-	writeCLITestFile(t, filepath.Join(bin, "ssh"), "#!/bin/sh\ncase \"$*\" in\n"+
-		"  *\"list dot candidates\"*) printf '/fake/dot\\tdot version 9.9.9 (fake)\\n' ;;\n"+
-		"  *\"peer status --json\"*) printf '%s\\n' '"+status+"' ;;\n"+
-		"  *) exit 0 ;;\nesac\n")
-	if err := os.Chmod(filepath.Join(bin, "ssh"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	for _, profile := range []string{"sync", "peer"} {
-		writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", profile, "config.yaml"),
-			"target: ssh:peer-alias:/remote/work\nowner: gone-mac\npropagation:\n  create: true\n  update: true\n  delete: true\n")
-	}
-	writeCLITestFile(t, filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist"), "<plist/>")
-	if _, errOut, err := runDotForTest("sync", "owner", "--rename", "gone-mac", self); err != nil {
-		t.Fatalf("%v\n%s", err, errOut)
+	for _, tc := range []struct {
+		name, state, old, new, wantErr, wantOut string
+	}{
+		{"unsupported is none", "unsupported: peer scheduler requires macOS launchd", "gone-mac", self, "", ""},
+		// Unknown is no answer: it fails closed, and says so.
+		{"unknown refuses", "unknown: permission denied", "gone-mac", self, "could not report its peer scheduler", ""},
+		// Before this Mac's host rename, <new> is checked only against the
+		// other Mac's current names.
+		{"new not yet this Mac's", "not installed", self, "renamed-mac", "", "checked only against the other Mac's current names"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSyncCLIFixture(t)
+			status := `{"schemaVersion":1,"kind":"peer","profile":{"configured":true,"owner":"` + tc.old + `","machineNames":["other-box"],"workspacePath":"/remote/work","target":{"path":"` + f.local + `"}},"job":{"state":"` + tc.state + `"}}`
+			bin := t.TempDir()
+			writeCLITestFile(t, filepath.Join(bin, "ssh"), "#!/bin/sh\ncase \"$*\" in\n"+
+				"  *\"list dot candidates\"*) printf '/fake/dot\\tdot version 9.9.9 (fake)\\n' ;;\n"+
+				"  *\"peer status --json\"*) printf '%s\\n' '"+status+"' ;;\n"+
+				"  *) exit 0 ;;\nesac\n")
+			if err := os.Chmod(filepath.Join(bin, "ssh"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			for _, profile := range []string{"sync", "peer"} {
+				writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", profile, "config.yaml"),
+					"target: ssh:peer-alias:/remote/work\nowner: "+tc.old+"\npropagation:\n  create: true\n  update: true\n  delete: true\n")
+			}
+			writeCLITestFile(t, filepath.Join(f.home, "Library", "LaunchAgents", "com.dotfiles.peer.plist"), "<plist/>")
+			out, errOut, err := runDotForTest("sync", "owner", "--rename", tc.old, tc.new)
+			switch {
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("%v\n%s", err, errOut)
+			case !strings.Contains(out+errOut, tc.wantOut):
+				t.Fatalf("output lacks %q:\n%s%s", tc.wantOut, out, errOut)
+			}
+		})
 	}
 }

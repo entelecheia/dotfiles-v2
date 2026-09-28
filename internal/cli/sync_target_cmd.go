@@ -325,6 +325,8 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 				return fmt.Errorf("this machine no longer answers to %q, and the scheduler proof of ownership needs launchd (macOS); run with --local-only on the owner of each profile", oldName)
 			case !runsPeerScheduler(bs):
 				return fmt.Errorf("this machine no longer answers to %q and does not run the peer scheduler, so it cannot be shown to be the owner being renamed; run --rename on the coordinator (the Mac with the peer scheduler), or, when the mirror and the peer have different owners, --local-only on the owner of each profile", oldName)
+			case peerView.Scheduler == "" || strings.HasPrefix(peerView.Scheduler, "unknown"):
+				return fmt.Errorf("the peer could not report its peer scheduler (%q), so neither Mac can be shown to be the owner being renamed; check it there with dot peer status, or run with --local-only on the owner", peerView.Scheduler)
 			case peerView.Scheduler != syncer.SchedulerNotInstalled.String() && !strings.HasPrefix(peerView.Scheduler, "unsupported"):
 				// A peer without launchd (unsupported) runs no scheduler.
 				return fmt.Errorf("both Macs claim the owner's peer scheduler (the peer reports %q), so neither can be shown to be the owner being renamed; remove the stale one with dot peer setup --off there, or run with --local-only on the owner", peerView.Scheduler)
@@ -374,6 +376,11 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 			p.Line("  On the other Mac, when reachable: %s", manual)
 		}
 		return nil
+	}
+	if !answersTo(names, newName) {
+		// Before this Mac's host rename, <new> was checked only against the
+		// other Mac's current names, not the one it may get next.
+		p.Warn("%q was checked only against the other Mac's current names: make sure it is not the name the other Mac will get", newName)
 	}
 	host := peer.Config.Target.Host
 	if dryRun {
@@ -473,7 +480,11 @@ func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
 	}
 	switch {
 	case opts.DryRun:
-		p.Line("dry-run: would set the owner of profile %q to %q", cfg.Profile, owner)
+		if owner == "" {
+			p.Line("dry-run: would clear the owner of profile %q", cfg.Profile)
+		} else {
+			p.Line("dry-run: would set the owner of profile %q to %q", cfg.Profile, owner)
+		}
 	case owner == "":
 		p.Success("owner cleared for profile %q (any machine may push)", cfg.Profile)
 	default:
