@@ -453,3 +453,61 @@ func TestPeerGitRescue_TieFollowsTheChildren(t *testing.T) {
 		})
 	}
 }
+
+// A parent counts on a child's rescue only when the rescue stays local: a
+// push can fail after the parent has moved, and the parent would record a
+// commit the child never reaches (#189 round 18).
+func TestPeerGitRescue_ParentCountsOnlyOnALocalRescue(t *testing.T) {
+	for _, noPush := range []bool{true, false} {
+		t.Run(fmt.Sprintf("noPush=%v", noPush), func(t *testing.T) {
+			tmp := t.TempDir()
+			subSrc := filepath.Join(tmp, "sub-src")
+			gitStateInitRepo(t, subSrc)
+			s0 := gitStateCommitFile(t, subSrc, "a.txt", "0\n", "s0")
+			origin := filepath.Join(tmp, "origin")
+			gitStateInitRepo(t, origin)
+			gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+			gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+			p0 := gitStateHead(t, origin)
+			su := gitStateCommitFile(t, subSrc, "a.txt", "u\n", "su")
+			gitStateRun_(t, origin, "-C", "sub", "fetch", "-q")
+			gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", su)
+			gitStateRun_(t, origin, "add", "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump sub only")
+			p1 := gitStateHead(t, origin)
+
+			ws := filepath.Join(tmp, "ws")
+			gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+			gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+			gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+			sub := filepath.Join(ws, "sub")
+			// Diverged: one local commit on main, su's files delivered.
+			gitStateRun_(t, sub, "checkout", "-q", "-B", "main", s0)
+			gitStateRun_(t, sub, "branch", "-q", "--set-upstream-to=origin/main")
+			local := gitStateCommitFile(t, sub, "docs.md", "mine\n", "local docs")
+			if err := os.Remove(filepath.Join(sub, "docs.md")); err != nil {
+				t.Fatal(err)
+			}
+			gitStateRewriteTracked(t, filepath.Join(sub, "a.txt"), "u\n")
+			gitStateRun_(t, sub, "remote", "set-url", "--push", "origin", filepath.Join(tmp, "nowhere"))
+
+			res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Rescue: true, NoPush: noPush, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child := gitStateReport(t, res, "sub")
+			if noPush {
+				if gitStateHead(t, ws) != p1 || gitStateHead(t, sub) != su {
+					t.Fatalf("local rescue: parent %s child %s (%+v), want p1 and su", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)), child)
+				}
+			} else if gitStateHead(t, ws) != p0 || gitStateHead(t, sub) != local || child.Status != GitRepoUnresolvable {
+				t.Fatalf("failed push: parent %s child %s (%+v), want p0, the local commit, unresolvable", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)), child)
+			}
+			// "<" lists a commit the parent records that the child lacks.
+			if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "  <") {
+				t.Fatalf("the parent records a commit the child did not take:\n%s", log)
+			}
+		})
+	}
+}

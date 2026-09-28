@@ -186,8 +186,10 @@ type gitStateRun struct {
 	// compares (gitlinks and .gitmodules are left out), so a child scored
 	// for its parent's question is not scored again in its own turn.
 	diffs map[string]int
-	// childTarget's answers by child and the gitlink asked about.
+	// childTarget's answers by child and the gitlink asked about, and the
+	// gitlinks each commit's tree records.
 	targets map[string]childAnswer
+	links   map[string][]gitlinkEntry
 }
 
 // gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
@@ -599,7 +601,14 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 	}
 	switch {
 	case ev.split:
-		return pool, fmt.Sprintf("children are at %d of %d differing gitlinks", ev.best, ev.decided) + note
+		var why []string
+		if ev.decided > 0 {
+			why = append(why, fmt.Sprintf("children are at %d of %d differing gitlinks", ev.best, ev.decided))
+		}
+		if len(ev.behind) > 0 {
+			why = append(why, "not reached: "+strings.Join(ev.behind, ", "))
+		}
+		return pool, strings.Join(why, "; ") + note
 	case note != "":
 		return pool, "children cannot tell" + note
 	}
@@ -625,8 +634,9 @@ type tieEvidence struct {
 // parent past a bump the child never takes, and a later commit -a would
 // record it reverted; the same holds for a submodule it adds whose checkout
 // was never delivered, and for a commit the child lacks while its files, or
-// a run that leaves it alone, hold it elsewhere. With withHead, tied[0] is HEAD, which such a record never
-// drops: the others are dropped, and with none left HEAD alone is the pool.
+// a run that leaves it alone, hold it elsewhere. With withHead, tied[0] is
+// HEAD, which such a record never drops: the others are dropped, and with
+// none left HEAD alone is the pool.
 // Without it (the parent's own content needs a move) they are only a last
 // resort. The rest are scored by how many gitlinks name exactly where their
 // child is.
@@ -796,6 +806,11 @@ func (r *gitStateRun) childTurn(ctx context.Context, abs, gitlink string) (strin
 	r.classify(ctx, abs, gitdir, gitlink, rep)
 	if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
 		r.planRescue(ctx, abs, rep)
+		// A rescue that pushes can fail on the network after the parent has
+		// moved, so the parent counts only on one that stays local.
+		if rep.RescueRemote != "" {
+			return rep.Head, rep.HeadDiffs == 0, true, ""
+		}
 	}
 	switch {
 	case rep.Head == "":
@@ -1148,6 +1163,10 @@ type gitlinkEntry struct {
 // mode 160000 entries, at any depth within this repo (ls-tree does not cross
 // into submodules).
 func (r *gitStateRun) childGitlinks(ctx context.Context, abs, rev string) ([]gitlinkEntry, error) {
+	key := abs + "\x00" + rev
+	if entries, ok := r.links[key]; ok {
+		return entries, nil
+	}
 	out, err := r.read(ctx, abs, "ls-tree", "-r", "-z", rev)
 	if err != nil {
 		return nil, err
@@ -1163,6 +1182,12 @@ func (r *gitStateRun) childGitlinks(ctx context.Context, abs, rev string) ([]git
 			continue
 		}
 		entries = append(entries, gitlinkEntry{path: string(path), sha: string(fields[2])})
+	}
+	if isCommitID(rev) { // a commit's tree never changes; HEAD does
+		if r.links == nil {
+			r.links = map[string][]gitlinkEntry{}
+		}
+		r.links[key] = entries
 	}
 	return entries, nil
 }
