@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	osexec "os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -54,6 +56,80 @@ func RemoteRsyncPath(ctx context.Context, runner *exec.Runner, host string) (str
 	}
 	return "", fmt.Errorf("peer %s only offers openrsync/2.x (%q), which cannot receive -aHAX; install rsync 3.x there (brew install rsync)",
 		host, firstLine(lastVer))
+}
+
+// localRsyncCandidates are probed in order by LocalRsyncPath. Tests swap them
+// for fixtures; production never changes them.
+var localRsyncCandidates = []string{"rsync", "/opt/homebrew/bin/rsync", "/usr/local/bin/rsync"}
+
+// LocalRsyncPath resolves the local rsync client a peer run must use and
+// returns its absolute path and version banner.
+//
+// The trap RemoteRsyncPath navigates exists on this side too: a non-login
+// shell (an ssh command, `zsh -l -s` fed by a pipe, a plain script) puts
+// /usr/bin ahead of Homebrew, so bare `rsync` is openrsync on macOS 26 even
+// with rsync 3.x installed. openrsync escapes non-ASCII names in --out-format
+// as \#ooo, and the inventory then rejected valid NFD names as unnormalized
+// (#175). Every local invocation of a peer run uses the path returned here.
+func LocalRsyncPath(ctx context.Context, runner *exec.Runner) (string, string, error) {
+	var rejected []string
+	seen := map[string]bool{}
+	for _, cand := range localRsyncCandidates {
+		path := cand
+		if !filepath.IsAbs(path) {
+			found, err := osexec.LookPath(cand)
+			if err != nil {
+				continue
+			}
+			if path, err = filepath.Abs(found); err != nil {
+				continue
+			}
+		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		res, err := runner.RunQuery(ctx, path, "--version")
+		if err != nil {
+			continue
+		}
+		ver := strings.TrimSpace(res.Stdout)
+		if remoteRsyncUsable(ver) {
+			return path, firstLine(ver), nil
+		}
+		rejected = append(rejected, fmt.Sprintf("%s (%s)", path, strings.ReplaceAll(ver, "\n", ", ")))
+	}
+	if len(rejected) == 0 {
+		return "", "", fmt.Errorf("no local rsync found (tried %s); install rsync 3.x (brew install rsync)", strings.Join(localRsyncCandidates, ", "))
+	}
+	return "", "", fmt.Errorf("local rsync is openrsync or 2.x: %s; peer sync needs rsync 3.x (brew install rsync)", strings.Join(rejected, "; "))
+}
+
+// rsyncBin is the local rsync client for this run: the binary a peer run
+// resolved and verified, else the PATH lookup made when the config was
+// resolved, else bare "rsync".
+func (c *Config) rsyncBin() string {
+	if c != nil && c.RsyncPath != "" {
+		return c.RsyncPath
+	}
+	return "rsync"
+}
+
+// resolvePeerRsync pins both rsync ends of a peer run: the local client
+// (absolute path, 3.x) and the remote --rsync-path. Both fail before any
+// transfer.
+func resolvePeerRsync(ctx context.Context, probe *exec.Runner, cfg *Config) error {
+	local, _, err := LocalRsyncPath(ctx, probe)
+	if err != nil {
+		return err
+	}
+	cfg.RsyncPath = local
+	rp, err := RemoteRsyncPath(ctx, probe, cfg.Target.Host)
+	if err != nil {
+		return err
+	}
+	cfg.RemoteRsyncPath = rp
+	return nil
 }
 
 func remoteRsyncUsable(version string) bool {
