@@ -209,6 +209,7 @@ const (
 	PeerEventDotVersionMismatch                         // peer dot release differs from this one; Path names the peer binary
 	PeerEventPeerDotUnreleased                          // the peer has only a non-release dot and no remote_dot pin; Path names it
 	PeerEventOwnerAliasesRetired                        // both machines record the renamed owner; Path lists the profiles cleared
+	PeerEventOwnerRenamePending                         // the peer still records this Mac's earlier name; Path is the command to run there
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -699,6 +700,18 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			if err != nil || len(retired) > 0 {
 				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerAliasesRetired, Path: strings.Join(retired, ", "), Err: err})
 			}
+		}
+		// The other Mac never ran its --local-only step after an offline
+		// rename: the alias stays until it does, so say what to run there.
+		if old := remoteStatus.Profile.Owner; len(cfg.OwnerAliases) > 0 && NormalizeHostname(old) != NormalizeHostname(cfg.Owner) &&
+			ownersMatch(old, nil, cfg.OwnerAliases...) {
+			quote := func(s string) string {
+				if strings.ContainsAny(s, " \t") {
+					return shellQuote(s)
+				}
+				return s
+			}
+			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerRenamePending, Path: "dot sync owner --rename " + quote(old) + " " + quote(cfg.Owner) + " --local-only"})
 		}
 		if cfg.FencePending {
 			// The first complete run after contact: the fence has done its
