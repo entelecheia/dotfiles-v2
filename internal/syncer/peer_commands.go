@@ -439,21 +439,34 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 	}
 	res := &PeerDiffResult{Plan: plan}
 	if opts.Itemize {
+		// The plan of a two-way run, with the deletions it would hold.
+		authorized, err := PeerBaselineReady(cfg)
+		if err != nil {
+			return nil, err
+		}
+		evidence, err := ComputeTombstones(cfg)
+		if err != nil {
+			return nil, err
+		}
 		items := newPeerRunPlan(cfg)
-		items.addPlan(plan, PlanScopeWorkspace)
+		items.addPlan(plan, PlanScopeWorkspace, planRun{authorized: authorized, evidence: evidence})
 		tracked, err := planPeerHomeTracked(ctx, opts.Probe, cfg, nil, true)
 		if err != nil {
 			return nil, err
 		}
 		if tracked != nil {
-			items.addPlan(tracked.plan, PlanScopeHostTracked)
+			run, err := tracked.run(false, false)
+			if err != nil {
+				return nil, err
+			}
+			items.addPlan(tracked.plan, PlanScopeHostTracked, run)
 		}
 		additive, err := peerHomeAdditiveItems(ctx, opts.Probe, cfg, false, false)
 		if err != nil {
 			return nil, err
 		}
 		items.Items = append(items.Items, additive...)
-		annotateHotItems(ctx, opts.Probe, cfg, items.Items)
+		annotateHotItems(ctx, opts.Probe, cfg, items.Items, true)
 		items.sortItems()
 		res.Items = items
 	}
@@ -593,16 +606,16 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
 		return nil, err
 	}
-	var runPlan *PeerRunPlan
-	if opts.Itemize {
-		runPlan = newPeerRunPlan(cfg)
-		runPlan.addPlan(plan, PlanScopeWorkspace)
-	}
 	conflict := NewConflictDir()
 	complete := true
 	baselineReady, err := PeerBaselineReady(cfg)
 	if err != nil {
 		return nil, err
+	}
+	var runPlan *PeerRunPlan
+	if opts.Itemize {
+		runPlan = newPeerRunPlan(cfg)
+		runPlan.addPlan(plan, PlanScopeWorkspace, planRun{pushOnly: opts.PushOnly, pullOnly: opts.PullOnly, authorized: baselineReady, evidence: tombstones})
 	}
 	// A target marker authorizes destructive transitions. An initial
 	// additive bootstrap remains allowed, but an unproven local/remote
@@ -686,7 +699,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	// runs first so its three-way plan observes the tracked trees before
 	// the additive pass touches anything.
 	if !opts.SkipHome {
-		trackedComplete, trackedPlan, trackedErr := peerHomeTrackedSync(ctx, runner, probe, cfg, opts.Progress, dryRun, opts.PushOnly, opts.PullOnly)
+		trackedComplete, tracked, trackedErr := peerHomeTrackedSync(ctx, runner, probe, cfg, opts.Progress, dryRun, opts.PushOnly, opts.PullOnly)
 		if err := failOnPartial(opts.Progress, trackedErr); err != nil {
 			return nil, err
 		}
@@ -694,7 +707,13 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			complete = false
 		}
 		if runPlan != nil {
-			runPlan.addPlan(trackedPlan, PlanScopeHostTracked)
+			if tracked != nil {
+				run, err := tracked.run(opts.PushOnly, opts.PullOnly)
+				if err != nil {
+					return nil, err
+				}
+				runPlan.addPlan(tracked.plan, PlanScopeHostTracked, run)
+			}
 			// Listed before the pass runs: afterwards rsync has nothing left
 			// to report.
 			additive, err := peerHomeAdditiveItems(ctx, probe, cfg, opts.PushOnly, opts.PullOnly)
@@ -702,7 +721,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 				return nil, err
 			}
 			runPlan.Items = append(runPlan.Items, additive...)
-			annotateHotItems(ctx, probe, cfg, runPlan.Items)
+			annotateHotItems(ctx, probe, cfg, runPlan.Items, !opts.PushOnly && !opts.PullOnly)
 		}
 		// host_merge runs before the additive pass and only in a two-way run:
 		// it writes both machines.

@@ -71,6 +71,12 @@ func TestPeerSync_HostMergeKeepsEntriesFromBothMacs(t *testing.T) {
 		`{"mcpServers":{"a":{},"mine":{}},"numStartups":12}`,
 		`{"mcpServers":{"a":{},"kimi-cu":{},"pencil":{}},"numStartups":40}`)
 	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers", "projects"}}
+	// The file holds tokens (0600 on both Macs): the merge write keeps it.
+	for _, home := range []string{localHome, peerHome} {
+		if err := os.Chmod(filepath.Join(home, ".claude.json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var merged []string
 	res, err := PeerSync(context.Background(), PeerSyncOptions{
 		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false),
@@ -95,8 +101,62 @@ func TestPeerSync_HostMergeKeepsEntriesFromBothMacs(t *testing.T) {
 		}
 	}
 	li, _ := os.Stat(filepath.Join(localHome, ".claude.json"))
+	if li.Mode().Perm() != 0o600 {
+		t.Fatalf("merge left mode %v", li.Mode().Perm())
+	}
 	pi, _ := os.Stat(filepath.Join(peerHome, ".claude.json"))
 	if !li.ModTime().Equal(pi.ModTime()) {
 		t.Fatalf("copies left with different mtimes: %v / %v", li.ModTime(), pi.ModTime())
+	}
+}
+
+// #181: host_merge runs only in a two-way run; a one-directional plan must
+// not claim the merge and must warn about what newest-wins drops.
+func TestPeerSync_OneWayPlanDoesNotClaimTheMerge(t *testing.T) {
+	cfg, _, _ := claudeJSONFixture(t,
+		`{"mcpServers":{"a":{},"mine":{}}}`,
+		`{"mcpServers":{"a":{},"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, PullOnly: true, Itemize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := findItem(t, res.Plan, ".claude.json")
+	if strings.Contains(it.Reason, "merged") || !strings.Contains(it.Warning, "mine") || !strings.Contains(it.Warning, "host_merge runs only in a two-way sync") {
+		t.Fatalf("item = %+v", it)
+	}
+}
+
+// The merge write keeps a token file's mode and refuses to replace a symlink.
+func TestMergePeerHostFilesKeepsModeAndSymlinks(t *testing.T) {
+	cfg, localHome, _ := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	path := filepath.Join(localHome, ".claude.json")
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := peerScheduleRunner(false)
+	if merged, err := mergePeerHostFiles(context.Background(), r, r, cfg); err != nil || len(merged) != 1 {
+		t.Fatalf("merged %v, %v", merged, err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", info.Mode().Perm())
+	}
+
+	cfg, localHome, _ = claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	path = filepath.Join(localHome, ".claude.json")
+	real := filepath.Join(localHome, "real.json")
+	if err := os.Rename(path, real); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mergePeerHostFiles(context.Background(), r, r, cfg); err == nil {
+		t.Fatal("merge replaced a symlink")
+	}
+	if info, _ := os.Lstat(path); info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink gone")
 	}
 }

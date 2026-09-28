@@ -19,8 +19,8 @@ func TestPeerRunPlanFlattensThreeWayPlan(t *testing.T) {
 		LocalBefore:  PeerSnapshot{"changed": fp(1), "mine": fp(2), "both": fp(3), "gone-there": fp(4)},
 		RemoteBefore: PeerSnapshot{"new": fp(5), "changed": fp(6), "both": fp(7), "gone-here": fp(8)},
 	}
-	rp := newPeerRunPlan(&Config{MaxDelete: 100})
-	rp.addPlan(plan, PlanScopeWorkspace)
+	rp := newPeerRunPlan(&Config{MaxDelete: 100, Propagation: PropagationPolicy{Delete: true}})
+	rp.addPlan(plan, PlanScopeWorkspace, planRun{authorized: true, evidence: []string{"gone-here"}})
 	rp.sortItems()
 	got := map[string]string{}
 	for _, it := range rp.Items {
@@ -143,5 +143,36 @@ func TestPeerSync_DryRunPlanIsTheRunsPlan(t *testing.T) {
 	}
 	if body := string(gitStateFileBytes(t, filepath.Join(localHome, ".claude.json"))); body != `{"a":1,"b":2}` {
 		t.Fatalf("the planned host update did not happen: %s", body)
+	}
+}
+
+// #180 AC2: a one-directional run lists only its direction, and a deletion
+// the run holds says so.
+func TestPeerSync_DryRunPlanFollowsTheRunMode(t *testing.T) {
+	cfg, _, _ := peerPlanFixture(t)
+	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, PushOnly: true, Itemize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := planKeys(res.Plan)
+	if !slices.Contains(got, "workspace push create local-only.txt") {
+		t.Fatalf("push missing:\n%s", strings.Join(got, "\n"))
+	}
+	for _, it := range res.Plan.Items {
+		if it.Direction == "pull" {
+			t.Errorf("a push-only run lists %s %s %s", it.Scope, it.Action, it.Path)
+		}
+	}
+
+	cfg, _, _ = peerPlanFixture(t)
+	cfg.Propagation.Delete = false
+	diff, err := PeerDiff(context.Background(), PeerDiffOptions{Config: cfg, Probe: peerScheduleRunner(false), Itemize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range diff.Items.Items {
+		if it.Path == "gone-there.txt" && it.Reason != "held: propagation.delete is off" {
+			t.Fatalf("held deletion listed as %+v", it)
+		}
 	}
 }

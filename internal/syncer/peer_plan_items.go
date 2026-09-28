@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,14 +58,24 @@ type PeerRunPlan struct {
 	Items     []PeerPlanItem         `json:"items"`
 	Deletes   map[string]PlanDeletes `json:"deletes"`
 	MaxDelete int                    `json:"maxDelete"`
+	deletes   bool                   // propagation.delete
 }
 
 func newPeerRunPlan(cfg *Config) *PeerRunPlan {
-	return &PeerRunPlan{Items: []PeerPlanItem{}, Deletes: map[string]PlanDeletes{}, MaxDelete: cfg.MaxDelete}
+	return &PeerRunPlan{Items: []PeerPlanItem{}, Deletes: map[string]PlanDeletes{}, MaxDelete: cfg.MaxDelete, deletes: cfg.Propagation.Delete}
 }
 
-// addPlan flattens a three-way plan of one scope into items.
-func (p *PeerRunPlan) addPlan(plan *PeerPlan, scope string) {
+// planRun is what one run does with a scope's plan: the directions it moves
+// and what authorizes its deletions. A planned deletion the run does not
+// execute is listed with the reason it is held.
+type planRun struct {
+	pushOnly, pullOnly bool
+	authorized         bool     // the baseline is verified for this peer
+	evidence           []string // this machine's deletion evidence (tombstones)
+}
+
+// addPlan flattens a three-way plan of one scope into the items run moves.
+func (p *PeerRunPlan) addPlan(plan *PeerPlan, scope string, run planRun) {
 	if plan == nil {
 		return
 	}
@@ -86,25 +97,43 @@ func (p *PeerRunPlan) addPlan(plan *PeerPlan, scope string) {
 		}
 		return it
 	}
-	for _, rel := range plan.Pull {
-		action := "update"
-		if side(plan.LocalBefore, rel) == nil {
-			action = "create"
+	held := ""
+	switch {
+	case !p.deletes:
+		held = "held: propagation.delete is off"
+	case !run.authorized:
+		held = "held: the baseline is not verified for this peer yet"
+	}
+	if !run.pushOnly {
+		for _, rel := range plan.Pull {
+			action := "update"
+			if side(plan.LocalBefore, rel) == nil {
+				action = "create"
+			}
+			p.Items = append(p.Items, item(rel, action, "pull"))
 		}
-		p.Items = append(p.Items, item(rel, action, "pull"))
-	}
-	for _, rel := range plan.Push {
-		action := "update"
-		if side(plan.RemoteBefore, rel) == nil {
-			action = "create"
+		for _, rel := range plan.DeleteLocal {
+			it := item(rel, "delete", "pull")
+			it.Reason = held
+			p.Items = append(p.Items, it)
 		}
-		p.Items = append(p.Items, item(rel, action, "push"))
 	}
-	for _, rel := range plan.DeleteLocal {
-		p.Items = append(p.Items, item(rel, "delete", "pull"))
-	}
-	for _, rel := range plan.DeleteRemote {
-		p.Items = append(p.Items, item(rel, "delete", "push"))
+	if !run.pullOnly {
+		for _, rel := range plan.Push {
+			action := "update"
+			if side(plan.RemoteBefore, rel) == nil {
+				action = "create"
+			}
+			p.Items = append(p.Items, item(rel, action, "push"))
+		}
+		for _, rel := range plan.DeleteRemote {
+			it := item(rel, "delete", "push")
+			it.Reason = held
+			if held == "" && !slices.Contains(run.evidence, rel) {
+				it.Reason = "held: no deletion evidence on this machine"
+			}
+			p.Items = append(p.Items, it)
+		}
 	}
 	d := p.Deletes[scope]
 	d.In += len(plan.DeleteLocal)

@@ -592,7 +592,7 @@ secrets:
 
 | Key | Description |
 |-----|-------------|
-| `host_merge` | Host files (relative to `$HOME`) whose listed top-level JSON keys are merged from both Macs before the additive host pass of a two-way `dot peer sync`, e.g. `host_merge: {.claude.json: [mcpServers, projects]}`: every entry either copy has survives, the newer copy wins an entry both have and every other key. Without it the newer file wins whole; `dot peer diff --list` marks such hot files and warns about entries newest-wins would drop. |
+| `host_merge` | Host files (relative to `$HOME`) whose listed top-level JSON keys are merged from both Macs before the additive host pass of a two-way `dot peer sync`, e.g. `host_merge: {.claude.json: [mcpServers, projects]}`: every entry either copy has survives, the newer copy wins an entry both have and every other key. Without it the newer file wins whole; `dot peer diff --list` marks such hot files and warns about entries newest-wins would drop. The merge is a union: an entry removed on one Mac comes back from the other, so remove it on both. It applies to additive host paths only, not tracked ones. |
 | `remote_dot` | Path of the `dot` binary to run on the other Mac (`~/` is that Mac's home). Unset, a peer run probes `~/.local/bin/dot`, `/opt/homebrew/bin/dot`, `/usr/local/bin/dot`, the Linuxbrew path and `command -v dot` there, and uses the newest release; a dev build is used only when nothing else is installed, with a warning. Set it to use a dev build; scheduled runs read it too. |
 
 ---

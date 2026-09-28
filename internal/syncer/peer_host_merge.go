@@ -191,10 +191,11 @@ func hostKeyPolicy(cfg *Config, rel string) ([]string, bool) {
 }
 
 // annotateHotItems marks hot host items and, for JSON files with a key
-// policy, lists the key-level differences between the two copies. Without
-// a merge policy, a losing copy that holds entries the winner lacks is
-// called out: newest-wins would drop them.
-func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, items []PeerPlanItem) {
+// policy, lists the key-level differences between the two copies. Unless
+// host_merge merges the file in this run (two-way runs, additive host
+// paths only), a losing copy that holds entries the winner lacks is called
+// out: newest-wins would drop them.
+func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, items []PeerPlanItem, twoWay bool) {
 	for i := range items {
 		it := &items[i]
 		if it.Scope == PlanScopeWorkspace {
@@ -218,21 +219,36 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		if lerr != nil || perr != nil {
 			continue
 		}
+		merging := merge && twoWay && it.Scope == PlanScopeHost
+		hint := "set host_merge for this file to keep them"
+		switch {
+		case merge && it.Scope != PlanScopeHost:
+			hint = "host_merge does not apply to tracked host paths"
+		case merge && !twoWay:
+			hint = "host_merge runs only in a two-way sync"
+		}
+		var lostAny bool
+		var warnings []string
 		for _, d := range diffJSONKeys(local, peer, keys) {
 			it.Keys = append(it.Keys, d.String())
-			if merge {
-				continue
-			}
 			// The copy this item overwrites loses what only it has.
 			lost := d.onlyLocal
 			if it.Direction == "push" {
 				lost = d.onlyPeer
 			}
-			if len(lost) > 0 {
-				it.Warning = fmt.Sprintf("newest wins: %s entries %s exist only in the overwritten copy; set host_merge for this file to keep them", d.key, strings.Join(lost, ", "))
+			if len(lost) == 0 {
+				continue
+			}
+			lostAny = true
+			if !merging {
+				warnings = append(warnings, fmt.Sprintf("%s entries %s exist only in the overwritten copy", d.key, strings.Join(lost, ", ")))
 			}
 		}
-		if merge && len(it.Keys) > 0 {
+		if len(warnings) > 0 {
+			it.Warning = "newest wins: " + strings.Join(warnings, "; ") + "; " + hint
+		}
+		// The merge only writes when the newer copy lacks something.
+		if merging && lostAny {
 			it.Reason = "merged before the transfer (host_merge: " + strings.Join(keys, ", ") + ")"
 		}
 	}
@@ -259,6 +275,9 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		keys := cfg.HostMerge[rel]
 		if len(keys) == 0 {
 			continue
+		}
+		if validateTombstoneRel(rel) != nil || strings.HasPrefix(rel, "~") {
+			return merged, fmt.Errorf("host_merge: %q must be a path relative to $HOME, like .claude.json", rel)
 		}
 		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(rel))
 		info, err := os.Stat(localPath)
@@ -300,11 +319,10 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		if err != nil {
 			return merged, err
 		}
-		if err := atomicWrite(localPath, body); err != nil {
+		// Keeps the mode (~/.claude.json holds tokens, 0600) and owner, and
+		// refuses a symlink rather than replacing it.
+		if err := runner.WriteFileAtomic(localPath, body, 0o600); err != nil {
 			return merged, fmt.Errorf("host_merge %s: %w", rel, err)
-		}
-		if err := os.Chmod(localPath, info.Mode().Perm()); err != nil {
-			return merged, err
 		}
 		now := time.Now()
 		if err := os.Chtimes(localPath, now, now); err != nil {
