@@ -111,7 +111,7 @@ func newAICoauthoredGuardStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().String("mode", aisettings.CoauthorGuardWarn, "Guard mode: off, warn, or block")
+	c.Flags().String("mode", aisettings.CoauthorGuardBlock, "Guard mode: off, warn, or block")
 	return c
 }
 
@@ -123,15 +123,13 @@ func newAICoauthoredGuardApplyCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			mode, _ := cmd.Flags().GetString("mode")
 			persist, _ := cmd.Flags().GetBool("persist")
-			forceHooksPath, _ := cmd.Flags().GetBool("force-hooks-path")
 			applyAgents, _ := cmd.Flags().GetBool("apply-agents")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			mgr := newCoauthorGuardManagerFromCmd(cmd)
 			result, err := mgr.Apply(aisettings.CoauthorGuardOptions{
-				Mode:           mode,
-				DryRun:         dryRun,
-				ForceHooksPath: forceHooksPath,
-				ApplyAgents:    applyAgents,
+				Mode:        mode,
+				DryRun:      dryRun,
+				ApplyAgents: applyAgents,
 			})
 			if err != nil {
 				return err
@@ -147,11 +145,14 @@ func newAICoauthoredGuardApplyCmd() *cobra.Command {
 			p := printerFrom(cmd)
 			p.Header("Coauthor Guard Apply")
 			printCoauthorGuardStatus(p, result.Status)
+			if result.Warning != "" {
+				p.Warn("%s", result.Warning)
+			}
 			if result.HookChanged {
 				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "hook updated")
 			}
 			if result.ConfigChanged {
-				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "git hooksPath updated")
+				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "git hook config updated")
 			}
 			if result.AgentsChanged {
 				p.Bullet(ui.StyleHint.Render(ui.MarkPending), "AGENTS instruction updated")
@@ -165,9 +166,8 @@ func newAICoauthoredGuardApplyCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().String("mode", aisettings.CoauthorGuardWarn, "Guard mode: off, warn, or block")
+	c.Flags().String("mode", aisettings.CoauthorGuardBlock, "Guard mode: off, warn, or block")
 	c.Flags().Bool("persist", false, "Persist modules.git.coauthor_guard for future dot apply runs")
-	c.Flags().Bool("force-hooks-path", false, "Replace an existing non-dotfiles core.hooksPath")
 	c.Flags().Bool("apply-agents", false, "Reapply agents SSOT to live tool targets after updating the instruction")
 	return c
 }
@@ -229,17 +229,17 @@ func printCoauthorGuardStatus(p *Printer, st aisettings.CoauthorGuardStatus) {
 		drift string
 	}{
 		{"hook", st.HookDrift},
-		{"hooksPath", st.HooksPathDrift},
+		{"hookConfig", st.HookConfigDrift},
 		{"agents", st.AgentsDrift},
 	} {
 		marker, style := agentDriftMarker(row.drift)
 		p.Bullet(style.Render(marker), fmt.Sprintf("%-10s %s", row.name, row.drift))
 	}
-	if st.HooksPath != "" {
-		p.KV("Current hooksPath", st.HooksPath)
+	if !st.GitHooksSupported && st.Mode != aisettings.CoauthorGuardOff {
+		p.Warn("git %s predates config-based hooks (2.54); upgrade git to enforce the guard", st.GitVersion)
 	}
-	if st.Conflict != "" {
-		p.Warn("%s", st.Conflict)
+	if st.HooksPathLeftover != "" {
+		p.Warn("leftover dot-managed core.hooksPath %q; apply migrates it away", st.HooksPathLeftover)
 	}
 }
 

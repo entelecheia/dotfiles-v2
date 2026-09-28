@@ -120,18 +120,21 @@ func (m *GitModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, er
 		if err != nil {
 			return nil, fmt.Errorf("coauthor guard status: %w", err)
 		}
-		if status.Conflict != "" {
-			return nil, fmt.Errorf("%s", status.Conflict)
-		}
 		if status.HookDrift != "in-sync" {
 			changes = append(changes, Change{
 				Description: fmt.Sprintf("write %s", status.HookPath),
 				Command:     "dot ai coauthor-guard apply",
 			})
 		}
-		if status.HooksPathDrift != "in-sync" {
+		if status.GitHooksSupported && status.HookConfigDrift != "in-sync" {
 			changes = append(changes, Change{
-				Description: "enable git core.hooksPath for dotfiles hooks",
+				Description: "configure git hook.coauthor-guard in " + status.GitConfigPath,
+				Command:     "dot ai coauthor-guard apply",
+			})
+		}
+		if status.HooksPathLeftover != "" {
+			changes = append(changes, Change{
+				Description: "remove dot-managed core.hooksPath from " + status.GitConfigPath,
 				Command:     "dot ai coauthor-guard apply",
 			})
 		}
@@ -148,17 +151,6 @@ func (m *GitModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, er
 
 func (m *GitModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, error) {
 	var messages []string
-
-	if mode := rc.Config.Modules.Git.CoauthorGuard; mode != "" && mode != aisettings.CoauthorGuardOff {
-		manager := aisettings.NewCoauthorGuardManager(rc.Runner, rc.HomeDir)
-		status, err := manager.Status(mode)
-		if err != nil {
-			return nil, fmt.Errorf("coauthor guard status: %w", err)
-		}
-		if status.Conflict != "" {
-			return nil, fmt.Errorf("%s", status.Conflict)
-		}
-	}
 
 	fileMessages, err := applyTemplatedFiles(rc, m.files(rc))
 	if err != nil {
@@ -211,7 +203,10 @@ func (m *GitModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResult, er
 			messages = append(messages, fmt.Sprintf("wrote %s", result.Status.HookPath))
 		}
 		if result.ConfigChanged {
-			messages = append(messages, fmt.Sprintf("enabled git hooksPath in %s", result.Status.GitConfigPath))
+			messages = append(messages, fmt.Sprintf("configured git hook.coauthor-guard in %s", result.Status.GitConfigPath))
+		}
+		if result.Warning != "" {
+			fmt.Fprintf(rc.out(), "  ⚠ git: %s\n", result.Warning)
 		}
 	}
 

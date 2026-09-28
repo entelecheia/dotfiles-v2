@@ -69,6 +69,7 @@ var pathBoundaryTable = []pathBoundaryEntry{
 	{"ClaudeMemManager.codexConfigPath", classReadOnly},
 	{"ClaudeMemManager.TranscriptStatePath", classHomeWrite},
 	{"CoauthorGuardManager.SSOTPath", classHomeWrite},
+	{"CoauthorGuardManager.dotManagedHooksPath", classTransform},
 	{"CoauthorGuardManager.gitConfigPath", classHomeWrite},
 	{"CoauthorGuardManager.hookPath", classHomeWrite},
 	{"DefaultSyncDBPath", classHomeWrite},
@@ -82,7 +83,6 @@ var pathBoundaryTable = []pathBoundaryEntry{
 	{"canonicalPath", classTransform},
 	{"canonicalSkillPath", classTransform},
 	{"normalizeGitPath", classTransform},
-	{"patchGitHooksPath", classTransform},
 	{"validateMaterializedPath", classTransform},
 }
 
