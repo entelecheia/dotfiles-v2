@@ -141,6 +141,30 @@ func NormalizeHostname(h string) string {
 	return h
 }
 
+// ownersMatch reports whether owner, or one of its recorded aliases, is one
+// of names (compared normalized).
+func ownersMatch(owner string, aliases []string, names ...string) bool {
+	for _, want := range append([]string{owner}, aliases...) {
+		want = NormalizeHostname(want)
+		if want == "" {
+			continue
+		}
+		for _, n := range names {
+			if NormalizeHostname(n) == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sameOwner reports whether two profiles name the same owner: their names or
+// aliases meet. Two machines migrated one after the other by
+// `dot sync owner --rename` agree throughout.
+func sameOwner(a string, aAliases []string, b string, bAliases []string) bool {
+	return ownersMatch(a, aAliases, append([]string{b}, bAliases...)...)
+}
+
 // OwnerMismatchError reports that this machine may not write the profile.
 type OwnerMismatchError struct {
 	Profile string
@@ -169,11 +193,8 @@ func CheckOwner(cfg *Config) error {
 		// Cannot prove we are the owner, so do not claim to be.
 		return fmt.Errorf("cannot determine this machine's name to check profile owner")
 	}
-	want := NormalizeHostname(cfg.Owner)
-	for _, n := range names {
-		if n == want {
-			return nil
-		}
+	if ownersMatch(cfg.Owner, cfg.OwnerAliases, names...) {
+		return nil
 	}
 	return &OwnerMismatchError{
 		Profile: NormalizeProfile(cfg.Profile),

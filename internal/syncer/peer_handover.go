@@ -206,7 +206,7 @@ func peerFence(cfg *Config, remote *remotePeerStatus) (demote, legacy bool, err 
 	case cfg.OwnerEpoch > remote.OwnerEpoch:
 		return false, false, nil
 	}
-	if NormalizeHostname(cfg.Owner) != NormalizeHostname(remote.Profile.Owner) {
+	if !sameOwner(cfg.Owner, cfg.OwnerAliases, remote.Profile.Owner, remote.Profile.OwnerAliases) {
 		return false, false, fmt.Errorf(
 			"peer fence: equal owner epochs (%d) with different owners (local %q, remote %q); both sides refuse — pick one coordinator and set it with `dot sync owner --profile=peer --set <machine>`",
 			cfg.OwnerEpoch, cfg.Owner, remote.Profile.Owner)
@@ -660,9 +660,19 @@ func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args .
 	}
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", cfg.Target.Host, cmd)
 	if err != nil {
-		return "", fmt.Errorf("peer handover: remote `dot %s` failed: %w", strings.Join(args, " "), err)
+		return "", fmt.Errorf("remote `dot %s` on %s failed: %w", strings.Join(args, " "), cfg.Target.Host, err)
 	}
 	return res.Stdout, nil
+}
+
+// RenamePeerOwner applies `dot sync owner --rename <old> <new> --local-only`
+// on the peer, through the same resolved dot binary the status probe uses.
+func RenamePeerOwner(ctx context.Context, runner *exec.Runner, cfg *Config, oldName, newName string) error {
+	if err := CheckSSH(ctx, runner, cfg.Target.Host); err != nil {
+		return err
+	}
+	_, err := peerRemoteDot(ctx, runner, cfg, "sync", "owner", "--rename", "--local-only", oldName, newName)
+	return err
 }
 
 // peerRemoteAdopt asks the peer to adopt itself as coordinator and returns

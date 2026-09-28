@@ -90,9 +90,11 @@ type remotePeerStatus struct {
 	FencePending  bool     `json:"fencePending"`
 	DotVersion    string   `json:"dotVersion"`
 	Profile       struct {
-		Configured    bool   `json:"configured"`
-		Owner         string `json:"owner"`
-		WorkspacePath string `json:"workspacePath"`
+		Configured    bool     `json:"configured"`
+		Owner         string   `json:"owner"`
+		OwnerAliases  []string `json:"ownerAliases"`
+		MachineNames  []string `json:"machineNames"`
+		WorkspacePath string   `json:"workspacePath"`
 		Target        struct {
 			Path string `json:"path"`
 		} `json:"target"`
@@ -197,9 +199,7 @@ func checkRemotePeerTopology(cfg *Config, status *remotePeerStatus) error {
 // checkRemotePeerOwnerMatch is the pre-epoch refusal: without an epoch to
 // order them, two different owners can never both proceed.
 func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
-	wantOwner := NormalizeHostname(cfg.Owner)
-	gotOwner := NormalizeHostname(status.Profile.Owner)
-	if wantOwner == "" || gotOwner != wantOwner {
+	if NormalizeHostname(cfg.Owner) == "" || !sameOwner(cfg.Owner, cfg.OwnerAliases, status.Profile.Owner, status.Profile.OwnerAliases) {
 		return fmt.Errorf(
 			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
 			cfg.Owner, status.Profile.Owner, cfg.Owner)

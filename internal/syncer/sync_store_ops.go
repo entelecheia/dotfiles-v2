@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -494,6 +495,9 @@ func SetOwner(opts OwnerOptions) (string, error) {
 	default:
 		local.Owner = opts.SetTo
 	}
+	// A deliberate owner change is a new decision, not a rename: earlier
+	// names no longer stand for the owner.
+	local.OwnerAliases = nil
 	explicitSet := opts.SetSelf || opts.SetTo != ""
 	if cfg.Profile == PeerProfile && (local.Owner != previous || explicitSet) {
 		local.OwnerEpoch++
@@ -503,6 +507,62 @@ func SetOwner(opts OwnerOptions) (string, error) {
 		return "", err
 	}
 	return local.Owner, nil
+}
+
+// OwnerRenameResult names the profile stores RenameOwner rewrote.
+type OwnerRenameResult struct {
+	Profiles []string
+}
+
+// RenameOwner records that the owner machine was renamed from oldName to
+// newName in every profile store of the workspace whose owner, or one of
+// whose aliases, is oldName (#185). The old name stays as an alias, so the
+// guard keeps matching a machine not renamed yet and a peer not migrated yet.
+// Nothing else changes: not the epoch (a rename is not a coordinator
+// change), not the target, not a baseline, so no run plans a deletion.
+func RenameOwner(workspaceRoot, oldName, newName string) (*OwnerRenameResult, error) {
+	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
+	if oldName == "" || newName == "" || strings.ContainsAny(newName, " \t'\"/") {
+		return nil, fmt.Errorf("owner rename needs an old and a new machine name without spaces, quotes or slashes (got %q -> %q)", oldName, newName)
+	}
+	if NormalizeHostname(oldName) == NormalizeHostname(newName) {
+		return nil, fmt.Errorf("owner rename: %q and %q are the same name", oldName, newName)
+	}
+	entries, err := os.ReadDir(filepath.Join(workspaceRoot, ".dotfiles"))
+	if err != nil {
+		return nil, fmt.Errorf("owner rename: reading profile stores: %w", err)
+	}
+	result := &OwnerRenameResult{}
+	for _, entry := range entries {
+		if !entry.IsDir() || ValidateProfile(entry.Name()) != nil {
+			continue
+		}
+		paths := ResolveLocalPathsForProfile(workspaceRoot, entry.Name())
+		local, ok, err := LoadLocalConfig(paths)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || local == nil || !ownersMatch(local.Owner, local.OwnerAliases, oldName) {
+			continue
+		}
+		seen := map[string]bool{NormalizeHostname(newName): true}
+		var aliases []string
+		for _, alias := range append(slices.Clone(local.OwnerAliases), local.Owner) {
+			if n := NormalizeHostname(alias); n != "" && !seen[n] {
+				seen[n] = true
+				aliases = append(aliases, alias)
+			}
+		}
+		local.Owner, local.OwnerAliases = newName, aliases
+		if err := SaveLocalConfig(paths, local); err != nil {
+			return nil, err
+		}
+		result.Profiles = append(result.Profiles, entry.Name())
+	}
+	if len(result.Profiles) == 0 {
+		return nil, fmt.Errorf("owner rename: no profile under %s is owned by %q", filepath.Join(workspaceRoot, ".dotfiles"), oldName)
+	}
+	return result, nil
 }
 
 // RsyncOutcome names what EnsureRsync did about a missing rsync.

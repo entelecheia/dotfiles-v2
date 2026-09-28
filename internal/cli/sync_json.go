@@ -58,6 +58,7 @@ type syncStatusJSON struct {
 	Paused               bool                        `json:"paused"`
 	LockHeld             bool                        `json:"lockHeld"`
 	Owner                string                      `json:"owner,omitempty"`
+	OwnerAliases         []string                    `json:"ownerAliases,omitempty"`
 	CanPush              bool                        `json:"canPush"`
 	MachineNames         []string                    `json:"machineNames"`
 	FilterMode           string                      `json:"filterMode"`
@@ -146,6 +147,7 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 		Paused:             st.Paused,
 		LockHeld:           st.LockHeld,
 		Owner:              st.Owner,
+		OwnerAliases:       cfg.OwnerAliases,
 		CanPush:            canPush,
 		MachineNames:       syncer.MachineNames(),
 		FilterMode:         st.FilterMode.String(),

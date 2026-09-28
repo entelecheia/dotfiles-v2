@@ -136,6 +136,17 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Linked worktrees", strconv.Itoa(len(worktrees))+" (excluded from sync)")
 	}
 	p.KV("Target", st.Target.String())
+	// The owner is a recorded name and this machine answers to live host
+	// names; after a Mac rename the two drift apart (#185).
+	owner := cfg.Owner
+	if owner == "" {
+		owner = "(unset)"
+	}
+	if len(cfg.OwnerAliases) > 0 {
+		owner += " (aliases: " + strings.Join(cfg.OwnerAliases, ", ") + ")"
+	}
+	p.KV("Owner", owner)
+	p.KV("This machine", strings.Join(syncer.MachineNames(), ", "))
 	p.KV("Scheduler", snapshot.State)
 	if snapshot.IntervalSeconds > 0 {
 		p.KV("Interval", formatInterval(snapshot.IntervalSeconds))
