@@ -144,6 +144,7 @@ func (s *peerHandoverSandbox) installFakeRemoteDot(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := "#!/bin/sh\n" +
+		"[ \"$1\" = --version ] && { echo 'dot version 9.9.9 (fake)'; exit 0; }\n" +
 		"echo \"dot $*\" >> '" + s.record + "'\n" +
 		"store='" + store + "'\n" +
 		"case \"$1 $2\" in\n" +
@@ -156,6 +157,7 @@ func (s *peerHandoverSandbox) installFakeRemoteDot(t *testing.T) {
 		"  *) exit 0 ;;\n" +
 		"esac\n"
 	writeStub(t, filepath.Join(binDir, "dot"), script)
+	useRemoteDotCandidates(t, filepath.Join(binDir, "dot"))
 }
 
 func (s *peerHandoverSandbox) recordLines(t *testing.T) []string {
@@ -697,6 +699,10 @@ func TestPeerSyncWithLegacyPeerStillSyncs(t *testing.T) {
 	for _, e := range events {
 		if e.Kind == PeerEventPeerLacksHandover {
 			legacyNotice = true
+			// #176: the notice names the binary the run talked to.
+			if !strings.Contains(e.Path, "/dot (dot version 9.9.9 (fake))") {
+				t.Errorf("legacy notice %q lacks the peer binary path and version", e.Path)
+			}
 		}
 	}
 	if !legacyNotice {

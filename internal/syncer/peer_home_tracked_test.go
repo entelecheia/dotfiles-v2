@@ -59,6 +59,7 @@ func installFakePeerHomeSSH(t *testing.T, statusJSON, peerHome string) {
 		"  esac\n" +
 		"done\n" +
 		"case \"$*\" in\n" +
+		"  *\"list dot candidates\"*) exec /bin/sh -c \"$*\" ;;\n" +
 		"  *--version*) echo 'rsync  version 3.4.1  protocol version 32' ;;\n" +
 		"  *\"peer status --json\"*) printf '%s\\n' '" + statusJSON + "' ;;\n" +
 		"  *) HOME='" + peerHome + "'; export HOME; cd \"$HOME\" || exit 1; exec /bin/sh -c \"$*\" ;;\n" +
@@ -66,6 +67,9 @@ func installFakePeerHomeSSH(t *testing.T, statusJSON, peerHome string) {
 	bin := t.TempDir()
 	writeStub(t, filepath.Join(bin, "ssh"), script)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dot := filepath.Join(bin, "dot")
+	writeStub(t, dot, "#!/bin/sh\n[ \"$1\" = --version ] && echo 'dot version 9.9.9 (fake)'\nexit 0\n")
+	useRemoteDotCandidates(t, dot)
 }
 
 // peerHomeTrackedFixture builds a full peer sandbox: a coordinator config with

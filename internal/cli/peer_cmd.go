@@ -165,11 +165,10 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 		case syncer.PeerEventPartialTransfer:
 			reportPartial(p, e.Err)
 		case syncer.PeerEventPeerLacksHandover:
-			version := e.Path
-			if version == "" {
-				version = "unknown (pre-handover release)"
-			}
-			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", version)
+			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", e.Path)
+			p.Line("  Upgrade dot there, or remove that binary if a newer release is installed next to it.")
+		case syncer.PeerEventDotVersionMismatch:
+			p.Warn("peer dot %s is a different release from this machine's; upgrade the older side", e.Path)
 		case syncer.PeerEventReplicaPushFailed:
 			p.Warn("replica push failed: %v", e.Err)
 			p.Line("  The run itself is complete; the next unplanned switch may lack a fresh replica.")
@@ -283,6 +282,8 @@ on a laptop.`,
 				SkipHome: skipHome,
 				DryRun:   dryRun,
 				Progress: renderPeerEvent(p),
+
+				LocalDotVersion: c.Root().Version,
 			})
 			if err != nil {
 				return quietScheduledContention(bs.Runner, err)

@@ -206,6 +206,7 @@ const (
 	PeerEventPartialTransfer                            // rsync moved some but not all of a pass; Err carries it
 	PeerEventPeerLacksHandover                          // peer dot predates epochs; Path names its version when known
 	PeerEventReplicaPushFailed                          // the replica push after a complete run failed; Err carries it
+	PeerEventDotVersionMismatch                         // peer dot release differs from this one; Path names the peer binary
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -448,6 +449,9 @@ type PeerSyncOptions struct {
 	SkipHome bool
 	DryRun   bool
 	Progress func(PeerEvent)
+	// LocalDotVersion is this binary's version ("2.70.22 (sha)"); a peer on
+	// a different release is reported. Empty skips the comparison.
+	LocalDotVersion string
 }
 
 // PeerSyncResult reports how the transaction ended. Complete=false means
@@ -504,7 +508,9 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		return nil, err
 	}
 	if legacy {
-		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventPeerLacksHandover, Path: remoteStatus.DotVersion})
+		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventPeerLacksHandover, Path: cfg.remoteDot.String()})
+	} else if dotVersionsDiffer(opts.LocalDotVersion, cfg.remoteDot) {
+		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventDotVersionMismatch, Path: cfg.remoteDot.String()})
 	}
 	if demote {
 		if err := demotePeer(ctx, runner, cfg, remoteStatus.Profile.Owner, remoteStatus.OwnerEpoch, dryRun); err != nil {
@@ -888,6 +894,8 @@ func peerPlistPathError(field, value, plist string, err error) error {
 type PeerDoctorOptions struct {
 	Config *Config
 	Probe  *exec.Runner
+	// LocalDotVersion is this binary's version, compared with the peer's.
+	LocalDotVersion string
 }
 
 // PeerDoctorReport is the outcome of every precondition probe. Each check
@@ -895,6 +903,12 @@ type PeerDoctorOptions struct {
 // does not hide the rest.
 type PeerDoctorReport struct {
 	Target          string
+	LocalDotPath    string
+	LocalDotVersion string
+	RemoteDot       string   // "path (banner)" of the binary peer runs use
+	RemoteDotPassed []string // candidates the probe passed over
+	RemoteDotErr    error
+	DotMismatch     bool
 	Unreachable     bool
 	UnreachableErr  error
 	RemoteRsyncPath string
@@ -914,12 +928,24 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 		return nil, fmt.Errorf("peer profile target is %q, expected an ssh: target; run dot peer init", cfg.Target.String())
 	}
 	host := cfg.Target.Host
-	report := &PeerDoctorReport{Target: cfg.Target.String()}
+	report := &PeerDoctorReport{Target: cfg.Target.String(), LocalDotVersion: opts.LocalDotVersion}
+	if exe, err := peerExecutable(); err == nil {
+		report.LocalDotPath = exe
+	}
 
 	if err := CheckSSH(ctx, runner, host); err != nil {
 		report.Unreachable = true
 		report.UnreachableErr = err
 		return report, nil
+	}
+
+	if dot, err := resolveRemoteDot(ctx, runner, cfg); err != nil {
+		report.RemoteDotErr = err
+		report.Problems++
+	} else {
+		report.RemoteDot = dot.String()
+		report.RemoteDotPassed = dot.Passed
+		report.DotMismatch = dotVersionsDiffer(opts.LocalDotVersion, dot)
 	}
 
 	rp, err := RemoteRsyncPath(ctx, runner, host)

@@ -8,6 +8,8 @@ Probe everything that silently breaks a peer transfer.
 
 Checks, and why each exists:
   reachability   an offline peer must be a clean no-op, not a failure
+  peer dot       the newest release among the peer's dot installs; a stale
+                 build at ~/.local/bin/dot must not shadow it
   remote rsync   macOS 26 ships openrsync, which cannot receive -aHAX from a
                  3.x client — and --dry-run never surfaces it, because a dry
                  run ships no file data

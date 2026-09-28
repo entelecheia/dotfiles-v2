@@ -163,6 +163,8 @@ func newPeerDoctorCmd() *cobra.Command {
 
 Checks, and why each exists:
   reachability   an offline peer must be a clean no-op, not a failure
+  peer dot       the newest release among the peer's dot installs; a stale
+                 build at ~/.local/bin/dot must not shadow it
   remote rsync   macOS 26 ships openrsync, which cannot receive -aHAX from a
                  3.x client — and --dry-run never surfaces it, because a dry
                  run ships no file data
@@ -177,8 +179,9 @@ Checks, and why each exists:
 				return err
 			}
 			report, err := syncer.PeerDoctor(context.Background(), syncer.PeerDoctorOptions{
-				Config: bs.Config,
-				Probe:  probeRunner(),
+				Config:          bs.Config,
+				Probe:           probeRunner(),
+				LocalDotVersion: c.Root().Version,
 			})
 			if err != nil {
 				return err
@@ -193,6 +196,19 @@ Checks, and why each exists:
 				return nil
 			}
 			p.Success("reachable")
+
+			p.KV("local dot", report.LocalDotPath+" ("+report.LocalDotVersion+")")
+			switch {
+			case report.RemoteDotErr != nil:
+				p.Fail("peer dot: %v", report.RemoteDotErr)
+			case report.DotMismatch:
+				p.Warn("peer dot: %s is a different release from this machine's; upgrade the older side", report.RemoteDot)
+			default:
+				p.Success("peer dot: %s", report.RemoteDot)
+			}
+			for _, passed := range report.RemoteDotPassed {
+				p.Line("  passed over: %s", passed)
+			}
 
 			switch {
 			case report.RemoteRsyncErr != nil:
