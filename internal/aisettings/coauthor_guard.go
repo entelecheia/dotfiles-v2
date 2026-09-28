@@ -436,6 +436,34 @@ exit 0
 `, mode)
 }
 
+// PreserveForeignHooksPath carries a core.hooksPath dot does not manage from
+// the existing git config into the rendered one: the git module rewrites
+// ~/.config/git/config wholesale from its template, and config-based hooks
+// coexist with a foreign hooksPath, so an apply must not drop it. A
+// dot-managed value is not preserved — removing it is the migration.
+func PreserveForeignHooksPath(rendered, existing, home string) string {
+	value := gitConfigValue(existing, "core", "hooksPath")
+	if value == "" || normalizeGitPath(value, home) == normalizeGitPath(coauthorGuardHooksRelPath, home) {
+		return rendered
+	}
+	if gitConfigValue(rendered, "core", "hooksPath") != "" {
+		return rendered
+	}
+	lines := strings.Split(strings.TrimRight(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n"), "\n")
+	desired := "    hooksPath = " + value
+	start, end := findTOMLTable(lines, "core")
+	if start < 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		return strings.Join(append(lines, "[core]", desired), "\n") + "\n"
+	}
+	next := append([]string{}, lines[:end]...)
+	next = append(next, desired)
+	next = append(next, lines[end:]...)
+	return strings.Join(next, "\n") + "\n"
+}
+
 // gitConfigLineValue extracts the value of one `key = value` config line,
 // stripping quotes and a trailing comment, mirroring gitConfigValue's regex
 // for callers that already located the line.

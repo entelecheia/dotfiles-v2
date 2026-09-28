@@ -70,6 +70,7 @@ var pathBoundaryTable = []pathBoundaryEntry{
 	{"ClaudeMemManager.TranscriptStatePath", classHomeWrite},
 	{"CoauthorGuardManager.SSOTPath", classHomeWrite},
 	{"CoauthorGuardManager.dotManagedHooksPath", classTransform},
+	{"PreserveForeignHooksPath", classTransform},
 	{"CoauthorGuardManager.gitConfigPath", classHomeWrite},
 	{"CoauthorGuardManager.hookPath", classHomeWrite},
 	{"DefaultSyncDBPath", classHomeWrite},

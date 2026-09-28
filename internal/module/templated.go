@@ -12,6 +12,10 @@ type templatedFile struct {
 	destPath     string
 	isTemplate   bool
 	perm         os.FileMode
+	// postRender, when set, rewrites the rendered content before the
+	// check/apply comparison — e.g. to preserve foreign keys in a file the
+	// template otherwise owns wholesale.
+	postRender func(rc *RunContext, rendered []byte) ([]byte, error)
 }
 
 func checkTemplatedFiles(rc *RunContext, files []templatedFile) ([]Change, error) {
@@ -56,17 +60,24 @@ func applyTemplatedFiles(rc *RunContext, files []templatedFile) ([]string, error
 }
 
 func renderTemplatedFile(rc *RunContext, f templatedFile, data map[string]any) ([]byte, error) {
+	var content []byte
+	var err error
 	if f.isTemplate {
-		content, err := rc.Template.Render(f.templatePath, data)
+		content, err = rc.Template.Render(f.templatePath, data)
 		if err != nil {
 			return nil, fmt.Errorf("rendering %s: %w", f.templatePath, err)
 		}
-		return content, nil
+	} else {
+		content, err = rc.Template.ReadStatic(f.templatePath)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", f.templatePath, err)
+		}
 	}
-
-	content, err := rc.Template.ReadStatic(f.templatePath)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", f.templatePath, err)
+	if f.postRender != nil {
+		content, err = f.postRender(rc, content)
+		if err != nil {
+			return nil, fmt.Errorf("post-processing %s: %w", f.templatePath, err)
+		}
 	}
 	return content, nil
 }

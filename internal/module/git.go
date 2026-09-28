@@ -24,6 +24,19 @@ func (m *GitModule) files(rc *RunContext) []templatedFile {
 			destPath:     filepath.Join(rc.HomeDir, ".config", "git", "config"),
 			isTemplate:   true,
 			perm:         0644,
+			// The template owns the file wholesale; keep a core.hooksPath dot
+			// does not manage across the rewrite (the coauthor guard's config
+			// hooks coexist with it).
+			postRender: func(rc *RunContext, rendered []byte) ([]byte, error) {
+				existing, err := os.ReadFile(filepath.Join(rc.HomeDir, ".config", "git", "config"))
+				if os.IsNotExist(err) {
+					return rendered, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				return []byte(aisettings.PreserveForeignHooksPath(string(rendered), string(existing), rc.HomeDir)), nil
+			},
 		},
 		{
 			templatePath: "git/gitignore.global",

@@ -153,6 +153,34 @@ func TestCoauthorGuardApplyLeavesNonDotHooksPathAlone(t *testing.T) {
 	}
 }
 
+func TestPreserveForeignHooksPath(t *testing.T) {
+	home := t.TempDir()
+	rendered := "[core]\n    pager = less\n\n[hook \"coauthor-guard\"]\n    command = ~/.config/git/hooks/commit-msg\n    event = commit-msg\n"
+	t.Run("foreign hooksPath carried into the render", func(t *testing.T) {
+		got := PreserveForeignHooksPath(rendered, "[core]\n    hooksPath = _meta/scripts/hooks\n", home)
+		if !strings.Contains(got, "hooksPath = _meta/scripts/hooks") || !strings.Contains(got, "pager = less") {
+			t.Fatalf("foreign hooksPath not preserved:\n%s", got)
+		}
+	})
+	t.Run("dot-managed hooksPath not preserved", func(t *testing.T) {
+		got := PreserveForeignHooksPath(rendered, "[core]\n    hooksPath = ~/.config/git/hooks\n", home)
+		if strings.Contains(got, "hooksPath") {
+			t.Fatalf("dot-managed hooksPath survived the render:\n%s", got)
+		}
+	})
+	t.Run("no hooksPath in existing config", func(t *testing.T) {
+		if got := PreserveForeignHooksPath(rendered, "[user]\n    name = T\n", home); got != rendered {
+			t.Fatalf("render changed without a foreign hooksPath:\n%s", got)
+		}
+	})
+	t.Run("rendered config already has a hooksPath", func(t *testing.T) {
+		withKey := "[core]\n    hooksPath = /already/there\n"
+		if got := PreserveForeignHooksPath(withKey, "[core]\n    hooksPath = _meta/scripts/hooks\n", home); got != withKey {
+			t.Fatalf("render with its own hooksPath changed:\n%s", got)
+		}
+	})
+}
+
 // writeHookStub plants an executable stub hook.
 func writeHookStub(t *testing.T, path, script string) {
 	t.Helper()

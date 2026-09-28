@@ -124,14 +124,14 @@ tool):
 
 - `~/.config/git/config` — the `[hook "coauthor-guard"]` table
   (`command = ~/.config/git/hooks/commit-msg`, `event = commit-msg`),
-  written by `dot ai coauthor-guard` when the guard mode is warn or
-  block and the installed git supports config-based hooks (2.54+).
-  Configured hooks run in addition to `.git/hooks/*` and any repo-local
-  `core.hooksPath`, so neither is touched; a `core.hooksPath` dot does
-  not manage is left alone, and a leftover dot-managed one
-  (`~/.config/git/hooks` from the pre-2.54 wiring) is removed as
-  migration. dot never sets a global `core.hooksPath`. The same table is
-  also rendered by the git module's `git/config.tmpl` when
+  applies a warn or block mode and the installed git supports config-based
+  hooks (2.54+). Configured hooks run in addition to `.git/hooks/*` and any
+  repo-local `core.hooksPath`, so neither is touched; a `core.hooksPath`
+  dot does not manage is left alone and is preserved across the git
+  module's wholesale template rewrite of this file, while a leftover
+  dot-managed one (`~/.config/git/hooks` from the pre-2.54 wiring) is
+  removed as migration. dot never sets a global `core.hooksPath`. The same
+  table is also rendered by the git module's `git/config.tmpl` when
   `modules.git.coauthor_guard` is set. No other table or key is touched.
 - `~/.config/git/hooks/commit-msg` — the coauthor-guard hook script,
   written by `dot ai coauthor-guard` when the guard mode is warn or
