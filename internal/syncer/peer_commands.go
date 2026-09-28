@@ -213,6 +213,7 @@ const (
 	PeerEventHostMerged                                 // a host_merge file was merged on both machines; Path names it
 	PeerEventHostMergeHeld                              // a one-way run leaves a differing host_merge file alone; Path names it
 	PeerEventOwnerAliasesRetired                        // both machines record the renamed owner; Path lists the profiles cleared
+	PeerEventOwnerRenamePending                         // the peer still records this Mac's earlier name; Path is the command to run there
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -589,6 +590,13 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		hooks, err := demotePeer(ctx, runner, cfg, remoteStatus.Profile.Owner, remoteStatus.OwnerEpoch, dryRun)
 		// The hook outcomes return with a failed demotion too.
 		return &PeerSyncResult{Demoted: true, Hooks: hooks}, err
+	}
+	// The other Mac never ran its --local-only step after an offline rename:
+	// the alias stays until it does, so every run past the fence (a preview
+	// and a one-way run too) says what to run there.
+	if old := remoteStatus.Profile.Owner; len(cfg.OwnerAliases) > 0 && NormalizeHostname(old) != NormalizeHostname(cfg.Owner) &&
+		ownersMatch(old, nil, cfg.OwnerAliases...) {
+		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerRenamePending, Path: "dot sync owner --rename " + shellQuote(old) + " " + shellQuote(cfg.Owner) + " --local-only"})
 	}
 	// After the fence (a bad key must not keep a losing Mac from demoting)
 	// and before anything moves: a bad key would otherwise stop every run
