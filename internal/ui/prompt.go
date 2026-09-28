@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/entelecheia/dotfiles-v2/internal/sliceutil"
 )
@@ -59,12 +61,15 @@ var (
 			Foreground(lipgloss.Color("#565F89"))
 )
 
-// TerminalAttached reports whether the process has a controlling terminal,
-// which the prompts below need: huh opens /dev/tty, and without one (a plain
-// ssh command, launchd, CI) it dies with "bubbletea: could not open TTY"
-// (#183). Piped stdin or stdout alone is fine; huh reads /dev/tty. A
-// variable so tests can pin it.
+// TerminalAttached reports whether the prompts below can reach a terminal,
+// by bubbletea's own rule: stdin when it is a terminal, else /dev/tty.
+// Without either (a plain ssh command, launchd, CI) huh dies with
+// "bubbletea: could not open TTY" (#183). A variable so tests can pin it.
 var TerminalAttached = func() bool {
+	// isatty, not a character-device check: /dev/null is a character device.
+	if term.IsTerminal(os.Stdin.Fd()) {
+		return true
+	}
 	f, err := os.Open("/dev/tty")
 	if err != nil {
 		return false
@@ -76,11 +81,14 @@ var TerminalAttached = func() bool {
 // ErrNoTerminal is what a prompt returns when it has no terminal to run on.
 var ErrNoTerminal = errors.New("no terminal for an interactive prompt; pass --yes, or run from a terminal")
 
+// ansiRe matches the SGR sequences lipgloss adds to prompt titles.
+var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
 func noTerminal(message string) error {
 	if TerminalAttached() {
 		return nil
 	}
-	return fmt.Errorf("%q: %w", message, ErrNoTerminal)
+	return fmt.Errorf("%s: %w", ansiRe.ReplaceAllString(message, ""), ErrNoTerminal)
 }
 
 // Confirm asks for yes/no. Returns true immediately if unattended.

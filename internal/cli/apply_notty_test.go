@@ -14,6 +14,9 @@ func pinNoTerminal(t *testing.T) {
 	old := ui.TerminalAttached
 	ui.TerminalAttached = func() bool { return false }
 	t.Cleanup(func() { ui.TerminalAttached = old })
+	for _, env := range []string{"DOTFILES_YES", "DOTFILES_PROFILE", "DOTFILES_NAME", "DOTFILES_EMAIL"} {
+		t.Setenv(env, "")
+	}
 }
 
 // #183 AC1: no TTY and a complete stored config runs the dry run with the
@@ -43,9 +46,9 @@ func TestApply_NoTerminalMissingValueOrConfirmationFails(t *testing.T) {
 		args  []string
 		want  string
 	}{
-		{"missing identity", &config.UserState{Profile: "minimal"}, []string{"--dry-run"}, "lacks name, email"},
-		{"missing profile", &config.UserState{Name: "N", Email: "n@example.invalid"}, []string{"--dry-run"}, "lacks profile"},
-		{"real apply needs confirmation", &config.UserState{Name: "N", Email: "n@example.invalid", Profile: "minimal"}, nil, "no terminal to confirm"},
+		{"missing identity", &config.UserState{Profile: "minimal"}, []string{"--dry-run"}, "the name and email (set DOTFILES_NAME and DOTFILES_EMAIL"},
+		{"missing profile", &config.UserState{Name: "N", Email: "n@example.invalid"}, []string{"--dry-run"}, "the profile (pass --profile"},
+		{"real apply needs confirmation", &config.UserState{Name: "N", Email: "n@example.invalid", Profile: "minimal"}, nil, "no terminal to confirm the apply; pass --yes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -54,8 +57,8 @@ func TestApply_NoTerminalMissingValueOrConfirmationFails(t *testing.T) {
 			}
 			args := append([]string{"--home", home, "apply", "--module", "git"}, tc.args...)
 			_, _, err := runDotForTest(args...)
-			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "--yes") {
-				t.Fatalf("err = %v, want one naming %q and --yes", err, tc.want)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want one naming %q", err, tc.want)
 			}
 			if strings.Contains(err.Error(), "bubbletea") {
 				t.Fatalf("prompt still ran: %v", err)
@@ -76,5 +79,28 @@ func TestPrompts_NoTerminalReturnClearError(t *testing.T) {
 	}
 	if v, err := ui.Input("Full name", "stored", true); err != nil || v != "stored" {
 		t.Fatalf("unattended Input = %q, %v", v, err)
+	}
+}
+
+// The identity overrides count as supplied values without a terminal.
+func TestApply_NoTerminalIdentityFromEnvironment(t *testing.T) {
+	pinNoTerminal(t)
+	t.Setenv("DOTFILES_NAME", "Env User")
+	t.Setenv("DOTFILES_EMAIL", "env@example.invalid")
+	home := t.TempDir()
+	if err := config.SaveStateForHome(home, &config.UserState{Profile: "minimal"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, errOut, err := runDotForTest("--home", home, "apply", "--module", "git", "--dry-run"); err != nil {
+		t.Fatalf("apply: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+}
+
+// The error names the prompt without the styling escapes.
+func TestPrompts_NoTerminalErrorIsPlainText(t *testing.T) {
+	pinNoTerminal(t)
+	_, err := ui.InputWithDetected("Full name", "x", true, false)
+	if err == nil || strings.Contains(err.Error(), "\x1b") || !strings.Contains(err.Error(), "Full name (auto-detected)") {
+		t.Fatalf("err = %q", err)
 	}
 }

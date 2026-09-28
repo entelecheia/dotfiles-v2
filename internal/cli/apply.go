@@ -78,7 +78,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	interactive := ui.TerminalAttached()
 	if !yes && !interactive {
 		if missing := missingApplyValues(state, profileName, configPath); len(missing) > 0 {
-			return fmt.Errorf("no terminal for prompts and the stored configuration lacks %s; pass --yes to use defaults, or run dot apply from a terminal", strings.Join(missing, ", "))
+			return fmt.Errorf("no terminal for prompts, and nothing supplies %s", strings.Join(missing, "; "))
 		}
 		if !dryRun {
 			return fmt.Errorf("no terminal to confirm the apply; pass --yes, or run dot apply from a terminal")
@@ -234,24 +234,31 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// missingApplyValues lists what a prompt would have to supply: the profile
-// (unless --config names the configuration) and the identity.
+// missingApplyValues lists what a prompt would have to supply, each with its
+// non-interactive source: the profile (unless --config names the
+// configuration) and the identity, which the stored state or the
+// DOTFILES_NAME/DOTFILES_EMAIL overrides provide. --yes is no source for the
+// identity: it skips the prompts without detecting one.
 func missingApplyValues(state *config.UserState, profile, configPath string) []string {
 	var missing []string
 	if profile == "" && configPath == "" {
-		missing = append(missing, "profile")
+		missing = append(missing, "the profile (pass --profile or set DOTFILES_PROFILE)")
 	}
-	if state.Name == "" {
-		missing = append(missing, "name")
+	var identity []string
+	if state.Name == "" && os.Getenv("DOTFILES_NAME") == "" {
+		identity = append(identity, "name")
 	}
-	if state.Email == "" {
-		missing = append(missing, "email")
+	if state.Email == "" && os.Getenv("DOTFILES_EMAIL") == "" {
+		identity = append(identity, "email")
+	}
+	if len(identity) > 0 {
+		missing = append(missing, "the "+strings.Join(identity, " and ")+" (set DOTFILES_NAME and DOTFILES_EMAIL, or run dot init from a terminal)")
 	}
 	return missing
 }
 
 // configureInteractive walks through each configuration section interactively.
-// Skipped entirely when --yes is set.
+// Skipped entirely when --yes is set or no terminal is attached.
 func configureInteractive(
 	p *Printer,
 	state *config.UserState,
