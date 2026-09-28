@@ -101,6 +101,29 @@ func TestEvaluatePeerSides(t *testing.T) {
 		}
 	}
 
+	// The other Mac holds a higher epoch: the coordinator's next sync
+	// demotes it. It stays the owner when it answers to the recorded name,
+	// else no coordinator is left.
+	for _, tc := range []struct {
+		owner, level string
+	}{{"m5x26", DoctorWarn}, {"old-name", DoctorFail}} {
+		local, peer = doctorFacts()
+		local.MachineNames = []string{"m5x26"}
+		peer.Owner, peer.OwnerEpoch = tc.owner, 3
+		c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", tc.level)
+		if c == nil || c.Fix != "on m3x23: dot peer adopt --owner m5x26 --epoch 2" || !strings.Contains(c.Detail, "demotes") {
+			t.Errorf("peer owner %q at a higher epoch: %+v", tc.owner, c)
+		}
+	}
+	// The coordinator holds the higher epoch: it proceeds; the other Mac is
+	// told to catch up, since it never syncs.
+	local, peer = doctorFacts()
+	local.OwnerEpoch = 3
+	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
+	if checkFor(checks, "roles", DoctorPass) == nil || checkFor(checks, "roles", DoctorWarn) == nil || checkFor(checks, "roles", DoctorFail) != nil {
+		t.Errorf("coordinator ahead: %+v", checks)
+	}
+
 	// No coordinator: no sync runs. The other Mac's rsync client only
 	// matters once it coordinates.
 	local, peer = doctorFacts()

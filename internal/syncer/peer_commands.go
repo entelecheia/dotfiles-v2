@@ -1006,6 +1006,10 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 
 	if report.RemoteDotErr == nil {
 		report.Peer, report.PeerFactsErr = remotePeerSideFacts(ctx, runner, cfg)
+		if report.PeerFactsErr != nil {
+			// None of the both-machines checks ran: unknown is not a pass.
+			report.Problems++
+		}
 	}
 	if report.Peer != nil {
 		// Only now: the NFD count walks the whole workspace.

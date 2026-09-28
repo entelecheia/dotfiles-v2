@@ -123,6 +123,16 @@ func localReplicaFacts(cfg *Config) (*PeerReplicaFacts, string) {
 	return &PeerReplicaFacts{Generation: meta.Generation, Coordinator: meta.Coordinator, Epoch: meta.Epoch, WrittenAt: info.ModTime().UTC()}, ""
 }
 
+func answersTo(names []string, name string) bool {
+	want := NormalizeHostname(name)
+	for _, n := range names {
+		if want != "" && NormalizeHostname(n) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // IsPeerCoordinator reports whether this machine is the peer pair's
 // coordinator: a set owner that passes the owner guard here.
 func IsPeerCoordinator(cfg *Config) bool {
@@ -190,7 +200,7 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 	// normalizes the peer first; its diff and dry run stop on them.
 	for i, s := range sides {
 		o := sides[1-i]
-		fix := "on " + s.host + ": dot sync names normalize --profile=peer"
+		fix := "on " + s.host + ": dot sync names normalize --profile=peer --yes"
 		switch {
 		case s.f.NonNFDError != "":
 			add("nfd", DoctorWarn, s.host+": cannot count non-NFD names: "+s.f.NonNFDError, "")
@@ -206,16 +216,18 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		if peer.NFDMarked {
 			marked, other = there, here
 		}
-		add("nfd", DoctorWarn, "the NFD marker is set on "+marked+" only", "on "+other+": dot sync names normalize --profile=peer")
+		add("nfd", DoctorWarn, "the NFD marker is set on "+marked+" only", "on "+other+": dot sync names normalize --profile=peer --yes")
 	}
 
+	// Roles: what peerFence decides at the next sync, asked through the same
+	// fenceDecision from the side that runs it (the coordinator).
 	lower, higher := here, there
 	if local.OwnerEpoch > peer.OwnerEpoch {
 		lower, higher = there, here
 	}
 	switch {
 	case local.Coordinator && peer.Coordinator && local.OwnerEpoch == peer.OwnerEpoch:
-		// peerFence refuses on both sides: only an operator can settle it.
+		// The fence refuses on both sides, or both write: an operator settles it.
 		add("roles", DoctorFail, fmt.Sprintf("both machines pass their owner guard at epoch %d: two coordinators", local.OwnerEpoch), "set one owner on both: dot sync owner --profile=peer --set <coordinator>")
 	case local.Coordinator && peer.Coordinator:
 		// A takeover's pending fence: the lower epoch demotes at its next run.
@@ -223,24 +235,33 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 			higher, max(local.OwnerEpoch, peer.OwnerEpoch), lower, min(local.OwnerEpoch, peer.OwnerEpoch)),
 			"on "+lower+": dot peer sync (its fence demotes it)")
 	case !local.Coordinator && !peer.Coordinator:
-		// Each owner guard refuses, so no peer sync runs.
-		add("roles", DoctorFail, fmt.Sprintf("neither machine is the coordinator (owner %q here, %q on %s)", local.Owner, peer.Owner, there), "on the Mac in use: dot sync owner --profile=peer --set-self")
+		// Each owner guard refuses, so no peer sync runs. Adopting with an
+		// epoch above both makes the fence side with the Mac in use.
+		add("roles", DoctorFail, fmt.Sprintf("neither machine is the coordinator (owner %q here, %q on %s)", local.Owner, peer.Owner, there),
+			fmt.Sprintf("on the Mac in use: dot peer adopt --self --epoch %d", max(local.OwnerEpoch, peer.OwnerEpoch)+1))
 	default:
 		c, n, coord, other := local, peer, here, there
 		if peer.Coordinator {
 			c, n, coord, other = peer, local, there, here
 		}
-		// peerFence on the coordinator compares owners at equal epochs, and
-		// against a peer without an epoch; different owners refuse there.
-		if (n.OwnerEpoch == c.OwnerEpoch || n.OwnerEpoch == 0) && NormalizeHostname(n.Owner) != NormalizeHostname(c.Owner) {
-			add("roles", DoctorFail, fmt.Sprintf("the fence refuses: %s records owner %q (epoch %d), %s records %q (epoch %d)", coord, c.Owner, c.OwnerEpoch, other, n.Owner, n.OwnerEpoch),
-				fmt.Sprintf("on %s: dot peer adopt --owner %s --epoch %d", other, c.Owner, c.OwnerEpoch))
-		} else {
+		// The settled state: the other Mac records the coordinator's owner
+		// and epoch, so the fence proceeds.
+		align := fmt.Sprintf("on %s: dot peer adopt --owner %s --epoch %d", other, c.Owner, c.OwnerEpoch)
+		demote, err := fenceDecision(c.Owner, c.OwnerEpoch, n.Owner, n.OwnerEpoch)
+		switch {
+		case err != nil:
+			add("roles", DoctorFail, fmt.Sprintf("%s's next sync is refused: %v", coord, err), align)
+		case demote && answersTo(c.MachineNames, n.Owner):
+			add("roles", DoctorWarn, fmt.Sprintf("%s records epoch %d over %s's %d: %s's next sync demotes it and removes its scheduler, though it stays the owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
+		case demote:
+			add("roles", DoctorFail, fmt.Sprintf("%s records owner %q at epoch %d over %s's %d: %s's next sync demotes it to that owner, which it does not answer to, leaving no coordinator", other, n.Owner, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
+		case n.OwnerEpoch != c.OwnerEpoch:
+			// The coordinator proceeds; the other Mac never syncs to catch up.
+			add("roles", DoctorPass, fmt.Sprintf("coordinator: %s (epoch %d here, %d on %s)", coord, local.OwnerEpoch, peer.OwnerEpoch, there), "")
+			add("roles", DoctorWarn, fmt.Sprintf("%s still records epoch %d (the coordinator's is %d)", other, n.OwnerEpoch, c.OwnerEpoch), align)
+		default:
 			add("roles", DoctorPass, fmt.Sprintf("coordinator: %s (epoch %d here, %d on %s)", coord, local.OwnerEpoch, peer.OwnerEpoch, there), "")
 		}
-	}
-	if local.OwnerEpoch != peer.OwnerEpoch && (!local.Coordinator || !peer.Coordinator) {
-		add("roles", DoctorWarn, fmt.Sprintf("owner epochs differ (%d here, %d on %s); the higher wins at the next sync's fence and the other side demotes", local.OwnerEpoch, peer.OwnerEpoch, there), "")
 	}
 
 	for _, s := range sides {

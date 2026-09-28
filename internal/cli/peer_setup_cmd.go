@@ -266,8 +266,11 @@ propagation and filter files that differ.`,
 			}
 
 			p.Section("both machines")
-			if report.PeerFactsErr != nil {
-				p.Warn("the peer's facts are unavailable: %v", report.PeerFactsErr)
+			switch {
+			case report.PeerFactsErr != nil:
+				p.Fail("the peer's facts are unavailable: %v", report.PeerFactsErr)
+			case report.Peer == nil:
+				p.Warn("not compared: the peer's dot did not resolve (see peer dot above)")
 			}
 			for _, check := range report.Checks {
 				switch check.Level {

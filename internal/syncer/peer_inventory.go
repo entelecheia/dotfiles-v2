@@ -57,7 +57,7 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 	snap, err := parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
 	if errors.Is(err, errPeerNameNotNFD) {
 		// The name lives on the peer, so the fix runs there (#182).
-		return nil, fmt.Errorf("%w on %s; run there: dot sync names normalize --profile=peer (dot peer doctor counts them)", err, cfg.Target.Host)
+		return nil, fmt.Errorf("%w on %s; run there: dot sync names normalize --profile=peer --yes (dot peer doctor counts them)", err, cfg.Target.Host)
 	}
 	return snap, err
 }
@@ -364,12 +364,16 @@ func checkRemotePeerTopology(cfg *Config, status *remotePeerStatus) error {
 // checkRemotePeerOwnerMatch is the pre-epoch refusal: without an epoch to
 // order them, two different owners can never both proceed.
 func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
-	wantOwner := NormalizeHostname(cfg.Owner)
-	gotOwner := NormalizeHostname(status.Profile.Owner)
+	return ownerMatchError(cfg.Owner, status.Profile.Owner)
+}
+
+func ownerMatchError(localOwner, remoteOwner string) error {
+	wantOwner := NormalizeHostname(localOwner)
+	gotOwner := NormalizeHostname(remoteOwner)
 	if wantOwner == "" || gotOwner != wantOwner {
 		return fmt.Errorf(
 			"peer coordinator check: both profiles must name the same owner (local %q, remote %q); set the remote profile to %q and keep its scheduler off",
-			cfg.Owner, status.Profile.Owner, cfg.Owner)
+			localOwner, remoteOwner, localOwner)
 	}
 	return nil
 }

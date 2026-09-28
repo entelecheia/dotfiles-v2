@@ -191,27 +191,37 @@ func peerFence(cfg *Config, remote *remotePeerStatus) (demote, legacy bool, err 
 	if err := checkRemotePeerTopology(cfg, remote); err != nil {
 		return false, false, err
 	}
-	if strings.TrimSpace(cfg.Owner) == "" {
-		return false, false, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+	demote, err = fenceDecision(cfg.Owner, cfg.OwnerEpoch, remote.Profile.Owner, remote.OwnerEpoch)
+	if remote.OwnerEpoch == 0 && strings.TrimSpace(cfg.Owner) != "" {
+		legacy = remote.DotVersion == ""
 	}
-	legacy = remote.DotVersion == ""
-	if remote.OwnerEpoch == 0 {
+	return demote, legacy, err
+}
+
+// fenceDecision is peerFence's verdict from the two owners and epochs once
+// the topology matches. `dot peer doctor` asks it from the coordinator's
+// side, so the doctor cannot drift from the fence (#182).
+func fenceDecision(localOwner string, localEpoch int, remoteOwner string, remoteEpoch int) (demote bool, err error) {
+	if strings.TrimSpace(localOwner) == "" {
+		return false, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+	}
+	if remoteEpoch == 0 {
 		// A remote without epoch support refuses (or proceeds) through the
 		// existing owner-mismatch check, exactly as before epochs existed.
-		return false, legacy, checkRemotePeerOwnerMatch(cfg, remote)
+		return false, ownerMatchError(localOwner, remoteOwner)
 	}
 	switch {
-	case remote.OwnerEpoch > cfg.OwnerEpoch:
-		return true, false, nil
-	case cfg.OwnerEpoch > remote.OwnerEpoch:
-		return false, false, nil
+	case remoteEpoch > localEpoch:
+		return true, nil
+	case localEpoch > remoteEpoch:
+		return false, nil
 	}
-	if NormalizeHostname(cfg.Owner) != NormalizeHostname(remote.Profile.Owner) {
-		return false, false, fmt.Errorf(
+	if NormalizeHostname(localOwner) != NormalizeHostname(remoteOwner) {
+		return false, fmt.Errorf(
 			"peer fence: equal owner epochs (%d) with different owners (local %q, remote %q); both sides refuse — pick one coordinator and set it with `dot sync owner --profile=peer --set <machine>`",
-			cfg.OwnerEpoch, cfg.Owner, remote.Profile.Owner)
+			localEpoch, localOwner, remoteOwner)
 	}
-	return false, false, nil
+	return false, nil
 }
 
 // recheckPeerOwnerBeforeMutation re-reads the remote owner immediately before
