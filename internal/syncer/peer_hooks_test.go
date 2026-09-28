@@ -168,3 +168,52 @@ func TestPeerSyncDemotion_RunsOnDeactivateFirst(t *testing.T) {
 		t.Fatalf("service actions = %v, want the hook first and the peer scheduler last", lines)
 	}
 }
+
+func TestRunPeerHooks_BadGlobAndTargetUserHome(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "record.log")
+	installHookServiceStubs(t, record, "com.maru.job.a")
+	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.[", "app-quit Maru"}}}
+	res := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
+	if res[0].Err == nil || !strings.Contains(res[0].Err.Error(), "bad label glob") {
+		t.Fatalf("malformed glob reported as %+v", res[0])
+	}
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	// --home names another user: no action may run in the caller's session.
+	_ = os.Remove(record)
+	cfg.Home = t.TempDir()
+	res = runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
+	if !strings.Contains(res[1].Detail, "another user's session") || readRecord(t, record) != "" {
+		t.Fatalf("target-user app hook ran: %+v / %q", res[1], readRecord(t, record))
+	}
+}
+
+// A handover relays the new coordinator's on_activate outcomes, failures
+// included, from its setup output.
+func TestPeerHandover_RelaysRemoteHookResults(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1)
+	sb.installRecordingLaunchctl(t)
+	sb.installFakeRemoteDot(t)
+	sb.plantPeerPlist(t)
+	dot := filepath.Join(sb.home, ".local", "bin", "dot")
+	if err := os.Rename(dot, dot+".real"); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, dot, "#!/bin/sh\n"+
+		"if [ \"$1 $2\" = 'peer setup' ]; then\n"+
+		"  echo 'hook on_activate app-open Maru: opened Maru'\n"+
+		"  echo 'hook on_activate launchd-bootstrap com.maru.job.*: bootstrapping x failed' >&2\n"+
+		"fi\n"+
+		"exec '"+dot+".real' \"$@\"\n")
+	res, err := PeerHandover(context.Background(), PeerHandoverOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)})
+	if err != nil {
+		t.Fatalf("PeerHandover: %v", err)
+	}
+	if !strings.Contains(strings.Join(res.Steps, "\n"), "peer hook on_activate app-open Maru: opened Maru") {
+		t.Fatalf("steps lack the remote hook success: %v", res.Steps)
+	}
+	if len(res.RemoteHookFailures) != 1 || !strings.Contains(res.RemoteHookFailures[0], "bootstrapping x failed") {
+		t.Fatalf("remote hook failures = %v", res.RemoteHookFailures)
+	}
+}

@@ -94,11 +94,20 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 	if arg == "" || strings.ContainsAny(arg, "\"\\\n") {
 		return "", fmt.Errorf("hook action %q needs one argument without quotes or backslashes", action)
 	}
+	if strings.HasPrefix(verb, "launchd-") {
+		// A malformed glob would otherwise match nothing and report success
+		// while the jobs keep running.
+		if _, err := path.Match(arg, ""); err != nil {
+			return "", fmt.Errorf("bad label glob %q: %w", arg, err)
+		}
+	}
 	if runtime.GOOS != "darwin" {
 		return "skipped: needs macOS", nil
 	}
-	if strings.HasPrefix(verb, "launchd-") && schedulerRequiresTargetUserServiceDomain(cfg) {
-		return "skipped: --home targets another user's launchd domain", nil
+	if schedulerRequiresTargetUserServiceDomain(cfg) {
+		// launchctl and the app actions would act in the caller's session,
+		// not the --home user's.
+		return "skipped: --home targets another user's session", nil
 	}
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	switch verb {

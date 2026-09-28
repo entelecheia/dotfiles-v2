@@ -60,6 +60,9 @@ coordinator with ` + "`dot peer git realign --apply`" + ` (fetch first).`,
 				p.Bullet(ui.MarkPresent, step)
 			}
 			printPeerHooks(p, res.Hooks)
+			for _, line := range res.RemoteHookFailures {
+				p.Warn("peer %s", line)
+			}
 			if res.DryRun {
 				p.Blank()
 				p.Line("Run without --dry-run to hand over.")

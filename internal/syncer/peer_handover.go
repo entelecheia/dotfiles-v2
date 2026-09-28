@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -529,8 +530,10 @@ type PeerHandoverResult struct {
 	Epoch    int
 	Steps    []string
 	// Hooks are this machine's on_deactivate results; the new coordinator
-	// runs its on_activate when its scheduler is installed.
-	Hooks []HookResult
+	// runs its on_activate when its scheduler is installed, and the lines
+	// its setup reported as failed are in RemoteHookFailures.
+	Hooks              []HookResult
+	RemoteHookFailures []string
 }
 
 // PeerHandover moves coordination to the peer, planned, with both machines
@@ -634,14 +637,37 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	}
 	step("peer baseline set aside; bootstrap sync complete")
 
-	// 5. The peer's scheduler on.
-	if _, err := peerRemoteDot(ctx, opts.Runner, cfg, "peer", "setup"); err != nil {
+	// 5. The peer's scheduler on. Its setup runs the peer's on_activate
+	// hooks; a failed hook does not fail the setup, so the outcomes are
+	// relayed from its output (successes on stdout, failures on stderr).
+	res, err := peerRemoteDotResult(ctx, opts.Runner, cfg, "peer", "setup")
+	if err != nil {
 		return nil, fmt.Errorf(
 			"peer handover: installing the peer's scheduler failed: %w. Ownership already moved; run `dot peer setup` on %s to finish",
 			err, cfg.Target.Host)
 	}
-	step("peer scheduler installed; its on_activate hooks ran there")
+	step("peer scheduler installed")
+	for _, line := range hookLines(res.Stdout) {
+		step("peer %s", line)
+	}
+	for _, line := range hookLines(res.Stderr) {
+		result.RemoteHookFailures = append(result.RemoteHookFailures, line)
+	}
 	return result, nil
+}
+
+var sgrRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// hookLines picks the role-hook lines out of a remote dot's output.
+func hookLines(out string) []string {
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(sgrRe.ReplaceAllString(line, ""))
+		if strings.Contains(line, "hook "+HookOnActivate) {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // peerRemoteDotCommand builds the remote resolver plus an exact argv for a
@@ -662,15 +688,25 @@ func peerRemoteDotCommand(args ...string) (string, error) {
 
 // peerRemoteDot runs a dot subcommand on the peer and returns its stdout.
 func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args ...string) (string, error) {
-	cmd, err := peerRemoteDotCommand(args...)
+	res, err := peerRemoteDotResult(ctx, runner, cfg, args...)
 	if err != nil {
 		return "", err
 	}
+	return res.Stdout, nil
+}
+
+// peerRemoteDotResult runs a dot subcommand on the peer and returns both
+// output streams.
+func peerRemoteDotResult(ctx context.Context, runner *exec.Runner, cfg *Config, args ...string) (*exec.Result, error) {
+	cmd, err := peerRemoteDotCommand(args...)
+	if err != nil {
+		return nil, err
+	}
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", cfg.Target.Host, cmd)
 	if err != nil {
-		return "", fmt.Errorf("peer handover: remote `dot %s` failed: %w", strings.Join(args, " "), err)
+		return nil, fmt.Errorf("peer handover: remote `dot %s` failed: %w", strings.Join(args, " "), err)
 	}
-	return res.Stdout, nil
+	return res, nil
 }
 
 // peerRemoteAdopt asks the peer to adopt itself as coordinator and returns
