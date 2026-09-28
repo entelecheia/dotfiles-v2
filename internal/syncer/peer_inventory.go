@@ -56,27 +56,176 @@ func peerRemoteInventory(ctx context.Context, runner *exec.Runner, cfg *Config, 
 	return parsePeerRemoteInventory(res.Stdout, time.UTC, baseline, requireNFD)
 }
 
-const remotePeerDotResolver = `set -eu
-dot_bin=
-for candidate in "$HOME/.local/bin/dot" /opt/homebrew/bin/dot /usr/local/bin/dot /home/linuxbrew/.linuxbrew/bin/dot; do
-  if [ -x "$candidate" ]; then
-    dot_bin=$candidate
-    break
-  fi
-done
-if [ -z "$dot_bin" ]; then
-  dot_bin=$(command -v dot 2>/dev/null || true)
-fi
-if [ -z "$dot_bin" ] || [ ! -x "$dot_bin" ]; then
-  echo "peer dot binary is missing from supported install locations" >&2
-  exit 127
-fi`
+// remoteDotCandidates are the shell words the peer probe expands into dot
+// candidates, in preference order for equal versions. Tests replace them so
+// a probe never reaches a dot installed on the test host.
+var remoteDotCandidates = `"$HOME/.local/bin/dot" /opt/homebrew/bin/dot /usr/local/bin/dot /home/linuxbrew/.linuxbrew/bin/dot "$(command -v dot 2>/dev/null || true)"`
 
-const remotePeerStatusCommand = remotePeerDotResolver + `
-exec "$dot_bin" peer status --json`
+// remoteDotProbe lists every executable dot candidate on the peer with the
+// first line of its --version banner, one "path<TAB>banner" line each.
+func remoteDotProbe(candidates string) string {
+	return `# dot-peer: list dot candidates
+for c in ` + candidates + `; do
+  [ -n "$c" ] && [ -x "$c" ] || continue
+  printf '%s\t%s\n' "$c" "$("$c" --version 2>/dev/null | head -n 1)"
+done`
+}
 
-const remotePeerNormalizeCommand = remotePeerDotResolver + `
-exec "$dot_bin" sync names normalize --profile=peer --yes`
+// remoteDot is the peer's dot binary a run talks to.
+type remoteDot struct {
+	Path    string
+	Banner  string // first --version line, e.g. "dot version 2.70.22 (388a398)"
+	release []int  // nil for a dev build or an unreadable banner
+	// Pinned says the peer config's remote_dot chose it.
+	Pinned bool
+	// Passed names the other dot installs the probe passed over, "path
+	// (banner)" each; copies of the chosen version are left out.
+	Passed []string
+}
+
+// Unreleased reports a chosen binary that is not a release build and that no
+// remote_dot pin asked for: the fallback when the peer has nothing newer.
+func (d *remoteDot) Unreleased() bool {
+	return d != nil && d.release == nil && !d.Pinned
+}
+
+// String renders the binary for notices: path and version together.
+func (d *remoteDot) String() string {
+	if d == nil {
+		return "unknown"
+	}
+	banner := d.Banner
+	if banner == "" {
+		banner = "no version banner"
+	}
+	return d.Path + " (" + banner + ")"
+}
+
+// dotRelease parses "dot version 2.70.22 (sha)" into [2 70 22]. A dev build
+// ("dot version dev (sha)") and anything unreadable yield nil.
+func dotRelease(banner string) []int {
+	fields := strings.Fields(banner)
+	if len(fields) < 3 || fields[1] != "version" {
+		return nil
+	}
+	return parseRelease(fields[2])
+}
+
+// parseRelease parses "2.70.22" (optionally "v"-prefixed); nil otherwise.
+func parseRelease(v string) []int {
+	parts := strings.Split(strings.TrimPrefix(v, "v"), ".")
+	if len(parts) != 3 {
+		return nil
+	}
+	out := make([]int, 3)
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return nil
+		}
+		out[i] = n
+	}
+	return out
+}
+
+// dotVersionsDiffer reports two releases that differ: the local version
+// string ("2.70.22 (sha)", as cobra renders it) against the peer's banner. A
+// dev build on either side is not compared.
+func dotVersionsDiffer(local string, remote *remoteDot) bool {
+	fields := strings.Fields(local)
+	if len(fields) == 0 || remote == nil || remote.release == nil {
+		return false
+	}
+	mine := parseRelease(fields[0])
+	return mine != nil && (releaseNewer(mine, remote.release) || releaseNewer(remote.release, mine))
+}
+
+func releaseNewer(a, b []int) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return false
+}
+
+// pickRemoteDot chooses the newest release among the probed candidates, so a
+// stale dev build at ~/.local/bin/dot no longer shadows the installed
+// release (#176). A dev build is used only when nothing else exists; the
+// sync and doctor then name it (Unreleased). A candidate whose banner is not
+// dot's (Graphviz also installs a `dot`) is ignored unless pinned.
+func pickRemoteDot(probe string, pinned bool) (*remoteDot, error) {
+	var all []*remoteDot
+	seen := map[string]bool{}
+	for _, line := range strings.Split(probe, "\n") {
+		path, banner, ok := strings.Cut(strings.TrimRight(line, "\r"), "\t")
+		banner = strings.TrimSpace(banner)
+		if !ok || path == "" || seen[path] || (!pinned && !strings.HasPrefix(banner, "dot version ")) {
+			continue
+		}
+		seen[path] = true
+		all = append(all, &remoteDot{Path: path, Banner: banner, release: dotRelease(banner), Pinned: pinned})
+	}
+	if len(all) == 0 {
+		return nil, fmt.Errorf("peer dot binary is missing from supported install locations")
+	}
+	best := all[0]
+	for _, cand := range all[1:] {
+		if cand.release != nil && (best.release == nil || releaseNewer(cand.release, best.release)) {
+			best = cand
+		}
+	}
+	for _, cand := range all {
+		if cand != best && cand.Banner != best.Banner {
+			best.Passed = append(best.Passed, cand.String())
+		}
+	}
+	return best, nil
+}
+
+// resolveRemoteDot probes the peer once per run and caches the choice on the
+// config. The peer profile's remote_dot pins the path (the way to use a dev
+// build, read by scheduled runs too); it must still exist and run there.
+func resolveRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config) (*remoteDot, error) {
+	if cfg.remoteDot != nil {
+		return cfg.remoteDot, nil
+	}
+	candidates := remoteDotCandidates
+	pinned := strings.TrimSpace(cfg.RemoteDot)
+	if pinned != "" {
+		candidates = remoteShellPath(pinned)
+	}
+	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remoteDotProbe(candidates))
+	if err != nil {
+		return nil, fmt.Errorf("peer dot probe on %s: %w", cfg.Target.Host, err)
+	}
+	dot, err := pickRemoteDot(res.Stdout, pinned != "")
+	if err != nil {
+		if pinned != "" {
+			return nil, fmt.Errorf("remote_dot %q in the peer config is not an executable on %s", pinned, cfg.Target.Host)
+		}
+		return nil, fmt.Errorf("%s on %s", err, cfg.Target.Host)
+	}
+	cfg.remoteDot = dot
+	return dot, nil
+}
+
+// remoteShellPath quotes a peer path for the remote shell, letting a leading
+// "~/" expand to the peer's home.
+func remoteShellPath(path string) string {
+	if rest, ok := strings.CutPrefix(path, "~/"); ok {
+		return `"$HOME"/` + shellQuote(rest)
+	}
+	return shellQuote(path)
+}
+
+func remotePeerStatusCommand(dot string) string {
+	return "exec " + shellQuote(dot) + " peer status --json"
+}
+
+func remotePeerNormalizeCommand(dot string) string {
+	return "exec " + shellQuote(dot) + " sync names normalize --profile=peer --yes"
+}
 
 // remotePeerStatus is the narrow view of a remote `dot peer status --json`
 // document the coordinator check reads. The full document is assembled by the
@@ -139,7 +288,11 @@ func fetchRemotePeerStatus(ctx context.Context, runner *exec.Runner, cfg *Config
 	if cfg == nil || !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer coordinator check: target is not SSH")
 	}
-	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand)
+	dot, err := resolveRemoteDot(ctx, runner, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("peer coordinator check: %w", err)
+	}
+	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerStatusCommand(dot.Path))
 	if err != nil {
 		return nil, fmt.Errorf("peer coordinator check: reading remote peer status: %w", err)
 	}
@@ -220,7 +373,11 @@ func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
 }
 
 func normalizeRemotePeerNames(ctx context.Context, runner *exec.Runner, cfg *Config) error {
-	if _, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerNormalizeCommand); err != nil {
+	dot, err := resolveRemoteDot(ctx, runner, cfg)
+	if err != nil {
+		return fmt.Errorf("normalizing peer workspace names: %w", err)
+	}
+	if _, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host, remotePeerNormalizeCommand(dot.Path)); err != nil {
 		return fmt.Errorf("normalizing peer workspace names: %w", err)
 	}
 	return nil

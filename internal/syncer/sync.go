@@ -96,6 +96,12 @@ type Config struct {
 	// While set, PeerSchedule skips the reachability and remote-owner checks.
 	FencePending bool
 
+	// RemoteDot is the peer profile's remote_dot pin; empty picks the newest
+	// release on the peer.
+	RemoteDot string
+	// remoteDot caches the peer's dot binary for one run (resolveRemoteDot).
+	remoteDot *remoteDot
+
 	// NamesNormalized avoids a second full workspace scan when a CLI caller
 	// already ran the marker-gated NFD preflight under the shared lock.
 	NamesNormalized bool
@@ -326,6 +332,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Home:              override,
 		Owner:             localCfg.Owner,
 		OwnerAliases:      localCfg.OwnerAliases,
+		RemoteDot:         localCfg.RemoteDot,
 		OwnerEpoch:        localCfg.OwnerEpoch,
 		FencePending:      localCfg.FencePending,
 		IncludeSubmodules: localCfg.IncludeSubmodules,

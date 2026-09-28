@@ -11,10 +11,13 @@ rewrites the owner in every profile of this workspace owned by <old> (mirror
 and peer alike), then does the same on the peer over ssh unless --local-only.
 Only a profile whose current owner is <old> is renamed. The old name stays
 as an alias, so the guard and the peer's owner check keep matching while
-either Mac still answers to it; a generic name such as "Mac" is not kept, and
-the aliases retire at the first complete peer sync that finds both machines
-recording the new owner. A peer that passes its own owner guard at equal
-epochs is refused, so aliases cannot admit a second coordinator. The epoch, targets and baselines are untouched, so no run plans
+either Mac still answers to it; a generic name such as "Mac" is not kept.
+The coordinator retires its aliases at the first complete peer sync that
+finds the peer recording the new owner, once this Mac answers to the new
+name; the peer's copies stay until its owner next changes. At equal epochs
+the peer fence refuses a peer that passes its own owner guard. When the peer
+cannot be reached, the rename runs only on a Mac that still answers to <old>
+(or with --local-only). The epoch, targets and baselines are untouched, so no run plans
 a deletion. It refuses when this Mac answers to neither name, and when the
 peer answers to either one: moving ownership between the Macs is --set or
 dot peer handover. --dry-run shows the change without writing anything.

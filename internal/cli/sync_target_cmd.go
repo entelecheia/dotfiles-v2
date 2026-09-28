@@ -190,10 +190,13 @@ rewrites the owner in every profile of this workspace owned by <old> (mirror
 and peer alike), then does the same on the peer over ssh unless --local-only.
 Only a profile whose current owner is <old> is renamed. The old name stays
 as an alias, so the guard and the peer's owner check keep matching while
-either Mac still answers to it; a generic name such as "Mac" is not kept, and
-the aliases retire at the first complete peer sync that finds both machines
-recording the new owner. A peer that passes its own owner guard at equal
-epochs is refused, so aliases cannot admit a second coordinator. The epoch, targets and baselines are untouched, so no run plans
+either Mac still answers to it; a generic name such as "Mac" is not kept.
+The coordinator retires its aliases at the first complete peer sync that
+finds the peer recording the new owner, once this Mac answers to the new
+name; the peer's copies stay until its owner next changes. At equal epochs
+the peer fence refuses a peer that passes its own owner guard. When the peer
+cannot be reached, the rename runs only on a Mac that still answers to <old>
+(or with --local-only). The epoch, targets and baselines are untouched, so no run plans
 a deletion. It refuses when this Mac answers to neither name, and when the
 peer answers to either one: moving ownership between the Macs is --set or
 dot peer handover. --dry-run shows the change without writing anything.
@@ -258,15 +261,28 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 		case !peer.Config.Target.IsSSH():
 			peer = nil
 		}
+		checked := false
 		if peer != nil {
+			host := peer.Config.Target.Host
+			if answersTo([]string{host}, oldName) || answersTo([]string{host}, newName) {
+				return fmt.Errorf("the peer target %q is %q or %q: a rename cannot move ownership between the Macs; use dot sync owner --set or dot peer handover", host, oldName, newName)
+			}
 			peerNames, err := syncer.PeerMachineNames(cmd.Context(), probeRunner(), peer.Config)
 			switch {
 			case err != nil:
-				p.Warn("peer %s could not be read (%v); it cannot be checked or migrated now", peer.Config.Target.Host, err)
+				p.Warn("peer %s could not be read (%v); it cannot be checked or migrated now", host, err)
 				peer = nil
 			case answersTo(peerNames, oldName) || answersTo(peerNames, newName):
 				return fmt.Errorf("the peer answers to %s, which includes %q or %q: a rename cannot move ownership between the Macs; use dot sync owner --set or dot peer handover", strings.Join(peerNames, ", "), oldName, newName)
+			default:
+				checked = true
 			}
+		}
+		// Without the peer's answer, only the machine that still answers to
+		// the old name is known to be the owner being renamed; after the host
+		// rename it could as well be the other Mac claiming the owner.
+		if !checked && !answersTo(names, oldName) {
+			return fmt.Errorf("the peer could not confirm that it is not %q or %q, and this machine no longer answers to %q; wake the peer and retry, or run with --local-only on the Mac being renamed", oldName, newName, oldName)
 		}
 	}
 

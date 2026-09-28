@@ -270,3 +270,23 @@ func TestPeerSync_RetiresAliasesOnceBothMachinesAgree(t *testing.T) {
 		t.Fatalf("aliases %v, retired event %q", got.OwnerAliases, retired)
 	}
 }
+
+// A rename recorded before the host rename keeps its aliases until this Mac
+// answers to the new name: retiring earlier would lock it out.
+func TestPeerSync_KeepsAliasesUntilTheHostAnswersToTheNewName(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{owner: "future-name", epoch: 2, dotVersion: "9.9.9 (fake)"}, 2)
+	if err := SaveLocalConfig(sb.paths, &LocalConfig{
+		Target: "ssh:fake-peer:" + sb.peer, Owner: "future-name", OwnerAliases: []string{sb.owner}, OwnerEpoch: 2,
+		Propagation: PropagationPolicy{Create: true, Update: true, Delete: true}, MaxDelete: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sb.cfg.Owner, sb.cfg.OwnerAliases = "future-name", []string{sb.owner}
+	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true})
+	if err != nil || !res.Complete {
+		t.Fatalf("PeerSync: %+v %v", res, err)
+	}
+	if got := loadPeerStoreConfig(t, sb.paths); len(got.OwnerAliases) != 1 {
+		t.Fatalf("aliases retired while the host still answers only to one: %+v", got)
+	}
+}

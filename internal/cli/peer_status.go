@@ -136,6 +136,12 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Linked worktrees", strconv.Itoa(len(worktrees))+" (excluded from sync)")
 	}
 	p.KV("Target", st.Target.String())
+	// The peer probes every dot install and uses the newest release; this
+	// names the binary answering here, which over ssh may not be the one an
+	// interactive shell finds first (#176).
+	if exe, err := os.Executable(); err == nil {
+		p.KV("Dot", exe+" ("+cmd.Root().Version+")")
+	}
 	// The owner is a recorded name and this machine answers to live host
 	// names; after a Mac rename the two drift apart (#185).
 	owner := cfg.Owner

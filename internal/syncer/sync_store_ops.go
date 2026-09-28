@@ -522,7 +522,7 @@ type OwnerRenameResult struct {
 // change), not the target, not a baseline, so no run plans a deletion.
 func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRenameResult, error) {
 	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
-	if oldName == "" || newName == "" || strings.ContainsAny(newName, " \t'\"/") {
+	if oldName == "" || newName == "" || strings.ContainsAny(newName, " \t\r\n'\"/") {
 		return nil, fmt.Errorf("owner rename needs an old and a new machine name, the new one without spaces, quotes or slashes (got %q -> %q)", oldName, newName)
 	}
 	if strings.ContainsAny(oldName, "'\"\n") {

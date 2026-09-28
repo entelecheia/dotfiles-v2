@@ -165,13 +165,18 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 		case syncer.PeerEventPartialTransfer:
 			reportPartial(p, e.Err)
 		case syncer.PeerEventPeerLacksHandover:
-			version := e.Path
-			if version == "" {
-				version = "unknown (pre-handover release)"
-			}
-			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", version)
+			p.Warn("peer dot %s predates owner epochs; fence, handover and takeover are skipped on that side", e.Path)
+			p.Line("  Upgrade dot on the peer, or pin a newer binary with remote_dot in the peer config.")
+		case syncer.PeerEventPeerDotUnreleased:
+			p.Warn("peer dot %s is not a release build; install a release there, or pin it with remote_dot in the peer config", e.Path)
+		case syncer.PeerEventDotVersionMismatch:
+			p.Warn("peer dot %s is a different release from this machine's; upgrade the older side", e.Path)
 		case syncer.PeerEventOwnerAliasesRetired:
-			p.Success("both machines record the renamed owner; earlier names retired in: %s", e.Path)
+			if e.Err != nil {
+				p.Warn("retiring the earlier owner names failed (retried on the next run): %v", e.Err)
+			} else {
+				p.Success("both machines record the renamed owner; earlier names retired in: %s", e.Path)
+			}
 		case syncer.PeerEventReplicaPushFailed:
 			p.Warn("replica push failed: %v", e.Err)
 			p.Line("  The run itself is complete; the next unplanned switch may lack a fresh replica.")
@@ -285,6 +290,8 @@ on a laptop.`,
 				SkipHome: skipHome,
 				DryRun:   dryRun,
 				Progress: renderPeerEvent(p),
+
+				LocalDotVersion: c.Root().Version,
 			})
 			if err != nil {
 				return quietScheduledContention(bs.Runner, err)
