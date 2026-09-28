@@ -204,6 +204,8 @@ const (
 	PeerEventHostPathsMissing                           // no host-path list exists; Path names where one would live
 	PeerEventHomeTrackedStart                           // the tracked host-path pass begins
 	PeerEventPartialTransfer                            // rsync moved some but not all of a pass; Err carries it
+	PeerEventPeerLacksHandover                          // peer dot predates epochs; Path names its version when known
+	PeerEventReplicaPushFailed                          // the replica push after a complete run failed; Err carries it
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -450,9 +452,12 @@ type PeerSyncOptions struct {
 
 // PeerSyncResult reports how the transaction ended. Complete=false means
 // destructive transitions were held back and the baseline was left alone.
+// Demoted means this machine lost the epoch fence: it adopted the peer's
+// owner and epoch and removed its scheduler instead of transferring.
 type PeerSyncResult struct {
 	Unreachable bool
 	Complete    bool
+	Demoted     bool
 }
 
 // PeerSync exchanges the workspace and the host paths with the peer.
@@ -486,9 +491,26 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		return nil, err
 	}
 	cfg.RemoteRsyncPath = rp
-	remoteStatus, err := checkRemotePeerOwner(ctx, probe, cfg)
+	// The fence runs on first contact, before any transfer. A previous-
+	// release peer (no dotVersion, no epoch) gets exactly the pre-epoch
+	// owner-mismatch behavior; an epoch pair resolves coordinator divergence
+	// here and the loser demotes itself instead of syncing.
+	remoteStatus, err := fetchRemotePeerStatus(ctx, probe, cfg)
 	if err != nil {
 		return nil, err
+	}
+	demote, legacy, err := peerFence(cfg, remoteStatus)
+	if err != nil {
+		return nil, err
+	}
+	if legacy {
+		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventPeerLacksHandover, Path: remoteStatus.DotVersion})
+	}
+	if demote {
+		if err := demotePeer(ctx, runner, cfg, remoteStatus.Profile.Owner, remoteStatus.OwnerEpoch, dryRun); err != nil {
+			return nil, err
+		}
+		return &PeerSyncResult{Demoted: true}, nil
 	}
 
 	// The linked-worktree exclude is a sticky union of the stored list, local
@@ -557,6 +579,15 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		}
 	}
 	if !opts.PullOnly {
+		// The remote owner is re-read immediately before the first remote
+		// mutation after the pull pass: a coordinator change while the pull
+		// was moving bytes must stop this run before it deletes or pushes
+		// anything on the peer.
+		if !dryRun {
+			if err := recheckPeerOwnerBeforeMutation(ctx, probe, cfg); err != nil {
+				return nil, err
+			}
+		}
 		deleteSet := intersectPeerPaths(tombstones, plan.DeleteRemote)
 		if !cfg.Propagation.Delete {
 			deleteSet = nil
@@ -635,6 +666,23 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if complete && !dryRun && !opts.PushOnly && !opts.PullOnly && canCommitBaseline {
 		if err := CommitPeerBaseline(cfg, plan.NextBaseline); err != nil {
 			return nil, err
+		}
+	}
+	if complete && !dryRun && !opts.PushOnly && !opts.PullOnly {
+		// After every complete two-way run the coordinator pushes its
+		// baselines and filter files to the peer store as the takeover
+		// replica. The replica is a safety net: its failure degrades the next
+		// unplanned switch, not this run, so it is reported, not fatal.
+		if err := PushPeerReplica(ctx, runner, cfg); err != nil {
+			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventReplicaPushFailed, Err: err})
+		}
+		if cfg.FencePending {
+			// The first complete run after contact: the fence has done its
+			// job and normal requirements apply again.
+			if err := clearPeerFencePending(cfg); err != nil {
+				return nil, err
+			}
+			cfg.FencePending = false
 		}
 	}
 	if !dryRun {
@@ -765,11 +813,16 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	// coordinator immediately before the dry-run/mutation branch so actual
 	// scheduler installs still require bilateral owner agreement, while an
 	// invalid local artifact can be rejected without a network dependency.
-	if err := CheckSSH(ctx, opts.Probe, cfg.Target.Host); err != nil {
-		return nil, fmt.Errorf("checking peer coordinator before scheduler setup: %w", err)
-	}
-	if _, err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
-		return nil, err
+	// A takeover with a pending fence installs its scheduler while the old
+	// coordinator is still away, so these two checks are skipped only then;
+	// the fence on the first contact after the peer returns settles the role.
+	if !cfg.FencePending {
+		if err := CheckSSH(ctx, opts.Probe, cfg.Target.Host); err != nil {
+			return nil, fmt.Errorf("checking peer coordinator before scheduler setup: %w", err)
+		}
+		if _, err := checkRemotePeerOwner(ctx, opts.Probe, cfg); err != nil {
+			return nil, err
+		}
 	}
 	// Mirror the off-arm above. The write below bypasses the runner entirely
 	// (os.MkdirAll + os.WriteFile), so without this a preview leaves a plist on

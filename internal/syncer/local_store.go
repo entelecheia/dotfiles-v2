@@ -142,6 +142,16 @@ type LocalConfig struct {
 	// is on, so each run undoes the other. Empty means unrestricted (the
 	// pre-existing behavior, kept so upgrades are not gated on setting it).
 	Owner string `yaml:"owner,omitempty"`
+	// OwnerEpoch orders coordinator transitions (peer profile). Every
+	// deliberate owner change bumps it; on first contact after a switch the
+	// higher epoch wins and the lower demotes itself. Zero means the profile
+	// predates epochs and the fence stays in the pre-epoch refusal mode.
+	OwnerEpoch int `yaml:"owner_epoch,omitempty"`
+	// FencePending marks a takeover that has not yet met the old coordinator.
+	// While set, PeerSchedule and PeerSync skip the reachability and
+	// remote-owner requirements (an unreachable run still exits 0); the first
+	// complete run after contact clears it.
+	FencePending bool `yaml:"fence_pending,omitempty"`
 	// IncludeSubmodules carries submodule working trees in the payload.
 	// The cloud mirror deliberately leaves them out - they round-trip through
 	// Git, and mirroring them would duplicate gigabytes. A peer profile wants

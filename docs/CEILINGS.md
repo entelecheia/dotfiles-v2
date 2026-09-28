@@ -110,3 +110,35 @@ own pre-delete payloads, small and few at current operating scale, and making
 the conflicts walker understand a second root name is a wider change than the
 feature needs. Replace this limit when the conflicts listing learns
 named-root trees; until then, prune `~/.dot-peer-conflicts` by hand.
+
+## Unplanned peer switch window
+
+`internal/syncer/peer_handover.go` implements `dot peer takeover`: the Mac
+becoming active installs the replica the last coordinator pushed after its
+last complete run and adopts ownership with a higher epoch. Anything the old
+coordinator changed after that run — unpushed commits and uncommitted work —
+never reaches the new coordinator's baseline. When the old Mac returns, the
+first run reconciles precisely and the active Mac's simultaneous edits win,
+but the pre-replica-gap edits are simply absent.
+
+This is accepted: the alternative (machine-to-machine Git transport,
+checkpoints, or `refs/peer/*`) was rejected by the owner on 2026-09-27 for
+conflict and loss risk. The window is one sync interval, and the workspace
+rule of pushing on every commit keeps it small. Replace this limit only if a
+safe machine-to-machine state channel is ever designed.
+
+## Replica bootstrap trust
+
+A takeover validates the pushed replica (`<workspace>/.dotfiles/peer/replica/`
+with `meta.yaml`) by per-file sha256, a reverse-target check against this
+profile, and a generation counter (`<workspace>/.dotfiles/peer/replica-generation`)
+that must not go backwards. The FIRST takeover on a store that has never
+recorded a generation accepts whatever the replica says: there is no local
+evidence to compare against, and the channel that wrote the replica is the
+same ssh trust the sync itself runs on.
+
+Accepting a first-seen replica is deliberate: rejecting it would make every
+first unplanned switch impossible, which is the exact moment takeover exists
+for. The generation counter closes the stale-replica hole from the second
+switch onward. Replace this limit if the replica gains a signature or a
+second, independent provenance channel.

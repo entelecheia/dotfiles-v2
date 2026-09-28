@@ -88,6 +88,13 @@ type Config struct {
 	// read it so the rsync argv and the Go walk agree layer for layer.
 	WorktreeExcludes []string
 
+	// OwnerEpoch orders coordinator transitions on the peer profile. Loaded
+	// from the store config; bumped by every deliberate owner change.
+	OwnerEpoch int
+	// FencePending marks a takeover that has not met the old coordinator yet.
+	// While set, PeerSchedule skips the reachability and remote-owner checks.
+	FencePending bool
+
 	// NamesNormalized avoids a second full workspace scan when a CLI caller
 	// already ran the marker-gated NFD preflight under the shared lock.
 	NamesNormalized bool
@@ -311,6 +318,8 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Profile:           profile,
 		Home:              override,
 		Owner:             localCfg.Owner,
+		OwnerEpoch:        localCfg.OwnerEpoch,
+		FencePending:      localCfg.FencePending,
 		IncludeSubmodules: localCfg.IncludeSubmodules,
 		LocalPath:         localPath,
 		MirrorPath:        mirrorPath,
