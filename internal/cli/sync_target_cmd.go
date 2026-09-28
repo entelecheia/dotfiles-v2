@@ -201,11 +201,12 @@ cannot be reached, the rename runs only on a Mac that still answers to <old>
 (or with --local-only). The epoch, targets and baselines are untouched, so no
 run plans a deletion. It refuses when this Mac answers to neither name, when
 the peer (or the peer target's host) answers to either one, and, once this
-Mac no longer answers to <old>, unless it runs the peer scheduler (only the
-coordinator may; without a peer, the mirror's): moving ownership between the
-Macs is --set or dot peer handover. --local-only skips these checks; it is
-the step the command runs on the peer. A retry after a peer failure goes on
-to the peer. --dry-run shows the change without writing anything.
+Mac no longer answers to <old>, unless it runs the peer scheduler and the
+peer, asked then, runs none (without a peer, or a peer that cannot answer,
+only --local-only renames it): moving ownership between the Macs is --set or
+dot peer handover. --local-only skips these checks; it is the step the
+command runs on the peer. A retry after a peer failure goes on to the peer.
+--dry-run shows the change without writing anything.
 
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer
@@ -269,6 +270,7 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 			peer = nil
 		}
 		checked := false
+		var peerView *syncer.PeerView
 		if peer != nil {
 			// The target host names the other Mac. A user@ prefix is not part
 			// of the host.
@@ -279,28 +281,36 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 			if answersTo([]string{host}, oldName) || answersTo([]string{host}, newName) {
 				return fmt.Errorf("the peer target %q is %q or %q: a rename cannot move ownership between the Macs; use dot sync owner --set or dot peer handover", peer.Config.Target.Host, oldName, newName)
 			}
-			peerNames, err := syncer.PeerMachineNames(cmd.Context(), probeRunner(), peer.Config)
+			view, err := syncer.PeerOwnerView(cmd.Context(), probeRunner(), peer.Config)
 			switch {
 			case err != nil:
 				p.Warn("peer %s could not be read (%v); it cannot be checked or migrated now", peer.Config.Target.Host, err)
 				peer = nil
-			case answersTo(peerNames, oldName) || answersTo(peerNames, newName):
-				return fmt.Errorf("the peer answers to %s, which includes %q or %q: a rename cannot move ownership between the Macs; use dot sync owner --set or dot peer handover", strings.Join(peerNames, ", "), oldName, newName)
+			case answersTo(view.MachineNames, oldName) || answersTo(view.MachineNames, newName):
+				return fmt.Errorf("the peer answers to %s, which includes %q or %q: a rename cannot move ownership between the Macs; use dot sync owner --set or dot peer handover", strings.Join(view.MachineNames, ", "), oldName, newName)
 			default:
-				checked = true
+				checked, peerView = true, view
 			}
 		}
 		// Once this Mac no longer answers to <old>, nothing in the names
 		// shows that it, and not the other Mac, is the owner being renamed:
-		// after both host renames neither answers to <old>. The owner is the
-		// Mac that runs the peer scheduler, which only the coordinator may
-		// install. Without the peer's answer, the rename waits for it.
+		// after both host renames neither answers to <old>. Both sides must
+		// then agree which Mac runs the owner's peer scheduler: this one does
+		// and the peer, asked just now, does not. Anything less (no peer
+		// profile, a peer store that does not load, a peer that cannot
+		// answer, a stale plist on both) refuses; --local-only on the Mac
+		// being renamed stays the explicit override.
 		if !answersOld {
+			root := strings.TrimRight(bs.Config.LocalPath, "/")
 			switch {
-			case peer == nil && !checked && peerConfigured(cmd):
+			case !peerStoreExists(root):
+				return fmt.Errorf("this machine no longer answers to %q and there is no peer to confirm which Mac is the owner; run --rename while the owner still answers to %q, or with --local-only on the owner", oldName, oldName)
+			case !checked:
 				return fmt.Errorf("the peer could not confirm that it is not %q or %q, and this machine no longer answers to %q; wake the peer and retry, or run with --local-only on the Mac being renamed", oldName, newName, oldName)
-			case !runsOwnerScheduler(cmd, bs):
-				return fmt.Errorf("this machine no longer answers to %q and does not run the owner's dot scheduler, so it cannot be shown to be the owner being renamed; run --rename on the coordinator (the Mac with the peer scheduler), where --local-only is also allowed", oldName)
+			case !runsPeerScheduler(bs):
+				return fmt.Errorf("this machine no longer answers to %q and does not run the peer scheduler, so it cannot be shown to be the owner being renamed; run --rename on the coordinator (the Mac with the peer scheduler), where --local-only is also allowed", oldName)
+			case peerView.Scheduler != syncer.SchedulerNotInstalled.String():
+				return fmt.Errorf("both Macs claim the owner's peer scheduler (the peer reports %q), so neither can be shown to be the owner being renamed; remove the stale one with dot peer setup --off there, or run with --local-only on the owner", peerView.Scheduler)
 			}
 		}
 	}
@@ -342,26 +352,18 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 	return nil
 }
 
-// peerConfigured reports a peer profile with an ssh target.
-func peerConfigured(cmd *cobra.Command) bool {
-	peer, err := peerBootstrapReadOnly(cmd)
-	return err == nil && peer.Config.Target.IsSSH()
+// peerStoreExists reports a peer profile store, loadable or not: a store
+// that fails to load must not read as "no peer".
+func peerStoreExists(root string) bool {
+	_, err := os.Stat(filepath.Join(root, ".dotfiles", syncer.PeerProfile, "config.yaml"))
+	return err == nil
 }
 
-// runsOwnerScheduler reports the owner's dot scheduler on this machine. With
-// a peer, that is the peer scheduler: only the coordinator may install it,
-// and demotion and handover remove it. The mirror unit proves nothing there
-// (`dot sync setup` installs it on either Mac), so it counts only in a
-// mirror-only workspace.
-func runsOwnerScheduler(cmd *cobra.Command, bs *syncer.BootstrapResult) bool {
-	plist := filepath.Join(bs.Config.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist")
-	if !peerConfigured(cmd) {
-		if bs.Config.SystemPaths == nil || bs.Config.SystemPaths.LaunchdPlist == "" {
-			return false
-		}
-		plist = bs.Config.SystemPaths.LaunchdPlist
-	}
-	_, err := os.Stat(plist)
+// runsPeerScheduler reports the peer scheduler's plist on this machine.
+// Alone it proves nothing (a --set leaves the old coordinator's plist); the
+// rename also asks the peer.
+func runsPeerScheduler(bs *syncer.BootstrapResult) bool {
+	_, err := os.Stat(filepath.Join(bs.Config.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist"))
 	return err == nil
 }
 

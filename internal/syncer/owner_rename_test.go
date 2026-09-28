@@ -297,3 +297,24 @@ func TestPeerSync_KeepsAliasesUntilTheHostAnswersToTheNewName(t *testing.T) {
 		t.Fatalf("aliases retired while the host still answers only to one: %+v", got)
 	}
 }
+
+// Retirement clears the peer store last: a run retries only while the peer
+// profile holds aliases, so a failure on another store must leave them.
+func TestRetireOwnerAliasesClearsThePeerStoreLast(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes read-only directories")
+	}
+	root := t.TempDir()
+	sync := seedProfile(t, root, DefaultProfile, &LocalConfig{Owner: "m5x26", OwnerAliases: []string{"old"}})
+	peer := seedProfile(t, root, PeerProfile, &LocalConfig{Owner: "m5x26", OwnerAliases: []string{"old"}, OwnerEpoch: 2, Target: "ssh:m3x23:/w"})
+	if err := os.Chmod(sync.StoreDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sync.StoreDir, 0o755) })
+	if _, err := RetireOwnerAliases(root, "m5x26"); err == nil {
+		t.Fatal("a store that cannot be saved was not reported")
+	}
+	if got := loadPeerStoreConfig(t, peer); len(got.OwnerAliases) != 1 {
+		t.Fatalf("the peer store lost its aliases before the others: %v", got.OwnerAliases)
+	}
+}

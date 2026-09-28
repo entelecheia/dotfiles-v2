@@ -595,11 +595,24 @@ func RenameOwner(workspaceRoot, oldName, newName string, dryRun bool) (*OwnerRen
 // store of the workspace owned by owner. A complete peer run calls it once
 // the peer records the same owner: both machines are migrated and the old
 // names must stop admitting writes. It returns the profiles it changed.
+//
+// ponytail: known ceiling. See docs/CEILINGS.md (owner aliases outside the coordinator's peer run).
 func RetireOwnerAliases(workspaceRoot, owner string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(workspaceRoot, ".dotfiles"))
 	if err != nil {
 		return nil, err
 	}
+	// The peer store goes last: a run retries only while the peer profile
+	// still holds aliases, so a failure on another store must leave them.
+	slices.SortStableFunc(entries, func(a, b os.DirEntry) int {
+		switch {
+		case a.Name() == PeerProfile && b.Name() != PeerProfile:
+			return 1
+		case b.Name() == PeerProfile && a.Name() != PeerProfile:
+			return -1
+		}
+		return 0
+	})
 	var retired []string
 	for _, entry := range entries {
 		if !entry.IsDir() || ValidateProfile(entry.Name()) != nil {

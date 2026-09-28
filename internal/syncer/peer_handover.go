@@ -679,6 +679,22 @@ func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args .
 // PeerMachineNames reads the live host names the peer answers to, from its
 // status document.
 func PeerMachineNames(ctx context.Context, runner *exec.Runner, cfg *Config) ([]string, error) {
+	view, err := PeerOwnerView(ctx, runner, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return view.MachineNames, nil
+}
+
+// PeerView is what an owner rename asks the other Mac: the names it answers
+// to and its peer scheduler's state.
+type PeerView struct {
+	MachineNames []string
+	Scheduler    string // "not installed" when it has none; "" when unknown
+}
+
+// PeerOwnerView reads the peer's status document over ssh.
+func PeerOwnerView(ctx context.Context, runner *exec.Runner, cfg *Config) (*PeerView, error) {
 	if err := CheckSSH(ctx, runner, cfg.Target.Host); err != nil {
 		return nil, err
 	}
@@ -686,7 +702,7 @@ func PeerMachineNames(ctx context.Context, runner *exec.Runner, cfg *Config) ([]
 	if err != nil {
 		return nil, err
 	}
-	return status.Profile.MachineNames, nil
+	return &PeerView{MachineNames: status.Profile.MachineNames, Scheduler: status.Job.State}, nil
 }
 
 // RenamePeerOwner applies `dot sync owner --rename <old> <new> --local-only`

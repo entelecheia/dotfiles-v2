@@ -255,6 +255,11 @@ type remotePeerStatus struct {
 			Path string `json:"path"`
 		} `json:"target"`
 	} `json:"profile"`
+	// Job is the remote's peer scheduler; State is "not installed" when it
+	// has none.
+	Job struct {
+		State string `json:"state"`
+	} `json:"job"`
 }
 
 // checkRemotePeerOwner makes the single-coordinator invariant bilateral. A

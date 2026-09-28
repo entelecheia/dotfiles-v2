@@ -20,11 +20,12 @@ cannot be reached, the rename runs only on a Mac that still answers to <old>
 (or with --local-only). The epoch, targets and baselines are untouched, so no
 run plans a deletion. It refuses when this Mac answers to neither name, when
 the peer (or the peer target's host) answers to either one, and, once this
-Mac no longer answers to <old>, unless it runs the peer scheduler (only the
-coordinator may; without a peer, the mirror's): moving ownership between the
-Macs is --set or dot peer handover. --local-only skips these checks; it is
-the step the command runs on the peer. A retry after a peer failure goes on
-to the peer. --dry-run shows the change without writing anything.
+Mac no longer answers to <old>, unless it runs the peer scheduler and the
+peer, asked then, runs none (without a peer, or a peer that cannot answer,
+only --local-only renames it): moving ownership between the Macs is --set or
+dot peer handover. --local-only skips these checks; it is the step the
+command runs on the peer. A retry after a peer failure goes on to the peer.
+--dry-run shows the change without writing anything.
 
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer
