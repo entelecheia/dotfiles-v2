@@ -225,6 +225,7 @@ type hostMerge struct {
 	local, peer map[string]any // both copies, decoded
 	result      map[string]any // what both machines get
 	localInfo   os.FileInfo    // re-checked right before the write
+	peerData    []byte         // the peer's copy as read, re-checked likewise
 	refused     string         // why the run cannot merge it; it stops before anything moves
 	same        bool           // equal in substance: nothing to write, still host_merge's
 }
@@ -316,7 +317,7 @@ func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hos
 		if peerMtime.After(info.ModTime()) {
 			newer, older = peer, local
 		}
-		m.local, m.peer, m.localInfo = local, peer, info
+		m.local, m.peer, m.localInfo, m.peerData = local, peer, info, peerData
 		m.result = mergeJSONKeys(newer, older, m.keys)
 		merges = append(merges, m)
 	}
@@ -383,18 +384,25 @@ func hostKeyPolicy(cfg *Config, rel string) ([]string, bool) {
 	return nil, false
 }
 
-// annotateHotItems marks hot host items and lists the key-level
-// differences of hot JSON files. A file planHostMerges merges in this run
-// (two-way runs only) becomes a merge item, added when rsync listed none;
-// a refused one carries the refusal. Any other losing copy that holds
-// entries the winner lacks is called out: newest-wins would drop them.
-func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, items []PeerPlanItem, twoWay bool, merges []hostMerge) []PeerPlanItem {
-	byRel := map[string]*hostMerge{}
-	for i := range merges {
-		byRel[merges[i].rel] = &merges[i]
+// runDirection names what a run moves: "both", or the one direction of a
+// --push-only or --pull-only run.
+func runDirection(pushOnly, pullOnly bool) string {
+	switch {
+	case pushOnly:
+		return "push"
+	case pullOnly:
+		return "pull"
 	}
-	rendered := map[string]bool{}
-	dup := map[int]bool{}
+	return "both"
+}
+
+// annotateHotItems marks hot host items and lists the key-level
+// differences of hot JSON files; a losing copy that holds entries the
+// winner lacks is called out: newest-wins would drop them. The files
+// planHostMerges decided are not newest-wins input and are not listed by
+// the pass: each one that differs becomes an item here, merged in a two-way
+// run (direction "both"), held in a one-way one.
+func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, items []PeerPlanItem, direction string, merges []hostMerge) []PeerPlanItem {
 	for i := range items {
 		it := &items[i]
 		if it.Scope == PlanScopeWorkspace {
@@ -402,18 +410,6 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		}
 		keys, merge := hostKeyPolicy(cfg, it.Path)
 		it.Hot = isHotHostPath(it.Path) || merge
-		if m := byRel[it.Path]; m != nil && twoWay && it.Scope == PlanScopeHost {
-			// rsync can list a file both ways (equal mtime, other size); the
-			// merge is one write on both machines. An equal file moves not at
-			// all: the pass leaves it out.
-			if rendered[m.rel] || m.same {
-				dup[i] = true
-				continue
-			}
-			renderHostMerge(it, m)
-			rendered[m.rel] = true
-			continue
-		}
 		if len(keys) == 0 {
 			continue
 		}
@@ -431,11 +427,8 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 			continue
 		}
 		hint := "set host_merge for this file to keep them"
-		switch {
-		case merge && it.Scope != PlanScopeHost:
+		if merge && it.Scope != PlanScopeHost {
 			hint = "host_merge does not apply to tracked host paths"
-		case merge && !twoWay:
-			hint = "host_merge runs only in a two-way sync"
 		}
 		var warnings []string
 		for _, d := range diffJSONKeys(local, peer, keys) {
@@ -453,38 +446,33 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 			it.Warning = "newest wins: " + strings.Join(warnings, "; ") + "; " + hint
 		}
 	}
-	if len(dup) > 0 {
-		kept := items[:0]
-		for i, it := range items {
-			if !dup[i] {
-				kept = append(kept, it)
-			}
-		}
-		items = kept
-	}
-	if twoWay {
-		// A merge rsync lists nothing for (equal size and mtime) is still a
-		// write on both machines.
-		for i := range merges {
-			if !rendered[merges[i].rel] && !merges[i].same {
-				items = append(items, PeerPlanItem{Path: merges[i].rel, Scope: PlanScopeHost, Hot: true})
-				renderHostMerge(&items[len(items)-1], &merges[i])
-			}
+	for i := range merges {
+		if !merges[i].same {
+			items = append(items, PeerPlanItem{Path: merges[i].rel, Scope: PlanScopeHost, Hot: true})
+			renderHostMerge(&items[len(items)-1], &merges[i], direction)
 		}
 	}
 	return items
 }
 
-func renderHostMerge(it *PeerPlanItem, m *hostMerge) {
-	if m.refused != "" {
-		it.Warning = "host_merge cannot merge it: " + m.refused + "; the run stops before anything moves"
-		return
-	}
+func renderHostMerge(it *PeerPlanItem, m *hostMerge, direction string) {
 	for _, d := range diffJSONKeys(m.local, m.peer, m.keys) {
 		it.Keys = append(it.Keys, d.String())
 	}
-	it.Action, it.Direction = "merge", "both"
-	it.Reason = "merged on both machines before the transfer (host_merge: " + strings.Join(m.keys, ", ") + ")"
+	switch {
+	case direction != "both":
+		it.Action, it.Direction = "update", direction
+		it.Reason = "held: host_merge merges it only in a two-way run"
+		if m.refused != "" {
+			it.Reason += ", where it cannot: " + m.refused
+		}
+	case m.refused != "":
+		it.Action, it.Direction = "conflict", "both"
+		it.Reason = "host_merge cannot merge it: " + m.refused + "; the run stops before anything moves"
+	default:
+		it.Action, it.Direction = "merge", "both"
+		it.Reason = "merged on both machines before the transfer (host_merge: " + strings.Join(m.keys, ", ") + ")"
+	}
 }
 
 // mergePeerHostFiles runs planHostMerges again right before the additive
@@ -492,7 +480,8 @@ func renderHostMerge(it *PeerPlanItem, m *hostMerge) {
 // each result is written here with a fresh mtime and pushed with it, so the
 // pass then finds two equal copies. Both sides are always written: the
 // result must not depend on which copy the pass would call newer (the
-// peer's mtime is read to the second). It returns the files it merged.
+// peer's mtime is read to the second). Every file a decision covers joins
+// the pass's exclusions, written or not. It returns the files it merged.
 //
 // ponytail: known ceiling. See docs/CEILINGS.md (host_merge read-merge-write race).
 func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Config) ([]string, error) {
@@ -506,17 +495,22 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		if err != nil {
 			return merged, err
 		}
-		if err := hostMergeRefusal(merges, "the host pass did not run; the next run merges it"); err != nil {
+		for _, rel := range hostMergeRels(merges) {
+			if !slices.Contains(cfg.hostMergeExcluded, rel) {
+				cfg.hostMergeExcluded = append(cfg.hostMergeExcluded, rel)
+			}
+		}
+		if err := hostMergeRefusal(merges, "the host pass did not run; the next two-way run merges it"); err != nil {
 			return merged, err
 		}
-		changed, err := writeHostMerges(ctx, runner, cfg, merges, &merged)
+		changed, err := writeHostMerges(ctx, runner, probe, cfg, merges, &merged)
 		if err != nil || changed == "" {
 			return merged, err
 		}
 		if attempt == hostMergeAttempts {
 			// Stop before the additive pass: the run is partial, the baseline
 			// stays, and the next run merges from both copies again.
-			return merged, fmt.Errorf("host_merge %s: the file kept changing during the merge (%d attempts); the host pass did not run, the next run merges it", changed, hostMergeAttempts)
+			return merged, fmt.Errorf("host_merge %s: the file kept changing during the merge (%d attempts); the host pass did not run, the next two-way run merges it", changed, hostMergeAttempts)
 		}
 	}
 }
@@ -552,14 +546,20 @@ func pushMergedCopy(ctx context.Context, runner *exec.Runner, cfg *Config, rel s
 const hostMergeAttempts = 3
 
 // writeHostMerges writes each decided merge on both machines, in order. It
-// stops at a file changed here since planHostMerges read it and names it.
-func writeHostMerges(ctx context.Context, runner *exec.Runner, cfg *Config, merges []hostMerge, merged *[]string) (string, error) {
+// stops at a file changed on either machine since planHostMerges read it
+// and names it.
+func writeHostMerges(ctx context.Context, runner, probe *exec.Runner, cfg *Config, merges []hostMerge, merged *[]string) (string, error) {
 	for _, m := range merges {
 		if m.same {
 			continue
 		}
 		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(m.rel))
 		if now, err := os.Stat(localPath); err != nil || now.Size() != m.localInfo.Size() || !now.ModTime().Equal(m.localInfo.ModTime()) {
+			return m.rel, nil
+		}
+		// The peer's copy is read again, whole: its mtime has one-second
+		// precision there.
+		if now, err := readPeerHostFile(ctx, probe, cfg, m.rel); err != nil || !bytes.Equal(now, m.peerData) {
 			return m.rel, nil
 		}
 		body, err := encodeJSONObject(m.result)

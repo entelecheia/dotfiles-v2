@@ -270,8 +270,9 @@ tool):
   top-level JSON keys from both copies are merged into the newer copy,
   which is written here (atomic rename, mode and owner kept, a symlink
   refused) and pushed to the peer with its mtime from a private copy; the
-  additive pass of a two-way run leaves every `host_merge` file present on
-  both machines alone, merged or equal. Other keys are the
+  additive pass of any run leaves every `host_merge` file present on both
+  machines alone, merged or equal (a `--push-only` or `--pull-only` run
+  merges nothing and holds them). Other keys are the
   newer copy's; an unlisted file is only ever copied whole, as before.
   Never a file under a tool skill root (refused before a run starts), or
   one the additive host pass does not move.

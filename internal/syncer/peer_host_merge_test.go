@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -113,20 +114,40 @@ func TestPeerSync_HostMergeKeepsEntriesFromBothMacs(t *testing.T) {
 	}
 }
 
-// #181: host_merge runs only in a two-way run; a one-directional plan must
-// not claim the merge and must warn about what newest-wins drops.
-func TestPeerSync_OneWayPlanDoesNotClaimTheMerge(t *testing.T) {
-	cfg, _, _ := claudeJSONFixture(t,
-		`{"mcpServers":{"a":{},"mine":{}}}`,
-		`{"mcpServers":{"a":{},"kimi-cu":{}}}`)
-	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
-	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, PullOnly: true, Itemize: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	it := findItem(t, res.Plan, ".claude.json")
-	if strings.Contains(it.Reason, "merged") || !strings.Contains(it.Warning, "mine") || !strings.Contains(it.Warning, "host_merge runs only in a two-way sync") {
-		t.Fatalf("item = %+v", it)
+// #181 AC2 in a one-way run: host_merge merges only in a two-way run, so a
+// --pull-only or --push-only run holds a file present on both machines
+// instead of letting the newer copy drop the other's entries on both.
+func TestPeerSync_OneWayRunHoldsHostMergeFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		pushOnly, pullOnly bool
+		direction          string
+	}{{"pull-only, peer newer", false, true, "pull"}, {"push-only, local newer", true, false, "push"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			local := `{"mcpServers":{"a":{},"mine":{}}}`
+			cfg, localHome, peerHome := claudeJSONFixture(t, local, `{"mcpServers":{"a":{},"kimi-cu":{}}}`)
+			if tc.pushOnly {
+				writePeerHomeFile(t, localHome, ".claude.json", local, peerHomeFixedTime.Add(7200e9))
+			}
+			cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+			opts := PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, PushOnly: tc.pushOnly, PullOnly: tc.pullOnly, Itemize: true}
+			res, err := PeerSync(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if it := findItem(t, res.Plan, ".claude.json"); it.Action != "update" || it.Direction != tc.direction || !strings.HasPrefix(it.Reason, "held: host_merge") {
+				t.Fatalf("item = %+v", it)
+			}
+			opts.Runner, opts.DryRun, opts.Itemize = peerScheduleRunner(false), false, false
+			if _, err := PeerSync(context.Background(), opts); err != nil {
+				t.Fatal(err)
+			}
+			for home, want := range map[string]string{localHome: `"mine"`, peerHome: `"kimi-cu"`} {
+				if body := string(gitStateFileBytes(t, filepath.Join(home, ".claude.json"))); !strings.Contains(body, want) {
+					t.Errorf("%s lost %s: %s", home, want, body)
+				}
+			}
+		})
 	}
 }
 
@@ -320,6 +341,11 @@ func TestHostMergePlanMatchesWhatTheRunDid(t *testing.T) {
 				t.Fatalf("dry=%v: err = %v", dry, err)
 			}
 		}
+		// The plan lists it as an item with an action, like every item.
+		res, _ := PeerDiff(context.Background(), PeerDiffOptions{Config: cfg, Probe: peerScheduleRunner(false), Itemize: true})
+		if it := findItem(t, res.Items, ".claude.json"); it.Action != "conflict" || it.Direction != "both" || !strings.Contains(it.Reason, "cannot merge") {
+			t.Fatalf("refused item = %+v", it)
+		}
 		if _, err := os.Stat(filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), "peer-only.txt")); !os.IsNotExist(err) {
 			t.Fatalf("the workspace pass ran before the refusal: %v", err)
 		}
@@ -378,6 +404,43 @@ func TestHostMergeSurvivesALocalSaveDuringTheMerge(t *testing.T) {
 	}
 }
 
+// The peer's app saving its copy while the merge step works on it: the
+// write re-reads the peer's copy and decides again, so its new entry is not
+// overwritten by the merged push.
+func TestHostMergeSurvivesAPeerSaveDuringTheMerge(t *testing.T) {
+	cfg, localHome, peerHome := claudeJSONFixture(t,
+		`{"mcpServers":{"a":{},"mine":{}}}`,
+		`{"mcpServers":{"a":{},"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	real, err := osexec.LookPath("ssh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The second peer-mtime read (the merge step's decision) saves the
+	// peer's file after the decision read it.
+	bin, count := t.TempDir(), filepath.Join(t.TempDir(), "count")
+	peer := filepath.Join(peerHome, ".claude.json")
+	writeStub(t, filepath.Join(bin, "ssh"), "#!/bin/sh\n"+
+		"case \"$*\" in *'stat -c %Y'*)\n"+
+		"  n=$(( $(cat '"+count+"' 2>/dev/null || echo 0) + 1 )); echo $n > '"+count+"'\n"+
+		"  if [ \"$n\" -eq 2 ]; then printf '{\"mcpServers\":{\"a\":{},\"kimi-cu\":{},\"late\":{}}}' > '"+peer+"'; fi ;;\n"+
+		"esac\n"+
+		"exec '"+real+"' \"$@\"\n")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, home := range []string{localHome, peerHome} {
+		body := string(gitStateFileBytes(t, filepath.Join(home, ".claude.json")))
+		for _, want := range []string{`"mine"`, `"kimi-cu"`, `"late"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %s: %s", home, want, body)
+			}
+		}
+	}
+}
+
 // host_merge never writes where BOUNDARIES forbids: skill roots and Maru's
 // trees, in any letter case (APFS is case-insensitive).
 func TestValidateHostMergeRefusesForbiddenRoots(t *testing.T) {
@@ -396,56 +459,76 @@ func TestValidateHostMergeRefusesForbiddenRoots(t *testing.T) {
 // newest-wins input any more, so the peer keeps the union and the next run
 // restores this Mac.
 func TestHostMergeSurvivesAStaleSaveAfterTheMerge(t *testing.T) {
-	cfg, localHome, peerHome := claudeJSONFixture(t,
-		`{"mcpServers":{"a":{},"mine":{}}}`,
-		`{"mcpServers":{"a":{},"kimi-cu":{},"pencil":{}}}`)
-	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers", "projects"}}
-	real, err := osexec.LookPath("ssh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Once the merge has written this Mac (the file holds the peer's entry),
-	// the next rsync starts with a stale copy saved here, clearly newer than
-	// the merge (an app saves seconds later; POSIX touch -t).
-	bin, done := t.TempDir(), filepath.Join(t.TempDir(), "done")
-	local := filepath.Join(localHome, ".claude.json")
-	later := time.Now().Add(time.Hour).Format("200601021504.05")
-	writeStub(t, filepath.Join(bin, "ssh"), "#!/bin/sh\n"+
-		"case \"$*\" in *'rsync --server'*)\n"+
-		"  if [ ! -f '"+done+"' ] && grep -q kimi-cu '"+local+"'; then\n"+
-		"    printf '{\"mcpServers\":{\"a\":{},\"mine\":{}},\"numStartups\":99}' > '"+local+"'; touch -t "+later+" '"+local+"'; touch '"+done+"'\n"+
-		"  fi ;;\n"+
-		"esac\n"+
-		"exec '"+real+"' \"$@\"\n")
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	run := func() {
-		t.Helper()
-		if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	run()
-	if _, err := os.Stat(done); err != nil {
-		t.Fatal("the stale save never happened; the test proves nothing")
-	}
-	if peer := string(gitStateFileBytes(t, filepath.Join(peerHome, ".claude.json"))); !strings.Contains(peer, "kimi-cu") || !strings.Contains(peer, "pencil") || !strings.Contains(peer, "mine") {
-		t.Fatalf("the stale save reached the peer: %s", peer)
-	}
-	run()
-	for _, home := range []string{localHome, peerHome} {
-		body := string(gitStateFileBytes(t, filepath.Join(home, ".claude.json")))
-		for _, want := range []string{"kimi-cu", "pencil", "mine"} {
-			if !strings.Contains(body, want) {
-				t.Errorf("%s lacks %s after the next run: %s", home, want, body)
+	// late: the peer's copy appears only after the preflight decided, so
+	// the merge step's own decision must keep it out of newest-wins.
+	for _, late := range []bool{false, true} {
+		t.Run(fmt.Sprintf("late=%v", late), func(t *testing.T) {
+			cfg, localHome, peerHome := claudeJSONFixture(t,
+				`{"mcpServers":{"a":{},"mine":{}}}`,
+				`{"mcpServers":{"a":{},"kimi-cu":{},"pencil":{}}}`)
+			cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers", "projects"}}
+			real, err := osexec.LookPath("ssh")
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
+			peerFile := filepath.Join(peerHome, ".claude.json")
+			appear := ""
+			if late {
+				if err := os.Rename(peerFile, peerFile+".later"); err != nil {
+					t.Fatal(err)
+				}
+				// The second read of the peer's copy (the merge step's) finds it.
+				count := filepath.Join(t.TempDir(), "reads")
+				appear = "case \"$*\" in *__dot_absent__*)\n" +
+					"  n=$(( $(cat '" + count + "' 2>/dev/null || echo 0) + 1 )); echo $n > '" + count + "'\n" +
+					"  if [ \"$n\" -eq 2 ]; then mv '" + peerFile + ".later' '" + peerFile + "'; fi ;;\n" +
+					"esac\n"
+			}
+			// Once the merge has written this Mac (the file holds the peer's
+			// entry), the next rsync starts with a stale copy saved here,
+			// clearly newer than the merge (an app saves seconds later; POSIX
+			// touch -t).
+			bin, done := t.TempDir(), filepath.Join(t.TempDir(), "done")
+			local := filepath.Join(localHome, ".claude.json")
+			later := time.Now().Add(time.Hour).Format("200601021504.05")
+			writeStub(t, filepath.Join(bin, "ssh"), "#!/bin/sh\n"+appear+
+				"case \"$*\" in *'rsync --server'*)\n"+
+				"  if [ ! -f '"+done+"' ] && grep -q kimi-cu '"+local+"'; then\n"+
+				"    printf '{\"mcpServers\":{\"a\":{},\"mine\":{}},\"numStartups\":99}' > '"+local+"'; touch -t "+later+" '"+local+"'; touch '"+done+"'\n"+
+				"  fi ;;\n"+
+				"esac\n"+
+				"exec '"+real+"' \"$@\"\n")
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			run := func() {
+				t.Helper()
+				if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run()
+			if _, err := os.Stat(done); err != nil {
+				t.Fatal("the stale save never happened; the test proves nothing")
+			}
+			if peer := string(gitStateFileBytes(t, peerFile)); !strings.Contains(peer, "kimi-cu") || !strings.Contains(peer, "pencil") || !strings.Contains(peer, "mine") {
+				t.Fatalf("the stale save reached the peer: %s", peer)
+			}
+			run()
+			for _, home := range []string{localHome, peerHome} {
+				body := string(gitStateFileBytes(t, filepath.Join(home, ".claude.json")))
+				for _, want := range []string{"kimi-cu", "pencil", "mine"} {
+					if !strings.Contains(body, want) {
+						t.Errorf("%s lacks %s after the next run: %s", home, want, body)
+					}
+				}
+			}
+		})
 	}
 }
 
 // Copies equal at the merge step are still host_merge's for the rest of
 // the run: a stale save during the additive pass must not reach the other
-// Mac (it stays here; the next run's merge restores it).
+// Mac (it stays here; the next two-way run's merge restores it).
 func TestHostMergeKeepsEqualCopiesOutOfNewestWins(t *testing.T) {
 	full := `{"mcpServers":{"a":{},"mine":{},"kimi-cu":{}}}`
 	cfg, localHome, peerHome := claudeJSONFixture(t, full, full)

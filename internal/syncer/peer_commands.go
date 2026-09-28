@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -483,7 +482,7 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 			return nil, err
 		}
 		items.Items = append(items.Items, additive...)
-		items.Items = annotateHotItems(ctx, opts.Probe, cfg, items.Items, true, merges)
+		items.Items = annotateHotItems(ctx, opts.Probe, cfg, items.Items, "both", merges)
 		items.sortItems()
 		res.Items = items
 		// peer sync stops on the same refusal before anything moves.
@@ -591,8 +590,9 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	}
 	// After the fence (a bad key must not keep a losing Mac from demoting)
 	// and before anything moves: a bad key would otherwise stop every run
-	// halfway, after the workspace pass. Only a run that merges reads it.
-	if !opts.PushOnly && !opts.PullOnly && !opts.SkipHome {
+	// halfway, after the workspace pass. Every run with the host pass reads
+	// it: a one-way run holds the files it names.
+	if !opts.SkipHome {
 		if err := validateHostMerge(cfg.HostMerge); err != nil {
 			return nil, err
 		}
@@ -637,19 +637,22 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
 		return nil, err
 	}
-	// host_merge decides here, before anything moves: a file it cannot merge
-	// stops the run now, not after the workspace pass (#181). The same
-	// decision draws the plan; the merge step takes it again from the
-	// copies as they are then.
+	// host_merge decides here, before anything moves (#181). A file on both
+	// machines is never newest-wins input, in any direction: a two-way run
+	// merges it (one it cannot merge stops the run now, not after the
+	// workspace pass), a one-way run holds it. The same decision draws the
+	// plan; the merge step takes it again from the copies as they are then.
 	twoWay := !opts.PushOnly && !opts.PullOnly
 	var merges []hostMerge
-	if twoWay && !opts.SkipHome {
+	if !opts.SkipHome {
 		m, err := planHostMerges(ctx, probe, cfg)
 		if err != nil {
 			return nil, err
 		}
-		if err := hostMergeRefusal(m, "nothing was transferred"); err != nil {
-			return nil, err
+		if twoWay {
+			if err := hostMergeRefusal(m, "nothing was transferred"); err != nil {
+				return nil, err
+			}
 		}
 		merges = m
 		cfg.hostMergeExcluded = hostMergeRels(m)
@@ -769,17 +772,12 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 				return nil, err
 			}
 			runPlan.Items = append(runPlan.Items, additive...)
-			runPlan.Items = annotateHotItems(ctx, probe, cfg, runPlan.Items, twoWay, merges)
+			runPlan.Items = annotateHotItems(ctx, probe, cfg, runPlan.Items, runDirection(opts.PushOnly, opts.PullOnly), merges)
 		}
 		// host_merge runs before the additive pass and only in a two-way run:
 		// it writes both machines.
 		if !dryRun && twoWay && len(cfg.HostMerge) > 0 {
 			merged, err := mergePeerHostFiles(ctx, runner, probe, cfg)
-			for _, rel := range merged {
-				if !slices.Contains(cfg.hostMergeExcluded, rel) {
-					cfg.hostMergeExcluded = append(cfg.hostMergeExcluded, rel)
-				}
-			}
 			for _, rel := range merged {
 				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostMerged, Path: rel})
 			}
@@ -1247,9 +1245,10 @@ func peerHomeAdditiveArgs(cfg *Config, list string, report bool) []string {
 		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
 		"--exclude=/.codex/config.toml",
 		"--exclude=.DS_Store")
-	// A host_merge file on both machines is host_merge's, merged or equal:
-	// never newest-wins input, so a stale save by a running app stays on
-	// its own Mac and the next run's merge restores it there (#181).
+	// A host_merge file on both machines is host_merge's, merged, equal or
+	// held by a one-way run: never newest-wins input, so a stale save by a
+	// running app stays on its own Mac and the next two-way run's merge
+	// restores it there (#181).
 	for _, rel := range cfg.hostMergeExcluded {
 		if pattern, err := literalRsyncPattern(rel); err == nil {
 			args = append(args, "--exclude=/"+pattern)
