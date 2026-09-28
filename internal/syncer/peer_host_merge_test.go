@@ -555,8 +555,72 @@ func TestValidateHostMergeRefusesForbiddenRoots(t *testing.T) {
 			t.Errorf("%s accepted", rel)
 		}
 	}
+	// No keys would exclude the file from newest-wins and merge nothing: it
+	// would never move. A line break would split the create-only list.
+	for _, m := range []map[string][]string{{".claude.json": {}}, {".claude.json": nil}, {".a\n.json": {"k"}}} {
+		if err := validateHostMerge(m); err == nil {
+			t.Errorf("%q accepted", m)
+		}
+	}
 	if err := validateHostMerge(map[string][]string{".claude.json": {"mcpServers"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// host_merge writes regular files only, and the create-only pass copies
+// nothing else: a lone symlink on either Mac stays where it is, the plan
+// lists nothing for it, and the next run is not refused. A directory on
+// both is refused like a symlink (#194 round 10).
+func TestHostMergeCreatesRegularFilesOnly(t *testing.T) {
+	for _, onPeer := range []bool{false, true} {
+		t.Run(fmt.Sprintf("symlink on peer=%v", onPeer), func(t *testing.T) {
+			cfg, localHome, peerHome := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+			cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+			from, to := localHome, peerHome
+			if onPeer {
+				from, to = peerHome, localHome
+			}
+			if err := os.Remove(filepath.Join(to, ".claude.json")); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(from, ".claude.json")
+			if err := os.Rename(link, link+".real"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(link+".real", link); err != nil {
+				t.Fatal(err)
+			}
+			res, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, Itemize: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, it := range res.Plan.Items {
+				if it.Path == ".claude.json" {
+					t.Fatalf("the plan lists the lone symlink: %+v", it)
+				}
+			}
+			for run := 0; run < 2; run++ {
+				if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)}); err != nil {
+					t.Fatalf("run %d: %v", run, err)
+				}
+			}
+			if _, err := os.Lstat(filepath.Join(to, ".claude.json")); !os.IsNotExist(err) {
+				t.Fatalf("the symlink was copied: %v", err)
+			}
+		})
+	}
+
+	cfg, localHome, peerHome := claudeJSONFixture(t, `{}`, `{}`)
+	cfg.HostMerge = map[string][]string{".cfg": {"k"}}
+	if err := os.WriteFile(PeerHomePathsFile(cfg.LocalPaths), []byte(".cfg\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, home := range []string{localHome, peerHome} {
+		writePeerHomeFile(t, home, ".cfg/a.json", `{}`, peerHomeFixedTime)
+	}
+	merges, err := planHostMerges(context.Background(), peerScheduleRunner(false), cfg)
+	if err != nil || len(merges) != 1 || !strings.Contains(merges[0].refused, "not a regular file") {
+		t.Fatalf("a directory on both was not refused: %+v %v", merges, err)
 	}
 }
 

@@ -1250,10 +1250,16 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, cfg *Config, progres
 // itemized plan (#180) so a preview lists what the run would move. report
 // adds the human-readable stats a transfer prints. createOnly is the pass
 // over the host_merge files (hostMergeList): --ignore-existing creates a
-// file only where it is absent, so it never replaces a copy, not even one
-// that appeared during the run; the merge step owns files on both Macs.
+// file only where it is absent (a copy that appeared during the run
+// included, up to rsync's own check-then-rename; see docs/CEILINGS.md), and
+// only a regular file, as host_merge writes nothing else: no links, no
+// devices, no recursion into a directory. The merge step owns files on
+// both Macs.
 func peerHomeAdditiveArgs(cfg *Config, list string, report, createOnly bool) []string {
 	args := []string{"-aHAX", "--numeric-ids", "-r"}
+	if createOnly {
+		args = []string{"-aHAX", "--numeric-ids", "--no-links", "--no-D"}
+	}
 	if report {
 		args = append(args, "--human-readable", "--stats")
 	}

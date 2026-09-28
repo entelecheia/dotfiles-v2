@@ -174,14 +174,17 @@ func encodeJSONObject(obj map[string]any) ([]byte, error) {
 // readPeerHostFile reads a host file on the peer, relative to its home. A
 // missing file is (nil, nil).
 func readPeerHostFile(ctx context.Context, runner *exec.Runner, cfg *Config, rel string) ([]byte, error) {
-	// A symlink there is refused as it is here: the merged copy's rsync -t
-	// would replace the link with a regular file.
+	// A symlink or another non-regular copy there is refused as it is here:
+	// the merged copy's rsync -t would replace it with a regular file.
 	q := shellQuote(rel)
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host,
-		"if [ -L "+q+" ]; then echo __dot_symlink__ >&2; exit 4; elif [ -f "+q+" ]; then cat -- "+q+"; else echo __dot_absent__ >&2; exit 3; fi")
+		"if [ -L "+q+" ]; then echo __dot_symlink__ >&2; exit 4; elif [ -f "+q+" ]; then cat -- "+q+"; elif [ -e "+q+" ]; then echo __dot_nonregular__ >&2; exit 5; else echo __dot_absent__ >&2; exit 3; fi")
 	if err != nil {
 		if res != nil && strings.Contains(res.Stderr, "__dot_symlink__") {
 			return nil, fmt.Errorf("%s on %s: %w", rel, cfg.Target.Host, errPeerHostSymlink)
+		}
+		if res != nil && strings.Contains(res.Stderr, "__dot_nonregular__") {
+			return nil, fmt.Errorf("%s on %s: %w", rel, cfg.Target.Host, errPeerHostNonRegular)
 		}
 		if res != nil && strings.Contains(res.Stderr, "__dot_absent__") {
 			return nil, nil
@@ -191,7 +194,10 @@ func readPeerHostFile(ctx context.Context, runner *exec.Runner, cfg *Config, rel
 	return []byte(res.Stdout), nil
 }
 
-var errPeerHostSymlink = errors.New("a symlink; host_merge writes regular files only")
+var (
+	errPeerHostSymlink    = errors.New("a symlink; host_merge writes regular files only")
+	errPeerHostNonRegular = errors.New("not a regular file (a directory?); host_merge writes regular files only")
+)
 
 // skillRootPrefixes are the tool skill roots and Maru trees dot must not
 // write (docs/BOUNDARIES.md); host_merge refuses files under them.
@@ -202,9 +208,16 @@ var skillRootPrefixes = []string{".claude/skills/", ".codex/skills/", ".agents/s
 // validateHostMerge checks every host_merge key is a clean path relative to
 // $HOME, like .claude.json, outside the tool skill roots.
 func validateHostMerge(m map[string][]string) error {
-	for rel := range m {
-		if validateTombstoneRel(rel) != nil || strings.HasPrefix(rel, "~") {
+	for rel, keys := range m {
+		// A line break would split the create-only pass's list and escape
+		// the additive pass's exclusion.
+		if validateTombstoneRel(rel) != nil || strings.HasPrefix(rel, "~") || strings.ContainsAny(rel, "\r\n") {
 			return fmt.Errorf("host_merge: %q must be a path relative to $HOME, like .claude.json", rel)
+		}
+		// Excluded from newest-wins but merged by no key, the file would
+		// never move.
+		if len(keys) == 0 {
+			return fmt.Errorf("host_merge: %q lists no keys; name the top-level JSON keys to merge, or drop it", rel)
 		}
 		for _, root := range skillRootPrefixes {
 			// APFS is case-insensitive: .Claude/skills is the same directory.
@@ -316,8 +329,13 @@ func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hos
 			return nil, err
 		}
 		peerData, err := readPeerHostFile(ctx, probe, cfg, rel)
-		if errors.Is(err, errPeerHostSymlink) {
+		switch {
+		case errors.Is(err, errPeerHostSymlink):
 			m.refused = "a symlink on " + cfg.Target.Host
+			merges = append(merges, m)
+			continue
+		case errors.Is(err, errPeerHostNonRegular):
+			m.refused = "not a regular file on " + cfg.Target.Host + " (a directory?)"
 			merges = append(merges, m)
 			continue
 		}

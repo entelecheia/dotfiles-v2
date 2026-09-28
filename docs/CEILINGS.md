@@ -133,8 +133,8 @@ safe machine-to-machine state channel is ever designed.
 of a `host_merge` file, merges them and writes the result on both machines,
 pushing the merged bytes from a private copy. The additive pass of every
 run excludes these files by config, and the create-only pass that copies a
-file on one Mac only never replaces a copy (a one-way run holds a file on
-both). An app that rewrites the file between the last
+regular file on one Mac only does not replace a copy (a one-way run holds a
+file on both). An app that rewrites the file between the last
 check and the write (Claude Code saving `~/.claude.json` while `dot peer
 sync` runs, often from inside a Claude session) loses that rewrite. A
 running app that later saves a stale copy changes only its own Mac, and the
@@ -146,7 +146,10 @@ file's size and mtime and reads the peer's copy again just before the
 write; a file saved in between is decided again from the new copy (three
 attempts, then the run stops before the additive pass). What is left is
 the local write itself on this Mac, and on the peer the time from that
-second read to the push (one ssh connection and a one-file rsync).
+second read to the push (one ssh connection and a one-file rsync). The
+create-only pass leaves a copy that appeared during the run alone except in
+the milliseconds between rsync's existence check and its rename of the
+received file over the path.
 Replace this if the app gains a lock or an atomic update protocol, or if
 lost entries are reported in practice.
 

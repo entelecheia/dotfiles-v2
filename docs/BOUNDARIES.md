@@ -271,8 +271,9 @@ tool):
   which is written here (atomic rename, mode and owner kept, a symlink
   refused) and pushed to the peer with its mtime from a private copy. The
   additive pass of every run excludes the listed files; a create-only pass
-  (`rsync --ignore-existing`) copies one that exists on one machine only
-  to the other and never replaces a copy. A `--push-only` or `--pull-only`
+  (`rsync --ignore-existing`, regular files only) copies one that exists on
+  one machine only to the other and does not replace a copy there (see the
+  host_merge ceiling for rsync's own window). A `--push-only` or `--pull-only`
   run merges nothing and holds a file on both machines. Other keys are the
   newer copy's; an unlisted file is only ever copied whole, as before.
   Never a file under a tool skill root (refused before a run starts), or
