@@ -461,6 +461,12 @@ type PeerSyncResult struct {
 	Unreachable bool
 	Complete    bool
 	Demoted     bool
+	// QuarantinedHere and QuarantinedOnPeer count the workspace deletions
+	// this run moved into .sync-conflicts/<ConflictStamp>/ on each machine
+	// instead of removing them (#182).
+	QuarantinedHere   int
+	QuarantinedOnPeer int
+	ConflictStamp     string
 }
 
 // PeerSync exchanges the workspace and the host paths with the peer.
@@ -560,6 +566,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	}
 	conflict := NewConflictDir()
 	complete := true
+	quarantinedHere, quarantinedOnPeer := 0, 0
 	baselineReady, err := PeerBaselineReady(cfg)
 	if err != nil {
 		return nil, err
@@ -579,6 +586,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			if err := DeletePeerLocal(cfg, conflict, plan.DeleteLocal, dryRun); err != nil {
 				return nil, err
 			}
+			quarantinedHere = len(plan.DeleteLocal)
 		} else if len(plan.DeleteLocal) > 0 {
 			complete = false
 			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventRemoteDeletesHeld})
@@ -603,6 +611,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			if err := PropagateDeletes(ctx, runner, cfg, conflict, deleteSet, dryRun); err != nil {
 				return nil, err
 			}
+			quarantinedOnPeer = len(deleteSet)
 		} else if len(plan.DeleteRemote) > 0 {
 			complete = false
 			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventLocalDeletesHeld})
@@ -700,7 +709,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			return nil, err
 		}
 	}
-	return &PeerSyncResult{Complete: complete}, nil
+	return &PeerSyncResult{Complete: complete, QuarantinedHere: quarantinedHere, QuarantinedOnPeer: quarantinedOnPeer, ConflictStamp: conflict.Timestamp}, nil
 }
 
 // recordPeerRun stamps a finished peer run onto state.yaml. A held run still

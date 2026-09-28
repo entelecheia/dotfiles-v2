@@ -20,6 +20,12 @@ Checks, and why each exists:
   keychain       tokens there cannot be transferred, and cannot even be
                  verified over ssh — a reminder, not a failure
 
+Then both machines are compared, each check with the command that fixes it
+and the Mac to run it on: rsync on each side; names not in NFD (the peer
+inventory stops on them); which machine is the coordinator and their owner
+epochs; a scheduler only on the coordinator; the takeover replica on the
+other Mac; max_delete, propagation and filter files that differ.
+
 ```
 dot peer doctor [flags]
 ```
