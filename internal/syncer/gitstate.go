@@ -921,7 +921,7 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string) ([]string, error) {
 	var out []string
 	if gitlink != "" && gitlink != head {
-		if _, err := r.read(ctx, abs, "cat-file", "-e", gitlink+"^{commit}"); err != nil {
+		if !r.hasCommit(ctx, abs, gitlink) {
 			return nil, errors.New(gitlinkMissing)
 		}
 		if r.strictDescendant(ctx, abs, head, gitlink) {
