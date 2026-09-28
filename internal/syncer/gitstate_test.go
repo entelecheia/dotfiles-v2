@@ -683,11 +683,10 @@ func TestGitCleanEnvKeepsConfigOverrides(t *testing.T) {
 	}
 }
 
-// A child that lacks a gitlink's commit cannot vote in the tie: the parent
-// must not stay behind a bump nobody fetched ("children match ... so HEAD
-// stays"); it moves by the next rules and the child reports the missing
-// commit with the fetch command.
-func TestPeerGitRealign_MissingGitlinkCommitDoesNotKeepTheParentBehind(t *testing.T) {
+// A child that lacks a gitlink's commit cannot vote for it, but its known
+// answer still counts: the parent stays with HEAD's gitlink, which the child
+// matches, and the tie line names the missing commit to fetch.
+func TestPeerGitRealign_MissingGitlinkCommitKeepsTheParentAndSaysSo(t *testing.T) {
 	tmp := t.TempDir()
 	subSrc := filepath.Join(tmp, "sub-src")
 	gitStateInitRepo(t, subSrc)
@@ -705,7 +704,6 @@ func TestPeerGitRealign_MissingGitlinkCommitDoesNotKeepTheParentBehind(t *testin
 	s2 := gitStateHead(t, filepath.Join(origin, "sub"))
 	gitStateRun_(t, origin, "add", "sub")
 	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump only")
-	p1 := gitStateHead(t, origin)
 
 	ws := filepath.Join(tmp, "ws")
 	gitStateRun_(t, tmp, "clone", "-q", origin, ws)
@@ -717,10 +715,131 @@ func TestPeerGitRealign_MissingGitlinkCommitDoesNotKeepTheParentBehind(t *testin
 		t.Fatal(err)
 	}
 	root := gitStateReport(t, res, ".")
-	if root.Status != GitRepoRealignable || root.Target != p1 || !strings.Contains(root.TieBreak, "children cannot tell (sub lacks "+shortRev(s2)+")") {
-		t.Fatalf("root = %+v, want realignable to %s with an undecided children rule", root, p1)
+	if root.Status != GitRepoAligned || !strings.Contains(root.TieBreak, "HEAD stays") || !strings.Contains(root.TieBreak, "sub lacks "+shortRev(s2)) {
+		t.Fatalf("root = %+v, want aligned, HEAD kept, and the missing %s named", root, shortRev(s2))
 	}
-	if child := gitStateReport(t, res, "sub"); child.Class != GitClassGitlinkMissing && child.Reason != gitlinkMissing {
-		t.Fatalf("the missing commit went unreported: %+v", child)
+}
+
+// The unfetched bump changes content (#189 round 10): moving the parent
+// would leave it ahead of the child, and a fetch of the child afterwards
+// would not bring the files, so the parent stays and stays clean.
+func TestPeerGitRealign_CleanParentStaysBehindAnUnfetchedGitlinkBump(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+
+	s2 := gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+	gitStateRun_(t, origin, "-C", "sub", "fetch", "-q")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump sub to v2")
+	gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := gitStateReport(t, res, ".")
+	if root.Status != GitRepoAligned || !strings.Contains(root.TieBreak, "HEAD stays") || !strings.Contains(root.TieBreak, "sub lacks "+shortRev(s2)) {
+		t.Fatalf("root = %+v, want aligned, HEAD kept, and the missing %s named", root, shortRev(s2))
+	}
+	if got := gitStateHead(t, ws); got != p0 {
+		t.Fatalf("parent moved to %s past a bump the child lacks", got)
+	}
+	if out := gitStateRun_(t, ws, "status", "--porcelain"); out != "" {
+		t.Fatalf("parent not clean:\n%s", out)
+	}
+}
+
+// A child with uncommitted edits still votes for the commit it was edited
+// from (#197): the parent stays behind the bump the child never received.
+func TestPeerGitRealign_ChildWithEditsStillKeepsTheParentBehind(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	gitStateCommitFile(t, subSrc, "other.txt", "o1\n", "other")
+	s1 := gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+	s2 := gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump only")
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	gitStateRewriteTracked(t, filepath.Join(ws, "sub", "other.txt"), "work in progress\n")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep := gitStateReport(t, res, "."); rep.Status != GitRepoAligned || !strings.Contains(rep.TieBreak, "HEAD stays") {
+		t.Fatalf("root = %+v, want aligned with HEAD kept", rep)
+	}
+	if got := gitStateHead(t, ws); got != p0 {
+		t.Fatalf("parent moved to %s past a bump the child lacks", got)
+	}
+}
+
+// Children that disagree keep HEAD: moving would take one child's bump in
+// and leave the other's content behind its new gitlink. A count of votes
+// ties here, and the tie went to the candidate.
+func TestPeerGitRealign_ChildrenThatDisagreeKeepHEAD(t *testing.T) {
+	tmp := t.TempDir()
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	bumps := map[string]string{}
+	for _, name := range []string{"a", "b"} {
+		src := filepath.Join(tmp, name+"-src")
+		gitStateInitRepo(t, src)
+		first := gitStateCommitFile(t, src, "file.txt", name+"1\n", "1")
+		bumps[name] = gitStateCommitFile(t, src, "file.txt", name+"2\n", "2")
+		gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", src, name)
+		gitStateRun_(t, origin, "-C", name, "checkout", "-q", first)
+		gitStateRun_(t, origin, "add", name)
+	}
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+	for name, bump := range bumps {
+		gitStateRun_(t, origin, "-C", name, "checkout", "-q", bump)
+		gitStateRun_(t, origin, "add", name)
+	}
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump a and b")
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	// Peer sync delivered a's bump; b's never came.
+	gitStateRewriteTracked(t, filepath.Join(ws, "a", "file.txt"), "a2\n")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep := gitStateReport(t, res, "."); rep.Status != GitRepoAligned || !strings.Contains(rep.TieBreak, "HEAD stays") {
+		t.Fatalf("root = %+v, want aligned with HEAD kept", rep)
 	}
 }
