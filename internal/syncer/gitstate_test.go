@@ -853,8 +853,9 @@ func TestPeerGitRealign_DeliveredSubmoduleRemovalMovesTheParent(t *testing.T) {
 // root stays behind an undelivered nested bump and moves for a delivered
 // one.
 func TestPeerGitRealign_NestedChildrenDecideTheMiddleRepo(t *testing.T) {
-	for _, delivered := range []bool{false, true} {
-		t.Run(fmt.Sprintf("delivered=%v", delivered), func(t *testing.T) {
+	for _, tc := range []struct{ delivered, devEdited bool }{{false, false}, {true, false}, {true, true}} {
+		delivered := tc.delivered
+		t.Run(fmt.Sprintf("delivered=%v devEdited=%v", tc.delivered, tc.devEdited), func(t *testing.T) {
 			tmp := t.TempDir()
 			maruSrc := filepath.Join(tmp, "maru-src")
 			gitStateInitRepo(t, maruSrc)
@@ -894,6 +895,11 @@ func TestPeerGitRealign_NestedChildrenDecideTheMiddleRepo(t *testing.T) {
 			if delivered {
 				gitStateRewriteTracked(t, filepath.Join(ws, "dev", "maru", "file.txt"), "v2\n")
 			}
+			if tc.devEdited {
+				// An edit no commit touches: dev's commits still differ in
+				// their children only, so maru decides.
+				gitStateRewriteTracked(t, filepath.Join(ws, "dev", "readme.md"), "dev, edited\n")
+			}
 
 			res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
 			if err != nil {
@@ -903,6 +909,134 @@ func TestPeerGitRealign_NestedChildrenDecideTheMiddleRepo(t *testing.T) {
 			if !delivered {
 				if root.Status != GitRepoAligned || !strings.Contains(root.TieBreak, "HEAD stays") || gitStateHead(t, ws) != p0 {
 					t.Fatalf("root = %+v, want HEAD kept behind the undelivered nested bump", root)
+				}
+				if out := gitStateRun_(t, ws, "status", "--porcelain"); out != "" {
+					t.Fatalf("workspace not clean:\n%s", out)
+				}
+				return
+			}
+			if got := gitStateHead(t, ws); got != p1 {
+				t.Fatalf("root HEAD = %s, want %s (%+v)", got, p1, root)
+			}
+		})
+	}
+}
+
+// The child holds a commit between HEAD's gitlink and the candidate's
+// (the sending Mac's own state): the candidate records a commit the child's
+// content has not reached, so the parent stays, and the child moves to its
+// own match (#189 round 12).
+func TestPeerGitRealign_ChildBetweenTheGitlinksKeepsTheParent(t *testing.T) {
+	// unfetched: the child lacks the candidate's s3, so only the child's
+	// exact match at s2 says the candidate is not where it is.
+	for _, unfetched := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unfetched=%v", unfetched), func(t *testing.T) { childBetweenTheGitlinks(t, unfetched) })
+	}
+}
+
+func childBetweenTheGitlinks(t *testing.T, unfetched bool) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	for _, f := range []string{"a", "b", "c"} {
+		gitStateCommitFile(t, subSrc, f, "1\n", f+"1")
+	}
+	s1 := gitStateCommitFile(t, subSrc, "d", "1\n", "s1")
+	for _, f := range []string{"a", "b"} {
+		gitStateCommitFile(t, subSrc, f, "2\n", f+"2")
+	}
+	s2 := gitStateCommitFile(t, subSrc, "c", "2\n", "s2")
+	s3 := ""
+	if !unfetched {
+		s3 = gitStateCommitFile(t, subSrc, "d", "3\n", "s3")
+	}
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+	ws := filepath.Join(tmp, "ws")
+	if unfetched {
+		gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+		s3 = gitStateCommitFile(t, subSrc, "d", "3\n", "s3")
+		gitStateRun_(t, origin, "-C", "sub", "fetch", "-q")
+	}
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s3)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump to s3")
+
+	if unfetched {
+		gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+	} else {
+		gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	}
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	sub := filepath.Join(ws, "sub")
+	gitStateRun_(t, sub, "checkout", "-q", "-B", "main", s1)
+	gitStateRun_(t, sub, "branch", "-q", "--set-upstream-to=origin/main")
+	for _, f := range []string{"a", "b", "c"} {
+		gitStateRewriteTracked(t, filepath.Join(sub, f), "2\n")
+	}
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); root.Status != GitRepoAligned || !strings.Contains(root.TieBreak, "HEAD stays") || gitStateHead(t, ws) != p0 {
+		t.Fatalf("root = %+v, want HEAD kept below the child's s2", root)
+	}
+	if got := gitStateHead(t, sub); got != s2 {
+		t.Fatalf("child HEAD = %s, want its own match %s", got, s2)
+	}
+	if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "rewind") {
+		t.Fatalf("the parent records a rewind:\n%s", log)
+	}
+}
+
+// A submodule added upstream whose checkout never arrived: moving would
+// leave it deleted in the worktree (a commit -a records the removal), so
+// the parent stays. A delivered one (files, no .git) moves.
+func TestPeerGitRealign_UndeliveredSubmoduleAdditionKeepsTheParent(t *testing.T) {
+	for _, delivered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delivered=%v", delivered), func(t *testing.T) {
+			tmp := t.TempDir()
+			xSrc := filepath.Join(tmp, "x-src")
+			gitStateInitRepo(t, xSrc)
+			gitStateCommitFile(t, xSrc, "file.txt", "v1\n", "x1")
+
+			origin := filepath.Join(tmp, "origin")
+			gitStateInitRepo(t, origin)
+			p0 := gitStateCommitFile(t, origin, "readme.md", "parent\n", "p0")
+			gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", xSrc, "x")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p1 add x")
+			p1 := gitStateHead(t, origin)
+
+			ws := filepath.Join(tmp, "ws")
+			gitStateRun_(t, tmp, "clone", "-q", origin, ws)
+			gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+			if err := os.RemoveAll(filepath.Join(ws, "x")); err != nil {
+				t.Fatal(err)
+			}
+			if delivered {
+				if err := os.MkdirAll(filepath.Join(ws, "x"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				gitStateRewriteTracked(t, filepath.Join(ws, "x", "file.txt"), "v1\n")
+			}
+
+			res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := gitStateReport(t, res, ".")
+			if !delivered {
+				if root.Status != GitRepoAligned || gitStateHead(t, ws) != p0 {
+					t.Fatalf("root = %+v, want HEAD kept", root)
 				}
 				if out := gitStateRun_(t, ws, "status", "--porcelain"); out != "" {
 					t.Fatalf("workspace not clean:\n%s", out)
