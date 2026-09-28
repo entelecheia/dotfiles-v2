@@ -25,9 +25,10 @@ unless it runs the peer scheduler and the peer, asked then, runs none
 (without a peer, or a peer that cannot answer, only --local-only renames
 it): moving ownership between the Macs is --set or dot peer handover.
 --local-only skips these checks; it is the step the command runs on the
-peer. A retry after a peer failure goes on to the peer (unless <old> was a
-generic name, which is not kept: then run the printed --local-only command
-there).
+peer. An unreachable peer exits 0 with that step printed; a peer that fails
+the step exits 1. A retry after a peer failure goes on to the peer (unless
+<old> was a generic name, which is not kept: then run the printed
+--local-only command there).
 --dry-run shows the change without writing anything.
 
 With --profile=peer, a --set or --clear that leaves this Mac without the

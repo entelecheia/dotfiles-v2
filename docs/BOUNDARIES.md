@@ -276,10 +276,9 @@ tool):
   (on_deactivate), a handover (on_deactivate here, last), a fence demotion
   (on_deactivate) and a peer `dot sync owner --set/--clear` that takes the
   coordinator role from this Mac (on_deactivate). The disable and enable
-  write those labels' entries in
-  launchd's per-user override database (`launchctl disable/enable
-  gui/<uid>/<label>`), so a bootout survives a reboot; only labels dot
-  disabled are enabled again. dot never writes those plists or the apps'
+  write those labels' entries in launchd's per-user override database
+  (`launchctl disable/enable gui/<uid>/<label>`), so a bootout survives a
+  reboot; only labels dot disabled are enabled again. dot never writes those plists or the apps'
   files; an unset `hooks` touches nothing.
 - `<workspace>/.dotfiles/peer/hooks-disabled.txt`: the launchd labels the
   role hooks disabled, one per line, so `on_activate` re-enables only those.

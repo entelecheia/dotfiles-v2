@@ -208,9 +208,10 @@ unless it runs the peer scheduler and the peer, asked then, runs none
 (without a peer, or a peer that cannot answer, only --local-only renames
 it): moving ownership between the Macs is --set or dot peer handover.
 --local-only skips these checks; it is the step the command runs on the
-peer. A retry after a peer failure goes on to the peer (unless <old> was a
-generic name, which is not kept: then run the printed --local-only command
-there).
+peer. An unreachable peer exits 0 with that step printed; a peer that fails
+the step exits 1. A retry after a peer failure goes on to the peer (unless
+<old> was a generic name, which is not kept: then run the printed
+--local-only command there).
 --dry-run shows the change without writing anything.
 
 With --profile=peer, a --set or --clear that leaves this Mac without the
@@ -366,7 +367,10 @@ func runSyncOwnerRename(cmd *cobra.Command, oldName, newName string, localOnly b
 		return nil
 	}
 	if peer == nil {
+		// An unreachable peer is the expected case (a laptop asleep): the
+		// alias keeps the pair working, so it exits 0 with the step to run.
 		if peerStoreExists(root) {
+			p.Warn("the peer was not checked: make sure %q is not the other Mac's name", newName)
 			p.Line("  On the other Mac, when reachable: %s", manual)
 		}
 		return nil
@@ -489,7 +493,16 @@ func runSyncOwner(cmd *cobra.Command, opts syncer.OwnerOptions) error {
 				if res != nil {
 					printPeerHooks(p, res.Hooks)
 				}
-				return fmt.Errorf("owner set, but removing this Mac's peer scheduler failed: %w; run dot peer setup --off", err)
+				verb := "owner set"
+				if dryRun {
+					verb = "dry-run: owner not set"
+				}
+				// Under --home the plist is gone and only launchd is left.
+				var target *syncer.SchedulerTargetUserActionRequiredError
+				if errors.As(err, &target) {
+					return fmt.Errorf("%s; this Mac's peer scheduler plist is handled, but: %w", verb, err)
+				}
+				return fmt.Errorf("%s, but removing this Mac's peer scheduler failed: %w; run dot peer setup --off", verb, err)
 			}
 			if dryRun {
 				p.Line("dry-run: would remove this Mac's peer scheduler (it no longer coordinates)")

@@ -82,6 +82,12 @@ func TestSyncOwnerRenameFailsClosedWithoutThePeer(t *testing.T) {
 	if _, _, err := runDotForTest("sync", "owner", "--rename", self, "asleep-peer"); err == nil || !strings.Contains(err.Error(), "peer target") {
 		t.Fatalf("renaming to the peer target's name: %v", err)
 	}
+	// A Mac that answers to <old> renames without the peer, exits 0, and
+	// says <new> was not checked against the other Mac.
+	out, errOut, err := runDotForTest("sync", "owner", "--rename", self, "renamed-mac")
+	if err != nil || !strings.Contains(out+errOut, "the peer was not checked") || !strings.Contains(out+errOut, "On the other Mac, when reachable") {
+		t.Fatalf("offline rename: %v\n%s%s", err, out, errOut)
+	}
 }
 
 // Round 4: after both host renames, neither Mac answers to <old>. The Mac
