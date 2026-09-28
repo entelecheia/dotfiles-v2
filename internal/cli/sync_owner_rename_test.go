@@ -137,7 +137,8 @@ func TestSyncOwnerRenameNeedsTheOwnersScheduler(t *testing.T) {
 	// nothing.
 	writeCLITestFile(t, filepath.Join(agents, "com.dotfiles.sync.plist"), "<plist/>")
 	refused("mirror unit only", "does not run the peer scheduler")
-	// A plist from an older dot or installed by hand: both Macs hold one.
+	// A stale plist (by hand, an older dot, or the old coordinator's until
+	// it next runs): both Macs hold one.
 	writeCLITestFile(t, filepath.Join(agents, "com.dotfiles.peer.plist"), "<plist/>")
 	peerSays("running")
 	refused("both claim the scheduler", "both Macs claim")

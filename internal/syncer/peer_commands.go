@@ -521,6 +521,13 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		// The hook outcomes return with a failed demotion too.
 		return &PeerSyncResult{Demoted: true, Hooks: hooks}, err
 	}
+	// The other Mac never ran its --local-only step after an offline rename:
+	// the alias stays until it does, so every run past the fence (a preview
+	// and a one-way run too) says what to run there.
+	if old := remoteStatus.Profile.Owner; len(cfg.OwnerAliases) > 0 && NormalizeHostname(old) != NormalizeHostname(cfg.Owner) &&
+		ownersMatch(old, nil, cfg.OwnerAliases...) {
+		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerRenamePending, Path: "dot sync owner --rename " + shellQuote(old) + " " + shellQuote(cfg.Owner) + " --local-only"})
+	}
 
 	// The linked-worktree exclude is a sticky union of the stored list, local
 	// detection and the remote's report (#135): both machines must apply the
@@ -700,18 +707,6 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			if err != nil || len(retired) > 0 {
 				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerAliasesRetired, Path: strings.Join(retired, ", "), Err: err})
 			}
-		}
-		// The other Mac never ran its --local-only step after an offline
-		// rename: the alias stays until it does, so say what to run there.
-		if old := remoteStatus.Profile.Owner; len(cfg.OwnerAliases) > 0 && NormalizeHostname(old) != NormalizeHostname(cfg.Owner) &&
-			ownersMatch(old, nil, cfg.OwnerAliases...) {
-			quote := func(s string) string {
-				if strings.ContainsAny(s, " \t") {
-					return shellQuote(s)
-				}
-				return s
-			}
-			emitPeer(opts.Progress, PeerEvent{Kind: PeerEventOwnerRenamePending, Path: "dot sync owner --rename " + quote(old) + " " + quote(cfg.Owner) + " --local-only"})
 		}
 		if cfg.FencePending {
 			// The first complete run after contact: the fence has done its

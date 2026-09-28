@@ -418,8 +418,9 @@ func peerStoreExists(root string) bool {
 }
 
 // runsPeerScheduler reports the peer scheduler's plist on this machine.
-// Alone it proves nothing (a plist installed by hand or by an older dot on
-// a Mac that does not coordinate); the rename also asks the peer.
+// Alone it proves nothing (a stale plist: by hand, from an older dot, or on
+// the old coordinator after a --set run on the other Mac, until its next
+// run demotes it); the rename also asks the peer.
 func runsPeerScheduler(bs *syncer.BootstrapResult) bool {
 	_, err := os.Stat(filepath.Join(bs.Config.HomeDir(), "Library", "LaunchAgents", "com.dotfiles.peer.plist"))
 	return err == nil

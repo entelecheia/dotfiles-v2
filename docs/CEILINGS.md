@@ -137,7 +137,7 @@ the coordinator retires them, at a complete peer sync. Where that run does
 not reach (a workspace with no peer profile, or the mirror owner when
 another Mac coordinates the peer) they stay until the owner next changes, and
 after an offline rename they stay until the other Mac runs its printed
-`--local-only` step (each peer sync says so), so
+`--local-only` step (each peer sync past the fence says so), so
 a Mac that later answers to a retired name (a reinstall that comes back as
 the default `<Name>s-MacBook-Pro`) passes the mirror owner guard there.
 
