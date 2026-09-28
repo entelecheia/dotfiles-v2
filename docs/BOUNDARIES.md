@@ -289,6 +289,20 @@ tool):
   status`, default `realign`, `--dry-run`) writes nothing; linked
   worktrees and locked, staged, conflicting or in-progress repositories
   are never touched.
+- host files the operator lists under `host_merge` in the peer config (for
+  example `~/.claude.json`), on both machines: before the additive
+  host-path pass of a two-way `dot peer sync`, the entries of the listed
+  top-level JSON keys from both copies are merged into the newer copy,
+  which is written here (atomic rename, mode and owner kept, a symlink
+  refused) and pushed to the peer with its mtime from a private copy. The
+  additive pass of every run excludes the listed files; a create-only pass
+  (`rsync --ignore-existing`, regular files only) copies one that exists on
+  one machine only to the other and does not replace a copy there (see the
+  host_merge ceiling for rsync's own window). A `--push-only` or `--pull-only`
+  run merges nothing and holds a file on both machines. Other keys are the
+  newer copy's; an unlisted file is only ever copied whole, as before.
+  Never a file under a tool skill root (refused before a run starts), or
+  one the additive host pass does not move.
 - launchd jobs and apps named by the operator in the peer profile's
   `hooks` (`.dotfiles/peer/config.yaml`): the jobs of their existing
   `~/Library/LaunchAgents/<label>.plist` disabled and booted out, or

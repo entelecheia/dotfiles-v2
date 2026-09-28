@@ -42,6 +42,9 @@ func TestCeilingsDoc(t *testing.T) {
 	if !strings.Contains(doc, "## Stale per-profile scheduler units") {
 		t.Error("stale per-profile scheduler ceiling missing from docs/CEILINGS.md")
 	}
+	if !strings.Contains(doc, "## host_merge read-merge-write race") {
+		t.Error("host_merge race ceiling (#181) missing from docs/CEILINGS.md")
+	}
 	if !strings.Contains(doc, "## Owner aliases outside the coordinator's peer run") {
 		t.Error("owner alias ceiling (#185) missing from docs/CEILINGS.md")
 	}
@@ -71,6 +74,7 @@ func TestCeilingsDoc(t *testing.T) {
 		{"internal/syncer/rsyncbin.go", "ponytail: known ceiling. See docs/CEILINGS.md (preview protocol limit)."},
 		{"internal/syncer/rsyncbin.go", "ponytail: known ceiling. See docs/CEILINGS.md (first-contact trust)."},
 		{"internal/syncer/sync_cmd_ops.go", "See docs/CEILINGS.md (stale per-profile scheduler units)"},
+		{"internal/syncer/peer_host_merge.go", "ponytail: known ceiling. See docs/CEILINGS.md (host_merge read-merge-write race)."},
 		{"internal/syncer/sync_store_ops.go", "ponytail: known ceiling. See docs/CEILINGS.md (owner aliases outside the coordinator's peer run)."},
 	} {
 		data, err := os.ReadFile(filepath.Join("..", "..", want.path))

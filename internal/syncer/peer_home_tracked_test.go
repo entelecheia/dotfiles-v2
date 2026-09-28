@@ -163,7 +163,7 @@ func TestPeerHomeTrackedSync_PropagatesDeleteToPeerHome(t *testing.T) {
 		"mem/gone.txt": {Size: int64(len("removed")), Mtime: peerHomeFixedTime},
 	})
 
-	complete, err := peerHomeTrackedSync(context.Background(),
+	complete, _, err := peerHomeTrackedSync(context.Background(),
 		peerScheduleRunner(false), peerScheduleRunner(false), cfg, nil, false, false, false)
 	if err != nil {
 		t.Fatalf("peerHomeTrackedSync: %v", err)
@@ -220,7 +220,7 @@ func TestPeerHomeTrackedSync_DualEditQuarantinesPeerPayload(t *testing.T) {
 		"mem/conflict.txt": {Size: int64(len("original")), Mtime: original},
 	})
 
-	complete, err := peerHomeTrackedSync(context.Background(),
+	complete, _, err := peerHomeTrackedSync(context.Background(),
 		peerScheduleRunner(false), peerScheduleRunner(false), cfg, nil, false, false, false)
 	if err != nil {
 		t.Fatalf("peerHomeTrackedSync: %v", err)
@@ -271,7 +271,7 @@ func TestPeerHomeTrackedSync_QuarantinesLocalCopyOnPeerDelete(t *testing.T) {
 		"mem/peer-deleted.txt": peerHomeFP(t, localHome, "mem/peer-deleted.txt"),
 	})
 
-	complete, err := peerHomeTrackedSync(context.Background(),
+	complete, _, err := peerHomeTrackedSync(context.Background(),
 		peerScheduleRunner(false), peerScheduleRunner(false), cfg, nil, false, false, false)
 	if err != nil {
 		t.Fatalf("peerHomeTrackedSync: %v", err)
@@ -324,7 +324,7 @@ func TestPeerHomeTrackedSync_HoldsDeletesWithoutProvenance(t *testing.T) {
 	}
 
 	var events []PeerEvent
-	complete, err := peerHomeTrackedSync(context.Background(),
+	complete, _, err := peerHomeTrackedSync(context.Background(),
 		peerScheduleRunner(false), peerScheduleRunner(false), cfg,
 		func(e PeerEvent) { events = append(events, e) }, false, false, false)
 	if err != nil {
@@ -365,7 +365,7 @@ func TestPeerHomeTrackedSync_DryRunWritesNothing(t *testing.T) {
 
 	var out bytes.Buffer
 	cfg.Out = &out
-	complete, err := peerHomeTrackedSync(context.Background(),
+	complete, _, err := peerHomeTrackedSync(context.Background(),
 		peerScheduleRunner(true), peerScheduleRunner(false), cfg, nil, true, false, false)
 	if err != nil {
 		t.Fatalf("peerHomeTrackedSync --dry-run: %v", err)

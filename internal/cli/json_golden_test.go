@@ -14,6 +14,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/aischedule"
 	"github.com/entelecheia/dotfiles-v2/internal/config"
+	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 	"github.com/spf13/cobra"
 )
 
@@ -132,6 +133,8 @@ func goldenCases() []goldenCase {
 		{surface: "peer home-paths tracked set", args: []string{"peer", "home-paths", "tracked", "set", "--json"}, stdin: ".claude/projects/-x-y/memory\n", fixture: goldenSyncFixture},
 		{surface: "peer status", args: []string{"peer", "status", "--json"}, fixture: goldenSyncFixture},
 		{surface: "peer git status", args: []string{"peer", "git", "status", "--json"}, fixture: goldenPeerGitFixture},
+		{surface: "peer diff", args: []string{"peer", "diff", "--json"}, fixture: goldenPeerPlanFixture},
+		{surface: "peer sync", args: []string{"peer", "sync", "--json"}, fixture: goldenPeerPlanFixture},
 		{surface: "sync configure", args: []string{"sync", "configure", "--json", "--yes"}, fixture: goldenSyncFixture},
 		{surface: "sync filters get", args: []string{"sync", "filters", "get", "include", "--json"}, fixture: goldenSyncFixture},
 		{surface: "sync filters set", args: []string{"sync", "filters", "set", "exclude", "--json"}, stdin: "*.tmp\nbuild/\n", fixture: goldenSyncFixture},
@@ -152,6 +155,19 @@ func goldenSyncFixture(t *testing.T) (home, root string) {
 	for _, profile := range []string{"sync", "peer"} {
 		writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", profile, "config.yaml"), storeCfg)
 	}
+	return f.home, f.local
+}
+
+// goldenPeerPlanFixture gives `peer diff --json` and `peer sync --json` an
+// ssh peer that cannot be reached (PATH holds no ssh), so both print the
+// deterministic unreachable plan document. The owner is this machine so the
+// sync gets past its owner guard.
+func goldenPeerPlanFixture(t *testing.T) (home, root string) {
+	t.Helper()
+	f := newSyncCLIFixture(t)
+	sandboxGoldenPATH(t)
+	storeCfg := "target: ssh:golden-peer:/remote/work\nowner: " + syncer.PreferredMachineName() + "\npropagation:\n  create: true\n  update: true\n  delete: true\n"
+	writeCLITestFile(t, filepath.Join(f.local, ".dotfiles", "peer", "config.yaml"), storeCfg)
 	return f.home, f.local
 }
 
