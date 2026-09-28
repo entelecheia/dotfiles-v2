@@ -219,7 +219,8 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		if lerr != nil || perr != nil {
 			continue
 		}
-		merging := merge && twoWay && it.Scope == PlanScopeHost
+		// The merge writes a file present on both sides whose copies differ.
+		merging := merge && twoWay && it.Scope == PlanScopeHost && it.Action == "update"
 		hint := "set host_merge for this file to keep them"
 		switch {
 		case merge && it.Scope != PlanScopeHost:
@@ -227,7 +228,6 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		case merge && !twoWay:
 			hint = "host_merge runs only in a two-way sync"
 		}
-		var lostAny bool
 		var warnings []string
 		for _, d := range diffJSONKeys(local, peer, keys) {
 			it.Keys = append(it.Keys, d.String())
@@ -239,7 +239,6 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 			if len(lost) == 0 {
 				continue
 			}
-			lostAny = true
 			if !merging {
 				warnings = append(warnings, fmt.Sprintf("%s entries %s exist only in the overwritten copy", d.key, strings.Join(lost, ", ")))
 			}
@@ -247,27 +246,34 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		if len(warnings) > 0 {
 			it.Warning = "newest wins: " + strings.Join(warnings, "; ") + "; " + hint
 		}
-		// The merge only writes when the newer copy lacks something.
-		if merging && lostAny {
-			it.Reason = "merged before the transfer (host_merge: " + strings.Join(keys, ", ") + ")"
+		if merging {
+			// Both machines get the merged file; the pass then moves nothing.
+			it.Action, it.Direction = "merge", "both"
+			it.Reason = "merged on both machines before the transfer (host_merge: " + strings.Join(keys, ", ") + ")"
 		}
 	}
 }
 
 // mergePeerHostFiles applies the host_merge policies before the additive
-// pass: for each listed file present on both machines, the configured keys'
-// entries of both copies are merged into the newer one, written here with a
-// fresh mtime and pushed with it, so the additive pass then finds two equal
-// copies. A file whose newer copy already holds every entry is left to the
-// pass. It returns the files it merged.
+// pass: for each listed file present on both machines with different
+// content, the configured keys' entries of both copies are merged into the
+// newer one, written here with a fresh mtime and pushed with it, so the
+// additive pass then finds two equal copies. Both sides are always written:
+// the result must not depend on which copy the pass would call newer (the
+// peer's mtime is read to the second). A file under a tracked host entry is
+// left to the tracked pass. It returns the files it merged.
 //
-// ponytail: read-merge-write race. An app rewriting the file between the
-// read and the write loses that rewrite; a lock the app honors would be the
-// upgrade, and none exists for ~/.claude.json.
+// ponytail: known ceiling. See docs/CEILINGS.md (host_merge read-merge-write race).
 func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Config) ([]string, error) {
+	tracked, err := readPeerHomeTrackedEntries(PeerHomeTrackedFile(cfg.LocalPaths))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
 	files := make([]string, 0, len(cfg.HostMerge))
 	for rel := range cfg.HostMerge {
-		files = append(files, rel)
+		if _, covered := filterUntrackedHomeEntries([]string{rel}, tracked); !covered {
+			files = append(files, rel)
+		}
 	}
 	sort.Strings(files)
 	var merged []string
@@ -311,9 +317,6 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		result := mergeJSONKeys(newer, older, keys)
 		if jsonEqual(result, newer) && jsonEqual(result, older) {
 			continue // identical in substance
-		}
-		if jsonEqual(result, newer) {
-			continue // the newer copy holds everything; the pass copies it
 		}
 		body, err := encodeJSONObject(result)
 		if err != nil {

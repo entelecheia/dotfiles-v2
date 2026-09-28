@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMergeJSONKeysKeepsEveryEntryAndNumbers(t *testing.T) {
@@ -158,5 +159,42 @@ func TestMergePeerHostFilesKeepsModeAndSymlinks(t *testing.T) {
 	}
 	if info, _ := os.Lstat(path); info.Mode()&os.ModeSymlink == 0 {
 		t.Fatal("symlink gone")
+	}
+}
+
+// Same-second writes: the peer's mtime is read to the second, so a copy the
+// pass will pull can look older here. The merge still writes both sides.
+func TestMergePeerHostFilesWritesBothSidesWhateverIsNewer(t *testing.T) {
+	cfg, localHome, peerHome := claudeJSONFixture(t, `{"mcpServers":{"a":{},"mine":{}}}`, `{"mcpServers":{"a":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	sec := peerHomeFixedTime.Truncate(time.Second)
+	if err := os.Chtimes(filepath.Join(localHome, ".claude.json"), sec.Add(300e6), sec.Add(300e6)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(peerHome, ".claude.json"), sec.Add(700e6), sec.Add(700e6)); err != nil {
+		t.Fatal(err)
+	}
+	r := peerScheduleRunner(false)
+	if merged, err := mergePeerHostFiles(context.Background(), r, r, cfg); err != nil || len(merged) != 1 {
+		t.Fatalf("merged %v, %v", merged, err)
+	}
+	if body := string(gitStateFileBytes(t, filepath.Join(peerHome, ".claude.json"))); !strings.Contains(body, `"mine"`) {
+		t.Fatalf("the peer copy lacks the local entry: %s", body)
+	}
+}
+
+// A host_merge file under a tracked host entry belongs to the tracked pass.
+func TestMergePeerHostFilesSkipsTrackedPaths(t *testing.T) {
+	cfg, _, peerHome := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	if err := os.WriteFile(PeerHomeTrackedFile(cfg.LocalPaths), []byte("mem\n.claude.json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := peerScheduleRunner(false)
+	if merged, err := mergePeerHostFiles(context.Background(), r, r, cfg); err != nil || len(merged) != 0 {
+		t.Fatalf("merged %v, %v", merged, err)
+	}
+	if body := string(gitStateFileBytes(t, filepath.Join(peerHome, ".claude.json"))); strings.Contains(body, "mine") {
+		t.Fatalf("a tracked file was merged: %s", body)
 	}
 }

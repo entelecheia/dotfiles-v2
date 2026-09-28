@@ -460,6 +460,12 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 				return nil, err
 			}
 			items.addPlan(tracked.plan, PlanScopeHostTracked, run)
+			// peer sync refuses the tracked plan on the same limits.
+			if err := ValidatePeerPlanSafety(cfg, tracked.plan); err != nil {
+				items.sortItems()
+				res.Items = items
+				return res, err
+			}
 		}
 		additive, err := peerHomeAdditiveItems(ctx, opts.Probe, cfg, false, false)
 		if err != nil {

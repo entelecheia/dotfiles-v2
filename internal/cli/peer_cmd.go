@@ -223,7 +223,8 @@ on a laptop.`,
 				if bs.Config.Verbose {
 					return fmt.Errorf("--json and --verbose both write to stdout; drop one")
 				}
-				progress = nil
+				// Warnings still reach the operator, on stderr.
+				progress = renderPeerEvent(&Printer{Out: c.ErrOrStderr(), Err: c.ErrOrStderr()})
 				bs.Config.Out = c.ErrOrStderr()
 			}
 			res, err := syncer.PeerSync(context.Background(), syncer.PeerSyncOptions{

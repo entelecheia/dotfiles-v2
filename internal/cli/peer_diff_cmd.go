@@ -48,11 +48,7 @@ host paths.`,
 				Itemize: list || jsonOut,
 			})
 			if res != nil && res.Items != nil {
-				perr := writePeerPlanJSON(c, peerPlanJSON{PeerRunPlan: res.Items})
-				if !jsonOut {
-					perr = printPeerRunPlan(p, res.Items)
-				}
-				if perr != nil {
+				if perr := printPeerPlanOutput(c, p, res.Items, jsonOut); perr != nil {
 					return perr
 				}
 				return err
@@ -115,6 +111,15 @@ func writePeerPlanJSON(c *cobra.Command, doc peerPlanJSON) error {
 	enc := json.NewEncoder(c.OutOrStdout())
 	enc.SetIndent("", "  ")
 	return enc.Encode(doc)
+}
+
+// printPeerPlanOutput writes the plan as the JSON document or as the list,
+// never both: stdout carries one of them.
+func printPeerPlanOutput(c *cobra.Command, p *Printer, plan *syncer.PeerRunPlan, jsonOut bool) error {
+	if jsonOut {
+		return writePeerPlanJSON(c, peerPlanJSON{PeerRunPlan: plan})
+	}
+	return printPeerRunPlan(p, plan)
 }
 
 // printPeerRunPlan renders the itemized plan: one line per action, grouped by
