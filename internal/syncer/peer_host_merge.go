@@ -315,7 +315,7 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 			args = append(args, "--rsync-path="+cfg.RemoteRsyncPath)
 		}
 		args = append(args, localPath, cfg.Target.Host+":"+rel)
-		if _, err := runner.Run(ctx, "rsync", args...); err != nil {
+		if _, err := runner.Run(ctx, cfg.rsyncBin(), args...); err != nil {
 			return merged, fmt.Errorf("host_merge %s: pushing the merged copy: %w", rel, err)
 		}
 		merged = append(merged, rel)

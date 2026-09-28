@@ -142,12 +142,12 @@ func peerHomeAdditiveItems(ctx context.Context, probe *exec.Runner, cfg *Config,
 		return nil, err
 	}
 	defer cleanup()
-	base := append(peerHomeAdditiveArgs(cfg, list, false), "--dry-run", "--out-format=@@%i\t%l\t%M\t%n")
+	base := append(peerHomeAdditiveArgs(cfg, list, false), "-8", "--dry-run", "--out-format=@@%i\t%l\t%M\t%n")
 	home, remote := cfg.HomeDir()+"/", cfg.Target.Host+":"
 	var items []PeerPlanItem
 	run := func(direction, src, dst string) error {
 		args := append(append([]string{}, base...), src, dst)
-		res, err := probe.Run(ctx, "env", append([]string{"TZ=UTC", "rsync"}, args...)...)
+		res, err := probe.Run(ctx, "env", append([]string{"TZ=UTC", cfg.rsyncBin()}, args...)...)
 		if err != nil {
 			return fmt.Errorf("peer host plan (%s): %w", direction, err)
 		}
