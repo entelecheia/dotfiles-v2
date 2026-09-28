@@ -147,12 +147,19 @@ func PushPeerReplica(ctx context.Context, runner *exec.Runner, cfg *Config) erro
 	}
 
 	remoteDir := strings.TrimRight(cfg.Target.Path, "/") + "/.dotfiles/peer/replica/"
+	// mkdir -p over ssh instead of rsync --mkpath: macOS peers may only offer
+	// openrsync, which predates --mkpath (rsync 3.2.3) and rejects the flag.
+	if _, err := runner.Run(ctx, "ssh",
+		"-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+		cfg.Target.Host, "mkdir -p "+shellQuote(remoteDir)); err != nil {
+		return fmt.Errorf("peer replica: creating %s on %s: %w", remoteDir, cfg.Target.Host, err)
+	}
 	// --checksum, not the default size+mtime quick check: the staging files
 	// are rewritten every run, and a same-size meta.yaml written in the same
 	// second as the previous one would otherwise be skipped, stalling the
 	// very generation a takeover compares. The payload is a few small files
 	// plus the baselines, so hashing both sides is cheap.
-	args := []string{"-a", "--checksum", "--delete", "--mkpath", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", replicaDir + "/", cfg.Target.Host + ":" + remoteDir}
+	args := []string{"-a", "--checksum", "--delete", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=5", replicaDir + "/", cfg.Target.Host + ":" + remoteDir}
 	if _, err := runner.Run(ctx, "rsync", args...); err != nil {
 		return fmt.Errorf("peer replica: pushing to %s: %w", cfg.Target.Host, err)
 	}
