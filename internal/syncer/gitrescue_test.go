@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -218,5 +219,55 @@ func TestPeerGitClass_StaleRebaseHead(t *testing.T) {
 	}
 	if rep := rescueRealign(t, f.ws, RealignOptions{}); rep.Class != "" || !strings.Contains(rep.Reason, "operation in progress") {
 		t.Fatalf("real rebase reported as %q (%s)", rep.Class, rep.Reason)
+	}
+}
+
+// With the index lock held, a HEAD that moved since the plan (a commit made
+// during the rescue push) stops the switch and leaves the repo untouched.
+func TestPeerGitRescue_SwitchRefusesAMovedHead(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+	planned := gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+	mainTip := f.publish(t, "a.txt", "a2\n")
+	moved := gitStateCommitFile(t, f.ws, "feat.txt", "f2\n", "made during the push")
+
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &gitStateRun{git: gitPath}
+	gitdir := gitStateRun_(t, f.ws, "rev-parse", "--absolute-git-dir")
+	rep := &GitRepoReport{Path: ".", Head: planned, Target: mainTip, Rescue: "rescue/x", branch: "feature", rescueBranch: "main"}
+	run.switchBranch(context.Background(), f.ws, gitdir, rep)
+	if rep.Status != GitRepoSkipped || !strings.Contains(rep.Reason, "HEAD moved") {
+		t.Fatalf("rep = %+v", rep)
+	}
+	if got := gitStateRun_(t, f.ws, "symbolic-ref", "--short", "HEAD"); got != "feature" || gitStateHead(t, f.ws) != moved {
+		t.Fatalf("repo changed: HEAD on %s at %s", got, gitStateHead(t, f.ws))
+	}
+	if _, err := os.Stat(filepath.Join(gitdir, "index.lock")); !os.IsNotExist(err) {
+		t.Fatal("index.lock left behind")
+	}
+}
+
+// A default branch the rescue creates tracks origin's, so later realigns
+// and pulls have an upstream.
+func TestPeerGitRescue_CreatedDefaultBranchTracksOrigin(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+	gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+	gitStateRun_(t, f.ws, "branch", "-q", "-D", "main")
+	mainTip := f.publish(t, "a.txt", "a2\n")
+	f.deliver(t, mainTip)
+
+	preview := rescueRealign(t, f.ws, RealignOptions{Rescue: true, NoPush: true})
+	if preview.RescueRemote != "" {
+		t.Fatalf("--no-push preview plans a push to %q", preview.RescueRemote)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned {
+		t.Fatalf("rescue = %+v", rep)
+	}
+	if got := gitStateRun_(t, f.ws, "rev-parse", "--abbrev-ref", "main@{upstream}"); got != "origin/main" {
+		t.Fatalf("main upstream = %q", got)
 	}
 }

@@ -224,13 +224,13 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 		if rep.TieBreak != "" && (withMoves || rep.Status == syncer.GitRepoRealigned) {
 			p.Line("      tie: %s", rep.TieBreak)
 		}
-		if rep.Rescue != "" && (withMoves || rep.Status == syncer.GitRepoRealigned) {
-			where := "pushed to origin"
+		if rep.Rescue != "" && (rep.Status == syncer.GitRepoRealignable && withMoves || rep.Status == syncer.GitRepoRealigned) {
+			where := "stays local"
 			switch {
 			case rep.RescuePushed:
-				where = "pushed"
-			case rep.Status == syncer.GitRepoRealigned:
-				where = "local only"
+				where = "pushed to " + rep.RescueRemote
+			case rep.Status == syncer.GitRepoRealignable && rep.RescueRemote != "":
+				where = "to be pushed to " + rep.RescueRemote
 			}
 			p.Line("      rescue: %s keeps %s (%s)", rep.Rescue, shortSHA(rep.Head), where)
 		}

@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,52 +14,58 @@ type urlMove struct{ old, new string }
 
 // checkGitmodules compares the worktree .gitmodules with the one in rev (the
 // commit the repo sits on, or moves to in a preview). Peer sync never carries
-// .gitmodules, so after a realign the worktree keeps the old copy and git
-// shows it as a local edit that reverts the peer's commit (#179). A worktree
-// copy equal to an older committed version is stale: --apply restores it
-// from the index and syncs the moved submodule URLs. Anything else is a
-// local edit and left alone. It returns the URL moves by submodule path.
-func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, apply bool, rep *GitRepoReport) map[string]*urlMove {
+// .gitmodules, so after a realign the worktree keeps the old copy, or none
+// when the peer added the first submodule, and git shows a local edit that
+// reverts the peer's commit (#179). A copy equal to an older committed
+// version, or a missing one, is stale: --apply restores it from the index
+// and syncs the moved submodule URLs. Anything else is a local edit and left
+// alone.
+func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, apply bool, rep *GitRepoReport) {
 	switch rep.Status {
 	case GitRepoAligned, GitRepoRealignable, GitRepoRealigned:
 	default:
-		return nil
-	}
-	worktree, err := os.ReadFile(filepath.Join(abs, ".gitmodules"))
-	if err != nil {
-		return nil
+		return
 	}
 	want, err := r.runOutput(ctx, abs, nil, true, "show", rev+":.gitmodules")
-	if err != nil || want == string(worktree) {
-		return nil
+	if err != nil {
+		return // rev has no .gitmodules: nothing to restore
 	}
-	if !r.staleGitmodules(ctx, abs, rev, string(worktree)) {
+	path := filepath.Join(abs, ".gitmodules")
+	worktree, err := os.ReadFile(path)
+	missing := errors.Is(err, os.ErrNotExist)
+	if err != nil && !missing {
+		return
+	}
+	if !missing && string(worktree) == want {
+		return
+	}
+	if !missing && !r.staleGitmodules(ctx, abs, rev, string(worktree)) {
 		rep.Gitmodules = "modified"
-		return nil
+		return
 	}
-	oldURLs := r.gitmodulesURLs(ctx, abs, "-f", filepath.Join(abs, ".gitmodules"))
-	newURLs := r.gitmodulesURLs(ctx, abs, "--blob", rev+":.gitmodules")
-	moves := map[string]*urlMove{}
 	var paths []string
-	for path, url := range newURLs {
-		if old, ok := oldURLs[path]; ok && old != url {
-			moves[path] = &urlMove{old: old, new: url}
-			paths = append(paths, path)
+	if missing {
+		rep.Gitmodules = "missing"
+	} else {
+		rep.Gitmodules = "stale"
+		oldURLs := r.gitmodulesURLs(ctx, abs, "-f", path)
+		for p, url := range r.gitmodulesURLs(ctx, abs, "--blob", rev+":.gitmodules") {
+			if old, ok := oldURLs[p]; ok && old != url {
+				paths = append(paths, p)
+				rep.URLMoves = append(rep.URLMoves, p+": "+old+" -> "+url)
+			}
 		}
-	}
-	sort.Strings(paths)
-	rep.Gitmodules = "stale"
-	for _, path := range paths {
-		rep.URLMoves = append(rep.URLMoves, path+": "+moves[path].old+" -> "+moves[path].new)
+		sort.Strings(paths)
+		sort.Strings(rep.URLMoves)
 	}
 	if !apply {
-		return moves
+		return
 	}
 	// After a realign the index holds rev's .gitmodules; checkout writes
 	// that one file and nothing else in the worktree.
 	if _, err := r.runOutput(ctx, abs, nil, false, "checkout", "-q", "--", ".gitmodules"); err != nil {
-		rep.Gitmodules = "stale (restore failed: " + shortErr(err) + ")"
-		return moves
+		rep.Gitmodules += " (restore failed: " + shortErr(err) + ")"
+		return
 	}
 	rep.Gitmodules = "restored"
 	if len(paths) > 0 {
@@ -67,7 +74,6 @@ func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, appl
 			rep.Gitmodules = "restored (submodule sync failed: " + shortErr(err) + ")"
 		}
 	}
-	return moves
 }
 
 // staleGitmodules reports whether content equals a version of .gitmodules
@@ -120,13 +126,21 @@ func (r *gitStateRun) gitmodulesURLs(ctx context.Context, abs, flag, source stri
 
 // missingGitlink handles a child whose parent gitlink commit is not in its
 // object store. A moved submodule URL is the usual cause after a peer
-// switch: the new commit exists only at the new remote. With --apply --fetch
-// the child points origin at the moved URL, fetches, and is classified
-// again; otherwise the report names the exact commands.
-func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink string, move *urlMove, apply bool, rep *GitRepoReport) {
-	commands := "git -C " + abs + " fetch origin"
+// switch: the new commit exists only at the new remote. The child compares
+// its origin URL with the one the parent's commit records (wantURL; a
+// relative URL is not compared). With --apply --fetch it points origin at a
+// moved URL, fetches, and is classified again; otherwise the report names
+// the exact commands.
+func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, wantURL string, apply bool, rep *GitRepoReport) {
+	var move *urlMove
+	if wantURL != "" && !strings.HasPrefix(wantURL, "./") && !strings.HasPrefix(wantURL, "../") {
+		if have, err := r.read(ctx, abs, "remote", "get-url", "origin"); err == nil && have != wantURL {
+			move = &urlMove{old: have, new: wantURL}
+		}
+	}
+	commands := "git -C " + shellWord(abs) + " fetch origin"
 	if move != nil {
-		commands = "git -C " + abs + " remote set-url origin " + move.new + " && " + commands
+		commands = "git -C " + shellWord(abs) + " remote set-url origin " + shellWord(move.new) + " && " + commands
 	}
 	if !apply || !r.opts.Fetch {
 		if move != nil {
@@ -150,5 +164,9 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink s
 	}
 	fresh := &GitRepoReport{Path: rep.Path}
 	r.classify(ctx, abs, gitdir, gitlink, fresh)
+	if fresh.Reason == gitlinkMissing {
+		fresh.Class = GitClassGitlinkMissing
+		fresh.Suggestion = "origin was fetched but " + shortRev(gitlink) + " is still missing; check that the parent's commit was pushed with its submodule"
+	}
 	*rep = *fresh
 }

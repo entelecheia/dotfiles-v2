@@ -34,8 +34,8 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			rep.Class = GitClassBranchMismatch
 			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, "origin"
 			rep.rescueDiffs = diffs
-			rep.Suggestion = fmt.Sprintf("on %s, but the files match %s at %s; keep HEAD on a rescue branch and switch: %s",
-				label, def, shortRev(cand), rescueCommand(rep.Path))
+			rep.Suggestion = fmt.Sprintf("on %s, but %s %s at %s; keep HEAD on a rescue branch and switch: %s",
+				label, matchWords(diffs), def, shortRev(cand), rescueCommand(rep.Path))
 			return
 		}
 	}
@@ -64,7 +64,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		rep.Suggestion = "at " + upName + "; only uncommitted changes differ, nothing to realign"
 	case behind == 0:
 		rep.Class = GitClassAheadUnpushed
-		rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s; push them: git -C %s push", ahead, label, abs)
+		rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s; push them: git -C %s push", ahead, label, shellWord(abs))
 	case ahead > 0:
 		rep.Class = GitClassDiverged
 		rep.remote = "origin"
@@ -76,8 +76,8 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		if cand, diffs, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, upstream, rep.HeadDiffs); ok {
 			rep.RescueTarget = cand
 			rep.rescueDiffs = diffs
-			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, whose %s the files match; keep the local commits on a rescue branch and realign: %s",
-				ahead, behind, upName, shortRev(cand), rescueCommand(rep.Path))
+			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s; keep the local commits on a rescue branch and realign: %s",
+				ahead, behind, upName, matchWords(diffs), shortRev(cand), rescueCommand(rep.Path))
 		} else {
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and no upstream commit matches the files better than HEAD; rebase or merge by hand",
 				ahead, behind, upName)
@@ -86,7 +86,26 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 }
 
 func rescueCommand(path string) string {
-	return "dot peer git realign --rescue --apply " + path
+	return "dot peer git realign --rescue --apply " + shellWord(path)
+}
+
+// shellWord quotes s for a suggested command line only when it needs it.
+func shellWord(s string) string {
+	safe := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_./:@+=,", r)
+	}
+	if s == "" || strings.IndexFunc(s, func(r rune) bool { return !safe(r) }) >= 0 {
+		return shellQuote(s)
+	}
+	return s
+}
+
+// matchWords says how well the rescue target matches the files.
+func matchWords(diffs int) string {
+	if diffs == 0 {
+		return "the files match"
+	}
+	return fmt.Sprintf("the files are closest to (%d differing)", diffs)
 }
 
 func shortRev(sha string) string {
@@ -158,6 +177,9 @@ func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoRe
 	rep.Reason = ""
 	rep.Target = rep.RescueTarget
 	rep.TargetDiffs = rep.rescueDiffs
+	if !r.opts.NoPush {
+		rep.RescueRemote = rep.remote
+	}
 }
 
 // rescue keeps HEAD on the rescue branch, pushes it unless NoPush, then moves
@@ -172,7 +194,7 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		return
 	}
 	if !r.opts.NoPush {
-		if _, err := r.runOutput(ctx, abs, nil, false, "push", "-q", rep.remote, ref+":"+ref); err != nil {
+		if _, err := r.runOutput(ctx, abs, nil, false, "push", "-q", rep.RescueRemote, ref+":"+ref); err != nil {
 			rep.Status = GitRepoUnresolvable
 			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (retry, or use --no-push): " + shortErr(err)
 			return
@@ -229,6 +251,19 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 		fail(GitRepoUnresolvable, "cannot write index lock: "+shortErr(err))
 		return
 	}
+	// With the lock held, HEAD must still be where the plan read it: a
+	// commit made during the push would otherwise be left off both the
+	// rescue branch and the undo command.
+	wantRef := ""
+	if rep.branch != "" {
+		wantRef = "refs/heads/" + rep.branch
+	}
+	curRef, _ := r.read(ctx, abs, "symbolic-ref", "-q", "HEAD")
+	curSHA, _ := r.read(ctx, abs, "rev-parse", "HEAD")
+	if curRef != wantRef || curSHA != rep.Head {
+		fail(GitRepoSkipped, "HEAD moved during the rescue; repo untouched (rescue branch "+rep.Rescue+" kept)")
+		return
+	}
 	restoreDef := func() {
 		if oldDef == target {
 			return
@@ -250,9 +285,9 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 		fail(GitRepoUnresolvable, "cannot point HEAD at "+def+"; "+def+" restored: "+shortErr(err))
 		return
 	}
-	restoreHead := "git -C " + abs + " update-ref --no-deref HEAD " + rep.Head
+	restoreHead := "git -C " + shellWord(abs) + " update-ref --no-deref HEAD " + rep.Head
 	if rep.branch != "" {
-		restoreHead = "git -C " + abs + " symbolic-ref HEAD refs/heads/" + rep.branch
+		restoreHead = "git -C " + shellWord(abs) + " symbolic-ref HEAD refs/heads/" + rep.branch
 	}
 	if err := os.Rename(lockPath, index); err != nil {
 		if rep.branch != "" {
@@ -264,7 +299,13 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 		fail(GitRepoUnresolvable, "index rename failed after HEAD moved; HEAD and "+def+" restored: "+shortErr(err))
 		return
 	}
+	if oldDef == "" {
+		// A branch created here tracks origin's, as a checkout would have
+		// set it up; realign and pull need the upstream.
+		_, _ = r.runOutput(ctx, abs, nil, false, "config", "branch."+def+".remote", "origin")
+		_, _ = r.runOutput(ctx, abs, nil, false, "config", "branch."+def+".merge", defRef)
+	}
 	rep.PreviousHead = rep.Head
 	rep.Status = GitRepoRealigned
-	rep.Undo = restoreHead + " && git -C " + abs + " reset --mixed -q " + rep.Head
+	rep.Undo = restoreHead + " && git -C " + shellWord(abs) + " reset --mixed -q " + rep.Head
 }

@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -113,5 +114,48 @@ func TestPeerGitRealign_LocalGitmodulesEditLeftAlone(t *testing.T) {
 	}
 	if got := gitStateFileBytes(t, path); string(got) != string(before) {
 		t.Fatal("a local .gitmodules edit was overwritten")
+	}
+}
+
+// A child detects the moved URL from the parent's commit, not only through a
+// stale worktree .gitmodules: here the parent was realigned and .gitmodules
+// restored by hand without `submodule sync`, and a later run restricted to
+// the child fetches from the moved URL.
+func TestPeerGitRealign_URLMoveDetectedFromTheParentCommit(t *testing.T) {
+	ws, sub, _, newURL, p1, s2 := urlMoveFixture(t)
+	gitStateRun_(t, ws, "reset", "-q", "--mixed", p1)
+	gitStateRun_(t, ws, "checkout", "-q", "--", ".gitmodules")
+
+	res, err := PeerGitRealign(context.Background(), ws, []string{"sub"}, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child := gitStateReport(t, res, "sub"); child.Class != GitClassURLMoved || !strings.Contains(child.Suggestion, newURL) {
+		t.Fatalf("child = %+v", child)
+	}
+	if _, err := PeerGitRealign(context.Background(), ws, []string{"sub"}, RealignOptions{Apply: true, Fetch: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitStateHead(t, sub); got != s2 {
+		t.Fatalf("child HEAD = %s, want %s", got, s2)
+	}
+}
+
+// The peer added the first submodule: its .gitmodules never reached this
+// worktree. --apply restores it.
+func TestPeerGitRealign_RestoresMissingGitmodules(t *testing.T) {
+	ws, _, _, _, _, _ := urlMoveFixture(t)
+	if err := os.Remove(filepath.Join(ws, ".gitmodules")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); root.Gitmodules != "restored" {
+		t.Fatalf("root = %+v", root)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".gitmodules")); err != nil {
+		t.Fatalf(".gitmodules not restored: %v", err)
 	}
 }

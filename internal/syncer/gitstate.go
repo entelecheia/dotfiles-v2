@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -64,8 +65,10 @@ type GitRepoReport struct {
 	// match, for a diverged or branch-mismatch repo; --rescue moves there.
 	RescueTarget string `json:"rescueTarget,omitempty"`
 	// Rescue names the branch that keeps HEAD's commits when --rescue moves
-	// the repo; RescuePushed says it reached the remote.
+	// the repo; RescueRemote is where it is pushed and RescuePushed says it
+	// got there.
 	Rescue       string `json:"rescue,omitempty"`
+	RescueRemote string `json:"rescueRemote,omitempty"` // empty: kept local (--no-push)
 	RescuePushed bool   `json:"rescuePushed,omitempty"`
 	// Undo is the exact command that reverses an applied rescue.
 	Undo string `json:"undo,omitempty"`
@@ -200,7 +203,7 @@ func runGitState(ctx context.Context, root string, repos []string, opts RealignO
 		}
 	}
 
-	run.process(ctx, root, ".", "", nil, opts.Apply, result)
+	run.process(ctx, root, ".", "", "", opts.Apply, result)
 	return result, nil
 }
 
@@ -258,7 +261,7 @@ func (r *gitStateRun) discoverPaths(ctx context.Context, root string) (map[strin
 // its submodule gitlinks. Children are enumerated AFTER the parent has been
 // processed, so a child's candidate gitlink is read from the parent's
 // realigned HEAD.
-func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, move *urlMove, apply bool, result *GitStateResult) {
+func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink, wantURL string, apply bool, result *GitStateResult) {
 	rep := &GitRepoReport{Path: rel}
 	included := r.included(rel)
 	defer func() {
@@ -289,7 +292,7 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, mov
 	if included {
 		r.classify(ctx, abs, gitdir, gitlink, rep)
 		if rep.Status == GitRepoUnresolvable && rep.Reason == gitlinkMissing {
-			r.missingGitlink(ctx, abs, gitdir, gitlink, move, apply, rep)
+			r.missingGitlink(ctx, abs, gitdir, gitlink, wantURL, apply, rep)
 		}
 		if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
 			r.planRescue(ctx, abs, rep)
@@ -309,10 +312,13 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, mov
 	if included && !apply && rep.Status == GitRepoRealignable {
 		rev = rep.Target
 	}
-	var moves map[string]*urlMove
 	if included {
-		moves = r.checkGitmodules(ctx, abs, rev, apply, rep)
+		r.checkGitmodules(ctx, abs, rev, apply, rep)
 	}
+	// Each child learns the URL rev's .gitmodules gives it, read even when
+	// this repo is outside the restriction, so a child whose gitlink commit
+	// is missing can tell a moved URL from a missing fetch.
+	urls := r.gitmodulesURLs(ctx, abs, "--blob", rev+":.gitmodules")
 	gitlinks, err := r.childGitlinks(ctx, abs, rev)
 	if err != nil {
 		// Children of a repo whose HEAD cannot be read cannot be discovered;
@@ -330,7 +336,7 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, mov
 		if rel != "." {
 			childRel = rel + "/" + child.path
 		}
-		r.process(ctx, filepath.Join(abs, filepath.FromSlash(child.path)), childRel, child.sha, moves[child.path], apply, result)
+		r.process(ctx, filepath.Join(abs, filepath.FromSlash(child.path)), childRel, child.sha, urls[child.path], apply, result)
 	}
 }
 
@@ -422,12 +428,30 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 		r.classifyNoMatch(ctx, abs, gitdir, rep)
 		return
 	}
-	// A tie with HEAD (best == headDiffs) is still a realign: moving to a
-	// strict descendant never makes the classification worse, and a parent
-	// whose only drift is in its children's gitlinks must move so each
-	// child's own realign reads the parent's new HEAD.
+	// A tie with HEAD (best == headDiffs) is still a realign unless the
+	// children say HEAD is right: moving to a strict descendant never makes
+	// the own-content classification worse, and a parent whose only drift is
+	// in its children's gitlinks must move so each child reads the new
+	// gitlinks. But a clean parent must not move past gitlink bumps whose
+	// content its children do not have yet.
+	headTie := ""
+	if bestDiffs == headDiffs {
+		headTie = head
+	}
+	target, rule, stay := r.breakTie(ctx, abs, gitlink, headTie, tied)
+	rep.TieBreak = rule
+	if stay {
+		if headDiffs == 0 {
+			aligned()
+			return
+		}
+		rep.Status = GitRepoNoMatch
+		rep.Reason = "the children match HEAD's gitlinks better than any descendant's"
+		r.classifyNoMatch(ctx, abs, gitdir, rep)
+		return
+	}
 	rep.Status = GitRepoRealignable
-	rep.Target, rep.TieBreak = r.breakTie(ctx, abs, gitlink, tied)
+	rep.Target = target
 	rep.TargetDiffs = bestDiffs
 }
 
@@ -437,32 +461,47 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 // oldest candidate and every child to a stale gitlink (#177). In order:
 //
 //  1. children: the candidates whose gitlinks match the most children's
-//     worktree content, when the children tell the candidates apart;
+//     worktree content, when the children tell them apart. When HEAD ties
+//     too (head is set) it competes here, and stay reports that it won;
 //  2. the parent's gitlink, which keeps the parent's status clean;
 //  3. the newest candidate, the upstream tip side of the chain.
 //
-// It returns the choice and a one-line account of the rule, empty without a
-// tie.
-func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink string, tied []string) (string, string) {
-	if len(tied) == 1 {
-		return tied[0], ""
-	}
-	pool, children := r.bestByChildren(ctx, abs, tied)
+// It returns the choice and a one-line account of the rule, empty when
+// nothing had to be decided.
+func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, tied []string) (string, string, bool) {
+	contenders := tied
 	prefix := fmt.Sprintf("%d candidates tie on content; ", len(tied))
+	if head != "" {
+		contenders = append([]string{head}, tied...)
+		prefix = fmt.Sprintf("HEAD and %d candidate(s) tie on content; ", len(tied))
+	}
+	if len(contenders) == 1 {
+		return tied[0], "", false
+	}
+	pool, children := r.bestByChildren(ctx, abs, contenders)
+	if head != "" {
+		if len(pool) == 1 && pool[0] == head {
+			return "", prefix + children + ", so HEAD stays", true
+		}
+		pool = slices.DeleteFunc(slices.Clone(pool), func(c string) bool { return c == head })
+	}
 	if len(pool) == 1 {
-		return pool[0], prefix + children
+		if children == "" {
+			return pool[0], "", false
+		}
+		return pool[0], prefix + children, false
 	}
 	if children != "" {
 		prefix += children + ", then "
 	}
 	for _, cand := range pool {
 		if cand == gitlink {
-			return cand, prefix + "parent gitlink"
+			return cand, prefix + "parent gitlink", false
 		}
 	}
 	// Candidate order is the parent gitlink first, then the first-parent
 	// chain nearest HEAD first; without the gitlink, the last is the newest.
-	return pool[len(pool)-1], prefix + "newest candidate"
+	return pool[len(pool)-1], prefix + "newest candidate", false
 }
 
 // bestByChildren scores each tied candidate by how many of its submodule
@@ -621,8 +660,8 @@ func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string)
 	lines := strings.Split(strings.TrimSpace(chain), "\n")
 	for i := len(lines) - 1; i >= 0; i-- { // rev-list is newest-first; want nearest HEAD first
 		sha := strings.TrimSpace(lines[i])
-		if sha == "" || sha == head {
-			continue
+		if sha == "" || sha == head || sha == gitlink {
+			continue // the parent gitlink is already the first candidate
 		}
 		if r.strictDescendant(ctx, abs, head, sha) {
 			out = append(out, sha)

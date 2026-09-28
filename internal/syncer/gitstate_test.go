@@ -604,3 +604,46 @@ func TestPeerGitRealign_TieWithoutChildrenTakesNewest(t *testing.T) {
 		t.Fatalf("target = %q tie %q, want the newest %q", rep.Target, rep.TieBreak, tip)
 	}
 }
+
+// A clean parent must not move past an upstream gitlink bump whose content
+// its child does not have yet (the bump came from CI or another machine and
+// peer sync has not delivered the child's files): HEAD's gitlink matches
+// the child, so HEAD wins the children tie-break and the parent stays clean.
+func TestPeerGitRealign_CleanParentStaysBehindUndeliveredGitlinkBump(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	s1 := gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+	s2 := gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump only")
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep := gitStateReport(t, res, "."); rep.Status != GitRepoAligned || !strings.Contains(rep.TieBreak, "HEAD stays") {
+		t.Fatalf("root = %+v, want aligned with HEAD kept", rep)
+	}
+	if got := gitStateHead(t, ws); got != p0 {
+		t.Fatalf("parent moved to %s", got)
+	}
+	if out := gitStateRun_(t, ws, "status", "--porcelain"); out != "" {
+		t.Fatalf("parent not clean:\n%s", out)
+	}
+}
