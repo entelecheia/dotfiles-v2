@@ -226,25 +226,73 @@ type hostMerge struct {
 	result      map[string]any // what both machines get
 	localInfo   os.FileInfo    // re-checked right before the write
 	peerData    []byte         // the peer's copy as read, re-checked likewise
+	peerMtime   time.Time      // to the second; zero when not read
 	refused     string         // why the run cannot merge it; it stops before anything moves
 	same        bool           // equal in substance: nothing to write, still host_merge's
 }
 
-// hostMergeRels names the files a decision covers: present on both
-// machines, so host_merge owns them for the run.
-func hostMergeRels(merges []hostMerge) []string {
-	rels := make([]string, 0, len(merges))
-	for _, m := range merges {
-		rels = append(rels, m.rel)
+// wouldMove says whether newest-wins would move the file in direction,
+// the plan's test for listing it as held by a one-way run. The peer's mtime
+// has one-second precision.
+func (m *hostMerge) wouldMove(direction string) bool {
+	if m.same {
+		return false
 	}
-	return rels
+	if m.localInfo == nil || m.peerMtime.IsZero() {
+		return true // refused: unknown, so listed
+	}
+	local := m.localInfo.ModTime().Truncate(time.Second)
+	if direction == "pull" {
+		return !local.After(m.peerMtime)
+	}
+	return !m.peerMtime.After(local)
 }
 
-// planHostMerges decides every host_merge file the additive pass moves
-// (home-paths.txt without the tracked entries) that exists on both
-// machines: copies equal in substance need nothing; a symlink or another
-// non-regular copy, or one that is not a JSON object, is a refusal;
-// anything else merges into the newer copy. It only reads.
+// hostMergeFiles are the host_merge files the additive host list
+// (home-paths.txt without the tracked entries) covers: host_merge owns them
+// in every run.
+func hostMergeFiles(cfg *Config) ([]string, error) {
+	if len(cfg.HostMerge) == 0 {
+		return nil, nil
+	}
+	entries, err := additiveHomeEntries(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for rel, keys := range cfg.HostMerge {
+		if len(keys) > 0 && homeEntriesCover(entries, rel) {
+			files = append(files, rel)
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// hostMergeList writes hostMergeFiles as the create-only pass's
+// --files-from list; "" when there are none.
+func hostMergeList(cfg *Config, dryRun bool) (string, func(), error) {
+	files, err := hostMergeFiles(cfg)
+	if err != nil || len(files) == 0 {
+		return "", func() {}, err
+	}
+	dir, cleanup, err := peerHomeScopedDir(cfg, dryRun)
+	if err != nil {
+		return "", nil, err
+	}
+	path := filepath.Join(dir, "host-merge.dyn")
+	if err := atomicWrite(path, []byte(strings.Join(files, "\n")+"\n")); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return path, cleanup, nil
+}
+
+// planHostMerges decides every host_merge file (hostMergeFiles) that
+// exists on both machines: copies equal in substance need nothing; a
+// symlink or another non-regular copy, or one that is not a JSON object, is
+// a refusal; anything else merges into the newer copy. A file on one Mac
+// only is the create-only pass's. It only reads.
 func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hostMerge, error) {
 	if len(cfg.HostMerge) == 0 {
 		return nil, nil
@@ -252,34 +300,18 @@ func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hos
 	if err := validateHostMerge(cfg.HostMerge); err != nil {
 		return nil, err
 	}
-	entries, err := additiveHomeEntries(cfg)
+	files, err := hostMergeFiles(cfg)
 	if err != nil {
 		return nil, err
 	}
-	files := make([]string, 0, len(cfg.HostMerge))
-	for rel, keys := range cfg.HostMerge {
-		if len(keys) > 0 && homeEntriesCover(entries, rel) {
-			files = append(files, rel)
-		}
-	}
-	sort.Strings(files)
 	var merges []hostMerge
 	for _, rel := range files {
 		m := hostMerge{rel: rel, keys: cfg.HostMerge[rel]}
 		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(rel))
 		info, err := os.Lstat(localPath)
 		if os.IsNotExist(err) {
-			continue // absent here: the pass copies the peer's
+			continue // absent here: the create-only pass brings the peer's
 		}
-		if err != nil {
-			return nil, err
-		}
-		if !info.Mode().IsRegular() {
-			m.refused = "not a regular file here (a symlink?)"
-			merges = append(merges, m)
-			continue
-		}
-		localData, err := os.ReadFile(localPath)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +325,16 @@ func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hos
 			return nil, err
 		}
 		if peerData == nil {
-			continue // absent there: the pass copies this one
+			continue // absent there (or not a file): nothing to merge with
+		}
+		if !info.Mode().IsRegular() {
+			m.refused = "not a regular file here (a symlink?)"
+			merges = append(merges, m)
+			continue
+		}
+		localData, err := os.ReadFile(localPath)
+		if err != nil {
+			return nil, err
 		}
 		local, lerr := decodeJSONObject(localData)
 		peer, perr := decodeJSONObject(peerData)
@@ -317,7 +358,7 @@ func planHostMerges(ctx context.Context, probe *exec.Runner, cfg *Config) ([]hos
 		if peerMtime.After(info.ModTime()) {
 			newer, older = peer, local
 		}
-		m.local, m.peer, m.localInfo, m.peerData = local, peer, info, peerData
+		m.local, m.peer, m.localInfo, m.peerData, m.peerMtime = local, peer, info, peerData, peerMtime
 		m.result = mergeJSONKeys(newer, older, m.keys)
 		merges = append(merges, m)
 	}
@@ -447,10 +488,19 @@ func annotateHotItems(ctx context.Context, probe *exec.Runner, cfg *Config, item
 		}
 	}
 	for i := range merges {
-		if !merges[i].same {
-			items = append(items, PeerPlanItem{Path: merges[i].rel, Scope: PlanScopeHost, Hot: true})
-			renderHostMerge(&items[len(items)-1], &merges[i], direction)
+		m := &merges[i]
+		if m.same || direction != "both" && !m.wouldMove(direction) {
+			continue
 		}
+		it := PeerPlanItem{Path: m.rel, Scope: PlanScopeHost, Hot: true}
+		if m.localInfo != nil {
+			it.Local = &PlanSide{Size: m.localInfo.Size(), Mtime: m.localInfo.ModTime()}
+		}
+		if !m.peerMtime.IsZero() {
+			it.Peer = &PlanSide{Size: int64(len(m.peerData)), Mtime: m.peerMtime}
+		}
+		renderHostMerge(&it, m, direction)
+		items = append(items, it)
 	}
 	return items
 }
@@ -494,11 +544,6 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		merges, err := planHostMerges(ctx, probe, cfg)
 		if err != nil {
 			return merged, err
-		}
-		for _, rel := range hostMergeRels(merges) {
-			if !slices.Contains(cfg.hostMergeExcluded, rel) {
-				cfg.hostMergeExcluded = append(cfg.hostMergeExcluded, rel)
-			}
 		}
 		if err := hostMergeRefusal(merges, "the host pass did not run; the next two-way run merges it"); err != nil {
 			return merged, err

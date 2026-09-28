@@ -27,9 +27,10 @@ type PlanSide struct {
 }
 
 // PeerPlanItem is one action a peer run plans (#180). Direction is "pull"
-// (peer to this machine), "push", or "both" for a host_merge write on both
-// machines; Action is create, update, delete, conflict or merge. Local and Peer describe each side's copy where it is known: the
-// additive host pass only sees the sending side.
+// (peer to this machine), "push", or "both" for a host_merge file (merged on
+// both machines, or a conflict that stops the run); Action is create,
+// update, delete, conflict or merge. Local and Peer describe each side's
+// copy where it is known: the additive host pass only sees the sending side.
 type PeerPlanItem struct {
 	Path      string    `json:"path"`
 	Scope     string    `json:"scope"`
@@ -179,9 +180,9 @@ func peerHomeAdditiveItems(ctx context.Context, probe *exec.Runner, cfg *Config,
 		return nil, err
 	}
 	defer cleanup()
-	base := append(peerHomeAdditiveArgs(cfg, list, false), "-8", "--dry-run", "--out-format=@@%i\t%l\t%M\t%n")
 	home, remote := cfg.HomeDir()+"/", cfg.Target.Host+":"
 	var items []PeerPlanItem
+	var base []string
 	run := func(direction, src, dst string) error {
 		args := append(append([]string{}, base...), src, dst)
 		res, err := probe.Run(ctx, "env", append([]string{"TZ=UTC", cfg.rsyncBin()}, args...)...)
@@ -199,13 +200,28 @@ func peerHomeAdditiveItems(ctx context.Context, probe *exec.Runner, cfg *Config,
 		}
 		return nil
 	}
-	if !pushOnly {
-		if err := run("pull", remote, home); err != nil {
-			return nil, err
+	pass := func(args []string) error {
+		base = append(args, "-8", "--dry-run", "--out-format=@@%i\t%l\t%M\t%n")
+		if !pushOnly {
+			if err := run("pull", remote, home); err != nil {
+				return err
+			}
 		}
+		if !pullOnly {
+			return run("push", home, remote)
+		}
+		return nil
 	}
-	if !pullOnly {
-		if err := run("push", home, remote); err != nil {
+	if err := pass(peerHomeAdditiveArgs(cfg, list, false, false)); err != nil {
+		return nil, err
+	}
+	hmList, hmCleanup, err := hostMergeList(cfg, true)
+	if err != nil {
+		return nil, err
+	}
+	if hmList != "" {
+		defer hmCleanup()
+		if err := pass(peerHomeAdditiveArgs(cfg, hmList, false, true)); err != nil {
 			return nil, err
 		}
 	}

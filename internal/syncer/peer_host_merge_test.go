@@ -116,13 +116,20 @@ func TestPeerSync_HostMergeKeepsEntriesFromBothMacs(t *testing.T) {
 
 // #181 AC2 in a one-way run: host_merge merges only in a two-way run, so a
 // --pull-only or --push-only run holds a file present on both machines
-// instead of letting the newer copy drop the other's entries on both.
+// instead of letting the newer copy drop the other's entries on both, also
+// when the other copy appears only during the run (late), and says so.
 func TestPeerSync_OneWayRunHoldsHostMergeFiles(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		pushOnly, pullOnly bool
 		direction          string
-	}{{"pull-only, peer newer", false, true, "pull"}, {"push-only, local newer", true, false, "push"}} {
+		late               bool
+	}{
+		{"pull-only, peer newer", false, true, "pull", false},
+		{"push-only, local newer", true, false, "push", false},
+		{"pull-only, the peer's copy appears late", false, true, "pull", true},
+		{"push-only, the local copy appears late", true, false, "push", true},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			local := `{"mcpServers":{"a":{},"mine":{}}}`
 			cfg, localHome, peerHome := claudeJSONFixture(t, local, `{"mcpServers":{"a":{},"kimi-cu":{}}}`)
@@ -131,14 +138,45 @@ func TestPeerSync_OneWayRunHoldsHostMergeFiles(t *testing.T) {
 			}
 			cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
 			opts := PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, PushOnly: tc.pushOnly, PullOnly: tc.pullOnly, Itemize: true}
-			res, err := PeerSync(context.Background(), opts)
-			if err != nil {
-				t.Fatal(err)
+			if !tc.late {
+				res, err := PeerSync(context.Background(), opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				it := findItem(t, res.Plan, ".claude.json")
+				if it.Action != "update" || it.Direction != tc.direction || !strings.HasPrefix(it.Reason, "held: host_merge") || it.Local == nil || it.Peer == nil {
+					t.Fatalf("item = %+v", it)
+				}
+			} else {
+				// The receiver's copy is there from the start; the sender's
+				// (the newer) appears once the workspace pass runs, after the
+				// decision, as an app's first save would.
+				sender := filepath.Join(peerHome, ".claude.json")
+				if tc.pushOnly {
+					sender = filepath.Join(localHome, ".claude.json")
+				}
+				if err := os.Rename(sender, sender+".later"); err != nil {
+					t.Fatal(err)
+				}
+				real, err := osexec.LookPath("ssh")
+				if err != nil {
+					t.Fatal(err)
+				}
+				bin, done := t.TempDir(), filepath.Join(t.TempDir(), "done")
+				writeStub(t, filepath.Join(bin, "ssh"), "#!/bin/sh\n"+
+					"case \"$*\" in *'rsync --server'*)\n"+
+					"  if [ ! -f '"+done+"' ]; then mv '"+sender+".later' '"+sender+"'; touch '"+done+"'; fi ;;\n"+
+					"esac\n"+
+					"exec '"+real+"' \"$@\"\n")
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			}
-			if it := findItem(t, res.Plan, ".claude.json"); it.Action != "update" || it.Direction != tc.direction || !strings.HasPrefix(it.Reason, "held: host_merge") {
-				t.Fatalf("item = %+v", it)
-			}
+			var held []string
 			opts.Runner, opts.DryRun, opts.Itemize = peerScheduleRunner(false), false, false
+			opts.Progress = func(e PeerEvent) {
+				if e.Kind == PeerEventHostMergeHeld {
+					held = append(held, e.Path)
+				}
+			}
 			if _, err := PeerSync(context.Background(), opts); err != nil {
 				t.Fatal(err)
 			}
@@ -147,7 +185,75 @@ func TestPeerSync_OneWayRunHoldsHostMergeFiles(t *testing.T) {
 					t.Errorf("%s lost %s: %s", home, want, body)
 				}
 			}
+			if !tc.late && !slices.Equal(held, []string{".claude.json"}) {
+				t.Errorf("held events = %v", held)
+			}
 		})
+	}
+
+	// A one-way run whose sending copy is the older one moves nothing, so
+	// the plan lists nothing for it.
+	cfg, _, _ := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, PushOnly: true, Itemize: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range res.Plan.Items {
+		if it.Path == ".claude.json" {
+			t.Fatalf("an older sender's copy is listed: %+v", it)
+		}
+	}
+}
+
+// A host_merge file on one Mac only is created on the other, in the
+// directions the run moves, and listed as a create; a copy that is not a
+// regular file here is no refusal while the peer has none (#194 round 9).
+func TestPeerSync_HostMergeFileOnOneMacIsCreatedOnTheOther(t *testing.T) {
+	for _, pullOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pullOnly=%v", pullOnly), func(t *testing.T) {
+			cfg, localHome, peerHome := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+			cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+			from, to, direction := localHome, peerHome, "push"
+			if pullOnly {
+				from, to, direction = peerHome, localHome, "pull"
+			}
+			if err := os.Remove(filepath.Join(to, ".claude.json")); err != nil {
+				t.Fatal(err)
+			}
+			opts := PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true, PullOnly: pullOnly, Itemize: true}
+			res, err := PeerSync(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if it := findItem(t, res.Plan, ".claude.json"); it.Action != "create" || it.Direction != direction {
+				t.Fatalf("item = %+v", it)
+			}
+			opts.Runner, opts.DryRun, opts.Itemize = peerScheduleRunner(false), false, false
+			if _, err := PeerSync(context.Background(), opts); err != nil {
+				t.Fatal(err)
+			}
+			want := string(gitStateFileBytes(t, filepath.Join(from, ".claude.json")))
+			if got := string(gitStateFileBytes(t, filepath.Join(to, ".claude.json"))); got != want {
+				t.Fatalf("created copy = %q, want %q", got, want)
+			}
+		})
+	}
+
+	cfg, localHome, peerHome := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	if err := os.Remove(filepath.Join(peerHome, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(localHome, ".claude.json")
+	if err := os.Rename(path, path+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(path+".real", path); err != nil {
+		t.Fatal(err)
+	}
+	if merges, err := planHostMerges(context.Background(), peerScheduleRunner(false), cfg); err != nil || len(merges) != 0 {
+		t.Fatalf("a symlink with no peer copy was decided: %+v %v", merges, err)
 	}
 }
 

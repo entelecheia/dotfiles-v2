@@ -3,8 +3,10 @@ package syncer
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -209,6 +211,7 @@ const (
 	PeerEventDotVersionMismatch                         // peer dot release differs from this one; Path names the peer binary
 	PeerEventPeerDotUnreleased                          // the peer has only a non-release dot and no remote_dot pin; Path names it
 	PeerEventHostMerged                                 // a host_merge file was merged on both machines; Path names it
+	PeerEventHostMergeHeld                              // a one-way run leaves a differing host_merge file alone; Path names it
 )
 
 // PeerEvent is one step outcome. Only the fields its kind documents are set.
@@ -476,7 +479,6 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 		if err != nil {
 			return nil, err
 		}
-		cfg.hostMergeExcluded = hostMergeRels(merges)
 		additive, err := peerHomeAdditiveItems(ctx, opts.Probe, cfg, false, false)
 		if err != nil {
 			return nil, err
@@ -540,7 +542,6 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer target is not an ssh target; run: dot peer init --host <user@host>")
 	}
-	cfg.hostMergeExcluded = nil // this run's decision only
 	// The profile owner is the coordinator. This guard is intentionally
 	// before any probe or transfer: a second machine must not perform a
 	// half-run and then leave a different baseline behind.
@@ -637,12 +638,14 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err := ValidatePeerPlanSafety(cfg, plan); err != nil {
 		return nil, err
 	}
-	// host_merge decides here, before anything moves (#181). A file on both
-	// machines is never newest-wins input, in any direction: a two-way run
-	// merges it (one it cannot merge stops the run now, not after the
-	// workspace pass), a one-way run holds it. The same decision draws the
-	// plan; the merge step takes it again from the copies as they are then.
+	// host_merge decides here, before anything moves (#181). Its files are
+	// never newest-wins input, in any run (peerHomeAdditiveArgs): a two-way
+	// run merges those on both machines (one it cannot merge stops the run
+	// now, not after the workspace pass), a one-way run holds them, and a
+	// file on one Mac only is created on the other. The same decision draws
+	// the plan; the merge step takes it again from the copies as they are.
 	twoWay := !opts.PushOnly && !opts.PullOnly
+	direction := runDirection(opts.PushOnly, opts.PullOnly)
 	var merges []hostMerge
 	if !opts.SkipHome {
 		m, err := planHostMerges(ctx, probe, cfg)
@@ -655,7 +658,11 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 			}
 		}
 		merges = m
-		cfg.hostMergeExcluded = hostMergeRels(m)
+		for i := range m {
+			if !twoWay && m[i].wouldMove(direction) {
+				emitPeer(opts.Progress, PeerEvent{Kind: PeerEventHostMergeHeld, Path: m[i].rel})
+			}
+		}
 	}
 	conflict := NewConflictDir()
 	complete := true
@@ -772,7 +779,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 				return nil, err
 			}
 			runPlan.Items = append(runPlan.Items, additive...)
-			runPlan.Items = annotateHotItems(ctx, probe, cfg, runPlan.Items, runDirection(opts.PushOnly, opts.PullOnly), merges)
+			runPlan.Items = annotateHotItems(ctx, probe, cfg, runPlan.Items, direction, merges)
 		}
 		// host_merge runs before the additive pass and only in a two-way run:
 		// it writes both machines.
@@ -1207,51 +1214,64 @@ func peerHomeSync(ctx context.Context, runner *exec.Runner, cfg *Config, progres
 	// home-paths.txt is seed-once, so lists written before the entry was removed
 	// still carry it, and Codex hash-keys its Keychain MCP OAuth credentials to
 	// this file's server definitions - copying a peer's copy orphans them.
-	base := peerHomeAdditiveArgs(cfg, list, true)
-	if dryRun {
-		base = append(base, "--dry-run")
-	}
 	remote := cfg.Target.Host + ":"
-
-	// Pull first, same reasoning as the workspace pass: the additive direction
-	// records a conflict before this machine's version goes out.
-	if !pushOnly {
-		args := append(append([]string{}, base...), remote, home+"/")
-		if err := runPeerRsync(ctx, runner, cfg, args); err != nil {
-			return err
+	pass := func(base []string) error {
+		if dryRun {
+			base = append(base, "--dry-run")
 		}
-	}
-	if !pullOnly {
-		args := append(append([]string{}, base...), home+"/", remote)
-		if err := runPeerRsync(ctx, runner, cfg, args); err != nil {
-			return err
+		// Pull first, same reasoning as the workspace pass: the additive
+		// direction records a conflict before this machine's version goes out.
+		if !pushOnly {
+			args := append(append([]string{}, base...), remote, home+"/")
+			if err := runPeerRsync(ctx, runner, cfg, args); err != nil {
+				return err
+			}
 		}
+		if !pullOnly {
+			args := append(append([]string{}, base...), home+"/", remote)
+			if err := runPeerRsync(ctx, runner, cfg, args); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+	if err := pass(peerHomeAdditiveArgs(cfg, list, true, false)); err != nil {
+		return err
+	}
+	hmList, hmCleanup, err := hostMergeList(cfg, dryRun)
+	if err != nil || hmList == "" {
+		return err
+	}
+	defer hmCleanup()
+	return pass(peerHomeAdditiveArgs(cfg, hmList, true, true))
 }
 
 // peerHomeAdditiveArgs are the additive pass's rsync flags, shared with the
 // itemized plan (#180) so a preview lists what the run would move. report
-// adds the human-readable stats a transfer prints.
-func peerHomeAdditiveArgs(cfg *Config, list string, report bool) []string {
+// adds the human-readable stats a transfer prints. createOnly is the pass
+// over the host_merge files (hostMergeList): --ignore-existing creates a
+// file only where it is absent, so it never replaces a copy, not even one
+// that appeared during the run; the merge step owns files on both Macs.
+func peerHomeAdditiveArgs(cfg *Config, list string, report, createOnly bool) []string {
 	args := []string{"-aHAX", "--numeric-ids", "-r"}
 	if report {
 		args = append(args, "--human-readable", "--stats")
 	}
 	args = append(args,
 		"--ignore-missing-args", "--chmod=Du+w",
-		"--update",
+		map[bool]string{false: "--update", true: "--ignore-existing"}[createOnly],
 		"--exclude=known_hosts", "--exclude=known_hosts.old", "--exclude=known_hosts2",
 		"--exclude=agent", "--exclude=agent/**", "--exclude=*.sock",
 		"--exclude=/.codex/config.toml",
 		"--exclude=.DS_Store")
-	// A host_merge file on both machines is host_merge's, merged, equal or
-	// held by a one-way run: never newest-wins input, so a stale save by a
-	// running app stays on its own Mac and the next two-way run's merge
-	// restores it there (#181).
-	for _, rel := range cfg.hostMergeExcluded {
-		if pattern, err := literalRsyncPattern(rel); err == nil {
-			args = append(args, "--exclude=/"+pattern)
+	// A host_merge file is never newest-wins input, by config rather than by
+	// who has a copy when: a stale save by a running app stays on its own
+	// Mac, and the next two-way run's merge restores it there (#181).
+	if !createOnly {
+		for _, rel := range slices.Sorted(maps.Keys(cfg.HostMerge)) {
+			if pattern, err := literalRsyncPattern(rel); err == nil {
+				args = append(args, "--exclude=/"+pattern)
+			}
 		}
 	}
 	args = append(args, "--files-from="+list)

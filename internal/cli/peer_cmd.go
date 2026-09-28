@@ -173,6 +173,8 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 			p.Warn("peer dot %s is a different release from this machine's; upgrade the older side", e.Path)
 		case syncer.PeerEventHostMerged:
 			p.Success("merged ~/%s from both machines (host_merge)", e.Path)
+		case syncer.PeerEventHostMergeHeld:
+			p.Warn("held ~/%s: host_merge merges it only in a two-way dot peer sync", e.Path)
 		case syncer.PeerEventReplicaPushFailed:
 			p.Warn("replica push failed: %v", e.Err)
 			p.Line("  The run itself is complete; the next unplanned switch may lack a fresh replica.")
