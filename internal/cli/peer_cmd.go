@@ -171,6 +171,12 @@ func renderPeerEvent(p *Printer) func(syncer.PeerEvent) {
 			p.Warn("peer dot %s is not a release build; install a release there, or pin it with remote_dot in the peer config", e.Path)
 		case syncer.PeerEventDotVersionMismatch:
 			p.Warn("peer dot %s is a different release from this machine's; upgrade the older side", e.Path)
+		case syncer.PeerEventOwnerAliasesRetired:
+			if e.Err != nil {
+				p.Warn("retiring the earlier owner names failed (retried on the next run): %v", e.Err)
+			} else {
+				p.Success("both machines record the renamed owner; earlier names retired in: %s", e.Path)
+			}
 		case syncer.PeerEventReplicaPushFailed:
 			p.Warn("replica push failed: %v", e.Err)
 			p.Line("  The run itself is complete; the next unplanned switch may lack a fresh replica.")

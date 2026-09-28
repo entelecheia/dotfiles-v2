@@ -45,11 +45,12 @@ type Config struct {
 	// IncludeSubmodules keeps submodule working trees in the payload instead of
 	// excluding them (mirror excludes; peer includes).
 	IncludeSubmodules bool
-	Owner             string // hostname allowed to push this profile; empty = unrestricted
-	LocalPath         string // workspace tree, with trailing slash
-	MirrorPath        string // local mirror tree with trailing slash; empty for ssh targets
-	Target            Target // parsed destination (local dir or ssh host:path)
-	MirrorIsDefault   bool   // target came from defaultMirrorPath, not explicit config
+	Owner             string   // hostname allowed to push this profile; empty = unrestricted
+	OwnerAliases      []string // earlier names of Owner (dot sync owner --rename)
+	LocalPath         string   // workspace tree, with trailing slash
+	MirrorPath        string   // local mirror tree with trailing slash; empty for ssh targets
+	Target            Target   // parsed destination (local dir or ssh host:path)
+	MirrorIsDefault   bool     // target came from defaultMirrorPath, not explicit config
 	FilterMode        FilterMode
 	IncludeFile       string   // editable include list (under .dotfiles/sync/)
 	IncludePatterns   []string // parsed include list used by Go filters + rsync args
@@ -332,6 +333,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Profile:           profile,
 		Home:              override,
 		Owner:             localCfg.Owner,
+		OwnerAliases:      localCfg.OwnerAliases,
 		Hooks:             localCfg.Hooks,
 		RemoteDot:         localCfg.RemoteDot,
 		OwnerEpoch:        localCfg.OwnerEpoch,
