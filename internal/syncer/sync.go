@@ -100,6 +100,8 @@ type Config struct {
 	// hostMerged lists the files this run's merge wrote on both machines;
 	// the additive pass leaves them alone (peerHomeAdditiveArgs).
 	hostMerged []string
+	// Hooks are the peer role hooks from the store config (#184).
+	Hooks PeerHooks
 	// RemoteDot is the peer profile's remote_dot pin; empty picks the newest
 	// release on the peer.
 	RemoteDot string
@@ -336,6 +338,7 @@ func resolveConfig(state *config.UserState, migrate bool, home, profile string) 
 		Home:              override,
 		Owner:             localCfg.Owner,
 		HostMerge:         localCfg.HostMerge,
+		Hooks:             localCfg.Hooks,
 		RemoteDot:         localCfg.RemoteDot,
 		OwnerEpoch:        localCfg.OwnerEpoch,
 		FencePending:      localCfg.FencePending,

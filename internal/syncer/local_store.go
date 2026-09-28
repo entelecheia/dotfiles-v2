@@ -172,6 +172,8 @@ type LocalConfig struct {
 	// keys whose entries a peer run merges from both copies before the
 	// additive pass, so neither Mac's entries are lost (#181).
 	HostMerge map[string][]string `yaml:"host_merge,omitempty"`
+	// Hooks run around this machine's peer coordinator role (#184).
+	Hooks PeerHooks `yaml:"hooks,omitempty"`
 	// RemoteDot pins the dot binary a peer run uses on the other machine
 	// ("~/" is the peer's home). Unset, the newest release found there wins;
 	// set it to use a dev build (#176).

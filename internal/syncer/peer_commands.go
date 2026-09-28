@@ -526,6 +526,8 @@ type PeerSyncResult struct {
 	Demoted     bool
 	// Plan is the itemized plan under Itemize.
 	Plan *PeerRunPlan
+	// Hooks are the on_deactivate results of a demotion.
+	Hooks []HookResult
 }
 
 // PeerSync exchanges the workspace and the host paths with the peer.
@@ -540,6 +542,7 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	if err := validateHostMerge(cfg.HostMerge); err != nil {
 		return nil, err
 	}
+	cfg.hostMerged = nil // this run's merges only
 	// The profile owner is the coordinator. This guard is intentionally
 	// before any probe or transfer: a second machine must not perform a
 	// half-run and then leave a different baseline behind.
@@ -583,10 +586,9 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 		emitPeer(opts.Progress, PeerEvent{Kind: PeerEventDotVersionMismatch, Path: cfg.remoteDot.String()})
 	}
 	if demote {
-		if err := demotePeer(ctx, runner, cfg, remoteStatus.Profile.Owner, remoteStatus.OwnerEpoch, dryRun); err != nil {
-			return nil, err
-		}
-		return &PeerSyncResult{Demoted: true}, nil
+		hooks, err := demotePeer(ctx, runner, cfg, remoteStatus.Profile.Owner, remoteStatus.OwnerEpoch, dryRun)
+		// The hook outcomes return with a failed demotion too.
+		return &PeerSyncResult{Demoted: true, Hooks: hooks}, err
 	}
 
 	// The linked-worktree exclude is a sticky union of the stored list, local
@@ -877,6 +879,8 @@ type PeerScheduleResult struct {
 	// SeededHomeTrackedFile names the tracked host-path list when the install
 	// created it (upgrade refresh); empty when the file already existed.
 	SeededHomeTrackedFile string
+	// Hooks are the on_activate (install) or on_deactivate (off) results.
+	Hooks []HookResult
 }
 
 // PeerSchedule installs or removes the periodic `dot peer sync` job.
@@ -895,6 +899,7 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 				DryRun:                   true,
 				TargetUserActionRequired: schedulerRequiresTargetUserServiceDomain(cfg),
 				Plist:                    plist,
+				Hooks:                    runPeerHooks(ctx, runner, cfg, HookOnDeactivate, true),
 			}, nil
 		}
 		if !schedulerRequiresTargetUserServiceDomain(cfg) {
@@ -907,6 +912,7 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 			Off:                      true,
 			TargetUserActionRequired: schedulerRequiresTargetUserServiceDomain(cfg),
 			Plist:                    plist,
+			Hooks:                    runPeerHooks(ctx, runner, cfg, HookOnDeactivate, false),
 		}
 		if schedulerRequiresTargetUserServiceDomain(cfg) {
 			return result, &SchedulerTargetUserActionRequiredError{}
@@ -970,6 +976,7 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 			Plist:                    plist,
 			LogFile:                  cfg.LogFile,
 			Interval:                 opts.Interval,
+			Hooks:                    runPeerHooks(ctx, runner, cfg, HookOnActivate, true),
 		}, nil
 	}
 	logFile := cfg.LogFile
@@ -1005,6 +1012,7 @@ func PeerSchedule(ctx context.Context, opts PeerScheduleOptions) (*PeerScheduleR
 	if _, err := runner.Run(ctx, "launchctl", "bootstrap", "gui/"+strconv.Itoa(os.Getuid()), plist); err != nil {
 		return nil, fmt.Errorf("loading %s: %w", plist, err)
 	}
+	result.Hooks = runPeerHooks(ctx, runner, cfg, HookOnActivate, false)
 	return result, nil
 }
 
