@@ -167,15 +167,48 @@ func encodeJSONObject(obj map[string]any) ([]byte, error) {
 // readPeerHostFile reads a host file on the peer, relative to its home. A
 // missing file is (nil, nil).
 func readPeerHostFile(ctx context.Context, runner *exec.Runner, cfg *Config, rel string) ([]byte, error) {
+	// A symlink there is refused as it is here: the merged copy's rsync -t
+	// would replace the link with a regular file.
+	q := shellQuote(rel)
 	res, err := runner.Run(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", cfg.Target.Host,
-		"if [ -f "+shellQuote(rel)+" ]; then cat -- "+shellQuote(rel)+"; else echo __dot_absent__ >&2; exit 3; fi")
+		"if [ -L "+q+" ]; then echo __dot_symlink__ >&2; exit 4; elif [ -f "+q+" ]; then cat -- "+q+"; else echo __dot_absent__ >&2; exit 3; fi")
 	if err != nil {
+		if res != nil && strings.Contains(res.Stderr, "__dot_symlink__") {
+			return nil, fmt.Errorf("%s on %s is a symlink; host_merge writes regular files only", rel, cfg.Target.Host)
+		}
 		if res != nil && strings.Contains(res.Stderr, "__dot_absent__") {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading %s on %s: %w", rel, cfg.Target.Host, err)
 	}
 	return []byte(res.Stdout), nil
+}
+
+// homeListCovers reports whether a home-paths list names rel or a directory
+// holding it.
+func homeListCovers(list, rel string) bool {
+	for _, line := range strings.Split(list, "\n") {
+		entry := strings.TrimSuffix(filepath.ToSlash(strings.TrimSpace(line)), "/")
+		entry = strings.TrimPrefix(entry, "./")
+		if entry == "" || strings.HasPrefix(entry, "#") {
+			continue
+		}
+		if rel == entry || strings.HasPrefix(rel, entry+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// validateHostMerge checks every host_merge key is a clean path relative to
+// $HOME, like .claude.json.
+func validateHostMerge(m map[string][]string) error {
+	for rel := range m {
+		if validateTombstoneRel(rel) != nil || strings.HasPrefix(rel, "~") {
+			return fmt.Errorf("host_merge: %q must be a path relative to $HOME, like .claude.json", rel)
+		}
+	}
+	return nil
 }
 
 // hostKeyPolicy is the key list to compare or merge for a host file, and
@@ -269,9 +302,15 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	// Only files the additive pass moves: the plan's host scope is that
+	// pass's list, so a merge outside it would be a write the plan omits.
+	additive, err := os.ReadFile(PeerHomePathsFile(cfg.LocalPaths))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
 	files := make([]string, 0, len(cfg.HostMerge))
 	for rel := range cfg.HostMerge {
-		if _, covered := filterUntrackedHomeEntries([]string{rel}, tracked); !covered {
+		if _, covered := filterUntrackedHomeEntries([]string{rel}, tracked); !covered && homeListCovers(string(additive), rel) {
 			files = append(files, rel)
 		}
 	}
@@ -281,9 +320,6 @@ func mergePeerHostFiles(ctx context.Context, runner, probe *exec.Runner, cfg *Co
 		keys := cfg.HostMerge[rel]
 		if len(keys) == 0 {
 			continue
-		}
-		if validateTombstoneRel(rel) != nil || strings.HasPrefix(rel, "~") {
-			return merged, fmt.Errorf("host_merge: %q must be a path relative to $HOME, like .claude.json", rel)
 		}
 		localPath := filepath.Join(cfg.HomeDir(), filepath.FromSlash(rel))
 		info, err := os.Stat(localPath)

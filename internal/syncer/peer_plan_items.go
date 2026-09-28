@@ -128,9 +128,17 @@ func (p *PeerRunPlan) addPlan(plan *PeerPlan, scope string, run planRun) {
 		}
 		for _, rel := range plan.DeleteRemote {
 			it := item(rel, "delete", "push")
-			it.Reason = held
+			reason := held
 			if held == "" && !slices.Contains(run.evidence, rel) {
-				it.Reason = "held: no deletion evidence on this machine"
+				reason = "held: no deletion evidence on this machine"
+			}
+			// A delete/edit conflict keeps its reason: the run deletes the
+			// peer's edited copy (into quarantine) unless held.
+			switch {
+			case it.Reason == "":
+				it.Reason = reason
+			case reason != "":
+				it.Reason += "; " + reason
 			}
 			p.Items = append(p.Items, it)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -196,5 +197,42 @@ func TestMergePeerHostFilesSkipsTrackedPaths(t *testing.T) {
 	}
 	if body := string(gitStateFileBytes(t, filepath.Join(peerHome, ".claude.json"))); strings.Contains(body, "mine") {
 		t.Fatalf("a tracked file was merged: %s", body)
+	}
+}
+
+// A bad host_merge key stops a run before anything moves; a symlink on the
+// peer is refused like one here; a file outside home-paths.txt is not
+// merged (the plan's host scope is that list).
+func TestHostMergeGuards(t *testing.T) {
+	cfg, _, peerHome := claudeJSONFixture(t, `{"mcpServers":{"mine":{}}}`, `{"mcpServers":{"kimi-cu":{}}}`)
+	cfg.HostMerge = map[string][]string{"~/.claude.json": {"mcpServers"}}
+	if _, err := PeerDiff(context.Background(), PeerDiffOptions{Config: cfg, Probe: peerScheduleRunner(false), Itemize: true}); err == nil || !strings.Contains(err.Error(), "host_merge") {
+		t.Fatalf("PeerDiff with a bad key: %v", err)
+	}
+	if _, err := PeerSync(context.Background(), PeerSyncOptions{Config: cfg, Runner: peerScheduleRunner(true), Probe: peerScheduleRunner(false), DryRun: true}); err == nil || !strings.Contains(err.Error(), "host_merge") {
+		t.Fatalf("PeerSync with a bad key: %v", err)
+	}
+
+	r := peerScheduleRunner(false)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}, ".other.json": {"mcpServers"}}
+	writePeerHomeFile(t, cfg.HomeDir(), ".other.json", `{"mcpServers":{"a":{}}}`, peerHomeFixedTime)
+	writePeerHomeFile(t, peerHome, ".other.json", `{"mcpServers":{"b":{}}}`, peerHomeFixedTime)
+	merged, err := mergePeerHostFiles(context.Background(), r, r, cfg)
+	if err != nil || !slices.Equal(merged, []string{".claude.json"}) {
+		t.Fatalf("merged %v, %v; want only the listed .claude.json", merged, err)
+	}
+
+	peerFile := filepath.Join(peerHome, ".claude.json")
+	if err := os.Rename(peerFile, peerFile+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(peerFile+".real", peerFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mergePeerHostFiles(context.Background(), r, r, cfg); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("a peer symlink was not refused: %v", err)
+	}
+	if info, _ := os.Lstat(peerFile); info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the peer symlink was replaced")
 	}
 }

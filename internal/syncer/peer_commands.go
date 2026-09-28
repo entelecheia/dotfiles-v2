@@ -403,6 +403,9 @@ func PeerDiff(ctx context.Context, opts PeerDiffOptions) (*PeerDiffResult, error
 	if !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer target is not configured; run dot peer init first")
 	}
+	if err := validateHostMerge(cfg.HostMerge); err != nil {
+		return nil, err
+	}
 	if err := CheckSSH(ctx, opts.Probe, cfg.Target.Host); err != nil {
 		return &PeerDiffResult{Unreachable: true}, nil
 	}
@@ -523,6 +526,11 @@ func PeerSync(ctx context.Context, opts PeerSyncOptions) (*PeerSyncResult, error
 	dryRun := opts.DryRun
 	if !cfg.Target.IsSSH() {
 		return nil, fmt.Errorf("peer target is not an ssh target; run: dot peer init --host <user@host>")
+	}
+	// Before anything moves: a bad key would otherwise stop every run
+	// halfway, after the workspace pass.
+	if err := validateHostMerge(cfg.HostMerge); err != nil {
+		return nil, err
 	}
 	// The profile owner is the coordinator. This guard is intentionally
 	// before any probe or transfer: a second machine must not perform a

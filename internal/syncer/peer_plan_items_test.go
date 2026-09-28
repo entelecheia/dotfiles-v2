@@ -176,3 +176,20 @@ func TestPeerSync_DryRunPlanFollowsTheRunMode(t *testing.T) {
 		}
 	}
 }
+
+// A delete/edit conflict keeps its reason, with the held reason appended.
+func TestPeerRunPlanKeepsTheConflictReasonOnADelete(t *testing.T) {
+	fp := PeerFile{Present: true, FP: Fingerprint{Size: 1}}
+	plan := &PeerPlan{DeleteRemote: []string{"gone"}, Conflicts: []PeerConflict{{RelPath: "gone", Reason: "deleted here, edited on the peer"}},
+		RemoteBefore: PeerSnapshot{"gone": fp}}
+	for _, tc := range []struct {
+		deletes bool
+		want    string
+	}{{true, "deleted here, edited on the peer"}, {false, "deleted here, edited on the peer; held: propagation.delete is off"}} {
+		rp := newPeerRunPlan(&Config{Propagation: PropagationPolicy{Delete: tc.deletes}})
+		rp.addPlan(plan, PlanScopeWorkspace, planRun{authorized: true, evidence: []string{"gone"}})
+		if len(rp.Items) != 1 || rp.Items[0].Reason != tc.want {
+			t.Fatalf("deletes=%v: items %+v", tc.deletes, rp.Items)
+		}
+	}
+}
