@@ -572,8 +572,11 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	}
 	if syncRes.Demoted {
 		// The peer took over while this Mac was away: the sync's fence
-		// already demoted it, and its on_deactivate hooks ran.
+		// demotes it (in a preview, would), with its on_deactivate hooks.
 		result.Hooks = syncRes.Hooks
+		if opts.DryRun {
+			return result, fmt.Errorf("peer handover: %s holds a higher epoch; the sync would demote this machine, so there is nothing to hand over", cfg.Target.Host)
+		}
 		return result, fmt.Errorf("peer handover: this machine lost the coordinator fence to %s during the sync and was demoted; nothing to hand over", cfg.Target.Host)
 	}
 	if !syncRes.Complete {
@@ -625,7 +628,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 
 	// 3. Local scheduler off.
 	if err := removePeerSchedulerArtifacts(ctx, opts.Runner, cfg); err != nil {
-		return nil, fmt.Errorf("peer handover: removing the local scheduler (owner already moved): %w", err)
+		return nil, fmt.Errorf("peer handover: removing the local scheduler (owner already moved): %w; finish with `dot peer setup --off` here, which also runs on_deactivate", err)
 	}
 	step("local scheduler removed")
 	result.Hooks = runPeerHooks(ctx, opts.Runner, cfg, HookOnDeactivate, false)
@@ -633,11 +636,13 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	// 4. On the peer: old baselines aside, then the first sync as an additive
 	// bootstrap. No baseline means no deletes can be planned, and right after
 	// step 1 almost nothing transfers.
+	// From here a failure still returns result: the on_deactivate outcomes
+	// above belong in the output.
 	if err := peerRemoteBaselinesAside(ctx, opts.Runner, cfg); err != nil {
-		return nil, err
+		return result, err
 	}
 	if _, err := peerRemoteDot(ctx, opts.Runner, cfg, "peer", "sync"); err != nil {
-		return nil, fmt.Errorf(
+		return result, fmt.Errorf(
 			"peer handover: the peer's bootstrap sync failed: %w. Ownership already moved; re-run `dot peer sync` on %s, then `dot peer setup` there",
 			err, cfg.Target.Host)
 	}
@@ -648,7 +653,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	// relayed from its output (successes on stdout, failures on stderr).
 	res, err := peerRemoteDotResult(ctx, opts.Runner, cfg, "peer", "setup")
 	if err != nil {
-		return nil, fmt.Errorf(
+		return result, fmt.Errorf(
 			"peer handover: installing the peer's scheduler failed: %w. Ownership already moved; run `dot peer setup` on %s to finish",
 			err, cfg.Target.Host)
 	}

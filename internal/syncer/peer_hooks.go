@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
@@ -25,21 +27,26 @@ import (
 // next); on_deactivate runs when it gives the role up (dot peer setup --off,
 // handover on the old coordinator, demotion at the fence). Actions:
 //
-//	launchd-bootout <label-glob>    disable and boot out gui jobs, e.g. com.maru.job.*
-//	launchd-bootstrap <label-glob>  enable and bootstrap ~/Library/LaunchAgents/<glob>.plist not yet loaded
+//	launchd-bootout <label-glob>    disable and boot out the jobs of ~/Library/LaunchAgents/<glob>.plist
+//	launchd-bootstrap <label-glob>  re-enable those and bootstrap the ones not loaded
 //	app-quit <App>                  quit a running app
 //	app-open <App>                  open an app in the background
 //
 // A bootout alone lasts until the next login, when launchd loads every
 // plist in ~/Library/LaunchAgents again; the disable (launchd's override
-// database) keeps the jobs off across a reboot until on_activate enables
-// them. com.dotfiles.peer is never matched: it is dot's own scheduler.
+// database) keeps the jobs off across a reboot. dot records which jobs it
+// disabled and on_activate enables only those, so a job stopped outside dot
+// stays stopped. com.dotfiles.peer is never matched: it is dot's own
+// scheduler.
 //
 // Failures are reported and logged; they never abort a sync or a switch.
 type PeerHooks struct {
 	OnActivate   []string `yaml:"on_activate,omitempty"`
 	OnDeactivate []string `yaml:"on_deactivate,omitempty"`
 }
+
+// peerHookTimeout bounds one hook action.
+const peerHookTimeout = time.Minute
 
 // Hook phases.
 const (
@@ -67,7 +74,11 @@ func runPeerHooks(ctx context.Context, runner *exec.Runner, cfg *Config, phase s
 	var results []HookResult
 	for _, action := range actions {
 		res := HookResult{Phase: phase, Action: action, DryRun: dryRun}
-		res.Detail, res.Err = runPeerHook(ctx, runner, cfg, action, dryRun)
+		// A hook must not hold the peer lock: an app that never answers, or
+		// a consent prompt nobody sees in a scheduled run, times out.
+		actx, cancel := context.WithTimeout(ctx, peerHookTimeout)
+		res.Detail, res.Err = runPeerHook(actx, runner, cfg, action, dryRun)
+		cancel()
 		results = append(results, res)
 		if !dryRun && cfg.LogFile != "" {
 			exit := 0
@@ -125,50 +136,12 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 	}
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	switch verb {
-	case "launchd-bootout":
-		loaded, err := loadedLaunchdLabels(ctx, runner, domain)
-		if err != nil {
-			return "", err
+	case "launchd-bootout", "launchd-bootstrap":
+		if cfg.LocalPaths == nil {
+			return "", fmt.Errorf("peer store unresolved: the disabled-job record lives there")
 		}
-		// Disable what is loaded and what the next login would load.
-		plists, err := agentPlists(cfg, arg)
-		if err != nil {
-			return "", err
-		}
-		var matched, disable []string
-		for _, label := range loaded {
-			// The peer scheduler is dot's own; booting it out from inside a
-			// demotion would end the run before its plist is removed.
-			if ok, _ := path.Match(arg, label); ok && label != peerSchedulerLabel {
-				matched = append(matched, label)
-			}
-		}
-		disable = append(disable, matched...)
-		for _, label := range baseNames(plists) {
-			if !slices.Contains(disable, label) {
-				disable = append(disable, label)
-			}
-		}
-		sort.Strings(disable)
-		if dryRun {
-			return plural(len(disable), "job") + " to disable, " + plural(len(matched), "loaded job") + " to boot out" + listSuffix(disable), nil
-		}
-		var failed []string
-		for _, label := range disable {
-			if _, err := runner.Run(ctx, "launchctl", "disable", domain+"/"+label); err != nil {
-				failed = append(failed, label+" ("+firstLine(err.Error())+")")
-			}
-		}
-		for _, label := range matched {
-			if _, err := runner.Run(ctx, "launchctl", "bootout", domain+"/"+label); err != nil {
-				failed = append(failed, label+" ("+firstLine(err.Error())+")")
-			}
-		}
-		if len(failed) > 0 {
-			return "", fmt.Errorf("disabling or booting out %s failed", strings.Join(failed, ", "))
-		}
-		return plural(len(disable), "job") + " disabled, " + plural(len(matched), "loaded job") + " booted out" + listSuffix(disable), nil
-	case "launchd-bootstrap":
+		// Only jobs with a plist here: launchd-bootstrap can restore those,
+		// and a glob never reaches an app's bundled or system agents.
 		plists, err := agentPlists(cfg, arg)
 		if err != nil {
 			return "", err
@@ -177,36 +150,14 @@ func runPeerHook(ctx context.Context, runner *exec.Runner, cfg *Config, action s
 		if err != nil {
 			return "", err
 		}
-		isLoaded := map[string]bool{}
-		for _, label := range loaded {
-			isLoaded[label] = true
+		disabled, err := disabledLaunchdLabels(ctx, runner, domain)
+		if err != nil {
+			return "", err
 		}
-		var todo []string
-		for _, plist := range plists {
-			if label := strings.TrimSuffix(filepath.Base(plist), ".plist"); !isLoaded[label] {
-				todo = append(todo, plist)
-			}
+		if verb == "launchd-bootout" {
+			return launchdBootout(ctx, runner, cfg, domain, plists, loaded, disabled, dryRun)
 		}
-		if dryRun {
-			return plural(len(plists), "job") + " to enable, " + plural(len(todo), "job") + " to bootstrap" + listSuffix(baseNames(todo)), nil
-		}
-		var failed []string
-		// A disabled job refuses to bootstrap; enable every match first so a
-		// loaded one also survives the next login.
-		for _, label := range baseNames(plists) {
-			if _, err := runner.Run(ctx, "launchctl", "enable", domain+"/"+label); err != nil {
-				failed = append(failed, label+" ("+firstLine(err.Error())+")")
-			}
-		}
-		for _, plist := range todo {
-			if _, err := runner.Run(ctx, "launchctl", "bootstrap", domain, plist); err != nil {
-				failed = append(failed, filepath.Base(plist)+" ("+firstLine(err.Error())+")")
-			}
-		}
-		if len(failed) > 0 {
-			return "", fmt.Errorf("enabling or bootstrapping %s failed", strings.Join(failed, ", "))
-		}
-		return plural(len(todo), "job") + " bootstrapped" + listSuffix(baseNames(todo)), nil
+		return launchdBootstrap(ctx, runner, cfg, domain, plists, loaded, disabled, dryRun)
 	case "app-quit":
 		if dryRun {
 			return "would quit " + arg + " if running", nil
@@ -219,7 +170,7 @@ tell application "` + arg + `" to quit
 end timeout
 end if`
 		if _, err := runner.Run(ctx, "osascript", "-e", script); err != nil {
-			return "", fmt.Errorf("%s", firstLine(err.Error()))
+			return "", errors.New(hookErr(err))
 		}
 		return "quit " + arg, nil
 	default: // app-open
@@ -227,10 +178,175 @@ end if`
 			return "would open " + arg, nil
 		}
 		if _, err := runner.Run(ctx, "open", "-g", "-a", arg); err != nil {
-			return "", fmt.Errorf("%s", firstLine(err.Error()))
+			return "", errors.New(hookErr(err))
 		}
 		return "opened " + arg, nil
 	}
+}
+
+// hookDisabledFile records the jobs on_deactivate disabled. on_activate
+// enables exactly those, so a job stopped outside dot (Maru's Stop is a
+// launchd disable) stays stopped. The peer store is per machine.
+func hookDisabledFile(cfg *Config) string {
+	return filepath.Join(cfg.LocalPaths.StoreDir, "hooks-disabled.txt")
+}
+
+func readHookDisabled(cfg *Config) (map[string]bool, error) {
+	data, err := os.ReadFile(hookDisabledFile(cfg))
+	if os.IsNotExist(err) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]bool{}
+	for _, label := range strings.Fields(string(data)) {
+		set[label] = true
+	}
+	return set, nil
+}
+
+func writeHookDisabled(cfg *Config, set map[string]bool) error {
+	labels := make([]string, 0, len(set))
+	for label := range set {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	body := strings.Join(labels, "\n")
+	if body != "" {
+		body += "\n"
+	}
+	return os.WriteFile(hookDisabledFile(cfg), []byte(body), 0o644)
+}
+
+// launchdBootout disables the plist-backed jobs that are not disabled yet,
+// records them, and boots out the loaded ones. A disable outlasts a reboot,
+// which a bootout alone does not.
+func launchdBootout(ctx context.Context, runner *exec.Runner, cfg *Config, domain string, plists []string, loaded []string, disabled map[string]bool, dryRun bool) (string, error) {
+	var disable, bootout []string
+	for _, label := range baseNames(plists) {
+		if !disabled[label] {
+			disable = append(disable, label)
+		}
+		if slices.Contains(loaded, label) {
+			bootout = append(bootout, label)
+		}
+	}
+	summary := plural(len(disable), "job") + " disabled, " + plural(len(bootout), "loaded job") + " booted out" + listSuffix(bootout)
+	if dryRun {
+		return "would: " + summary, nil
+	}
+	recorded, err := readHookDisabled(cfg)
+	if err != nil {
+		return "", err
+	}
+	var failed []string
+	for _, label := range disable {
+		if _, err := runner.Run(ctx, "launchctl", "disable", domain+"/"+label); err != nil {
+			failed = append(failed, label+" ("+hookErr(err)+")")
+			continue
+		}
+		recorded[label] = true
+	}
+	if err := writeHookDisabled(cfg, recorded); err != nil {
+		return "", err
+	}
+	for _, label := range bootout {
+		if _, err := runner.Run(ctx, "launchctl", "bootout", domain+"/"+label); err != nil {
+			failed = append(failed, label+" ("+hookErr(err)+")")
+		}
+	}
+	if len(failed) > 0 {
+		return "", fmt.Errorf("disabling or booting out %s failed", strings.Join(failed, ", "))
+	}
+	return summary, nil
+}
+
+// launchdBootstrap enables the jobs on_deactivate recorded and bootstraps
+// the plists that are neither loaded nor disabled; a job disabled outside
+// dot is left alone.
+func launchdBootstrap(ctx context.Context, runner *exec.Runner, cfg *Config, domain string, plists []string, loaded []string, disabled map[string]bool, dryRun bool) (string, error) {
+	recorded, err := readHookDisabled(cfg)
+	if err != nil {
+		return "", err
+	}
+	var enable, todo, kept []string
+	for _, plist := range plists {
+		label := strings.TrimSuffix(filepath.Base(plist), ".plist")
+		off := disabled[label]
+		switch {
+		case off && recorded[label]:
+			enable = append(enable, label)
+		case off:
+			kept = append(kept, label)
+			continue
+		}
+		if !slices.Contains(loaded, label) {
+			todo = append(todo, plist)
+		}
+	}
+	summary := plural(len(enable), "job") + " enabled, " + plural(len(todo), "job") + " bootstrapped" + listSuffix(baseNames(todo))
+	if len(kept) > 0 {
+		summary += "; left disabled (stopped outside dot)" + listSuffix(kept)
+	}
+	if dryRun {
+		return "would: " + summary, nil
+	}
+	var failed []string
+	for _, label := range enable {
+		if _, err := runner.Run(ctx, "launchctl", "enable", domain+"/"+label); err != nil {
+			failed = append(failed, label+" ("+hookErr(err)+")")
+			continue
+		}
+		delete(recorded, label)
+	}
+	// A recorded job enabled by hand since is no longer dot's to restore.
+	for _, label := range baseNames(plists) {
+		if recorded[label] && !disabled[label] {
+			delete(recorded, label)
+		}
+	}
+	if err := writeHookDisabled(cfg, recorded); err != nil {
+		return "", err
+	}
+	for _, plist := range todo {
+		if _, err := runner.Run(ctx, "launchctl", "bootstrap", domain, plist); err != nil {
+			failed = append(failed, filepath.Base(plist)+" ("+hookErr(err)+")")
+		}
+	}
+	if len(failed) > 0 {
+		return "", fmt.Errorf("enabling or bootstrapping %s failed", strings.Join(failed, ", "))
+	}
+	return summary, nil
+}
+
+// disabledLaunchdLabels lists the domain's disabled services from launchd's
+// override database ("label" => disabled, or => true on older macOS).
+func disabledLaunchdLabels(ctx context.Context, runner *exec.Runner, domain string) (map[string]bool, error) {
+	res, err := runner.RunQuery(ctx, "launchctl", "print-disabled", domain)
+	if err != nil {
+		return nil, fmt.Errorf("launchctl print-disabled %s: %s", domain, hookErr(err))
+	}
+	set := map[string]bool{}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		label, state, ok := strings.Cut(strings.TrimSpace(line), "=>")
+		if !ok {
+			continue
+		}
+		if st := strings.TrimSpace(state); st == "disabled" || st == "true" {
+			set[strings.Trim(strings.TrimSpace(label), `"`)] = true
+		}
+	}
+	return set, nil
+}
+
+// hookErr is a one-line reason: the command's own stderr when it has one.
+func hookErr(err error) string {
+	var cmdErr *exec.CmdError
+	if errors.As(err, &cmdErr) && cmdErr.Details() != "" {
+		return firstLine(cmdErr.Details())
+	}
+	return firstLine(err.Error())
 }
 
 // loadedLaunchdLabels lists the services loaded in the gui domain. `launchctl
@@ -239,7 +355,7 @@ end if`
 func loadedLaunchdLabels(ctx context.Context, runner *exec.Runner, domain string) ([]string, error) {
 	res, err := runner.RunQuery(ctx, "launchctl", "print", domain)
 	if err != nil {
-		return nil, fmt.Errorf("launchctl print %s: %w", domain, err)
+		return nil, fmt.Errorf("launchctl print %s: %s", domain, hookErr(err))
 	}
 	var labels []string
 	in := false

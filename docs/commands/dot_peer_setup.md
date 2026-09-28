@@ -26,12 +26,17 @@ write the workspace. List them in .dotfiles/peer/config.yaml:
 on_activate runs after this command installs the scheduler (also the step a
 handover runs on the new coordinator, and the one a takeover names next);
 on_deactivate runs after --off, on the old coordinator in a handover, and on
-a machine that demotes itself at the fence. launchd-bootout also disables
-the jobs, so a reboot does not load them again; launchd-bootstrap enables
-them. app-quit needs dot allowed to control the app (Automation), granted
-once at the first interactive run. --dry-run lists what each would do.
-Results are printed and appended to the peer log; a failed hook never stops
-the command or a sync.
+a machine that demotes itself at the fence. The launchd actions act on the
+jobs of ~/Library/LaunchAgents/<glob>.plist: launchd-bootout disables them,
+so a reboot does not load them again, and records which ones it disabled;
+launchd-bootstrap re-enables only those, so a job stopped outside dot stays
+stopped. app-quit sends an Apple Event, which macOS allows per sending
+program: in a scheduled demotion that is dot itself, which must be allowed
+under Privacy & Security > Automation when it first asks; until then the
+action fails and the app keeps running. --dry-run lists what each would do.
+Each action has a one-minute limit. Results are printed and appended to the
+peer log; a failed hook never stops the command or a sync. Upgrade dot on
+both Macs before adding hooks: an older dot drops the key when it saves.
 
 ```
 dot peer setup [flags]

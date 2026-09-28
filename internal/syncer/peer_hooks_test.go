@@ -23,13 +23,37 @@ func installHookServiceStubs(t *testing.T, record string, loaded ...string) {
 		domain += "\t\t       0      - \t" + label + "\n"
 	}
 	domain += "\t}\n\tdisabled services = {\n\t\t\"com.not.loaded\" => disabled\n\t}\n}\n"
-	writeStub(t, filepath.Join(bin, "launchctl"), "#!/bin/sh\n"+
-		"if [ \"$1\" = print ]; then printf '"+strings.ReplaceAll(strings.ReplaceAll(domain, "\n", "\\n"), "\t", "\\t")+"'; exit 0; fi\n"+
+	// disable and enable keep launchd's override database in a file, so a
+	// later print-disabled sees them; HOOK_STUB_DISABLED lets a test
+	// pre-disable a job (Maru's Stop).
+	disabled := filepath.Join(bin, "disabled.txt")
+	t.Setenv("HOOK_STUB_DISABLED", disabled)
+	writeStub(t, filepath.Join(bin, "launchctl"), "#!/bin/sh\nD='"+disabled+"'\n"+
+		"case \"$1\" in\n"+
+		"print) printf '"+strings.ReplaceAll(strings.ReplaceAll(domain, "\n", "\\n"), "\t", "\\t")+"'; exit 0 ;;\n"+
+		"print-disabled) [ -f \"$D\" ] && while read -r l; do printf '\\t\\t\"%s\" => disabled\\n' \"$l\"; done < \"$D\"; exit 0 ;;\n"+
+		"disable) echo \"${2##*/}\" >> \"$D\" ;;\n"+
+		"enable) grep -vx \"${2##*/}\" \"$D\" > \"$D.tmp\"; mv \"$D.tmp\" \"$D\" ;;\n"+
+		"esac\n"+
 		"echo \"launchctl $*\" >> '"+record+"'\n")
 	for _, name := range []string{"osascript", "open"} {
 		writeStub(t, filepath.Join(bin, name), "#!/bin/sh\necho \""+name+" $*\" >> '"+record+"'\n")
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// plantAgentPlists writes ~/Library/LaunchAgents/<label>.plist under home.
+func plantAgentPlists(t *testing.T, home string, labels ...string) {
+	t.Helper()
+	agents := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(agents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range labels {
+		if err := os.WriteFile(filepath.Join(agents, label+".plist"), []byte("<plist/>"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func readRecord(t *testing.T, record string) string {
@@ -44,18 +68,22 @@ func readRecord(t *testing.T, record string) string {
 func TestRunPeerHooks_Actions(t *testing.T) {
 	home := t.TempDir()
 	record := filepath.Join(t.TempDir(), "record.log")
-	installHookServiceStubs(t, record, "com.maru.job.mail-digest.1", "com.maru.job.morning-brief.1", "com.other.agent", "com.maru.job.loaded")
+	installHookServiceStubs(t, record, "com.maru.job.mail-digest.1", "com.maru.job.bundled.1", "com.other.agent", "com.maru.job.loaded")
 	agents := filepath.Join(home, "Library", "LaunchAgents")
 	if err := os.MkdirAll(agents, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"com.maru.job.fresh.plist", "com.maru.job.loaded.plist", "com.other.agent.plist"} {
+	for _, name := range []string{"com.maru.job.fresh.plist", "com.maru.job.loaded.plist", "com.maru.job.mail-digest.1.plist", "com.maru.job.stopped.plist", "com.other.agent.plist"} {
 		if err := os.WriteFile(filepath.Join(agents, name), []byte("<plist/>"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// The operator stopped this one in Maru: a launchd disable.
+	if err := os.WriteFile(os.Getenv("HOOK_STUB_DISABLED"), []byte("com.maru.job.stopped\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	logFile := filepath.Join(t.TempDir(), "log", "peer.log")
-	cfg := &Config{Home: "", LogFile: logFile, Hooks: PeerHooks{
+	cfg := &Config{Home: "", LogFile: logFile, LocalPaths: &LocalPaths{StoreDir: t.TempDir()}, Hooks: PeerHooks{
 		OnDeactivate: []string{"launchd-bootout com.maru.job.*", "app-quit Maru", "bogus x"},
 		OnActivate:   []string{"launchd-bootstrap com.maru.job.*", "app-open Maru"},
 	}}
@@ -75,20 +103,23 @@ func TestRunPeerHooks_Actions(t *testing.T) {
 		}
 		return
 	}
-	if !strings.Contains(preview[0].Detail, "4 jobs to disable, 3 loaded jobs to boot out") {
+	if preview[0].Detail != "would: 3 jobs disabled, 2 loaded jobs booted out: com.maru.job.loaded, com.maru.job.mail-digest.1" {
 		t.Fatalf("preview detail = %q", preview[0].Detail)
 	}
 
 	off := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
+	recorded, _ := os.ReadFile(hookDisabledFile(cfg))
+	if string(recorded) != "com.maru.job.fresh\ncom.maru.job.loaded\ncom.maru.job.mail-digest.1\n" {
+		t.Fatalf("recorded %q", recorded)
+	}
 	on := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnActivate, false)
 	got := readRecord(t, record)
 	for _, want := range []string{
-		// Disabled first, the not-loaded plist included: a reboot must not
-		// load them again.
+		// Disabled, the not-loaded plist included: a reboot must not load
+		// them again.
 		"launchctl disable " + uid + "/com.maru.job.fresh\n",
 		"launchctl disable " + uid + "/com.maru.job.mail-digest.1\n",
 		"launchctl bootout " + uid + "/com.maru.job.mail-digest.1",
-		"launchctl bootout " + uid + "/com.maru.job.morning-brief.1",
 		"with timeout of 20 seconds\ntell application \"Maru\" to quit",
 		"launchctl enable " + uid + "/com.maru.job.fresh\n",
 		"launchctl enable " + uid + "/com.maru.job.loaded\n",
@@ -99,13 +130,21 @@ func TestRunPeerHooks_Actions(t *testing.T) {
 			t.Errorf("record lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Index(got, "launchctl enable "+uid+"/com.maru.job.fresh") > strings.Index(got, "launchctl bootstrap") {
-		t.Errorf("bootstrap before enable:\n%s", got)
-	}
-	for _, never := range []string{"com.other.agent", "com.maru.job.loaded.plist", "com.dotfiles.peer"} {
+	// Never touched: another prefix, a loaded job with no plist here (an
+	// app's bundled agent), and the job stopped outside dot.
+	for _, never := range []string{"com.other.agent", "com.maru.job.bundled.1", "com.maru.job.stopped"} {
 		if strings.Contains(got, never) {
 			t.Errorf("record touched %q:\n%s", never, got)
 		}
+	}
+	if strings.Index(got, "launchctl enable "+uid+"/com.maru.job.fresh") > strings.Index(got, "launchctl bootstrap") {
+		t.Errorf("bootstrap before enable:\n%s", got)
+	}
+	if !strings.Contains(on[0].Detail, "left disabled (stopped outside dot): com.maru.job.stopped") {
+		t.Errorf("on detail = %q", on[0].Detail)
+	}
+	if recorded, _ := os.ReadFile(hookDisabledFile(cfg)); len(recorded) != 0 {
+		t.Errorf("record not cleared: %q", recorded)
 	}
 	if off[0].Err != nil || on[0].Err != nil || off[2].Err == nil {
 		t.Fatalf("results: off %+v on %+v", off, on)
@@ -123,6 +162,7 @@ func TestPeerHandover_RunsRoleHooks(t *testing.T) {
 	installHookServiceStubs(t, sb.record, "com.maru.job.mail-digest.1")
 	sb.installFakeRemoteDot(t)
 	sb.plantPeerPlist(t)
+	plantAgentPlists(t, sb.home, "com.maru.job.mail-digest.1")
 	sb.cfg.Hooks = PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.*"}}
 
 	res, err := PeerHandover(context.Background(), PeerHandoverOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)})
@@ -145,13 +185,15 @@ func TestPeerHandover_RunsRoleHooks(t *testing.T) {
 func TestPeerSchedule_InstallRunsOnActivate(t *testing.T) {
 	cfg, _ := peerScheduleSandbox(t)
 	cfg.Hooks = PeerHooks{OnActivate: []string{"app-open Maru"}}
+	// The sandbox PATH holds only its stubs; app-open needs `open`.
+	writeStub(t, filepath.Join(filepath.SplitList(os.Getenv("PATH"))[0], "open"), "#!/bin/sh\nexit 0\n")
 	res, err := PeerSchedule(context.Background(), PeerScheduleOptions{
 		Config: cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), Interval: 7 * 60e9,
 	})
 	if err != nil {
 		t.Fatalf("PeerSchedule: %v", err)
 	}
-	if len(res.Hooks) != 1 || res.Hooks[0].Phase != HookOnActivate {
+	if len(res.Hooks) != 1 || res.Hooks[0].Phase != HookOnActivate || (runtime.GOOS == "darwin" && res.Hooks[0].Err != nil) {
 		t.Fatalf("hooks = %+v", res.Hooks)
 	}
 }
@@ -162,6 +204,7 @@ func TestPeerSyncDemotion_RunsOnDeactivateFirst(t *testing.T) {
 	sb := newPeerHandoverSandbox(t, peerStatusFields{owner: "mac-b", epoch: 5, dotVersion: "9.9.9 (fake)"}, 1)
 	installHookServiceStubs(t, sb.record, "com.maru.job.mail-digest.1")
 	sb.plantPeerPlist(t)
+	plantAgentPlists(t, sb.home, "com.maru.job.mail-digest.1")
 	sb.cfg.Hooks = PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.*"}}
 
 	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true})
@@ -256,7 +299,7 @@ func TestLoadedLaunchdLabelsReadsTheGuiServices(t *testing.T) {
 		}
 	}
 	// Neither action may touch dot's own scheduler, loaded or not.
-	cfg := &Config{Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.*", "launchd-bootstrap ../x", "launchd-bootstrap com.*"}}}
+	cfg := &Config{LocalPaths: &LocalPaths{StoreDir: t.TempDir()}, Hooks: PeerHooks{OnDeactivate: []string{"launchd-bootout com.*", "launchd-bootstrap ../x", "launchd-bootstrap com.*"}}}
 	res := runPeerHooks(context.Background(), peerScheduleRunner(false), cfg, HookOnDeactivate, false)
 	if strings.Contains(readRecord(t, record), "com.dotfiles.peer") || !strings.Contains(res[0].Detail, "1 loaded job booted out") {
 		t.Fatalf("the peer scheduler was touched: %+v / %q", res, readRecord(t, record))
@@ -279,5 +322,30 @@ func TestPeerHandover_DemotedDuringSyncReportsHooks(t *testing.T) {
 	}
 	if res == nil || len(res.Hooks) != 1 || res.Hooks[0].Phase != HookOnDeactivate {
 		t.Fatalf("hooks lost: %+v", res)
+	}
+}
+
+// A handover that fails after this Mac's on_deactivate still returns those
+// outcomes with the error (#184 AC3).
+func TestPeerHandover_LateFailureKeepsHookResults(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{epoch: 1, dotVersion: "9.9.9 (fake)"}, 1)
+	installHookServiceStubs(t, sb.record, "com.maru.job.mail-digest.1")
+	sb.installFakeRemoteDot(t)
+	sb.plantPeerPlist(t)
+	plantAgentPlists(t, sb.home, "com.maru.job.mail-digest.1")
+	sb.cfg.Hooks = PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.*"}}
+	dot := filepath.Join(sb.home, ".local", "bin", "dot")
+	if err := os.Rename(dot, dot+".real"); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, dot, "#!/bin/sh\n"+
+		"[ \"$1 $2\" = 'peer setup' ] && { echo 'launchd refused' >&2; exit 1; }\n"+
+		"exec '"+dot+".real' \"$@\"\n")
+	res, err := PeerHandover(context.Background(), PeerHandoverOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false)})
+	if err == nil || !strings.Contains(err.Error(), "installing the peer's scheduler failed") {
+		t.Fatalf("err = %v", err)
+	}
+	if res == nil || len(res.Hooks) != 1 || res.Hooks[0].Phase != HookOnDeactivate {
+		t.Fatalf("hook results lost: %+v", res)
 	}
 }
