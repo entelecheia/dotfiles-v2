@@ -650,9 +650,7 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	for _, line := range hookLines(res.Stdout) {
 		step("peer %s", line)
 	}
-	for _, line := range hookLines(res.Stderr) {
-		result.RemoteHookFailures = append(result.RemoteHookFailures, line)
-	}
+	result.RemoteHookFailures = hookLines(res.Stderr)
 	return result, nil
 }
 
