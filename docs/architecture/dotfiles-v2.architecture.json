@@ -269,6 +269,12 @@
           "line": 119,
           "end_line": 165,
           "label": "encryptFile via 0600 temp"
+        },
+        {
+          "path": "internal/secrets/store.go",
+          "line": 283,
+          "end_line": 363,
+          "label": "restoreFile renames into place"
         }
       ]
     },
@@ -383,7 +389,7 @@
       "id": "cli-admission",
       "from": "cli",
       "to": "admission",
-      "label": "dot admit"
+      "label": "dot admit / ai run"
     },
     {
       "id": "cli-config",
@@ -436,10 +442,34 @@
       "label": "dot secrets"
     },
     {
+      "id": "secrets-home",
+      "from": "secrets",
+      "to": "home",
+      "label": "restore",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [
+        [
+          355,
+          660
+        ],
+        [
+          974,
+          660
+        ],
+        [
+          974,
+          260
+        ]
+      ]
+    },
+    {
       "id": "cli-syncer",
       "from": "cli",
       "to": "syncer",
-      "label": "dot sync / peer"
+      "label": "dot sync / peer",
+      "fromSide": "bottom",
+      "toSide": "top"
     },
     {
       "id": "syncer-targets",

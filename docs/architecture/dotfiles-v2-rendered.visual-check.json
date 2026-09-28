@@ -6,11 +6,11 @@
   "status": "pass",
   "visualReview": "pending",
   "provenance": "current",
-  "deliveryReceiptId": "d143aea8-591c-4191-b84f-b2b5b406fd62",
+  "deliveryReceiptId": "f51c2432-2219-411c-a549-ec1ba45f9046",
   "artifact": {
     "path": "docs/architecture/dotfiles-v2-rendered.html",
-    "sha256": "94b368a4acebd67168cd06450a3143c055d9136130adaac2455c2b4d33db2999",
-    "bytes": 778850
+    "sha256": "e6b95d9ab8a968240f47b2a6d1f605e71f12579f14831577c971975a09e6977c",
+    "bytes": 779843
   },
   "state": {
     "detail": "read",
@@ -41,17 +41,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1088,
-        "diagramWidth": 1058,
+        "readerWidth": 1069,
+        "diagramWidth": 1039,
         "pageComposition": {
           "bodyPaddingPx": 12,
           "headerPx": 52,
           "diagramChromePx": 78,
           "svgPx": 746,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -93,17 +93,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1136,
-        "diagramWidth": 1106,
+        "readerWidth": 1116,
+        "diagramWidth": 1086,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 60,
           "diagramChromePx": 84,
           "svgPx": 780,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -145,17 +145,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1250,
-        "diagramWidth": 1220,
+        "readerWidth": 1228,
+        "diagramWidth": 1198,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 60,
           "diagramChromePx": 84,
           "svgPx": 860,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -197,17 +197,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1585,
-        "diagramWidth": 1535,
+        "readerWidth": 1557,
+        "diagramWidth": 1507,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 68,
           "diagramChromePx": 94,
           "svgPx": 1082,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -302,17 +302,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1088,
-        "diagramWidth": 1058,
+        "readerWidth": 1069,
+        "diagramWidth": 1039,
         "pageComposition": {
           "bodyPaddingPx": 12,
           "headerPx": 52,
           "diagramChromePx": 78,
           "svgPx": 746,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -354,17 +354,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1136,
-        "diagramWidth": 1106,
+        "readerWidth": 1116,
+        "diagramWidth": 1086,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 60,
           "diagramChromePx": 84,
           "svgPx": 780,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -406,17 +406,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1250,
-        "diagramWidth": 1220,
+        "readerWidth": 1228,
+        "diagramWidth": 1198,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 60,
           "diagramChromePx": 84,
           "svgPx": 860,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -458,17 +458,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1585,
-        "diagramWidth": 1535,
+        "readerWidth": 1557,
+        "diagramWidth": 1507,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 68,
           "diagramChromePx": 94,
           "svgPx": 1082,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -515,17 +515,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1088,
-        "diagramWidth": 1058,
+        "readerWidth": 1069,
+        "diagramWidth": 1039,
         "pageComposition": {
           "bodyPaddingPx": 12,
           "headerPx": 52,
           "diagramChromePx": 78,
           "svgPx": 746,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -567,17 +567,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1136,
-        "diagramWidth": 1106,
+        "readerWidth": 1116,
+        "diagramWidth": 1086,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 60,
           "diagramChromePx": 84,
           "svgPx": 780,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -619,17 +619,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1250,
-        "diagramWidth": 1220,
+        "readerWidth": 1228,
+        "diagramWidth": 1198,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 60,
           "diagramChromePx": 84,
           "svgPx": 860,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -671,17 +671,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1585,
-        "diagramWidth": 1535,
+        "readerWidth": 1557,
+        "diagramWidth": 1507,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 68,
           "diagramChromePx": 94,
           "svgPx": 1082,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -728,17 +728,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1088,
-        "diagramWidth": 1058,
+        "readerWidth": 1069,
+        "diagramWidth": 1039,
         "pageComposition": {
           "bodyPaddingPx": 12,
           "headerPx": 52,
           "diagramChromePx": 78,
           "svgPx": 746,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -781,17 +781,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1088,
-        "diagramWidth": 1058,
+        "readerWidth": 1069,
+        "diagramWidth": 1039,
         "pageComposition": {
           "bodyPaddingPx": 12,
           "headerPx": 52,
           "diagramChromePx": 78,
           "svgPx": 746,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -834,17 +834,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1585,
-        "diagramWidth": 1535,
+        "readerWidth": 1557,
+        "diagramWidth": 1507,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 68,
           "diagramChromePx": 94,
           "svgPx": 1082,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -887,17 +887,17 @@
         "readerOverflow": null,
         "readerFit": "intrinsic-height",
         "ok": true,
-        "readerWidth": 1585,
-        "diagramWidth": 1535,
+        "readerWidth": 1557,
+        "diagramWidth": 1507,
         "pageComposition": {
           "bodyPaddingPx": 64,
           "headerPx": 68,
           "diagramChromePx": 94,
           "svgPx": 1082,
           "cardsPx": 0,
-          "viewBoxHeight": 698
+          "viewBoxHeight": 728
         },
-        "viewBoxWidth": 990,
+        "viewBoxWidth": 1014,
         "minimumProjectedNodeTextPx": 8,
         "minimumProjectedNonEdgeTextPx": 8.7,
         "minimumProjectedEdgeTextPx": 8,
@@ -937,23 +937,23 @@
         "file": "dotfiles-v2-rendered.visual-check.html"
       },
       {
-        "sha256": "eb33b1885b9510147306ea5b344ba56a169cf896eec99c8029c17ad913b2092b",
-        "bytes": 107835,
+        "sha256": "94246d361728630bedf1745704ffb653a2e169224610144a983ff519be09fc42",
+        "bytes": 106694,
         "file": "dotfiles-v2-rendered.visual-check.1440x900.light.png"
       },
       {
-        "sha256": "a09dbf9753b0cbcd7cb5598d86f44efccacd5d655e8530bc7eb8e80f986cb0f5",
-        "bytes": 118483,
+        "sha256": "1a00e7cf36ec63f2ced2ce9d172532653a68c3cf20fb4f5d2663173928069afd",
+        "bytes": 117162,
         "file": "dotfiles-v2-rendered.visual-check.1440x900.dark.png"
       },
       {
-        "sha256": "9331f67bfd17243382dfa9090fb7b9481a5395fcced4afcaadd505005435cf70",
-        "bytes": 163323,
+        "sha256": "d05ded90abd320011c98831533c7b28a0c8699e33050f864162d52194de37aad",
+        "bytes": 161690,
         "file": "dotfiles-v2-rendered.visual-check.2048x1320.light.png"
       },
       {
-        "sha256": "b10bafa5cc89786ad0b2cec2dec70676727c236446a7354df08930bf505731dd",
-        "bytes": 180684,
+        "sha256": "704a7142f6baf058c582930f5a877b5fce9c6b409a7764cb934673a4111cc8aa",
+        "bytes": 178319,
         "file": "dotfiles-v2-rendered.visual-check.2048x1320.dark.png"
       }
     ]
