@@ -663,3 +663,22 @@ func TestPeerGitStatus_IgnoresRepoPinningEnv(t *testing.T) {
 		t.Fatalf("sub = %+v", rep)
 	}
 }
+
+// `git -c` settings are the caller's config, kept as git keeps them when it
+// enters a submodule; the repo-pinning variables go.
+func TestGitCleanEnvKeepsConfigOverrides(t *testing.T) {
+	t.Setenv("GIT_DIR", "/elsewhere")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'foo.bar'='baz'")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "safe.directory")
+	t.Setenv("GIT_CONFIG_VALUE_0", "*")
+	env := strings.Join(gitCleanEnv(context.Background(), "git"), "\n")
+	for _, want := range []string{"GIT_CONFIG_PARAMETERS=", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("dropped %s", want)
+		}
+	}
+	if strings.Contains(env, "GIT_DIR=") {
+		t.Error("kept GIT_DIR")
+	}
+}

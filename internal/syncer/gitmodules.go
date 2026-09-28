@@ -76,7 +76,7 @@ func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, appl
 	// child's own rules: only children this run may touch (named, not
 	// locked or mid-operation), and each rewrite gets an undo command.
 	var syncPaths, skipped []string
-	before := map[string]string{}
+	before := map[string]map[string]string{}
 	for _, p := range paths {
 		childAbs := filepath.Join(abs, filepath.FromSlash(p))
 		if !r.included(filepath.ToSlash(filepath.Join(rep.Path, p))) {
@@ -88,7 +88,7 @@ func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, appl
 				skipped = append(skipped, p+" ("+reason+")")
 				continue
 			}
-			before[p], _ = r.read(ctx, childAbs, "config", "--get", "remote.origin.url")
+			before[p] = r.remoteURLs(ctx, childAbs)
 		}
 		syncPaths = append(syncPaths, p)
 	}
@@ -98,12 +98,24 @@ func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, appl
 			rep.Gitmodules = "restored (submodule sync failed: " + shortErr(err) + ")"
 		}
 	}
+	// sync rewrites the child's default remote (its branch's remote, else
+	// origin): every remote URL it changed gets an undo.
 	var undo []string
 	for _, p := range syncPaths {
 		childAbs := filepath.Join(abs, filepath.FromSlash(p))
-		if old := before[p]; old != "" {
-			if now, _ := r.read(ctx, childAbs, "config", "--get", "remote.origin.url"); now != old {
-				undo = append(undo, "git -C "+shellWord(childAbs)+" remote set-url origin "+shellWord(old))
+		old, ok := before[p]
+		if !ok {
+			continue
+		}
+		now := r.remoteURLs(ctx, childAbs)
+		names := make([]string, 0, len(old))
+		for name := range old {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if now[name] != old[name] {
+				undo = append(undo, "git -C "+shellWord(childAbs)+" remote set-url "+shellWord(name)+" "+shellWord(old[name]))
 			}
 		}
 	}
@@ -116,6 +128,22 @@ func (r *gitStateRun) checkGitmodules(ctx context.Context, abs, rev string, appl
 	if len(skipped) > 0 {
 		rep.Gitmodules += "; submodule sync skipped for " + strings.Join(skipped, ", ")
 	}
+}
+
+// remoteURLs maps each remote of the repo at abs to its configured URL.
+func (r *gitStateRun) remoteURLs(ctx context.Context, abs string) map[string]string {
+	urls := map[string]string{}
+	out, err := r.read(ctx, abs, "config", "-z", "--get-regexp", `^remote\..*\.url$`)
+	if err != nil {
+		return urls
+	}
+	for _, entry := range strings.Split(out, "\x00") {
+		key, value, ok := strings.Cut(entry, "\n")
+		if name, found := strings.CutSuffix(strings.TrimPrefix(key, "remote."), ".url"); ok && found {
+			urls[name] = value
+		}
+	}
+	return urls
 }
 
 // staleGitmodules reports whether content equals a version of .gitmodules

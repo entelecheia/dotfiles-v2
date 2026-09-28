@@ -338,3 +338,19 @@ func TestPeerGitRealign_SubmoduleSyncRespectsTheChild(t *testing.T) {
 		t.Fatalf("no undo for the rewritten origin: %+v", root)
 	}
 }
+
+// submodule sync rewrites the child's default remote, which for a branch
+// tracking another remote is not origin: that URL gets its undo too.
+func TestPeerGitRealign_SubmoduleSyncUndoCoversTheBranchRemote(t *testing.T) {
+	ws, sub, oldURL, _, _, _ := urlMoveFixture(t)
+	gitStateRun_(t, sub, "checkout", "-q", "-b", "work")
+	gitStateRun_(t, sub, "remote", "add", "upstream", oldURL)
+	gitStateRun_(t, sub, "config", "branch.work.remote", "upstream")
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); !strings.Contains(root.URLUndo, "remote set-url upstream "+shellWord(oldURL)) {
+		t.Fatalf("no undo for the branch's remote: %+v", root)
+	}
+}

@@ -271,9 +271,10 @@ tool):
 - `<workspace repo>/.gitmodules`: restored from the index by
   `realign --apply` only when it equals an older committed version or is
   missing (peer sync never carries it), then `git submodule sync` for the
-  URLs it moves (`.git/config` and the submodule's origin URL), only in
-  submodules the run names and that are not locked or mid-operation, each
-  rewritten origin printed with its undo. With `--apply --fetch` a
+  URLs it moves (`.git/config` and the submodule's default remote URL: its
+  branch's remote, else origin), only in submodules the run names and that
+  are not locked or mid-operation, each rewritten remote URL printed with
+  its undo. With `--apply --fetch` a
   submodule whose gitlink commit is missing (and is a checkout of its own,
   never a directory git resolves to the parent) gets `git fetch
   --no-recurse-submodules` under git submodule's protocol rules

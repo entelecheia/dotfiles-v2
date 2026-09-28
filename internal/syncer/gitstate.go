@@ -176,8 +176,9 @@ type gitStateRun struct {
 
 // gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
 // GIT_WORK_TREE, GIT_INDEX_FILE, ...): run from a git hook, they would aim
-// every per-repo command at the hook's repository, as git itself clears
-// them before it enters a submodule.
+// every per-repo command at the hook's repository. Like git entering a
+// submodule, it keeps `git -c` settings (GIT_CONFIG_PARAMETERS,
+// GIT_CONFIG_COUNT and its keys): they are the caller's config, not a repo.
 func gitCleanEnv(ctx context.Context, git string) []string {
 	out, err := exec.CommandContext(ctx, git, "rev-parse", "--local-env-vars").Output()
 	if err != nil {
@@ -185,7 +186,7 @@ func gitCleanEnv(ctx context.Context, git string) []string {
 	}
 	local := map[string]bool{}
 	for _, name := range strings.Fields(string(out)) {
-		local[name] = true
+		local[name] = name != "GIT_CONFIG_PARAMETERS" && name != "GIT_CONFIG_COUNT"
 	}
 	var env []string
 	for _, kv := range os.Environ() {

@@ -71,8 +71,8 @@ the machine that did not make the commits. After a switch, the newly active
 Mac realigns instead of pulling: each repo's HEAD and index move forward to
 the descendant commit its files already match, through git's compare-and-swap
 ref update. Uncommitted modifications survive and untracked files never block;
-the only worktree file git may write is a stale .gitmodules that realign
---apply restores.
+the only worktree file git may write is a missing or stale .gitmodules that
+realign --apply restores.
 
 Repos with a lock, an operation in progress, unmerged entries or staged
 changes are skipped and reported. Nothing is fetched unless realign runs with
