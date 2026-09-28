@@ -35,6 +35,7 @@ func installFakePeerSSH(t *testing.T, statusJSON string) {
 		"  esac\n" +
 		"done\n" +
 		"case \"$*\" in\n" +
+		"  *\"list dot candidates\"*) exec /bin/sh -c \"$*\" ;;\n" +
 		"  *--version*) echo 'rsync  version 3.4.1  protocol version 32' ;;\n" +
 		"  *\"peer status --json\"*) printf '%s\\n' '" + statusJSON + "' ;;\n" +
 		"  *) exec /bin/sh -c \"$*\" ;;\n" +
@@ -42,6 +43,22 @@ func installFakePeerSSH(t *testing.T, statusJSON string) {
 	bin := t.TempDir()
 	writeStub(t, filepath.Join(bin, "ssh"), script)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dot := filepath.Join(bin, "dot")
+	writeStub(t, dot, "#!/bin/sh\n[ \"$1\" = --version ] && echo 'dot version 9.9.9 (fake)'\nexit 0\n")
+	useRemoteDotCandidates(t, dot)
+}
+
+// useRemoteDotCandidates points the peer's dot probe at fixture binaries only,
+// so a test never reaches a dot installed on the host running it.
+func useRemoteDotCandidates(t *testing.T, paths ...string) {
+	t.Helper()
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = shellQuote(path)
+	}
+	old := remoteDotCandidates
+	remoteDotCandidates = strings.Join(quoted, " ")
+	t.Cleanup(func() { remoteDotCandidates = old })
 }
 
 // peerDryRunSandbox builds a coordinator config aimed at a local directory

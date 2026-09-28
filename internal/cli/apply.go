@@ -71,6 +71,20 @@ func runApply(cmd *cobra.Command, _ []string) error {
 		profileName = state.Profile
 	}
 
+	// Without a terminal the prompts cannot run: huh opens /dev/tty and dies
+	// with a bubbletea error over a plain ssh command (#183). Stored values
+	// stand in for the prompts; a missing one, or the confirmation a real
+	// apply needs, is an error that names the way out.
+	interactive := ui.TerminalAttached()
+	if !yes && !interactive {
+		if missing := missingApplyValues(state, profileName, configPath); len(missing) > 0 {
+			return fmt.Errorf("no terminal for prompts, and nothing supplies %s", strings.Join(missing, "; "))
+		}
+		if !dryRun {
+			return fmt.Errorf("no terminal to confirm the apply; pass --yes, or run dot apply from a terminal")
+		}
+	}
+
 	// Detect system
 	sysInfo, err := config.DetectSystem()
 	if err != nil {
@@ -98,7 +112,7 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	// Interactive configuration
 	p := printerFrom(cmd)
 	state.Profile = profileName
-	if err := configureInteractive(p, state, home, profileName, sysInfo, yes); err != nil {
+	if err := configureInteractive(p, state, home, profileName, sysInfo, yes || !interactive); err != nil {
 		if errors.Is(err, errAborted) {
 			p.Line("Aborted.")
 			return nil
@@ -220,8 +234,31 @@ func runApply(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// missingApplyValues lists what a prompt would have to supply, each with its
+// non-interactive source: the profile (unless --config names the
+// configuration) and the identity, which the stored state or the
+// DOTFILES_NAME/DOTFILES_EMAIL overrides provide. --yes is no source for the
+// identity: it skips the prompts without detecting one.
+func missingApplyValues(state *config.UserState, profile, configPath string) []string {
+	var missing []string
+	if profile == "" && configPath == "" {
+		missing = append(missing, "the profile (pass --profile, set DOTFILES_PROFILE, or pass --yes for the suggested one)")
+	}
+	var identity []string
+	if state.Name == "" && os.Getenv("DOTFILES_NAME") == "" {
+		identity = append(identity, "name")
+	}
+	if state.Email == "" && os.Getenv("DOTFILES_EMAIL") == "" {
+		identity = append(identity, "email")
+	}
+	if len(identity) > 0 {
+		missing = append(missing, "the "+strings.Join(identity, " and ")+" (set DOTFILES_NAME and DOTFILES_EMAIL, or run dot init from a terminal)")
+	}
+	return missing
+}
+
 // configureInteractive walks through each configuration section interactively.
-// Skipped entirely when --yes is set.
+// Skipped entirely when --yes is set or no terminal is attached.
 func configureInteractive(
 	p *Printer,
 	state *config.UserState,

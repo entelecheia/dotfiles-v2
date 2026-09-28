@@ -586,6 +586,15 @@ secrets:
 | `GITHUB_TOKEN` | GitHub API token for `update` |
 | `DOT_SCHEMA_FORCE` | Set to `1` to overwrite a state file written by a newer `dot`, dropping any keys this binary does not know |
 
+### Peer profile
+
+`dot peer` keeps its settings in `<workspace>/.dotfiles/peer/config.yaml`, one per machine (the store is gitignored). Keys besides those `dot peer init` writes:
+
+| Key | Description |
+|-----|-------------|
+| `hooks` | Actions around this Mac's coordinator role, so the inactive Mac runs no jobs that write the workspace. `on_activate` runs after `dot peer setup` installs the scheduler (also the step a handover runs on the new coordinator, and the one a takeover names next); `on_deactivate` after `dot peer setup --off`, on the old coordinator in a handover, and in a fence demotion before dot's own scheduler goes. Actions: `launchd-bootout <label-glob>` and `launchd-bootstrap <label-glob>` (gui domain, `~/Library/LaunchAgents/<label>.plist`; never `com.dotfiles.peer`), `app-quit <App>`, `app-open <App>`. `--dry-run` lists them; results go to the output and the peer log; a failure never stops the command. Example: `on_deactivate: [launchd-bootout com.maru.job.*, app-quit Maru]`. |
+| `remote_dot` | Path of the `dot` binary to run on the other Mac (`~/` is that Mac's home). Unset, a peer run probes `~/.local/bin/dot`, `/opt/homebrew/bin/dot`, `/usr/local/bin/dot`, the Linuxbrew path and `command -v dot` there, and uses the newest release; a dev build is used only when nothing else is installed, with a warning. Set it to use a dev build; scheduled runs read it too. |
+
 ---
 
 ## Resource admission (`dot admit`)

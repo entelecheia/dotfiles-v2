@@ -137,6 +137,7 @@ func (f *syncCLIFixture) setupPeerPreview(t *testing.T) {
 		"  esac\n" +
 		"done\n" +
 		"case \"$*\" in\n" +
+		"  *\"list dot candidates\"*) printf '/fake/dot\\tdot version 9.9.9 (fake)\\n' ;;\n" +
 		"  *--version*) echo 'rsync  version 3.4.1  protocol version 32' ;;\n" +
 		"  *\"peer status --json\"*) printf '%s\\n' '" + status + "' ;;\n" +
 		"  *) exec /bin/sh -c \"$*\" ;;\n" +

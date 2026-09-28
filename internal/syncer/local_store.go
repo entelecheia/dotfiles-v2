@@ -170,6 +170,10 @@ type LocalConfig struct {
 	SharedExcludes    []string          `yaml:"shared_excludes,omitempty"`
 	// Hooks run around this machine's peer coordinator role (#184).
 	Hooks PeerHooks `yaml:"hooks,omitempty"`
+	// RemoteDot pins the dot binary a peer run uses on the other machine
+	// ("~/" is the peer's home). Unset, the newest release found there wins;
+	// set it to use a dev build (#176).
+	RemoteDot string `yaml:"remote_dot,omitempty"`
 }
 
 // LocalState holds non-config runtime telemetry — the sticky timestamps

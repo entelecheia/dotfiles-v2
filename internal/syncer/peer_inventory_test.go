@@ -91,8 +91,8 @@ func TestRemotePeerCommandsResolveLocalAndHomebrewInstalls(t *testing.T) {
 		`/usr/local/bin/dot`,
 		`command -v dot`,
 	} {
-		if !strings.Contains(remotePeerStatusCommand, want) || !strings.Contains(remotePeerNormalizeCommand, want) {
-			t.Fatalf("remote dot resolver missing %q", want)
+		if !strings.Contains(remoteDotProbe(remoteDotCandidates), want) {
+			t.Fatalf("remote dot probe missing %q", want)
 		}
 	}
 }

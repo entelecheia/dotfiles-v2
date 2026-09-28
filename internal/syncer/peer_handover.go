@@ -583,8 +583,8 @@ func PeerHandover(ctx context.Context, opts PeerHandoverOptions) (*PeerHandoverR
 	}
 	if remote.DotVersion == "" {
 		return nil, fmt.Errorf(
-			"peer handover: the peer runs a dot release that predates handover support (its status document carries no dotVersion); upgrade dot on %s first",
-			cfg.Target.Host)
+			"peer handover: the peer's dot %s predates handover support (its status document carries no dotVersion); upgrade dot on %s first",
+			cfg.remoteDot.String(), cfg.Target.Host)
 	}
 	epoch := cfg.OwnerEpoch + 1
 	generation, err := readPeerReplicaGeneration(cfg.LocalPaths)
@@ -668,13 +668,12 @@ func hookLines(out string) []string {
 	return lines
 }
 
-// peerRemoteDotCommand builds the remote resolver plus an exact argv for a
-// dot subcommand, each argument single-quoted. The resolver is the same one
-// the status probe uses, so a peer reachable by `peer status` is reachable here.
-func peerRemoteDotCommand(args ...string) (string, error) {
+// peerRemoteDotCommand builds an exact argv for a dot subcommand on the
+// resolved peer binary, each argument single-quoted. The binary is the one the
+// status probe uses, so a peer reachable by `peer status` is reachable here.
+func peerRemoteDotCommand(dot string, args ...string) (string, error) {
 	var b strings.Builder
-	b.WriteString(remotePeerDotResolver)
-	b.WriteString("\nexec \"$dot_bin\"")
+	b.WriteString("exec " + shellQuote(dot))
 	for _, arg := range args {
 		if strings.ContainsAny(arg, "'\n") {
 			return "", fmt.Errorf("unsafe remote dot argument %q", arg)
@@ -696,7 +695,11 @@ func peerRemoteDot(ctx context.Context, runner *exec.Runner, cfg *Config, args .
 // peerRemoteDotResult runs a dot subcommand on the peer and returns both
 // output streams.
 func peerRemoteDotResult(ctx context.Context, runner *exec.Runner, cfg *Config, args ...string) (*exec.Result, error) {
-	cmd, err := peerRemoteDotCommand(args...)
+	dot, err := resolveRemoteDot(ctx, runner, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("peer handover: %w", err)
+	}
+	cmd, err := peerRemoteDotCommand(dot.Path, args...)
 	if err != nil {
 		return nil, err
 	}
