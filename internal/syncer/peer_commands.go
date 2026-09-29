@@ -1191,6 +1191,7 @@ func PeerDoctor(ctx context.Context, opts PeerDoctorOptions) (*PeerDoctorReport,
 		if here == "" {
 			here = "this machine"
 		}
+		hostMergeVerdicts(ctx, runner, cfg, report.Local, report.Peer, here, host)
 		report.Checks = evaluatePeerSides(report.Local, report.Peer, here, host)
 		for _, c := range report.Checks {
 			if c.Level == DoctorFail {
