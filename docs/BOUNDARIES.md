@@ -284,7 +284,10 @@ tool):
   submodule's protocol rules (`GIT_PROTOCOL_FROM_USER=0`), after
   `remote set-url origin` when its URL moved (both URLs compared as git
   resolves them, `url.<base>.insteadOf` included); the old URL is put back
-  if that fetch fails.
+  if that fetch fails. Under the same flags a submodule that lacks a commit
+  one of its parent's candidates records (and that the run does not leave
+  alone) gets the same fetch from its current origin, once per run, before
+  that parent's candidates are judged.
   Otherwise the worktree is never written by git; preview (`dot peer git
   status`, default `realign`, `--dry-run`) writes nothing; linked
   worktrees and locked, staged, conflicting or in-progress repositories

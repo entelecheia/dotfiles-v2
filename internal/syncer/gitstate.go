@@ -185,9 +185,11 @@ type gitStateRun struct {
 	// it.
 	present  map[string]bool
 	ancestry map[string]bool
-	// Commits a repo lacks, forgotten after that repo's own fetch
-	// (forgetAbsent), the only place a run brings commits in.
+	// Commits a repo lacks, forgotten after a fetch there (forgetFetched).
 	absent map[string]bool
+	// Children fetched before their parent's candidates were judged, with
+	// the fetch's outcome for the tie line (#201).
+	fetched map[string]string
 	// contentDiffs, keyed the same way: a run never writes the files it
 	// compares (gitlinks and .gitmodules are left out), so a child scored
 	// for its parent's question is not scored again in its own turn.
@@ -350,7 +352,19 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink, wantURL st
 	}
 
 	if included {
-		r.classify(ctx, abs, gitdir, gitlink, rep)
+		// A child fetched while this repo was judged (#201) can change
+		// answers already given: judge it again, with what the fetch
+		// brought. Each child fetches once per run, so this ends.
+		// ponytail: defensive; no test builds an answer that a later fetch
+		// in the same judgment makes stale (the tests fetch before any).
+		for {
+			fetches := len(r.fetched)
+			r.classify(ctx, abs, gitdir, gitlink, rep)
+			if len(r.fetched) == fetches {
+				break
+			}
+			*rep = GitRepoReport{Path: rel}
+		}
 		if rep.Status == GitRepoUnresolvable && rep.Reason == gitlinkMissing {
 			r.missingGitlink(ctx, abs, gitdir, gitlink, wantURL, apply, rep)
 		}
@@ -612,6 +626,9 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 	if len(ev.unknown) > 0 {
 		note = " (" + lacking(ev.unknown) + "; fetch it there, from the URL the candidate's .gitmodules names if it moved, then realign again)"
 	}
+	if len(ev.fetched) > 0 {
+		note += " (" + strings.Join(ev.fetched, ", ") + " before judging)"
+	}
 	pool := ev.pool
 	if withHead {
 		if len(pool) == 1 && pool[0] == tied[0] {
@@ -719,6 +736,7 @@ type tieEvidence struct {
 	split   bool     // the evidence told the contenders apart
 	behind  []string // the paths whose child has not reached a candidate's gitlink
 	unknown []string // "<path> lacks <sha>": commits a child could not compare with
+	fetched []string // "<path> fetched" (or "fetch failed: ..."): fetched to be judged
 }
 
 // childrenEvidence asks each child whose gitlink differs between the
@@ -783,6 +801,15 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 			if !slices.Contains(ev.behind, label) {
 				ev.behind = append(ev.behind, label)
 			}
+		}
+		for i := range tied {
+			if sha := links[i][path]; sha != "" && !r.hasCommit(ctx, child, sha) {
+				r.fetchToJudge(ctx, child) // before any contender is judged
+				break
+			}
+		}
+		if outcome, ok := r.fetched[child]; ok {
+			ev.fetched = append(ev.fetched, path+" "+outcome)
 		}
 		placed := false
 		for i := range tied {
@@ -917,7 +944,10 @@ func (r *gitStateRun) childTurn(ctx context.Context, abs, gitlink string) childA
 	case rep.Status == GitRepoRealignable:
 		return childAnswer{ends: []string{rep.Target}, exact: rep.TargetDiffs == 0, known: rep.TargetDiffs == 0 || rep.HeadDiffs == 0, ok: true}
 	}
-	return childAnswer{ends: []string{rep.Head}, exact: rep.HeadDiffs == 0, known: rep.HeadDiffs == 0, ok: true}
+	// A no-match child whose files match its rescue target exactly is at a
+	// commit it has, with or without --rescue (#201).
+	known := rep.HeadDiffs == 0 || rep.RescueTarget != "" && rep.rescueDiffs == 0
+	return childAnswer{ends: []string{rep.Head}, exact: rep.HeadDiffs == 0, known: known, ok: true}
 }
 
 // leftAlone says why process will not realign the checkout at abs, as it
@@ -952,14 +982,43 @@ func (r *gitStateRun) sameOwnContent(ctx context.Context, abs, a, b string) bool
 	return code == 0
 }
 
-// forgetAbsent drops what the run remembered as missing in the repo at abs,
-// after a fetch there.
-func (r *gitStateRun) forgetAbsent(abs string) {
+// forgetFetched drops what a fetch in the repo at abs can change: the
+// commits it lacked, and every remembered childTarget answer (its
+// upstream chain moved, and answers about its parents rest on it).
+func (r *gitStateRun) forgetFetched(abs string) {
 	for key := range r.absent {
 		if strings.HasPrefix(key, abs+"\x00") {
 			delete(r.absent, key)
 		}
 	}
+	r.targets = nil
+}
+
+// fetchToJudge fetches a child that lacks a commit a candidate records,
+// once per run and only under --apply --fetch, so it is judged with the
+// commit present (#201). It fetches from the child's origin as it is: a
+// moved URL is re-pointed in the child's own turn (missingGitlink). A
+// child the run leaves alone, or one with no checkout of its own, is not
+// fetched.
+func (r *gitStateRun) fetchToJudge(ctx context.Context, child string) {
+	if !r.opts.Apply || !r.opts.Fetch {
+		return
+	}
+	if _, done := r.fetched[child]; done {
+		return
+	}
+	gitdir, err := r.gitDir(ctx, child)
+	if err != nil || r.leftAlone(ctx, child, gitdir) != "" {
+		return
+	}
+	outcome := "fetched"
+	if err := r.fetchOrigin(ctx, child); err != nil {
+		outcome = "fetch failed: " + shortErr(err)
+	}
+	if r.fetched == nil {
+		r.fetched = map[string]string{}
+	}
+	r.fetched[child] = outcome
 }
 
 // isCommitID reports a full object id, the only key the run's caches take.
