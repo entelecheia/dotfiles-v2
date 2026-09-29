@@ -265,14 +265,15 @@ tool):
   protocol (compare-and-swap `update-ref`, fast-forward only onto a
   strict descendant, the old value recorded in the reflog for undo).
   Only `--rescue` moves a branch sideways: HEAD's commits are first kept
-  on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed where
-  git pushes the branch (pushRemote, pushDefault, then its remote)
-  unless `--no-push` (a Git LFS repo, or one the check cannot read, is
-  rescued only with `--no-push`); then the branch, or for a branch
-  mismatch the default branch (created with `branch.<name>.remote` and
-  `.merge` pointing at origin's, or fast-forwarded; never while a linked
-  worktree has it checked out; HEAD re-pointed after re-checking it under
-  the index lock), moves under the same protocol.
+  on a new `rescue/<yymmdd>-<branch>` ref (create-only; not while a
+  branch named `rescue` blocks it) and pushed where git pushes the
+  branch (pushRemote, pushDefault, then its remote) unless `--no-push`
+  (a Git LFS repo, or one the check cannot read, is rescued only with
+  `--no-push`); then the branch, or for a branch mismatch the default
+  branch (created with `branch.<name>.remote` and `.merge` pointing at
+  origin's, or fast-forwarded; never while a linked worktree has it
+  checked out, or is rebasing or bisecting it; HEAD re-pointed after
+  re-checking it under the index lock), moves under the same protocol.
 - `<workspace repo>/.gitmodules`: restored from the index by
   `realign --apply` only when it equals an older committed version or is
   missing (peer sync never carries it), then `git submodule sync` for the

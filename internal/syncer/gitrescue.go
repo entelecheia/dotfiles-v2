@@ -163,9 +163,14 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 		// HEAD and index, one on an unmounted drive included.
 		for _, wt := range r.worktreesOnBranch(ctx, abs, defRef) {
 			step := rep.rescueBranch + " is checked out in the linked worktree " + wt.path
-			if _, err := os.Stat(wt.path); err == nil || !os.IsNotExist(err) {
+			_, err := os.Stat(wt.path)
+			switch {
+			case wt.busy != "" && (err == nil || !os.IsNotExist(err)):
+				// Finishing or aborting leaves the branch checked out there.
+				step = rep.rescueBranch + " is being " + wt.busy + " in the linked worktree " + wt.path + "; finish or abort that there, then switch that worktree to another branch"
+			case err == nil || !os.IsNotExist(err):
 				step += "; switch that worktree to another branch"
-			} else {
+			default:
 				step += ", which is missing; if it is gone for good, not just unmounted: "
 				if wt.locked {
 					step += git + " worktree unlock " + shellWord(wt.path) + "; "
@@ -177,18 +182,15 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 		// Pushing or merging those commits keeps the branch off the
 		// target's history, so only moving the branch aside lifts this.
 		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
-			kept := rep.rescueBranch + "-kept"
-			for i := 2; ; i++ {
-				// A name is taken by a branch of that name or one under it
-				// (for-each-ref matches up to a slash).
-				if taken, _ := r.read(ctx, abs, "for-each-ref", "--count=1", "--format=x", "refs/heads/"+kept); taken == "" {
-					break
-				}
-				kept = rep.rescueBranch + "-kept-" + strconv.Itoa(i)
-			}
 			steps = append(steps, "local "+rep.rescueBranch+" has commits "+shortRev(rep.RescueTarget)+" lacks; keep them on another branch first: "+
-				git+" branch -m "+shellWord(rep.rescueBranch)+" "+shellWord(kept))
+				git+" branch -m "+shellWord(rep.rescueBranch)+" "+shellWord(r.freeBranchName(ctx, abs, rep.rescueBranch+"-kept")))
 		}
+	}
+	// A branch at a parent path of the rescue name (a branch named rescue)
+	// blocks every rescue name under it, suffixed or not (#212).
+	if base := r.rescueBase(rep); r.freeBranchName(ctx, abs, base) == "" {
+		blocker := base[:strings.Index(base, "/")]
+		steps = append(steps, "a branch named "+blocker+" keeps "+base+" from being created; rename it first: git -C "+shellWord(abs)+" branch -m "+shellWord(blocker)+" "+shellWord(r.freeBranchName(ctx, abs, blocker+"-kept")))
 	}
 	lfs := ""
 	if rep.remote != "." {
@@ -207,6 +209,38 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 		steps[i] = "(" + strconv.Itoa(i+1) + ") " + steps[i]
 	}
 	return strings.Join(steps, "; "), false
+}
+
+// rescueBase is the rescue branch name before a free-name suffix:
+// rescue/<yymmdd>-<branch>.
+func (r *gitStateRun) rescueBase(rep *GitRepoReport) string {
+	name := rep.branch
+	if name == "" {
+		name = "detached"
+	}
+	return "rescue/" + r.opts.Now().Format("060102") + "-" + strings.ReplaceAll(name, "/", "-")
+}
+
+// freeBranchName is base, or base-2, base-3, ..., the first name no branch
+// keeps from being created: git refs are files and directories, so a
+// branch of that name, one under it (for-each-ref matches up to a slash) or
+// one at a parent path blocks it. It is "" when a parent blocks base, since
+// no suffix helps then.
+func (r *gitStateRun) freeBranchName(ctx context.Context, abs, base string) string {
+	for i := 0; i < len(base); i++ {
+		if base[i] == '/' {
+			if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "refs/heads/"+base[:i]); err == nil {
+				return ""
+			}
+		}
+	}
+	name := base
+	for i := 2; ; i++ {
+		if taken, _ := r.read(ctx, abs, "for-each-ref", "--count=1", "--format=x", "refs/heads/"+name); taken == "" {
+			return name
+		}
+		name = base + "-" + strconv.Itoa(i)
+	}
 }
 
 // shellWord quotes s for a suggested command line only when it needs it.
@@ -332,17 +366,8 @@ func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoRe
 	if rep.rescueRefused != "" && (!rep.rescueLocalOnly || !r.opts.NoPush) {
 		return
 	}
-	name := rep.branch
-	if name == "" {
-		name = "detached"
-	}
-	base := "rescue/" + r.opts.Now().Format("060102") + "-" + strings.ReplaceAll(name, "/", "-")
-	rep.Rescue = base
-	for i := 2; ; i++ {
-		if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "refs/heads/"+rep.Rescue); err != nil {
-			break
-		}
-		rep.Rescue = base + "-" + strconv.Itoa(i)
+	if rep.Rescue = r.freeBranchName(ctx, abs, r.rescueBase(rep)); rep.Rescue == "" {
+		return // blocked; rescueRefusal already refused it
 	}
 	rep.Status = GitRepoRealignable
 	rep.Reason = ""
@@ -410,11 +435,13 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 // git worktree list --porcelain.
 type linkedWorktree struct {
 	path   string
-	locked bool // git worktree lock
+	locked bool   // git worktree lock
+	busy   string // "rebased" or "bisected" when that holds the branch, not a checkout
 }
 
-// worktreesOnBranch lists the worktrees other than abs that have ref
-// checked out.
+// worktreesOnBranch lists the worktrees other than abs that hold ref: those
+// with it checked out, and, as git counts them, those rebasing or bisecting
+// it, which the porcelain lists as detached (#211).
 func (r *gitStateRun) worktreesOnBranch(ctx context.Context, abs, ref string) []linkedWorktree {
 	out, err := r.read(ctx, abs, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -422,24 +449,70 @@ func (r *gitStateRun) worktreesOnBranch(ctx context.Context, abs, ref string) []
 	}
 	self, _ := filepath.EvalSymlinks(abs)
 	var on []linkedWorktree
+	var admins map[string]string
 	for _, block := range strings.Split(out, "\n\n") {
 		var wt linkedWorktree
-		onRef := false
+		onRef, detached := false, false
 		for _, line := range strings.Split(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "worktree "):
 				wt.path = strings.TrimPrefix(line, "worktree ")
 			case line == "branch "+ref:
 				onRef = true
+			case line == "detached":
+				detached = true
 			case line == "locked" || strings.HasPrefix(line, "locked "):
 				wt.locked = true
 			}
+		}
+		if detached {
+			if admins == nil {
+				admins = r.worktreeAdmins(ctx, abs)
+			}
+			wt.busy = busyOn(admins[wt.path], ref)
+			onRef = wt.busy != ""
 		}
 		if p, _ := filepath.EvalSymlinks(wt.path); onRef && p != self {
 			on = append(on, wt)
 		}
 	}
 	return on
+}
+
+// worktreeAdmins maps each linked worktree's path to its admin dir
+// (<common-dir>/worktrees/<id>), whose gitdir file names <path>/.git.
+func (r *gitStateRun) worktreeAdmins(ctx context.Context, abs string) map[string]string {
+	admins := map[string]string{}
+	common, err := r.read(ctx, abs, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return admins
+	}
+	dirs, _ := filepath.Glob(filepath.Join(common, "worktrees", "*"))
+	for _, dir := range dirs {
+		if b, err := os.ReadFile(filepath.Join(dir, "gitdir")); err == nil {
+			admins[strings.TrimSuffix(strings.TrimSpace(string(b)), "/.git")] = dir
+		}
+	}
+	return admins
+}
+
+// busyOn says whether the worktree with admin dir admin is rebasing or
+// bisecting ref, read the way git does before it lets a branch move.
+func busyOn(admin, ref string) string {
+	if admin == "" {
+		return ""
+	}
+	read := func(name string) string {
+		b, _ := os.ReadFile(filepath.Join(admin, name))
+		return strings.TrimSpace(string(b))
+	}
+	switch {
+	case read("rebase-merge/head-name") == ref, read("rebase-apply/head-name") == ref:
+		return "rebased"
+	case read("BISECT_START") == strings.TrimPrefix(ref, "refs/heads/"):
+		return "bisected"
+	}
+	return ""
 }
 
 // switchBranch points HEAD at the default branch, created at or
