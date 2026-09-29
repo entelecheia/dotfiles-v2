@@ -817,6 +817,66 @@ func TestNoHooksNamesEachConfigHook(t *testing.T) {
 	}
 }
 
+// A no-match suggestion names only a command the same run accepts (#209),
+// in a preview, a --rescue preview and a refused --rescue --apply alike: a
+// Git LFS repo's rescue is kept local, and a rescue the switch refuses
+// names no command, only what to do first.
+func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
+	suggestions := func(t *testing.T, ws string) []string {
+		t.Helper()
+		var out []string
+		for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+			rep := rescueRealign(t, ws, opts)
+			if rep.Status != GitRepoNoMatch {
+				t.Fatalf("%+v: status %q, want no-match (%s)", opts, rep.Status, rep.Suggestion)
+			}
+			out = append(out, rep.Suggestion)
+		}
+		return out
+	}
+	t.Run("lfs", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateCommitFile(t, f.writer, ".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n", "lfs")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+		gitStateCommitFile(t, f.ws, "docs.md", "unpushed docs\n", "local docs")
+		tip := f.publish(t, "b.txt", "b1\n")
+		f.deliver(t, tip)
+		for _, s := range suggestions(t, f.ws) {
+			if !strings.HasSuffix(s, "keeping it local: dot peer git realign --rescue --no-push --apply .") || !strings.Contains(s, "Git LFS") {
+				t.Fatalf("suggestion %q, want the LFS reason and the --no-push rescue", s)
+			}
+		}
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("the suggested command did not realign: %+v", rep)
+		}
+	})
+	refused := func(t *testing.T, ws, why string) {
+		t.Helper()
+		for _, s := range suggestions(t, ws) {
+			if strings.Contains(s, "dot peer git realign") || !strings.Contains(s, "not rescued: "+why) {
+				t.Fatalf("suggestion %q, want %q and no command", s, why)
+			}
+		}
+	}
+	t.Run("default branch in a linked worktree", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", filepath.Join(t.TempDir(), "wt-main"), "main")
+		refused(t, f.ws, "main is checked out in the linked worktree")
+	})
+	t.Run("local default branch the target lacks", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateCommitFile(t, f.ws, "mine.txt", "m\n", "unpushed on main")
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
+		refused(t, f.ws, "local main has commits")
+	})
+}
+
 // A pushed rescue branch in a Git LFS repo would point at objects the
 // remote lacks, so the rescue is refused unless it stays local (#204).
 func TestPeerGitRescue_LFSRepoRescuesOnlyLocally(t *testing.T) {

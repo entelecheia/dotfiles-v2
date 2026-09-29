@@ -61,8 +61,8 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, r.pushRemote(ctx, abs, rep.branch)
 			rep.rescueDiffs = diffs
 			rep.rescueTie = tie
-			rep.Suggestion = fmt.Sprintf("on %s, but %s %s at %s; keep HEAD on a rescue branch and switch: %s",
-				label, matchWords(diffs), def, shortRev(cand), rescueCommand(rep.Path))
+			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("on %s, but %s %s at %s", label, matchWords(diffs), def, shortRev(cand)),
+				"keep HEAD on a rescue branch and switch")
 			return
 		}
 	}
@@ -98,8 +98,8 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			rep.RescueTarget = upCand
 			rep.rescueDiffs = upDiffs
 			rep.rescueTie = upTie
-			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s; keep the local commits on a rescue branch and realign: %s",
-				ahead, behind, upName, matchWords(upDiffs), shortRev(upCand), rescueCommand(rep.Path))
+			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s", ahead, behind, upName, matchWords(upDiffs), shortRev(upCand)),
+				"keep the local commits on a rescue branch and realign")
 		} else {
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and no upstream commit matches the files better than HEAD; rebase or merge by hand",
 				ahead, behind, upName)
@@ -124,8 +124,50 @@ func (r *gitStateRun) pushRemote(ctx context.Context, abs, branch string) string
 	return "origin"
 }
 
-func rescueCommand(path string) string {
+func rescueCommand(path string, noPush bool) string {
+	if noPush {
+		return "dot peer git realign --rescue --no-push --apply " + shellWord(path)
+	}
 	return "dot peer git realign --rescue --apply " + shellWord(path)
+}
+
+// suggestRescue ends a rescue class's suggestion with a command the run
+// accepts: the rescue, the rescue kept local when only a push is refused
+// (Git LFS), or, when a rescue would be refused either way, the refusal and
+// no command (#209).
+func (r *gitStateRun) suggestRescue(ctx context.Context, abs string, rep *GitRepoReport, facts, action string) {
+	rep.rescueRefused, rep.rescueLocalOnly = r.rescueRefusal(ctx, abs, rep)
+	switch {
+	case rep.rescueRefused == "":
+		rep.Suggestion = facts + "; " + action + ": " + rescueCommand(rep.Path, false)
+	case rep.rescueLocalOnly:
+		rep.Suggestion = facts + "; " + rep.rescueRefused + "; " + action + ", keeping it local: " + rescueCommand(rep.Path, true)
+	default:
+		rep.Suggestion = facts + "; not rescued: " + rep.rescueRefused
+	}
+}
+
+// rescueRefusal says, read-only, why a rescue of rep would be refused, and
+// whether --no-push avoids it: the switch's own preconditions (the default
+// branch in a linked worktree, or holding commits the target lacks) refuse
+// any rescue; a pushed rescue branch in a Git LFS repo would point at objects
+// the remote lacks, and dot does not drive git-lfs (#204).
+func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRepoReport) (why string, localOnly bool) {
+	if rep.rescueBranch != "" {
+		defRef := "refs/heads/" + rep.rescueBranch
+		if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
+			return rep.rescueBranch + " is checked out in the linked worktree " + other + "; switch that worktree to another branch first", false
+		}
+		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
+			return "local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks; push or merge them by hand first", false
+		}
+	}
+	if rep.remote != "." {
+		if why := r.lfsRefusal(ctx, abs); why != "" {
+			return why, true
+		}
+	}
+	return "", false
 }
 
 // shellWord quotes s for a suggested command line only when it needs it.
@@ -245,28 +287,11 @@ func (r *gitStateRun) isAncestor(ctx context.Context, abs, a, b string) bool {
 // --rescue: the target is the matching commit and HEAD's commits get a
 // rescue branch named after today and the branch.
 func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoReport) {
-	// The switch's own preconditions are read-only, so they decide here,
-	// before a rescue branch is created or pushed for a move that would be
-	// refused.
-	if rep.rescueBranch != "" {
-		defRef := "refs/heads/" + rep.rescueBranch
-		if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
-			rep.Suggestion += "; not rescued: " + rep.rescueBranch + " is checked out in the linked worktree " + other
-			return
-		}
-		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
-			rep.Suggestion += "; not rescued: local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks"
-			return
-		}
-	}
-	// A pushed rescue branch in a Git LFS repo would point at objects the
-	// remote lacks: dot does not drive git-lfs, so it keeps such a rescue
-	// local or not at all (#204).
-	if !r.opts.NoPush && rep.remote != "." {
-		if why := r.lfsRefusal(ctx, abs); why != "" {
-			rep.Suggestion += "; not rescued: " + why + "; rescue with --no-push"
-			return
-		}
+	// classifyNoMatch read the refusals (rescueRefusal) before a rescue
+	// branch is created or pushed for a move that would be refused, and its
+	// suggestion already says why; one only a push hits passes --no-push.
+	if rep.rescueRefused != "" && (!rep.rescueLocalOnly || !r.opts.NoPush) {
+		return
 	}
 	name := rep.branch
 	if name == "" {
