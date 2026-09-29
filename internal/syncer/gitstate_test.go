@@ -1703,3 +1703,18 @@ func TestPeerGitRealign_FetchesAChildOnce(t *testing.T) {
 		t.Fatalf("child = %+v, want the first fetch's outcome", child)
 	}
 }
+
+// A fetch that failed before the parent was judged is tried again in the
+// child's own turn, and the report says the fetch failed (#201).
+func TestPeerGitRealign_RetriesAFailedFetchToJudge(t *testing.T) {
+	ws, sub, _, _, _ := fetchFixture(t, false)
+	gitStateRun_(t, sub, "config", "--unset", "protocol.file.allow")
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := gitStateReport(t, res, "sub")
+	if !strings.Contains(child.Reason, "fetch failed") || strings.Contains(child.Suggestion, "pushed with its submodule") {
+		t.Fatalf("child = %+v, want the fetch failure, not push advice", child)
+	}
+}

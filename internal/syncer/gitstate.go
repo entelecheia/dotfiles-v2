@@ -925,7 +925,7 @@ func (r *gitStateRun) childTarget(ctx context.Context, abs, gitlink string) chil
 type childAnswer struct {
 	ends  []string // where it can end: one commit, or HEAD and a rescue's target
 	exact bool     // its files match the one ending with no difference
-	known bool     // its files match a commit it has (HEAD or where it moves) exactly
+	known bool     // its files match a commit it has (HEAD, where it moves, or a no-match child's rescue target) exactly
 	ok    bool     // false when there is no checkout to read
 	held  string   // why this run leaves it alone
 }
@@ -1027,7 +1027,7 @@ func (r *gitStateRun) fetchToJudge(ctx context.Context, child string) {
 		return
 	}
 	from, _ := r.read(ctx, child, "remote", "get-url", "origin")
-	outcome := "fetched before judging"
+	outcome := fetchedToJudge
 	if err := r.fetchOrigin(ctx, child); err != nil {
 		outcome = "fetch failed before judging: " + shortErr(err)
 	}
@@ -1036,6 +1036,9 @@ func (r *gitStateRun) fetchToJudge(ctx context.Context, child string) {
 	}
 	r.fetched[child], r.fetchedFrom[child] = outcome, from
 }
+
+// fetchedToJudge is fetchToJudge's outcome when the fetch succeeded.
+const fetchedToJudge = "fetched before judging"
 
 // isCommitID reports a full object id, the only key the run's caches take.
 func isCommitID(s string) bool {
