@@ -999,9 +999,11 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 			}
 		})
 	}
-	// A gone worktree's rebase commits live only on its detached HEAD, in
-	// the admin dir a remove deletes, so the step keeps them first.
-	t.Run("a gone worktree whose rebase made commits", func(t *testing.T) {
+	// A gone worktree's rebase keeps its state (the commits so far on a
+	// detached HEAD, an autostash) only in the admin dir a remove deletes,
+	// so the step names that dir and what is there, and no command that
+	// drops it; recovering from it first loses nothing.
+	t.Run("a gone worktree mid-rebase", func(t *testing.T) {
 		f := newRescueFixture(t)
 		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
 		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
@@ -1013,17 +1015,32 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		}
 		wt := filepath.Join(tmp, "wt-main")
 		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
-		stopRebase(t, wt, "echo resolved > work.txt && git add work.txt && git commit -q -m 'conflict work' && false", "--root")
+		gitStateRewriteTracked(t, filepath.Join(wt, "a.txt"), "uncommitted\n")
+		stopRebase(t, wt, "echo resolved > work.txt && git add work.txt && git commit -q -m 'conflict work' && false", "--autostash", "--root")
 		wip := gitStateRun_(t, wt, "rev-parse", "HEAD")
+		admin := gitStateRun_(t, wt, "rev-parse", "--path-format=absolute", "--git-dir")
+		autostash, err := os.ReadFile(filepath.Join(admin, "rebase-merge", "autostash"))
+		if err != nil {
+			t.Fatalf("no autostash: %v", err)
+		}
 		if err := os.RemoveAll(wt); err != nil {
 			t.Fatal(err)
 		}
-		git := "git -C " + shellWord(f.ws)
-		refused(t, f.ws, "main is held by a rebase in the linked worktree "+wt+", which is missing; if it is gone for good, not just unmounted: "+git+" branch main-wip-kept "+wip+"; "+git+" worktree remove "+shellWord(wt))
-		gitStateRun_(t, f.ws, "branch", "main-wip-kept", wip)
+		refused(t, f.ws, "main is held by a rebase in the linked worktree "+wt+", which is missing; its admin dir "+admin+" holds that rebase's state (HEAD "+wip+", any autostash, rewritten refs and the reflog); if the worktree is gone for good, recover what you need from there first, then remove it with git worktree remove")
+		for _, s := range suggestions(t, f.ws) {
+			if strings.Contains(s, "git -C") {
+				t.Fatalf("suggestion %q names a command", s)
+			}
+		}
+		// Recovering first, as the step says, keeps both.
+		gitStateRun_(t, f.ws, "branch", "main-wip", wip)
+		gitStateRun_(t, f.ws, "stash", "store", "-m", "autostash", strings.TrimSpace(string(autostash)))
 		gitStateRun_(t, f.ws, "worktree", "remove", wt)
-		if got := gitStateRun_(t, f.ws, "log", "-1", "--format=%s", "main-wip-kept"); got != "conflict work" {
-			t.Fatalf("main-wip-kept holds %q, want the rebase's commit", got)
+		if got := gitStateRun_(t, f.ws, "log", "-1", "--format=%s", "main-wip"); got != "conflict work" {
+			t.Fatalf("main-wip holds %q, want the rebase's commit", got)
+		}
+		if got := gitStateRun_(t, f.ws, "show", "stash@{0}:a.txt"); got != "uncommitted" {
+			t.Fatalf("the stored autostash holds %q", got)
 		}
 		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
 			t.Fatalf("after the steps: %+v, want realigned to %s", rep, tip)

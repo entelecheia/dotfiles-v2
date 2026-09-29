@@ -174,13 +174,17 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 				step += "; finish or abort it there, and if that leaves " + rep.rescueBranch + " checked out, switch that worktree to another branch"
 			case present:
 				step += "; switch that worktree to another branch"
+			case wt.busy != "":
+				// The admin dir a remove deletes holds that operation's
+				// state: HEAD so far, an autostash, rewritten refs, the
+				// reflog. dot names no command that drops it.
+				step += ", which is missing; its admin dir " + wt.admin + " holds that " + wt.busy + "'s state (HEAD " + wt.head +
+					", any autostash, rewritten refs and the reflog); if the worktree is gone for good, recover what you need from there first, then remove it with git worktree remove"
+				if wt.locked {
+					step += " (after git worktree unlock)"
+				}
 			default:
 				step += ", which is missing; if it is gone for good, not just unmounted: "
-				if wt.busy != "" && wt.head != "" {
-					// A rebase's commits so far live only on that worktree's
-					// detached HEAD, in the admin dir the remove deletes.
-					step += git + " branch " + shellWord(r.freeBranchName(ctx, abs, rep.rescueBranch+"-wip-kept")) + " " + wt.head + "; "
-				}
 				if wt.locked {
 					step += git + " worktree unlock " + shellWord(wt.path) + "; "
 				}
@@ -445,6 +449,7 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 type linkedWorktree struct {
 	path   string
 	head   string // its HEAD commit
+	admin  string // its admin dir, <common-dir>/worktrees/<id>
 	locked bool   // git worktree lock
 	busy   string // "rebase" or "bisect" when one holds the branch
 }
@@ -479,7 +484,8 @@ func (r *gitStateRun) worktreesOnBranch(ctx context.Context, abs, ref string) []
 		if admins == nil {
 			admins = r.worktreeAdmins(ctx, abs)
 		}
-		if wt.busy = busyOn(admins[wt.path], ref); wt.busy != "" {
+		wt.admin = admins[wt.path]
+		if wt.busy = busyOn(wt.admin, ref); wt.busy != "" {
 			onRef = true
 		}
 		if p, _ := filepath.EvalSymlinks(wt.path); onRef && p != self {
