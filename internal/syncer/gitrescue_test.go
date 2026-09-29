@@ -875,37 +875,45 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 			}
 		}
 	}
-	t.Run("default branch in a linked worktree", func(t *testing.T) {
+	t.Run("default branch in linked worktrees", func(t *testing.T) {
 		f := newRescueFixture(t)
 		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
 		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
 		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
-		wt := filepath.Join(t.TempDir(), "wt-main")
-		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
-		refused(t, f.ws, "main is checked out in the linked worktree")
-		// The same refusal for a locked worktree whose directory is gone
-		// names the unlock and prune that lift it, in this repo.
-		gitStateRun_(t, f.ws, "worktree", "lock", wt)
-		listed, err := filepath.EvalSymlinks(wt) // the path git lists
+		tmp, err := filepath.EvalSymlinks(t.TempDir()) // the paths git lists
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.RemoveAll(wt); err != nil {
+		wt1, wt2, other := filepath.Join(tmp, "wt-main"), filepath.Join(tmp, "wt-main-2"), filepath.Join(tmp, "detached")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt1, "main")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", "-f", wt2, "main")
+		// Another worktree whose directory is missing: the steps must not
+		// drop it (git worktree prune would).
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", "--detach", other)
+		if err := os.RemoveAll(other); err != nil {
 			t.Fatal(err)
 		}
-		refused(t, f.ws, "main is checked out in the linked worktree")
+		on := func(wt string) string { return "main is checked out in the linked worktree " + wt }
+		refused(t, f.ws, "(1) "+on(wt1)+"; switch that worktree to another branch; (2) "+on(wt2)+"; switch that worktree to another branch")
+
+		gitStateRun_(t, f.ws, "worktree", "lock", wt1)
+		for _, wt := range []string{wt1, wt2} {
+			if err := os.RemoveAll(wt); err != nil {
+				t.Fatal(err)
+			}
+		}
 		git := "git -C " + shellWord(f.ws)
-		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "(locked)") || !strings.HasSuffix(s, "gone for good, not just unmounted: "+git+" worktree unlock "+shellWord(listed)+"; "+git+" worktree prune") {
-			t.Fatalf("suggestion %q, want this repo's unlock and prune for a locked worktree", s)
-		}
-		gitStateRun_(t, f.ws, "worktree", "unlock", wt)
-		// Unlocked, the prune alone lifts it.
-		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; strings.Contains(s, "unlock") || !strings.HasSuffix(s, "its directory is gone: "+git+" worktree prune") {
-			t.Fatalf("suggestion %q, want this repo's prune alone", s)
-		}
-		gitStateRun_(t, f.ws, "worktree", "prune")
+		gone := ", which is missing; if it is gone for good, not just unmounted: "
+		refused(t, f.ws, "(1) "+on(wt1)+gone+git+" worktree unlock "+shellWord(wt1)+"; "+git+" worktree remove "+shellWord(wt1)+"; (2) "+on(wt2)+gone+git+" worktree remove "+shellWord(wt2))
+
+		gitStateRun_(t, f.ws, "worktree", "unlock", wt1)
+		gitStateRun_(t, f.ws, "worktree", "remove", wt1)
+		gitStateRun_(t, f.ws, "worktree", "remove", wt2)
 		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
-			t.Fatalf("after the prune: suggestion %q, want the rescue", s)
+			t.Fatalf("after the steps: suggestion %q, want the rescue", s)
+		}
+		if list := gitStateRun_(t, f.ws, "worktree", "list", "--porcelain"); !strings.Contains(list, "worktree "+other+"\n") {
+			t.Fatalf("the steps dropped another missing worktree:\n%s", list)
 		}
 	})
 	t.Run("every refusal at once", func(t *testing.T) {
@@ -935,20 +943,22 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
 		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
 		refused(t, f.ws, "local main has commits")
-		// A name an earlier move took is skipped.
-		gitStateRun_(t, f.ws, "branch", "main-kept", f.base)
-		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "git -C "+shellWord(f.ws)+" branch -m main main-kept-2") {
+		// Names an earlier move took, or a branch under them holds, are
+		// skipped.
+		gitStateRun_(t, f.ws, "branch", "main-kept/x", f.base)
+		gitStateRun_(t, f.ws, "branch", "main-kept-2", f.base)
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "git -C "+shellWord(f.ws)+" branch -m main main-kept-3") {
 			t.Fatalf("suggestion %q, want the branch move to a free name", s)
 		}
 		// Following the advice lifts the refusal, and the kept branch
 		// holds the commits.
 		mine := gitStateRun_(t, f.ws, "rev-parse", "main")
-		gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept-2")
+		gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept-3")
 		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
 			t.Fatalf("after the advice: suggestion %q, want the rescue", s)
 		}
-		if got := gitStateRun_(t, f.ws, "rev-parse", "main-kept-2"); got != mine {
-			t.Fatalf("main-kept-2 = %s, want %s", got, mine)
+		if got := gitStateRun_(t, f.ws, "rev-parse", "main-kept-3"); got != mine {
+			t.Fatalf("main-kept-3 = %s, want %s", got, mine)
 		}
 	})
 }
