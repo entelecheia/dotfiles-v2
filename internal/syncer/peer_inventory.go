@@ -323,10 +323,15 @@ type remotePeerStatus struct {
 // The validated document is returned so the run can reuse what it carries
 // (the remote's linked-worktree list) without a second ssh round trip.
 func checkRemotePeerOwner(ctx context.Context, runner *exec.Runner, cfg *Config) (*remotePeerStatus, error) {
-	if strings.TrimSpace(cfg.Owner) == "" {
-		return nil, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
-	}
 	status, err := fetchRemotePeerStatus(ctx, runner, cfg)
+	if strings.TrimSpace(cfg.Owner) == "" {
+		// Name the peer's owner when it can be read (#202).
+		hint := noLocalOwnerFix(fenceSide{})
+		if err == nil {
+			hint = noLocalOwnerFix(remoteFenceSide(status))
+		}
+		return nil, fmt.Errorf("peer coordinator check: local peer owner is empty; %s", hint)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -427,6 +432,11 @@ func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
 }
 
 func ownerMatchError(local, remote fenceSide) error {
+	if strings.TrimSpace(remote.Owner) == "" && strings.TrimSpace(local.Owner) != "" {
+		// A cleared peer passes its own guard, but `--set` on both Macs
+		// would bump them apart and demote this one (#202).
+		return fmt.Errorf("peer coordinator check: the peer records no owner (a `dot sync owner --clear` there?) — %s", noPeerOwnerFix(local, remote))
+	}
 	if remote.CanPush {
 		return fmt.Errorf(
 			"peer coordinator check: the peer also passes its own owner guard (its owner %q, local %q); two coordinators would write to each other. Set one owner on both machines with `dot sync owner --profile=peer --set <coordinator>`",

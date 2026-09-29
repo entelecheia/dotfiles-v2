@@ -32,6 +32,7 @@ type peerHandoverSandbox struct {
 
 type peerStatusFields struct {
 	owner      string // empty = sandbox owner
+	noOwner    bool   // the peer records no owner (a --clear there)
 	epoch      int
 	dotVersion string // empty = omitted (previous release)
 }
@@ -46,7 +47,7 @@ func (f peerStatusFields) json(owner, peer, local string) string {
 		fmt.Fprintf(&b, `,"dotVersion":%q`, f.dotVersion)
 	}
 	statusOwner := f.owner
-	if statusOwner == "" {
+	if statusOwner == "" && !f.noOwner {
 		statusOwner = owner
 	}
 	fmt.Fprintf(&b, `,"profile":{"configured":true,"owner":%q,"workspacePath":%q,"target":{"path":%q}}}`,
@@ -236,6 +237,45 @@ func TestPeerFence(t *testing.T) {
 	demote, _, err = peerFence(cfg, remote("mac-b", 3, "1.2.3"))
 	if err != nil || !demote {
 		t.Fatalf("higher remote epoch: demote=%v err=%v", demote, err)
+	}
+	// A higher remote epoch with no owner refuses instead of demoting to no
+	// owner (#202).
+	demote, _, err = peerFence(cfg, remote("", 3, "1.2.3"))
+	if demote || err == nil || !strings.Contains(err.Error(), "no owner") || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-a' --epoch 2") {
+		t.Fatalf("higher remote epoch, no owner: demote=%v err=%v", demote, err)
+	}
+	// So does one at this Mac's epoch (a --clear from one epoch behind),
+	// where the cleared peer also passes its own guard.
+	cleared := remote("", 2, "1.2.3")
+	cleared.Profile.CanPush = true
+	if demote, _, err := peerFence(cfg, cleared); demote || err == nil || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-a' --epoch 2") {
+		t.Fatalf("equal epoch, no owner: demote=%v err=%v", demote, err)
+	}
+	// A peer whose dot predates epochs has no adopt: its fix is --set there.
+	legacyCleared := remote("", 0, "")
+	legacyCleared.Profile.CanPush = true
+	if _, _, err := peerFence(cfg, legacyCleared); err == nil || !strings.Contains(err.Error(), "dot sync owner --profile=peer --set 'mac-a'") || strings.Contains(err.Error(), "dot peer adopt --owner") {
+		t.Fatalf("legacy peer, no owner: %v", err)
+	}
+	// A peer with no owner below this Mac's epoch is not a coordinator.
+	lower := remote("", 1, "1.2.3")
+	lower.Profile.CanPush = true
+	if demote, _, err := peerFence(cfg, lower); demote || err != nil {
+		t.Fatalf("lower epoch, no owner: demote=%v err=%v", demote, err)
+	}
+	// This Mac recording no owner is told to record the peer's, not --set
+	// itself past the coordinator.
+	clearedHere := *cfg
+	clearedHere.Owner = ""
+	if _, _, err := peerFence(&clearedHere, remote("mac-b", 3, "1.2.3")); err == nil || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-b' --epoch 3") {
+		t.Fatalf("no owner here: %v", err)
+	}
+	if _, _, err := peerFence(&clearedHere, remote("mac-b", 0, "")); err == nil || !strings.Contains(err.Error(), "dot sync owner --profile=peer --set 'mac-b'") {
+		t.Fatalf("no owner here, legacy peer: %v", err)
+	}
+	// And dot peer setup's owner check, which advised --set on both Macs.
+	if err := ownerMatchError(fenceSide{Owner: "mac-a", Epoch: 2}, fenceSide{CanPush: true}); err == nil || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-a' --epoch 2") || strings.Contains(err.Error(), "--set") {
+		t.Fatalf("setup check, no owner: %v", err)
 	}
 	// Higher local epoch wins: proceed.
 	demote, _, err = peerFence(cfg, remote("mac-b", 1, "1.2.3"))
