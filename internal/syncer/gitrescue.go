@@ -61,8 +61,8 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, r.pushRemote(ctx, abs, rep.branch)
 			rep.rescueDiffs = diffs
 			rep.rescueTie = tie
-			rep.Suggestion = fmt.Sprintf("on %s, but %s %s at %s; keep HEAD on a rescue branch and switch: %s",
-				label, matchWords(diffs), def, shortRev(cand), rescueCommand(rep.Path))
+			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("on %s, but %s %s at %s", label, matchWords(diffs), def, shortRev(cand)),
+				"keep HEAD on a rescue branch and switch")
 			return
 		}
 	}
@@ -98,8 +98,8 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			rep.RescueTarget = upCand
 			rep.rescueDiffs = upDiffs
 			rep.rescueTie = upTie
-			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s; keep the local commits on a rescue branch and realign: %s",
-				ahead, behind, upName, matchWords(upDiffs), shortRev(upCand), rescueCommand(rep.Path))
+			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s", ahead, behind, upName, matchWords(upDiffs), shortRev(upCand)),
+				"keep the local commits on a rescue branch and realign")
 		} else {
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and no upstream commit matches the files better than HEAD; rebase or merge by hand",
 				ahead, behind, upName)
@@ -124,8 +124,89 @@ func (r *gitStateRun) pushRemote(ctx context.Context, abs, branch string) string
 	return "origin"
 }
 
-func rescueCommand(path string) string {
+func rescueCommand(path string, noPush bool) string {
+	if noPush {
+		return "dot peer git realign --rescue --no-push --apply " + shellWord(path)
+	}
 	return "dot peer git realign --rescue --apply " + shellWord(path)
+}
+
+// suggestRescue ends a rescue class's suggestion with a command the run
+// accepts: the rescue, the rescue kept local when only a push is refused
+// (Git LFS), or, when a rescue would be refused either way, the refusal and
+// no command (#209).
+func (r *gitStateRun) suggestRescue(ctx context.Context, abs string, rep *GitRepoReport, facts, action string) {
+	rep.rescueRefused, rep.rescueLocalOnly = r.rescueRefusal(ctx, abs, rep)
+	switch {
+	case rep.rescueRefused == "":
+		rep.Suggestion = facts + "; " + action + ": " + rescueCommand(rep.Path, false)
+	case rep.rescueLocalOnly:
+		rep.Suggestion = facts + "; " + rep.rescueRefused + "; " + action + ", keeping it local: " + rescueCommand(rep.Path, true)
+	default:
+		rep.Suggestion = facts + "; not rescued: " + rep.rescueRefused
+	}
+}
+
+// rescueRefusal says, read-only, why a rescue of rep would be refused, and
+// whether --no-push avoids it: the switch's own preconditions (the default
+// branch in a linked worktree, or holding commits the target lacks) refuse
+// any rescue; a pushed rescue branch in a Git LFS repo would point at objects
+// the remote lacks, and dot does not drive git-lfs (#204). Every refusal
+// that applies is named with its step, so following them lifts them all.
+func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRepoReport) (why string, localOnly bool) {
+	var steps []string
+	if rep.rescueBranch != "" {
+		defRef := "refs/heads/" + rep.rescueBranch
+		git := "git -C " + shellWord(abs)
+		// Each worktree on the branch is named, with a step for that one
+		// only: git worktree prune would drop every missing worktree's
+		// HEAD and index, one on an unmounted drive included.
+		for _, wt := range r.worktreesOnBranch(ctx, abs, defRef) {
+			step := rep.rescueBranch + " is checked out in the linked worktree " + wt.path
+			if _, err := os.Stat(wt.path); err == nil || !os.IsNotExist(err) {
+				step += "; switch that worktree to another branch"
+			} else {
+				step += ", which is missing; if it is gone for good, not just unmounted: "
+				if wt.locked {
+					step += git + " worktree unlock " + shellWord(wt.path) + "; "
+				}
+				step += git + " worktree remove " + shellWord(wt.path)
+			}
+			steps = append(steps, step)
+		}
+		// Pushing or merging those commits keeps the branch off the
+		// target's history, so only moving the branch aside lifts this.
+		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
+			kept := rep.rescueBranch + "-kept"
+			for i := 2; ; i++ {
+				// A name is taken by a branch of that name or one under it
+				// (for-each-ref matches up to a slash).
+				if taken, _ := r.read(ctx, abs, "for-each-ref", "--count=1", "--format=x", "refs/heads/"+kept); taken == "" {
+					break
+				}
+				kept = rep.rescueBranch + "-kept-" + strconv.Itoa(i)
+			}
+			steps = append(steps, "local "+rep.rescueBranch+" has commits "+shortRev(rep.RescueTarget)+" lacks; keep them on another branch first: "+
+				git+" branch -m "+shellWord(rep.rescueBranch)+" "+shellWord(kept))
+		}
+	}
+	lfs := ""
+	if rep.remote != "." {
+		lfs = r.lfsRefusal(ctx, abs)
+	}
+	switch {
+	case len(steps) == 0:
+		return lfs, lfs != ""
+	case lfs != "":
+		steps = append(steps, lfs+"; rescue with --no-push after that")
+	}
+	if len(steps) == 1 {
+		return steps[0], false
+	}
+	for i := range steps {
+		steps[i] = "(" + strconv.Itoa(i+1) + ") " + steps[i]
+	}
+	return strings.Join(steps, "; "), false
 }
 
 // shellWord quotes s for a suggested command line only when it needs it.
@@ -245,28 +326,11 @@ func (r *gitStateRun) isAncestor(ctx context.Context, abs, a, b string) bool {
 // --rescue: the target is the matching commit and HEAD's commits get a
 // rescue branch named after today and the branch.
 func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoReport) {
-	// The switch's own preconditions are read-only, so they decide here,
-	// before a rescue branch is created or pushed for a move that would be
-	// refused.
-	if rep.rescueBranch != "" {
-		defRef := "refs/heads/" + rep.rescueBranch
-		if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
-			rep.Suggestion += "; not rescued: " + rep.rescueBranch + " is checked out in the linked worktree " + other
-			return
-		}
-		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
-			rep.Suggestion += "; not rescued: local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks"
-			return
-		}
-	}
-	// A pushed rescue branch in a Git LFS repo would point at objects the
-	// remote lacks: dot does not drive git-lfs, so it keeps such a rescue
-	// local or not at all (#204).
-	if !r.opts.NoPush && rep.remote != "." {
-		if why := r.lfsRefusal(ctx, abs); why != "" {
-			rep.Suggestion += "; not rescued: " + why + "; rescue with --no-push"
-			return
-		}
+	// classifyNoMatch read the refusals (rescueRefusal) before a rescue
+	// branch is created or pushed for a move that would be refused, and its
+	// suggestion already says why; one only a push hits passes --no-push.
+	if rep.rescueRefused != "" && (!rep.rescueLocalOnly || !r.opts.NoPush) {
+		return
 	}
 	name := rep.branch
 	if name == "" {
@@ -342,25 +406,40 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 	r.switchBranch(ctx, abs, gitdir, rep)
 }
 
-// worktreeOnBranch names a worktree other than abs that has ref checked out.
-func (r *gitStateRun) worktreeOnBranch(ctx context.Context, abs, ref string) string {
+// linkedWorktree is a worktree other than the repo's own, from
+// git worktree list --porcelain.
+type linkedWorktree struct {
+	path   string
+	locked bool // git worktree lock
+}
+
+// worktreesOnBranch lists the worktrees other than abs that have ref
+// checked out.
+func (r *gitStateRun) worktreesOnBranch(ctx context.Context, abs, ref string) []linkedWorktree {
 	out, err := r.read(ctx, abs, "worktree", "list", "--porcelain")
 	if err != nil {
-		return ""
+		return nil
 	}
 	self, _ := filepath.EvalSymlinks(abs)
-	var path string
-	for _, line := range strings.Split(out, "\n") {
-		switch {
-		case strings.HasPrefix(line, "worktree "):
-			path = strings.TrimPrefix(line, "worktree ")
-		case line == "branch "+ref:
-			if p, _ := filepath.EvalSymlinks(path); p != self {
-				return path
+	var on []linkedWorktree
+	for _, block := range strings.Split(out, "\n\n") {
+		var wt linkedWorktree
+		onRef := false
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "worktree "):
+				wt.path = strings.TrimPrefix(line, "worktree ")
+			case line == "branch "+ref:
+				onRef = true
+			case line == "locked" || strings.HasPrefix(line, "locked "):
+				wt.locked = true
 			}
 		}
+		if p, _ := filepath.EvalSymlinks(wt.path); onRef && p != self {
+			on = append(on, wt)
+		}
 	}
-	return ""
+	return on
 }
 
 // switchBranch points HEAD at the default branch, created at or
@@ -372,9 +451,9 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 	defRef := "refs/heads/" + def
 	// A branch checked out in a linked worktree must not move under it:
 	// that worktree would see the move as staged changes undoing it.
-	if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
+	if on := r.worktreesOnBranch(ctx, abs, defRef); len(on) > 0 {
 		rep.Status = GitRepoSkipped
-		rep.Reason = def + " is checked out in the linked worktree " + other + "; HEAD not moved (rescue branch " + rep.Rescue + " kept)"
+		rep.Reason = def + " is checked out in the linked worktree " + on[0].path + "; HEAD not moved (rescue branch " + rep.Rescue + " kept)"
 		return
 	}
 	oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef)

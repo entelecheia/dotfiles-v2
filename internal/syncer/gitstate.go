@@ -95,6 +95,10 @@ type GitRepoReport struct {
 	remote       string // remote a rescue branch is pushed to
 	rescueDiffs  int    // worktree differences against RescueTarget
 	rescueTie    string // how RescueTarget won a tie, shown once a rescue moves
+	// rescueRefused is why a rescue would be refused (rescueRefusal);
+	// rescueLocalOnly when only a pushed one would be.
+	rescueRefused   string
+	rescueLocalOnly bool
 }
 
 // Classes of no-match and skipped outcomes (#178) and of unresolvable ones
