@@ -72,7 +72,8 @@ Mac realigns instead of pulling: each repo's HEAD and index move forward to
 the descendant commit its files already match, through git's compare-and-swap
 ref update. Uncommitted modifications survive and untracked files never block;
 the only worktree file git may write is a missing or stale .gitmodules that
-realign --apply restores.
+realign --apply restores, and no git command it starts runs a hook of the
+repo it works in.
 
 Repos with a lock, an operation in progress, unmerged entries or staged
 changes are skipped and reported. Nothing is fetched unless realign runs with
@@ -146,14 +147,14 @@ A leftover REBASE_HEAD with no rebase in progress is skipped as
 stale-rebase-head with the command that clears it.
 
 --rescue also moves diverged and branch-mismatch repos: HEAD's commits are
-kept on rescue/<yymmdd>-<branch>, pushed to the remote without hooks
-(--no-push keeps it local), then HEAD and the index move to the matching
-commit, on the default branch for a branch mismatch. No worktree file but
-.gitmodules is written; every move prints its undo command. A rescue can
-still fail (a push), so a parent that can stay does not record a commit
-past where its rescued child may end, and follows on the next run; a
-parent whose own files need the move names in its tie line the children
-it passes.
+kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
+local; a Git LFS repo, or one the check cannot read, is rescued only with
+--no-push), then HEAD and the index move to the matching commit, on the
+default branch for a branch mismatch. No worktree file but .gitmodules is
+written; every move prints its undo command. A rescue can still fail (a
+push), so a parent that can stay does not record a commit past where its
+rescued child may end, and follows on the next run; a parent whose own
+files need the move names in its tie line the children it passes.
 
 Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
 at its upstream tip, a worktree .gitmodules that is missing, or equal to an
@@ -201,18 +202,9 @@ retries it.`,
 			}
 			p.KV("Workspace", res.Root)
 			printPeerGitRepos(p, res, true)
-			switch {
-			case summary.Realigned > 0:
-				// undo lines were printed per repo already
-			case dryRun && summary.Realignable > 0:
+			if next := realignNext(summary.Realigned, summary.Realignable, dryRun, rescue, noPush); next != "" {
 				p.Blank()
-				p.Line("--dry-run: nothing changed. Re-run without it to apply.")
-			case summary.Realignable > 0 && rescue:
-				p.Blank()
-				p.Line("Run with --rescue --apply to realign.")
-			case summary.Realignable > 0:
-				p.Blank()
-				p.Line("Run with --apply to realign.")
+				p.Line("%s", next)
 			}
 			return nil
 		},
@@ -222,6 +214,23 @@ retries it.`,
 	cmd.Flags().BoolVar(&noPush, "no-push", false, "with --rescue, keep rescue branches local")
 	cmd.Flags().BoolVar(&fetch, "fetch", false, "with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it")
 	return cmd
+}
+
+// realignNext is the closing hint of a realign preview: the same command
+// with --apply, keeping --no-push so a rescue shown as staying local does
+// not push when the hint is followed (#204).
+func realignNext(realigned, realignable int, dryRun, rescue, noPush bool) string {
+	switch {
+	case realigned > 0, realignable == 0:
+		return "" // undo lines were printed per repo already, or nothing moves
+	case dryRun:
+		return "--dry-run: nothing changed. Re-run without it to apply."
+	case rescue && noPush:
+		return "Run with --rescue --no-push --apply to realign."
+	case rescue:
+		return "Run with --rescue --apply to realign."
+	}
+	return "Run with --apply to realign."
 }
 
 // printPeerGitRepos renders the per-repo report and the status tally. In a
