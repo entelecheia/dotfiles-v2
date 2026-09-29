@@ -207,19 +207,19 @@ type gitStateRun struct {
 // every per-repo command at the hook's repository. Like git entering a
 // submodule, it keeps `git -c` settings (GIT_CONFIG_PARAMETERS,
 // GIT_CONFIG_COUNT and its keys): they are the caller's config, not a repo.
+// The pathspec variables go too: they would turn off the pathspec magic
+// the run's commands rely on (":(exclude)", ":(glob)") (#204).
 func gitCleanEnv(ctx context.Context, git string) []string {
-	out, err := exec.CommandContext(ctx, git, "rev-parse", "--local-env-vars").Output()
-	if err != nil {
-		return os.Environ()
-	}
-	local := map[string]bool{}
-	for _, name := range strings.Fields(string(out)) {
-		local[name] = name != "GIT_CONFIG_PARAMETERS" && name != "GIT_CONFIG_COUNT"
+	drop := map[string]bool{"GIT_LITERAL_PATHSPECS": true, "GIT_GLOB_PATHSPECS": true, "GIT_NOGLOB_PATHSPECS": true, "GIT_ICASE_PATHSPECS": true}
+	if out, err := exec.CommandContext(ctx, git, "rev-parse", "--local-env-vars").Output(); err == nil {
+		for _, name := range strings.Fields(string(out)) {
+			drop[name] = name != "GIT_CONFIG_PARAMETERS" && name != "GIT_CONFIG_COUNT"
+		}
 	}
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if !local[name] {
+		if !drop[name] {
 			env = append(env, kv)
 		}
 	}
@@ -1343,10 +1343,7 @@ func (r *gitStateRun) run(ctx context.Context, abs string, env []string, readOnl
 }
 
 func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, readOnly bool, args ...string) (string, error) {
-	// No repo hook runs: a post-checkout, post-index-change or
-	// reference-transaction hook would write or run things BOUNDARIES does
-	// not name, a preview included (#204).
-	full := []string{"-c", "core.hooksPath=/dev/null", "-C", abs}
+	full := append(slices.Clone(noRepoHooks), "-C", abs)
 	if readOnly {
 		full = append([]string{"--no-optional-locks"}, full...)
 	}
@@ -1372,6 +1369,21 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 		return stdout.String(), err
 	}
 	return stdout.String(), nil
+}
+
+// noRepoHooks keeps every git command a peer git run starts from running a
+// hook of the repo it works in, a preview included (#204): the hooks
+// directory (core.hooksPath), hooks defined in config (git 2.54+,
+// hook.<event>, for each event these commands fire; older git ignores the
+// keys), and the fsmonitor hook.
+var noRepoHooks = []string{
+	"-c", "core.hooksPath=/dev/null",
+	"-c", "core.fsmonitor=false",
+	"-c", "hook.post-checkout.enabled=false",
+	"-c", "hook.post-index-change.enabled=false",
+	"-c", "hook.reference-transaction.enabled=false",
+	"-c", "hook.pre-push.enabled=false",
+	"-c", "hook.pre-auto-gc.enabled=false",
 }
 
 // gitExitError carries git's exit code and stderr without the "exit status N"

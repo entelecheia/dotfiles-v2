@@ -738,7 +738,17 @@ func TestPeerGit_RunsNoRepoHooks(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, hook), []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
+			// The same hook defined in config (git 2.54+), which the hooks
+			// directory setting does not control.
+			gitStateRun_(t, repo, "config", "--add", "hook.mark.event", hook)
 		}
+		gitStateRun_(t, repo, "config", "hook.mark.command", "touch "+shellQuote(filepath.Join(marks, "config-hook")))
+		// And the fsmonitor hook.
+		monitor := filepath.Join(dir, "fsmonitor")
+		if err := os.WriteFile(monitor, []byte("#!/bin/sh\ntouch "+shellQuote(filepath.Join(marks, "fsmonitor"))+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitStateRun_(t, repo, "config", "core.fsmonitor", monitor)
 	}
 	ran := func(t *testing.T) {
 		t.Helper()
@@ -791,7 +801,34 @@ func TestPeerGitRescue_LFSRepoRescuesOnlyLocally(t *testing.T) {
 	if out := gitStateRun_(t, f.ws, "branch", "--list", "rescue/*"); out != "" {
 		t.Fatalf("a rescue branch was created: %s", out)
 	}
+	// The check keeps its glob pathspec whatever the caller's environment
+	// says, and a check that fails refuses too.
+	t.Setenv("GIT_LITERAL_PATHSPECS", "1")
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); !strings.Contains(rep.Suggestion, "Git LFS") {
+		t.Fatalf("with literal pathspecs = %+v, want refused", rep)
+	}
+	gitStateRun_(t, f.ws, "config", "grep.threads", "not-a-number")
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); !strings.Contains(rep.Suggestion, "cannot tell whether the repo uses Git LFS") {
+		t.Fatalf("with a failing check = %+v, want refused", rep)
+	}
+	gitStateRun_(t, f.ws, "config", "--unset", "grep.threads")
 	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
 		t.Fatalf("local rescue in an LFS repo = %+v, want realigned", rep)
+	}
+}
+
+// A .gitattributes that only mentions filter=lfs in a comment, or sets
+// another filter, is not an LFS repo: its rescue pushes (#204).
+func TestPeerGitRescue_LFSCheckReadsAttributeLines(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateCommitFile(t, f.writer, ".gitattributes", "# was: *.bin filter=lfs\n*.dat filter=lfs2\n", "attributes")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	gitStateCommitFile(t, f.ws, "docs.md", "unpushed docs\n", "local docs")
+	f.publish(t, "b.txt", "b1\n")
+	tip := f.publish(t, "b.txt", "b2\n")
+	f.deliver(t, tip)
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("rescue = %+v, want pushed and realigned", rep)
 	}
 }

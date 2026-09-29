@@ -10,7 +10,8 @@ Mac realigns instead of pulling: each repo's HEAD and index move forward to
 the descendant commit its files already match, through git's compare-and-swap
 ref update. Uncommitted modifications survive and untracked files never block;
 the only worktree file git may write is a missing or stale .gitmodules that
-realign --apply restores, and no git command it starts runs a repo hook.
+realign --apply restores, and no git command it starts runs a hook of the
+repo it works in.
 
 Repos with a lock, an operation in progress, unmerged entries or staged
 changes are skipped and reported. Nothing is fetched unless realign runs with

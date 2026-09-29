@@ -72,7 +72,8 @@ Mac realigns instead of pulling: each repo's HEAD and index move forward to
 the descendant commit its files already match, through git's compare-and-swap
 ref update. Uncommitted modifications survive and untracked files never block;
 the only worktree file git may write is a missing or stale .gitmodules that
-realign --apply restores, and no git command it starts runs a repo hook.
+realign --apply restores, and no git command it starts runs a hook of the
+repo it works in.
 
 Repos with a lock, an operation in progress, unmerged entries or staged
 changes are skipped and reported. Nothing is fetched unless realign runs with
@@ -147,10 +148,10 @@ stale-rebase-head with the command that clears it.
 
 --rescue also moves diverged and branch-mismatch repos: HEAD's commits are
 kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
-local; a Git LFS repo is rescued only with --no-push), then HEAD and the
-index move to the matching commit, on the default branch for a branch
-mismatch. No worktree file but .gitmodules is written; every move prints
-its undo command. A rescue can still fail (a push), so a parent that can
+local; a Git LFS repo, or one the check cannot read, is rescued only with
+--no-push), then HEAD and the index move to the matching commit, on the
+default branch for a branch mismatch. No worktree file but .gitmodules is
+written; every move prints its undo command. A rescue can still fail (a push), so a parent that can
 stay does not record a commit past where its rescued child may end, and
 follows on the next run; a parent whose own files need the move names in
 its tie line the children it passes.
