@@ -552,8 +552,8 @@ func TestDoctorNFDVerdictMatchesTheSync(t *testing.T) {
 }
 
 // #203: the rest of the coordinator-only config is compared, each side's
-// host_merge is judged as the roles fix leaves it, and a peer whose dot
-// predates the report is told to upgrade rather than compared.
+// host_merge verdict is judged as the roles fix leaves it, and a peer whose
+// dot predates the report is told to upgrade rather than compared.
 func TestEvaluatePeerSidesComparesCoordinatorConfig(t *testing.T) {
 	local, peer := doctorFacts()
 	peer.CoordConfig.HostMerge = map[string][]string{".claude.json": {"projects", "mcpServers"}} // same set, other order
@@ -562,54 +562,129 @@ func TestEvaluatePeerSidesComparesCoordinatorConfig(t *testing.T) {
 	}
 
 	local, peer = doctorFacts()
-	peer.CoordConfig.IncludeSubmodules, peer.CoordConfig.SharedExcludes, peer.CoordConfig.FilterMode = true, []string{"x"}, "include"
-	peer.CoordConfig.HostMerge = nil
+	peer.CoordConfig.IncludeSubmodules, peer.CoordConfig.FilterMode, peer.CoordConfig.HostMerge = true, "include", nil
 	c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "config", DoctorWarn)
-	if c == nil || c.Detail != "host_merge, include_submodules, shared_excludes, filter_mode differ between the Macs; only the coordinator's applies" {
+	if c == nil || c.Detail != "host_merge, include_submodules, filter_mode differ between the Macs; the coordinator's copy decides its peer sync" {
 		t.Errorf("differing keys: %+v", c)
 	}
 
-	// The coordinator's bad host_merge stops its sync; the other Mac's
-	// would once it coordinates.
+	// The coordinator's verdict fails; the other Mac's warns.
 	local, peer = doctorFacts()
-	local.CoordConfig.HostMergeError, peer.CoordConfig.HostMergeError = ".claude.json: not a JSON object here", "host_merge: bad"
+	local.CoordConfig.HostMergeError, peer.CoordConfig.HostMergeError = "host_merge .claude.json: a symlink on m3x23", "host_merge: bad"
 	checks := evaluatePeerSides(local, peer, "m5x26", "m3x23")
-	if c := checkFor(checks, "config", DoctorFail); c == nil || !strings.Contains(c.Detail, "m5x26: host_merge stops its peer sync") {
-		t.Errorf("coordinator's host_merge error: %+v", checks)
+	if c := checkFor(checks, "config", DoctorFail); c == nil || !strings.Contains(c.Detail, "m5x26's peer sync stops over host_merge: host_merge .claude.json: a symlink on m3x23") {
+		t.Errorf("coordinator's host_merge verdict: %+v", checks)
 	}
-	if c := checkFor(checks, "config", DoctorWarn); c == nil || !strings.Contains(c.Detail, "m3x23: host_merge would stop its peer sync once it coordinates") {
-		t.Errorf("other Mac's host_merge error: %+v", checks)
+	if c := checkFor(checks, "config", DoctorWarn); c == nil || !strings.Contains(c.Detail, "m3x23's peer sync would stop over host_merge once it coordinates") {
+		t.Errorf("other Mac's host_merge verdict: %+v", checks)
 	}
 
+	// An older peer dot: told to upgrade, and this Mac's own verdict still
+	// fails the coordinator.
 	local, peer = doctorFacts()
 	peer.CoordConfig = nil
-	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "config", DoctorWarn); c == nil || c.Fix != "upgrade dot on m3x23 to compare them" {
-		t.Errorf("older peer dot: %+v", c)
+	local.CoordConfig.HostMergeError = `host_merge: "~/.claude.json" must be a path relative to $HOME, like .claude.json`
+	checks = evaluatePeerSides(local, peer, "m5x26", "m3x23")
+	if c := checkFor(checks, "config", DoctorWarn); c == nil || c.Fix != "upgrade dot on m3x23 to compare them" {
+		t.Errorf("older peer dot: %+v", checks)
+	}
+	if c := checkFor(checks, "config", DoctorFail); c == nil || !strings.Contains(c.Detail, "must be a path relative to $HOME") {
+		t.Errorf("this Mac's verdict dropped with an older peer: %+v", checks)
 	}
 }
 
-// localCoordConfig checks host_merge as the coordinator's run would: the
-// config, then each listed file here (#203).
-func TestLocalCoordConfigChecksHostMerge(t *testing.T) {
-	home := t.TempDir()
-	cfg := &Config{Home: home, LocalPaths: &LocalPaths{StoreDir: t.TempDir()}, HostMerge: map[string][]string{"../x.json": {"a"}}}
+// localCoordConfig reports its config's own error and each host_merge
+// file's state here (#203).
+func TestLocalCoordConfigReportsHostMergeFiles(t *testing.T) {
+	cfg, localHome, _ := claudeJSONFixture(t, `{"mcpServers":{}}`, `{"mcpServers":{}}`)
+	cfg.HostMerge = map[string][]string{"../x.json": {"a"}}
 	if c := localCoordConfig(cfg); !strings.Contains(c.HostMergeError, "relative to $HOME") {
 		t.Fatalf("invalid config: %+v", c)
 	}
-	cfg.HostMerge = map[string][]string{".claude.json": {"projects"}}
-	if err := os.WriteFile(filepath.Join(home, "real.json"), []byte("{}"), 0o644); err != nil {
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	path := filepath.Join(localHome, ".claude.json")
+	if err := os.Rename(path, path+".real"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(home, "real.json"), filepath.Join(home, ".claude.json")); err != nil {
+	if err := os.Symlink(path+".real", path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.LocalPaths.StoreDir), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(cfg.LocalPaths.StoreDir, "home-paths.txt"), []byte(".claude.json\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if c := localCoordConfig(cfg); !strings.Contains(c.HostMergeError, "not a regular file here") {
+	if c := localCoordConfig(cfg); c.HostMergeError != "" || len(c.HostMergeFiles) != 1 || c.HostMergeFiles[0] != (HostMergeFile{Rel: ".claude.json", State: "symlink"}) {
 		t.Fatalf("symlinked copy: %+v", c)
+	}
+}
+
+// The doctor's verdict for the other Mac (hostMergeRefused, from the
+// states of both copies) matches what planHostMerges, the sync's own
+// check, decides for every pair of copy states (#203).
+func TestHostMergeVerdictMatchesTheSync(t *testing.T) {
+	states := []string{"absent", "ok", "notjson", "symlink", "nonregular"}
+	place := func(t *testing.T, home, state string) {
+		t.Helper()
+		path := filepath.Join(home, ".claude.json")
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal(err)
+		}
+		switch state {
+		case "ok":
+			writePeerHomeFile(t, home, ".claude.json", `{"mcpServers":{"a":{}}}`, peerHomeFixedTime)
+		case "notjson":
+			writePeerHomeFile(t, home, ".claude.json", "null", peerHomeFixedTime)
+		case "symlink":
+			writePeerHomeFile(t, home, "real.json", `{"mcpServers":{}}`, peerHomeFixedTime)
+			if err := os.Symlink(filepath.Join(home, "real.json"), path); err != nil {
+				t.Fatal(err)
+			}
+		case "nonregular":
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, coord := range states {
+		for _, other := range states {
+			t.Run(coord+"/"+other, func(t *testing.T) {
+				cfg, localHome, peerHome := claudeJSONFixture(t, `{"mcpServers":{}}`, `{"mcpServers":{}}`)
+				cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+				place(t, localHome, coord)
+				place(t, peerHome, other)
+				refused := false
+				merges, err := planHostMerges(context.Background(), peerScheduleRunner(false), cfg)
+				if err != nil {
+					t.Fatalf("planHostMerges: %v", err)
+				}
+				if hostMergeRefusal(merges, "") != nil {
+					refused = true
+				}
+				if got := hostFileState(filepath.Join(localHome, ".claude.json")); got != coord {
+					t.Fatalf("local state = %s, want %s", got, coord)
+				}
+				if got := hostFileState(filepath.Join(peerHome, ".claude.json")); got != other {
+					t.Fatalf("peer state = %s, want %s", got, other)
+				}
+				if doctor := hostMergeRefused(coord, other, "here", cfg.Target.Host); (doctor != "") != refused {
+					t.Fatalf("doctor %q, sync refused %v", doctor, refused)
+				}
+			})
+		}
+	}
+}
+
+// hostMergeVerdicts asks planHostMerges itself for this Mac, reading the
+// other Mac's copy: a symlink there stops this coordinator's sync (#203).
+func TestHostMergeVerdictsReadTheOtherMacsCopy(t *testing.T) {
+	cfg, _, peerHome := claudeJSONFixture(t, `{"mcpServers":{"a":{}}}`, `{"mcpServers":{"b":{}}}`)
+	cfg.HostMerge = map[string][]string{".claude.json": {"mcpServers"}}
+	path := filepath.Join(peerHome, ".claude.json")
+	if err := os.Rename(path, path+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(path+".real", path); err != nil {
+		t.Fatal(err)
+	}
+	local, peer := &PeerSideFacts{CoordConfig: localCoordConfig(cfg)}, &PeerSideFacts{}
+	hostMergeVerdicts(context.Background(), peerScheduleRunner(false), cfg, local, peer, "here", cfg.Target.Host)
+	if !strings.Contains(local.CoordConfig.HostMergeError, "a symlink on "+cfg.Target.Host) {
+		t.Fatalf("verdict = %q, want the sync's refusal of the other Mac's symlink", local.CoordConfig.HostMergeError)
 	}
 }
