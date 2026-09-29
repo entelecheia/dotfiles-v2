@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -480,7 +481,9 @@ func (r *gitStateRun) worktreesOnBranch(ctx context.Context, abs, ref string) []
 }
 
 // worktreeAdmins maps each linked worktree's path to its admin dir
-// (<common-dir>/worktrees/<id>), whose gitdir file names <path>/.git.
+// (<common-dir>/worktrees/<id>), whose gitdir file names <path>/.git,
+// relative to the admin dir for a worktree added with --relative-paths
+// (the porcelain lists that one resolved).
 func (r *gitStateRun) worktreeAdmins(ctx context.Context, abs string) map[string]string {
 	admins := map[string]string{}
 	common, err := r.read(ctx, abs, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -489,15 +492,26 @@ func (r *gitStateRun) worktreeAdmins(ctx context.Context, abs string) map[string
 	}
 	dirs, _ := filepath.Glob(filepath.Join(common, "worktrees", "*"))
 	for _, dir := range dirs {
-		if b, err := os.ReadFile(filepath.Join(dir, "gitdir")); err == nil {
-			admins[strings.TrimSuffix(strings.TrimSpace(string(b)), "/.git")] = dir
+		b, err := os.ReadFile(filepath.Join(dir, "gitdir"))
+		if err != nil {
+			continue
 		}
+		path := strings.TrimSuffix(strings.TrimSpace(string(b)), "/.git")
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(dir, path)
+			if real, err := filepath.EvalSymlinks(path); err == nil {
+				path = real
+			}
+		}
+		admins[path] = dir
 	}
 	return admins
 }
 
 // busyOn says whether the worktree with admin dir admin is rebasing or
-// bisecting ref, read the way git does before it lets a branch move.
+// bisecting ref, read the way git branch -f does before it moves one: the
+// branch a rebase started from, one a rebase --update-refs will move, or the
+// one a bisect started from.
 func busyOn(admin, ref string) string {
 	if admin == "" {
 		return ""
@@ -507,7 +521,8 @@ func busyOn(admin, ref string) string {
 		return strings.TrimSpace(string(b))
 	}
 	switch {
-	case read("rebase-merge/head-name") == ref, read("rebase-apply/head-name") == ref:
+	case read("rebase-merge/head-name") == ref, read("rebase-apply/head-name") == ref,
+		slices.Contains(strings.Split(read("rebase-merge/update-refs"), "\n"), ref):
 		return "rebased"
 	case read("BISECT_START") == strings.TrimPrefix(ref, "refs/heads/"):
 		return "bisected"

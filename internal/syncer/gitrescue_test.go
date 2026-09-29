@@ -940,8 +940,36 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 	// counts it, though the porcelain lists that worktree as detached
 	// (#211). Ending it leaves the branch checked out there, so the step
 	// also switches the worktree.
-	for _, op := range []string{"rebased", "bisected"} {
-		t.Run("default branch being "+op+" in a linked worktree", func(t *testing.T) {
+	stopRebase := func(t *testing.T, wt string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", wt, "rebase", "--exec", "false"}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=dot-test", "GIT_AUTHOR_EMAIL=dot-test@example.invalid",
+			"GIT_COMMITTER_NAME=dot-test", "GIT_COMMITTER_EMAIL=dot-test@example.invalid")
+		out, _ := cmd.CombinedOutput()
+		if _, err := os.Stat(gitStateRun_(t, wt, "rev-parse", "--path-format=absolute", "--git-path", "rebase-merge")); err != nil {
+			t.Fatalf("the rebase did not stop in a rebase:\n%s", out)
+		}
+	}
+	for _, tc := range []struct {
+		name, op string
+		add      []string // worktree add flags
+		start    func(t *testing.T, wt string)
+		end      []string
+	}{
+		{"rebase", "rebased", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "--root") }, []string{"rebase", "--abort"}},
+		{"rebase (--relative-paths)", "rebased", []string{"--relative-paths", "main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "--root") }, []string{"rebase", "--abort"}},
+		// Another branch rebased with --update-refs over main's commit.
+		{"rebase --update-refs", "rebased", []string{"-b", "topic", "main"}, func(t *testing.T, wt string) {
+			gitStateRun_(t, wt, "commit", "-q", "--allow-empty", "-m", "t1")
+			stopRebase(t, wt, "--update-refs", "--root")
+		}, []string{"rebase", "--abort"}},
+		{"bisect", "bisected", []string{"main"}, func(t *testing.T, wt string) {
+			gitStateRun_(t, wt, "bisect", "start")
+			gitStateRun_(t, wt, "checkout", "-q", "--detach")
+		}, []string{"bisect", "reset"}},
+	} {
+		t.Run("default branch held by a "+tc.name+" in a linked worktree", func(t *testing.T) {
 			f := newRescueFixture(t)
 			gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
 			gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
@@ -952,28 +980,14 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 				t.Fatal(err)
 			}
 			wt := filepath.Join(tmp, "wt-main")
-			gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
+			gitStateRun_(t, f.ws, append([]string{"worktree", "add", "-q", wt}, tc.add...)...)
 			before := gitStateRun_(t, f.ws, "rev-parse", "main")
-			if op == "rebased" {
-				// A rebase that stops after its first pick.
-				cmd := exec.Command("git", "-C", wt, "rebase", "--exec", "false", "--root")
-				cmd.Env = append(os.Environ(), "GIT_COMMITTER_NAME=dot-test", "GIT_COMMITTER_EMAIL=dot-test@example.invalid")
-				if out, err := cmd.CombinedOutput(); err == nil {
-					t.Fatalf("the rebase did not stop:\n%s", out)
-				}
-			} else {
-				gitStateRun_(t, wt, "bisect", "start")
-				gitStateRun_(t, wt, "checkout", "-q", "--detach")
-			}
-			refused(t, f.ws, "main is being "+op+" in the linked worktree "+wt+"; finish or abort that there, then switch that worktree to another branch")
+			tc.start(t, wt)
+			refused(t, f.ws, "main is being "+tc.op+" in the linked worktree "+wt+"; finish or abort that there, then switch that worktree to another branch")
 			if got := gitStateRun_(t, f.ws, "rev-parse", "main"); got != before {
-				t.Fatalf("main moved to %s under the %s worktree", got, op)
+				t.Fatalf("main moved to %s under the %s", got, tc.name)
 			}
-			if op == "rebased" {
-				gitStateRun_(t, wt, "rebase", "--abort")
-			} else {
-				gitStateRun_(t, wt, "bisect", "reset")
-			}
+			gitStateRun_(t, wt, tc.end...)
 			gitStateRun_(t, wt, "checkout", "-q", "--detach")
 			if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
 				t.Fatalf("after the step: %+v, want realigned to %s", rep, tip)
