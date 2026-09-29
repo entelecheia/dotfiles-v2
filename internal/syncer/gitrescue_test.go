@@ -696,3 +696,27 @@ func TestPeerGitRescue_RescueAfterAHeadTieShowsItsOwnTieLine(t *testing.T) {
 		t.Fatalf("rescue = %+v, want a branch-mismatch move whose tie line names sub", rep)
 	}
 }
+
+// The rescue push is a backup ref, not a publish: a pre-push hook (a lint,
+// a test run, one that writes files) neither runs nor blocks it (#189
+// round 22).
+func TestPeerGitRescue_PushRunsNoHook(t *testing.T) {
+	f, local, tip := divergedFixture(t)
+	hook := filepath.Join(gitStateRun_(t, f.ws, "rev-parse", "--absolute-git-dir"), "hooks", "pre-push")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch \"$(git rev-parse --show-toplevel)/hook-ran\"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+	if rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("rescue = %+v, want pushed and realigned", rep)
+	}
+	if got := gitStateRun_(t, f.origin, "rev-parse", "refs/heads/rescue/260928-main"); got != local {
+		t.Fatalf("pushed rescue branch = %s, want %s", got, local)
+	}
+	if _, err := os.Stat(filepath.Join(f.ws, "hook-ran")); err == nil {
+		t.Fatal("the pre-push hook ran")
+	}
+}

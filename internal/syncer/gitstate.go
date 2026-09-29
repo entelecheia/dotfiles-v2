@@ -547,7 +547,7 @@ func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, i
 			if rule != "" {
 				rule += "; "
 			}
-			rule += shortRev(choice) + " is past what " + past + " holds, so a commit -a before they catch up records a rewind"
+			rule += shortRev(choice) + " is past what " + past + " holds, so a commit -a before they catch up records them going back (or, for one never delivered, removed)"
 		}
 	}
 	return choice, rule, stay

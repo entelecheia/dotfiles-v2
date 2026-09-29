@@ -298,7 +298,7 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		// No prompt can be answered here (a hook, a scheduled shell): fail
 		// instead of waiting on credentials, and bound a hung remote.
 		pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		_, err := r.runOutput(pctx, abs, []string{"GIT_TERMINAL_PROMPT=0"}, false, "push", "-q", "--recurse-submodules=no", rep.RescueRemote, ref+":"+ref)
+		_, err := r.runOutput(pctx, abs, []string{"GIT_TERMINAL_PROMPT=0"}, false, "push", "-q", "--no-verify", "--recurse-submodules=no", rep.RescueRemote, ref+":"+ref)
 		cancel()
 		if err != nil {
 			rep.Status = GitRepoUnresolvable
