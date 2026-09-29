@@ -37,3 +37,24 @@ func TestPrintPeerGitRepos_StatusShowsANoMatchTie(t *testing.T) {
 		t.Errorf("output:\n%s", out.String())
 	}
 }
+
+// The closing hint repeats --no-push, so following it does not push the
+// rescue the preview showed as staying local (#204).
+func TestRealignNextKeepsNoPush(t *testing.T) {
+	for _, tc := range []struct {
+		realigned, realignable int
+		dryRun, rescue, noPush bool
+		want                   string
+	}{
+		{0, 1, false, true, true, "Run with --rescue --no-push --apply to realign."},
+		{0, 1, false, true, false, "Run with --rescue --apply to realign."},
+		{0, 1, false, false, false, "Run with --apply to realign."},
+		{0, 1, true, true, true, "--dry-run: nothing changed. Re-run without it to apply."},
+		{1, 0, false, true, true, ""},
+		{0, 0, false, true, true, ""},
+	} {
+		if got := realignNext(tc.realigned, tc.realignable, tc.dryRun, tc.rescue, tc.noPush); got != tc.want {
+			t.Errorf("realignNext(%+v) = %q, want %q", tc, got, tc.want)
+		}
+	}
+}

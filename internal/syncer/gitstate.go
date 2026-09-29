@@ -206,6 +206,8 @@ type gitStateRun struct {
 	// rescue score (rescueDiffs, against the HEAD it names).
 	same    map[string]bool
 	rescued map[string]int
+	// noHooks' flags for each repo's configured hooks, by repo.
+	hookNames map[string][]string
 }
 
 // gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
@@ -213,19 +215,19 @@ type gitStateRun struct {
 // every per-repo command at the hook's repository. Like git entering a
 // submodule, it keeps `git -c` settings (GIT_CONFIG_PARAMETERS,
 // GIT_CONFIG_COUNT and its keys): they are the caller's config, not a repo.
+// The pathspec variables go too: they would turn off the pathspec magic
+// the run's commands rely on (":(exclude)", ":(glob)") (#204).
 func gitCleanEnv(ctx context.Context, git string) []string {
-	out, err := exec.CommandContext(ctx, git, "rev-parse", "--local-env-vars").Output()
-	if err != nil {
-		return os.Environ()
-	}
-	local := map[string]bool{}
-	for _, name := range strings.Fields(string(out)) {
-		local[name] = name != "GIT_CONFIG_PARAMETERS" && name != "GIT_CONFIG_COUNT"
+	drop := map[string]bool{"GIT_LITERAL_PATHSPECS": true, "GIT_GLOB_PATHSPECS": true, "GIT_NOGLOB_PATHSPECS": true, "GIT_ICASE_PATHSPECS": true}
+	if out, err := exec.CommandContext(ctx, git, "rev-parse", "--local-env-vars").Output(); err == nil {
+		for _, name := range strings.Fields(string(out)) {
+			drop[name] = name != "GIT_CONFIG_PARAMETERS" && name != "GIT_CONFIG_COUNT"
+		}
 	}
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if !local[name] {
+		if !drop[name] {
 			env = append(env, kv)
 		}
 	}
@@ -1416,9 +1418,9 @@ func (r *gitStateRun) run(ctx context.Context, abs string, env []string, readOnl
 }
 
 func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, readOnly bool, args ...string) (string, error) {
-	full := []string{"-C", abs}
+	full := append(r.noHooks(ctx, abs), "-C", abs)
 	if readOnly {
-		full = []string{"--no-optional-locks", "-C", abs}
+		full = append([]string{"--no-optional-locks"}, full...)
 	}
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.git, full...)
@@ -1430,7 +1432,7 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 	if base == nil {
 		base = os.Environ() // a run built without runGitState
 	}
-	cmd.Env = append(append([]string{}, base...), env...)
+	cmd.Env = append(append(append([]string{}, base...), env...), hookOffEnv+"=false")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1443,6 +1445,49 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 	}
 	return stdout.String(), nil
 }
+
+// noRepoHooks keeps every git command a peer git run starts from running a
+// hook of the repo it works in, a preview included (#204): the hooks
+// directory (core.hooksPath), hooks defined in config (git 2.55+,
+// hook.<event>, for each event these commands fire; noHooks adds each
+// configured hook by name for git 2.54), and the fsmonitor hook.
+var noRepoHooks = []string{
+	"-c", "core.hooksPath=/dev/null",
+	"-c", "core.fsmonitor=false",
+	"-c", "hook.post-checkout.enabled=false",
+	"-c", "hook.post-index-change.enabled=false",
+	"-c", "hook.reference-transaction.enabled=false",
+	"-c", "hook.pre-push.enabled=false",
+	"-c", "hook.pre-auto-gc.enabled=false",
+}
+
+// noHooks is noRepoHooks plus hook.<name>.enabled=false for every hook the
+// repo's config defines: git 2.54 runs config hooks but reads
+// hook.<event>.enabled only as a hook named after the event, so each hook is
+// turned off by its own name. The names are read NUL-separated and passed
+// with --config-env (split at the last "="), so a name may hold spaces or
+// "=". The names are read once per repo.
+func (r *gitStateRun) noHooks(ctx context.Context, abs string) []string {
+	names, ok := r.hookNames[abs]
+	if !ok {
+		cmd := exec.CommandContext(ctx, r.git, "-C", abs, "config", "-z", "--name-only", "--get-regexp", `^hook\..*\.event$`)
+		cmd.Env = r.env        // nil inherits the process environment
+		out, _ := cmd.Output() // exit 1: no hook configured
+		for _, key := range strings.Split(string(out), "\x00") {
+			if key != "" {
+				names = append(names, "--config-env=hook."+strings.TrimSuffix(strings.TrimPrefix(key, "hook."), ".event")+".enabled="+hookOffEnv)
+			}
+		}
+		if r.hookNames == nil {
+			r.hookNames = map[string][]string{}
+		}
+		r.hookNames[abs] = names
+	}
+	return append(slices.Clone(noRepoHooks), names...)
+}
+
+// hookOffEnv holds "false" for noHooks' --config-env flags.
+const hookOffEnv = "DOT_PEER_GIT_HOOK_OFF"
 
 // gitExitError carries git's exit code and stderr without the "exit status N"
 // wrapper text, so skip/unresolvable reasons stay readable.

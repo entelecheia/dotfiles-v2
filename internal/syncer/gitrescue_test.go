@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -726,5 +727,160 @@ func TestPeerGitRescue_PushRunsNoHook(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.ws, "hook-ran")); err == nil {
 		t.Fatal("the pre-push hook ran")
+	}
+}
+
+// No git command a peer git run starts runs a repo hook, in a preview or
+// an apply: post-checkout (the .gitmodules restore), post-index-change
+// (the temp-index refresh), reference-transaction (ref moves) and pre-push
+// (the rescue push) all stay silent (#204).
+func TestPeerGit_RunsNoRepoHooks(t *testing.T) {
+	marks := t.TempDir()
+	install := func(t *testing.T, repo string) {
+		t.Helper()
+		dir := filepath.Join(gitStateRun_(t, repo, "rev-parse", "--absolute-git-dir"), "hooks")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, hook := range []string{"post-checkout", "post-index-change", "reference-transaction", "pre-push"} {
+			script := "#!/bin/sh\ntouch " + shellQuote(filepath.Join(marks, hook)) + "\n"
+			if err := os.WriteFile(filepath.Join(dir, hook), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// The same hook defined in config (git 2.54+), which the hooks
+			// directory setting does not control.
+			gitStateRun_(t, repo, "config", "--add", "hook.mark it=now.event", hook)
+		}
+		gitStateRun_(t, repo, "config", "hook.mark it=now.command", "touch "+shellQuote(filepath.Join(marks, "config-hook")))
+		// And the fsmonitor hook.
+		monitor := filepath.Join(dir, "fsmonitor")
+		if err := os.WriteFile(monitor, []byte("#!/bin/sh\ntouch "+shellQuote(filepath.Join(marks, "fsmonitor"))+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitStateRun_(t, repo, "config", "core.fsmonitor", monitor)
+	}
+	ran := func(t *testing.T) {
+		t.Helper()
+		if entries, _ := os.ReadDir(marks); len(entries) > 0 {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Fatalf("repo hooks ran: %v", names)
+		}
+	}
+
+	// A stale .gitmodules restored and a realign (URL move fixture).
+	ws, _, _, _, _, _ := urlMoveFixture(t)
+	install(t, ws)
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	ran(t)
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true}); err != nil {
+		t.Fatal(err)
+	}
+	ran(t)
+
+	// A pushed rescue.
+	f, _, tip := divergedFixture(t)
+	install(t, f.ws)
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("rescue = %+v", rep)
+	}
+	ran(t)
+}
+
+// git 2.54 reads hook.<event>.enabled only as a hook named after the
+// event, so each configured hook is also turned off by its own name, a name
+// with dots, spaces or "=" included (#204). Checked on the flags: git 2.55
+// stops the hook by event either way.
+func TestNoHooksNamesEachConfigHook(t *testing.T) {
+	repo := t.TempDir()
+	gitStateInitRepo(t, repo)
+	for _, name := range []string{"mark", "team.Guard", "lint staged", "a=b"} {
+		gitStateRun_(t, repo, "config", "hook."+name+".event", "post-checkout")
+	}
+	gitStateRun_(t, repo, "config", "hook.idle.command", "true") // no event: never runs
+	r := &gitStateRun{git: "git"}
+	flags := r.noHooks(context.Background(), repo)
+	for _, name := range []string{"mark", "team.Guard", "lint staged", "a=b"} {
+		if want := "--config-env=hook." + name + ".enabled=" + hookOffEnv; !slices.Contains(flags, want) {
+			t.Errorf("noHooks = %q, missing %q", flags, want)
+		}
+	}
+	if !slices.Contains(flags, "core.hooksPath=/dev/null") {
+		t.Errorf("noHooks = %q, missing the hooks directory setting", flags)
+	}
+	if strings.Contains(strings.Join(flags, " "), "hook.idle.") {
+		t.Errorf("noHooks = %q, names a hook with no event", flags)
+	}
+}
+
+// A pushed rescue branch in a Git LFS repo would point at objects the
+// remote lacks, so the rescue is refused unless it stays local (#204).
+func TestPeerGitRescue_LFSRepoRescuesOnlyLocally(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateCommitFile(t, f.writer, ".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n", "lfs")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	local := gitStateCommitFile(t, f.ws, "docs.md", "unpushed docs\n", "local docs")
+	f.publish(t, "b.txt", "b1\n")
+	tip := f.publish(t, "b.txt", "b2\n")
+	f.deliver(t, tip)
+
+	rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+	if rep.Status != GitRepoNoMatch || !strings.Contains(rep.Suggestion, "Git LFS") || gitStateHead(t, f.ws) != local {
+		t.Fatalf("pushed rescue in an LFS repo = %+v, want refused with HEAD kept", rep)
+	}
+	if out := gitStateRun_(t, f.ws, "branch", "--list", "rescue/*"); out != "" {
+		t.Fatalf("a rescue branch was created: %s", out)
+	}
+	// The check keeps its glob pathspec whatever the caller's environment
+	// says, and a check that fails refuses too.
+	t.Setenv("GIT_LITERAL_PATHSPECS", "1")
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); !strings.Contains(rep.Suggestion, "Git LFS") {
+		t.Fatalf("with literal pathspecs = %+v, want refused", rep)
+	}
+	gitStateRun_(t, f.ws, "config", "grep.threads", "not-a-number")
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); !strings.Contains(rep.Suggestion, "cannot tell whether the repo uses Git LFS") {
+		t.Fatalf("with a failing check = %+v, want refused", rep)
+	}
+	gitStateRun_(t, f.ws, "config", "--unset", "grep.threads")
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("local rescue in an LFS repo = %+v, want realigned", rep)
+	}
+}
+
+// "#" starts a comment only as a line's first non-blank character, so a
+// pattern holding "#" still sets the attribute (#204).
+func TestLFSRefusalReadsCommentsAsGitDoes(t *testing.T) {
+	for attrs, lfs := range map[string]bool{
+		"assets/#raw/*.psd filter=lfs\n": true,
+		"  # *.bin filter=lfs\n":         false,
+	} {
+		repo := t.TempDir()
+		gitStateInitRepo(t, repo)
+		gitStateCommitFile(t, repo, ".gitattributes", attrs, "attributes")
+		r := &gitStateRun{git: "git"}
+		if got := r.lfsRefusal(context.Background(), repo) != ""; got != lfs {
+			t.Errorf("%q: refused = %v, want %v", attrs, got, lfs)
+		}
+	}
+}
+
+// A .gitattributes that only mentions filter=lfs in a comment, or sets
+// another filter, is not an LFS repo: its rescue pushes (#204).
+func TestPeerGitRescue_LFSCheckReadsAttributeLines(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateCommitFile(t, f.writer, ".gitattributes", "# was: *.bin filter=lfs\n*.dat filter=lfs2\n", "attributes")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	gitStateCommitFile(t, f.ws, "docs.md", "unpushed docs\n", "local docs")
+	f.publish(t, "b.txt", "b1\n")
+	tip := f.publish(t, "b.txt", "b2\n")
+	f.deliver(t, tip)
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("rescue = %+v, want pushed and realigned", rep)
 	}
 }

@@ -266,12 +266,13 @@ tool):
   strict descendant, the old value recorded in the reflog for undo).
   Only `--rescue` moves a branch sideways: HEAD's commits are first kept
   on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed where
-  git pushes the branch (pushRemote, pushDefault, then its remote, with
-  `--no-verify` so no pre-push hook runs) unless `--no-push`; then the branch, or for a branch mismatch the default
-  branch (created with `branch.<name>.remote` and `.merge` pointing at
-  origin's, or fast-forwarded; never while a linked worktree has it checked
-  out; HEAD re-pointed after re-checking it under the index lock), moves
-  under the same protocol.
+  git pushes the branch (pushRemote, pushDefault, then its remote)
+  unless `--no-push` (a Git LFS repo, or one the check cannot read, is
+  rescued only with `--no-push`); then the branch, or for a branch
+  mismatch the default branch (created with `branch.<name>.remote` and
+  `.merge` pointing at origin's, or fast-forwarded; never while a linked
+  worktree has it checked out; HEAD re-pointed after re-checking it under
+  the index lock), moves under the same protocol.
 - `<workspace repo>/.gitmodules`: restored from the index by
   `realign --apply` only when it equals an older committed version or is
   missing (peer sync never carries it), then `git submodule sync` for the
@@ -288,10 +289,15 @@ tool):
   one of its parent's tied candidates records (and that the run does not
   leave alone) gets the same fetch from its current origin, once per run,
   before those candidates are compared.
-  Otherwise the worktree is never written by git; preview (`dot peer git
-  status`, default `realign`, `--dry-run`) writes nothing; linked
-  worktrees and locked, staged, conflicting or in-progress repositories
-  are never touched.
+  Every git command these runs start runs no hook of the repo it works
+  in: `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
+  `hook.<event>.enabled=false` for the events they fire (git 2.55), and
+  `hook.<name>.enabled=false` for each hook the repo's config defines
+  (git 2.54) (a push to a local-path remote still runs that remote's
+  receive hooks). Otherwise the worktree is never written by git; preview
+  (`dot peer git status`, default `realign`, `--dry-run`) writes nothing;
+  linked worktrees and locked, staged, conflicting or in-progress
+  repositories are never touched.
 - host files the operator lists under `host_merge` in the peer config (for
   example `~/.claude.json`), on both machines: before the additive
   host-path pass of a two-way `dot peer sync`, the entries of the listed
