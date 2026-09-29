@@ -206,6 +206,9 @@ type fenceSide struct {
 	Aliases []string
 	Epoch   int
 	CanPush bool
+	// Legacy is a peer whose dot predates epochs (no dot version in its
+	// status): it has no `dot peer adopt`.
+	Legacy bool
 }
 
 func localFenceSide(cfg *Config) fenceSide {
@@ -213,7 +216,32 @@ func localFenceSide(cfg *Config) fenceSide {
 }
 
 func remoteFenceSide(r *remotePeerStatus) fenceSide {
-	return fenceSide{Owner: r.Profile.Owner, Aliases: r.Profile.OwnerAliases, Epoch: r.OwnerEpoch, CanPush: r.Profile.CanPush}
+	return fenceSide{Owner: r.Profile.Owner, Aliases: r.Profile.OwnerAliases, Epoch: r.OwnerEpoch, CanPush: r.Profile.CanPush, Legacy: r.DotVersion == ""}
+}
+
+// noPeerOwnerFix is what restores a pair whose other Mac records no owner:
+// it records this Mac's owner at this Mac's epoch (adopt writes the epoch
+// as given), and the next fence proceeds (#202). A peer whose dot predates
+// epochs has no adopt; `--set` there records the owner with no epoch.
+func noPeerOwnerFix(local, remote fenceSide) string {
+	if remote.Legacy {
+		return fmt.Sprintf("on the other Mac, whose dot predates `dot peer adopt`: dot sync owner --profile=peer --set %s", shellQuote(local.Owner))
+	}
+	return fmt.Sprintf("on the other Mac: dot peer adopt --owner %s --epoch %d", shellQuote(local.Owner), local.Epoch)
+}
+
+// noLocalOwnerFix is what a Mac that records no owner (a --clear here) is
+// told: record the peer's owner at the peer's epoch, so the peer keeps
+// coordinating. `--set <coordinator>` would bump this Mac past the peer and
+// demote it with its hooks (#202).
+func noLocalOwnerFix(remote fenceSide) string {
+	switch {
+	case strings.TrimSpace(remote.Owner) == "":
+		return "set one with `dot sync owner --profile=peer --set <coordinator>`"
+	case remote.Legacy:
+		return fmt.Sprintf("to keep %s coordinating, record it here: dot sync owner --profile=peer --set %s", shellQuote(remote.Owner), shellQuote(remote.Owner))
+	}
+	return fmt.Sprintf("to keep %s coordinating, record it here: dot peer adopt --owner %s --epoch %d", shellQuote(remote.Owner), shellQuote(remote.Owner), remote.Epoch)
 }
 
 // fenceDecision is peerFence's verdict from the two owner records once the
@@ -221,12 +249,20 @@ func remoteFenceSide(r *remotePeerStatus) fenceSide {
 // so the doctor cannot drift from the fence (#182).
 func fenceDecision(local, remote fenceSide) (demote bool, err error) {
 	if strings.TrimSpace(local.Owner) == "" {
-		return false, fmt.Errorf("peer coordinator check: local peer owner is empty; set one with `dot sync owner --profile=peer --set <coordinator>`")
+		return false, fmt.Errorf("peer coordinator check: local peer owner is empty; %s", noLocalOwnerFix(remote))
 	}
 	if remote.Epoch == 0 {
 		// A remote without epoch support refuses (or proceeds) through the
 		// existing owner-mismatch check, exactly as before epochs existed.
 		return false, ownerMatchError(local, remote)
+	}
+	if strings.TrimSpace(remote.Owner) == "" && remote.Epoch >= local.Epoch {
+		// A demotion would run this Mac's on_deactivate hooks and then fail
+		// to adopt no owner, on every run, and at an equal epoch the peer
+		// passes its own guard (#202): stop before either.
+		return false, fmt.Errorf(
+			"peer fence: the peer records epoch %d with no owner (a `dot sync owner --clear` there?); this run stops without demoting this Mac, since a demotion to no owner would stop its jobs and then fail — %s",
+			remote.Epoch, noPeerOwnerFix(local, remote))
 	}
 	switch {
 	case remote.Epoch > local.Epoch:
