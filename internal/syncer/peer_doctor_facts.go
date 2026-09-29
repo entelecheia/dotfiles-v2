@@ -54,6 +54,131 @@ type PeerSideFacts struct {
 	TargetHost    string `json:"targetHost,omitempty"`
 	// Filters maps each peer filter file to its sha256, or "absent".
 	Filters map[string]string `json:"filters"`
+	// CoordConfig is the rest of the peer config only the coordinator's
+	// copy applies (#203); nil from a peer whose dot predates it.
+	CoordConfig *CoordinatorConfig `json:"coordConfig,omitempty"`
+}
+
+// CoordinatorConfig is peer config that only the coordinator's copy
+// applies, beyond max_delete, propagation and the filter files.
+// shared_excludes is not here: a peer profile has no mirror path, so it
+// has no effect on either Mac.
+type CoordinatorConfig struct {
+	HostMerge         map[string][]string `json:"hostMerge,omitempty"`
+	IncludeSubmodules bool                `json:"includeSubmodules"`
+	FilterMode        string              `json:"filterMode"`
+	// HostMergeFiles is each file this Mac's host_merge applies to, with
+	// its copy here, for the other Mac to judge both copies as this Mac's
+	// sync would.
+	HostMergeFiles []HostMergeFile `json:"hostMergeFiles,omitempty"`
+	// HostMergeError is why this Mac's peer sync would stop over
+	// host_merge once it coordinates. A --self report carries only its
+	// config's own error; the doctor fills in the rest (hostMergeVerdicts).
+	HostMergeError string `json:"hostMergeError,omitempty"`
+}
+
+// HostMergeFile is one host_merge file and the state of its copy on the
+// Mac that reports it: absent, symlink, nonregular, notjson or ok.
+type HostMergeFile struct {
+	Rel   string `json:"rel"`
+	State string `json:"state"`
+}
+
+// localCoordConfig reads this Mac's coordinator-only config and the state
+// of each host_merge file here. It only reads.
+func localCoordConfig(cfg *Config) *CoordinatorConfig {
+	c := &CoordinatorConfig{
+		HostMerge:         cfg.HostMerge,
+		IncludeSubmodules: cfg.IncludeSubmodules,
+		FilterMode:        string(normalizeFilterMode(cfg.FilterMode)),
+	}
+	if len(cfg.HostMerge) == 0 {
+		return c
+	}
+	if err := validateHostMerge(cfg.HostMerge); err != nil {
+		c.HostMergeError = err.Error()
+		return c
+	}
+	files, err := hostMergeFiles(cfg)
+	if err != nil {
+		c.HostMergeError = err.Error()
+		return c
+	}
+	for _, rel := range files {
+		c.HostMergeFiles = append(c.HostMergeFiles, HostMergeFile{Rel: rel, State: hostFileState(filepath.Join(cfg.HomeDir(), filepath.FromSlash(rel)))})
+	}
+	return c
+}
+
+// hostFileState is a host_merge copy's state, in the terms planHostMerges
+// decides by.
+// ponytail: an Lstat error other than not-exist (EACCES, a parent that is a
+// file) reads as nonregular, where the sync errors on the coordinator and
+// its ssh probe reads absent; split the state if that ever shows up.
+func hostFileState(path string) string {
+	info, err := os.Lstat(path)
+	switch {
+	case os.IsNotExist(err):
+		return "absent"
+	case err != nil:
+		return "nonregular"
+	case info.Mode()&os.ModeSymlink != 0:
+		return "symlink"
+	case !info.Mode().IsRegular():
+		return "nonregular"
+	}
+	data, err := os.ReadFile(path)
+	if err == nil {
+		_, err = decodeJSONObject(data)
+	}
+	if err != nil {
+		return "notjson"
+	}
+	return "ok"
+}
+
+// hostMergeRefused is planHostMerges' refusal for one file from the
+// coordinator's copy state and the other Mac's (#203), with its wording:
+// a file on one Mac only is not refused.
+func hostMergeRefused(coord, other, coordHost, otherHost string) string {
+	switch {
+	case coord == "absent":
+		return ""
+	case other == "symlink":
+		return "a symlink on " + otherHost
+	case other == "nonregular":
+		return "not a regular file on " + otherHost + " (a directory?)"
+	case other == "absent":
+		return ""
+	case coord == "symlink" || coord == "nonregular":
+		return "not a regular file on " + coordHost + " (a symlink?)"
+	case coord == "notjson" || other == "notjson":
+		return "both copies must be JSON objects"
+	}
+	return ""
+}
+
+// hostMergeVerdicts sets each side's HostMergeError to what its peer sync
+// would say over host_merge, both copies of each file judged: this Mac's
+// by planHostMerges itself (reading the other Mac's copies over ssh), the
+// other Mac's from the states it reported and this Mac's copies (#203).
+func hostMergeVerdicts(ctx context.Context, probe *exec.Runner, cfg *Config, local, peer *PeerSideFacts, here, there string) {
+	if lc := local.CoordConfig; lc != nil && lc.HostMergeError == "" {
+		if merges, err := planHostMerges(ctx, probe, cfg); err != nil {
+			lc.HostMergeError = err.Error()
+		} else if err := hostMergeRefusal(merges, "its peer sync stops on it before anything moves"); err != nil {
+			lc.HostMergeError = err.Error()
+		}
+	}
+	if pc := peer.CoordConfig; pc != nil && pc.HostMergeError == "" {
+		for _, f := range pc.HostMergeFiles {
+			mine := hostFileState(filepath.Join(cfg.HomeDir(), filepath.FromSlash(f.Rel)))
+			if why := hostMergeRefused(f.State, mine, there, here); why != "" {
+				pc.HostMergeError = fmt.Sprintf("host_merge %s: %s; fix it or drop it from host_merge (its peer sync stops on it before anything moves)", f.Rel, why)
+				break
+			}
+		}
+	}
 }
 
 // NFDCount is one walk's count of names not in NFD.
@@ -87,6 +212,7 @@ func LocalPeerSideFacts(ctx context.Context, probe *exec.Runner, cfg *Config, do
 		MaxDelete:     cfg.MaxDelete,
 		Propagation:   cfg.Propagation,
 		Filters:       map[string]string{},
+		CoordConfig:   localCoordConfig(cfg),
 
 		WorkspacePath: strings.TrimRight(cfg.LocalPath, "/"),
 		TargetPath:    cfg.Target.Path,
@@ -400,8 +526,6 @@ func rolesVerdict(local, peer *PeerSideFacts, here, there string) (checks []Doct
 	switch {
 	case err != nil:
 		add(DoctorFail, fmt.Sprintf("%s's next sync is refused: %v", coord, err), align)
-	case demote && NormalizeHostname(n.Owner) == "":
-		add(DoctorFail, fmt.Sprintf("%s records no owner at epoch %d over %s's %d: every sync of %s runs its on_deactivate hooks to demote it, then fails to adopt an empty owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
 	case demote && passesAfterAdopting(c, n.Owner):
 		add(DoctorWarn, fmt.Sprintf("%s records epoch %d over %s's %d: %s's next sync demotes it, removing its scheduler and running its on_deactivate hooks, though it stays the owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
 	case demote:
@@ -506,7 +630,7 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 	}
 	if !decided {
 		add("scheduler", DoctorWarn, "the roles fix chooses the coordinator; only it keeps a peer scheduler", after+"dot peer setup on the Mac you choose, dot peer setup --off on the other")
-		return appendConfigChecks(checks, local, peer, there)
+		return appendConfigChecks(checks, &el, &ep, here, there)
 	}
 	for _, s := range sides {
 		switch {
@@ -545,11 +669,12 @@ func evaluatePeerSides(local, peer *PeerSideFacts, here, there string) []DoctorC
 		age := time.Since(s.f.Replica.WrittenAt).Round(time.Minute)
 		add("replica", DoctorPass, fmt.Sprintf("%s: replica generation %d from %s, written %s ago", s.host, s.f.Replica.Generation, s.f.Replica.Coordinator, age), "")
 	}
-	return appendConfigChecks(checks, local, peer, there)
+	return appendConfigChecks(checks, &el, &ep, here, there)
 }
 
-// appendConfigChecks compares the two peer configs.
-func appendConfigChecks(checks []DoctorCheck, local, peer *PeerSideFacts, there string) []DoctorCheck {
+// appendConfigChecks compares the config only the coordinator's copy
+// applies, judging each side as the roles fix leaves it (#203).
+func appendConfigChecks(checks []DoctorCheck, local, peer *PeerSideFacts, here, there string) []DoctorCheck {
 	add := func(name, level, detail, fix string) {
 		checks = append(checks, DoctorCheck{Name: name, Level: level, Detail: detail, Fix: fix})
 	}
@@ -574,8 +699,63 @@ func appendConfigChecks(checks []DoctorCheck, local, peer *PeerSideFacts, there 
 	if len(drift) > 0 {
 		add("config", DoctorWarn, "filter files differ: "+strings.Join(drift, ", "), "copy the coordinator's .dotfiles/peer filter files to the other Mac")
 	}
+	lc, pc := local.CoordConfig, peer.CoordConfig
+	switch {
+	case pc == nil:
+		add("config", DoctorWarn, there+"'s dot does not report host_merge, include_submodules or filter_mode", "upgrade dot on "+there+" to compare them")
+	case lc != nil:
+		var differ []string
+		if !sameHostMerge(lc.HostMerge, pc.HostMerge) {
+			differ = append(differ, "host_merge")
+		}
+		if lc.IncludeSubmodules != pc.IncludeSubmodules {
+			differ = append(differ, "include_submodules")
+		}
+		if lc.FilterMode != pc.FilterMode {
+			differ = append(differ, "filter_mode")
+		}
+		if len(differ) > 0 {
+			add("config", DoctorWarn, strings.Join(differ, ", ")+" differ between the Macs; the coordinator's copy decides its peer sync", "align .dotfiles/peer/config.yaml on both")
+		}
+	}
+	// Each side's own verdict, this Mac's even when the other Mac's dot is
+	// too old to report its own.
+	for _, s := range []struct {
+		host string
+		f    *PeerSideFacts
+	}{{here, local}, {there, peer}} {
+		if s.f.CoordConfig == nil || s.f.CoordConfig.HostMergeError == "" {
+			continue
+		}
+		msg := s.f.CoordConfig.HostMergeError
+		if s.f.Coordinator {
+			add("config", DoctorFail, s.host+"'s peer sync stops over host_merge: "+msg, "fix host_merge in .dotfiles/peer/config.yaml on "+s.host+", or the file the detail names")
+		} else {
+			add("config", DoctorWarn, s.host+"'s peer sync would stop over host_merge once it coordinates: "+msg, "fix host_merge in .dotfiles/peer/config.yaml on "+s.host+", or the file the detail names")
+		}
+	}
 	if checks[len(checks)-1].Name != "config" {
-		add("config", DoctorPass, "max_delete, propagation and filter files match", "")
+		add("config", DoctorPass, "the coordinator-only config matches (max_delete, propagation, filter files, host_merge, include_submodules, filter_mode)", "")
 	}
 	return checks
+}
+
+// sameHostMerge compares two host_merge maps, each file's keys as a set.
+func sameHostMerge(a, b map[string][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for rel, keys := range a {
+		other, ok := b[rel]
+		if !ok || !slices.Equal(sortedCopy(keys), sortedCopy(other)) {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedCopy(s []string) []string {
+	c := slices.Clone(s)
+	slices.Sort(c)
+	return c
 }
