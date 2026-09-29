@@ -164,15 +164,23 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 		// HEAD and index, one on an unmounted drive included.
 		for _, wt := range r.worktreesOnBranch(ctx, abs, defRef) {
 			step := rep.rescueBranch + " is checked out in the linked worktree " + wt.path
+			if wt.busy != "" {
+				step = rep.rescueBranch + " is held by a " + wt.busy + " in the linked worktree " + wt.path
+			}
 			_, err := os.Stat(wt.path)
-			switch {
-			case wt.busy != "" && (err == nil || !os.IsNotExist(err)):
-				// Finishing or aborting leaves the branch checked out there.
-				step = rep.rescueBranch + " is being " + wt.busy + " in the linked worktree " + wt.path + "; finish or abort that there, then switch that worktree to another branch"
-			case err == nil || !os.IsNotExist(err):
+			switch present := err == nil || !os.IsNotExist(err); {
+			case present && wt.busy != "":
+				// Finishing or aborting can leave the branch checked out there.
+				step += "; finish or abort it there, and if that leaves " + rep.rescueBranch + " checked out, switch that worktree to another branch"
+			case present:
 				step += "; switch that worktree to another branch"
 			default:
 				step += ", which is missing; if it is gone for good, not just unmounted: "
+				if wt.busy != "" && wt.head != "" {
+					// A rebase's commits so far live only on that worktree's
+					// detached HEAD, in the admin dir the remove deletes.
+					step += git + " branch " + shellWord(r.freeBranchName(ctx, abs, rep.rescueBranch+"-wip-kept")) + " " + wt.head + "; "
+				}
 				if wt.locked {
 					step += git + " worktree unlock " + shellWord(wt.path) + "; "
 				}
@@ -436,13 +444,15 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 // git worktree list --porcelain.
 type linkedWorktree struct {
 	path   string
+	head   string // its HEAD commit
 	locked bool   // git worktree lock
-	busy   string // "rebased" or "bisected" when that holds the branch, not a checkout
+	busy   string // "rebase" or "bisect" when one holds the branch
 }
 
 // worktreesOnBranch lists the worktrees other than abs that hold ref: those
-// with it checked out, and, as git counts them, those rebasing or bisecting
-// it, which the porcelain lists as detached (#211).
+// with it checked out, and, as git counts them, those whose rebase or bisect
+// holds it, which the porcelain may list as detached or on another branch
+// (#211).
 func (r *gitStateRun) worktreesOnBranch(ctx context.Context, abs, ref string) []linkedWorktree {
 	out, err := r.read(ctx, abs, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -453,25 +463,24 @@ func (r *gitStateRun) worktreesOnBranch(ctx context.Context, abs, ref string) []
 	var admins map[string]string
 	for _, block := range strings.Split(out, "\n\n") {
 		var wt linkedWorktree
-		onRef, detached := false, false
+		onRef := false
 		for _, line := range strings.Split(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "worktree "):
 				wt.path = strings.TrimPrefix(line, "worktree ")
+			case strings.HasPrefix(line, "HEAD "):
+				wt.head = strings.TrimPrefix(line, "HEAD ")
 			case line == "branch "+ref:
 				onRef = true
-			case line == "detached":
-				detached = true
 			case line == "locked" || strings.HasPrefix(line, "locked "):
 				wt.locked = true
 			}
 		}
-		if detached {
-			if admins == nil {
-				admins = r.worktreeAdmins(ctx, abs)
-			}
-			wt.busy = busyOn(admins[wt.path], ref)
-			onRef = wt.busy != ""
+		if admins == nil {
+			admins = r.worktreeAdmins(ctx, abs)
+		}
+		if wt.busy = busyOn(admins[wt.path], ref); wt.busy != "" {
+			onRef = true
 		}
 		if p, _ := filepath.EvalSymlinks(wt.path); onRef && p != self {
 			on = append(on, wt)
@@ -523,9 +532,9 @@ func busyOn(admin, ref string) string {
 	switch {
 	case read("rebase-merge/head-name") == ref, read("rebase-apply/head-name") == ref,
 		slices.Contains(strings.Split(read("rebase-merge/update-refs"), "\n"), ref):
-		return "rebased"
+		return "rebase"
 	case read("BISECT_START") == strings.TrimPrefix(ref, "refs/heads/"):
-		return "bisected"
+		return "bisect"
 	}
 	return ""
 }
@@ -541,7 +550,7 @@ func (r *gitStateRun) switchBranch(ctx context.Context, abs, gitdir string, rep 
 	// that worktree would see the move as staged changes undoing it.
 	if on := r.worktreesOnBranch(ctx, abs, defRef); len(on) > 0 {
 		rep.Status = GitRepoSkipped
-		rep.Reason = def + " is checked out in the linked worktree " + on[0].path + "; HEAD not moved (rescue branch " + rep.Rescue + " kept)"
+		rep.Reason = def + " is held by the linked worktree " + on[0].path + "; HEAD not moved (rescue branch " + rep.Rescue + " kept)"
 		return
 	}
 	oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef)

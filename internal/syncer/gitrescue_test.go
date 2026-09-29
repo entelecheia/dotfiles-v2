@@ -940,9 +940,9 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 	// counts it, though the porcelain lists that worktree as detached
 	// (#211). Ending it leaves the branch checked out there, so the step
 	// also switches the worktree.
-	stopRebase := func(t *testing.T, wt string, args ...string) {
+	stopRebase := func(t *testing.T, wt, run string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", wt, "rebase", "--exec", "false"}, args...)...)
+		cmd := exec.Command("git", append([]string{"-C", wt, "rebase", "--exec", run}, args...)...)
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=dot-test", "GIT_AUTHOR_EMAIL=dot-test@example.invalid",
 			"GIT_COMMITTER_NAME=dot-test", "GIT_COMMITTER_EMAIL=dot-test@example.invalid")
@@ -957,16 +957,21 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		start    func(t *testing.T, wt string)
 		end      []string
 	}{
-		{"rebase", "rebased", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "--root") }, []string{"rebase", "--abort"}},
-		{"rebase (--relative-paths)", "rebased", []string{"--relative-paths", "main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "--root") }, []string{"rebase", "--abort"}},
+		{"rebase", "rebase", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}},
+		{"rebase (--relative-paths)", "rebase", []string{"--relative-paths", "main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}},
 		// Another branch rebased with --update-refs over main's commit.
-		{"rebase --update-refs", "rebased", []string{"-b", "topic", "main"}, func(t *testing.T, wt string) {
+		{"rebase --update-refs", "rebase", []string{"-b", "topic", "main"}, func(t *testing.T, wt string) {
 			gitStateRun_(t, wt, "commit", "-q", "--allow-empty", "-m", "t1")
-			stopRebase(t, wt, "--update-refs", "--root")
+			stopRebase(t, wt, "false", "--update-refs", "--root")
 		}, []string{"rebase", "--abort"}},
-		{"bisect", "bisected", []string{"main"}, func(t *testing.T, wt string) {
+		{"bisect", "bisect", []string{"main"}, func(t *testing.T, wt string) {
 			gitStateRun_(t, wt, "bisect", "start")
 			gitStateRun_(t, wt, "checkout", "-q", "--detach")
+		}, []string{"bisect", "reset"}},
+		// A bisect started on main still holds it from another branch.
+		{"bisect left on another branch", "bisect", []string{"main"}, func(t *testing.T, wt string) {
+			gitStateRun_(t, wt, "bisect", "start")
+			gitStateRun_(t, wt, "switch", "-q", "-c", "other")
 		}, []string{"bisect", "reset"}},
 	} {
 		t.Run("default branch held by a "+tc.name+" in a linked worktree", func(t *testing.T) {
@@ -983,7 +988,7 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 			gitStateRun_(t, f.ws, append([]string{"worktree", "add", "-q", wt}, tc.add...)...)
 			before := gitStateRun_(t, f.ws, "rev-parse", "main")
 			tc.start(t, wt)
-			refused(t, f.ws, "main is being "+tc.op+" in the linked worktree "+wt+"; finish or abort that there, then switch that worktree to another branch")
+			refused(t, f.ws, "main is held by a "+tc.op+" in the linked worktree "+wt+"; finish or abort it there, and if that leaves main checked out, switch that worktree to another branch")
 			if got := gitStateRun_(t, f.ws, "rev-parse", "main"); got != before {
 				t.Fatalf("main moved to %s under the %s", got, tc.name)
 			}
@@ -994,6 +999,36 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 			}
 		})
 	}
+	// A gone worktree's rebase commits live only on its detached HEAD, in
+	// the admin dir a remove deletes, so the step keeps them first.
+	t.Run("a gone worktree whose rebase made commits", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		tip := f.publish(t, "a.txt", "a2\n")
+		f.deliver(t, tip)
+		tmp, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wt := filepath.Join(tmp, "wt-main")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
+		stopRebase(t, wt, "echo resolved > work.txt && git add work.txt && git commit -q -m 'conflict work' && false", "--root")
+		wip := gitStateRun_(t, wt, "rev-parse", "HEAD")
+		if err := os.RemoveAll(wt); err != nil {
+			t.Fatal(err)
+		}
+		git := "git -C " + shellWord(f.ws)
+		refused(t, f.ws, "main is held by a rebase in the linked worktree "+wt+", which is missing; if it is gone for good, not just unmounted: "+git+" branch main-wip-kept "+wip+"; "+git+" worktree remove "+shellWord(wt))
+		gitStateRun_(t, f.ws, "branch", "main-wip-kept", wip)
+		gitStateRun_(t, f.ws, "worktree", "remove", wt)
+		if got := gitStateRun_(t, f.ws, "log", "-1", "--format=%s", "main-wip-kept"); got != "conflict work" {
+			t.Fatalf("main-wip-kept holds %q, want the rebase's commit", got)
+		}
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("after the steps: %+v, want realigned to %s", rep, tip)
+		}
+	})
 	// A branch named rescue blocks every rescue/<date>-<branch> name, so
 	// no suffix helps; the step renames it (#212).
 	t.Run("a branch named rescue", func(t *testing.T) {
