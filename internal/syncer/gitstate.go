@@ -200,6 +200,8 @@ type gitStateRun struct {
 	// rescue score (rescueDiffs, against the HEAD it names).
 	same    map[string]bool
 	rescued map[string]int
+	// noHooks' flags for each repo's configured hooks, by repo.
+	hookNames map[string][]string
 }
 
 // gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
@@ -1343,7 +1345,7 @@ func (r *gitStateRun) run(ctx context.Context, abs string, env []string, readOnl
 }
 
 func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, readOnly bool, args ...string) (string, error) {
-	full := append(slices.Clone(noRepoHooks), "-C", abs)
+	full := append(r.noHooks(ctx, abs), "-C", abs)
 	if readOnly {
 		full = append([]string{"--no-optional-locks"}, full...)
 	}
@@ -1373,9 +1375,9 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 
 // noRepoHooks keeps every git command a peer git run starts from running a
 // hook of the repo it works in, a preview included (#204): the hooks
-// directory (core.hooksPath), hooks defined in config (git 2.54+,
-// hook.<event>, for each event these commands fire; older git ignores the
-// keys), and the fsmonitor hook.
+// directory (core.hooksPath), hooks defined in config (git 2.55+,
+// hook.<event>, for each event these commands fire; noHooks adds each
+// configured hook by name for git 2.54), and the fsmonitor hook.
 var noRepoHooks = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.fsmonitor=false",
@@ -1384,6 +1386,31 @@ var noRepoHooks = []string{
 	"-c", "hook.reference-transaction.enabled=false",
 	"-c", "hook.pre-push.enabled=false",
 	"-c", "hook.pre-auto-gc.enabled=false",
+}
+
+// noHooks is noRepoHooks plus hook.<name>.enabled=false for every hook the
+// repo's config defines: git 2.54 runs config hooks but reads
+// hook.<event>.enabled only as a hook named after the event, so each hook is
+// turned off by its own name. The names are read once per repo.
+// ponytail: a hook name containing "=" cannot be passed with -c; such a hook
+// still runs on git 2.54 (2.55 stops it by event).
+func (r *gitStateRun) noHooks(ctx context.Context, abs string) []string {
+	names, ok := r.hookNames[abs]
+	if !ok {
+		cmd := exec.CommandContext(ctx, r.git, "-C", abs, "config", "--name-only", "--get-regexp", `^hook\..*\.event$`)
+		cmd.Env = r.env        // nil inherits the process environment
+		out, _ := cmd.Output() // exit 1: no hook configured
+		for _, key := range strings.Fields(string(out)) {
+			if name := strings.TrimSuffix(strings.TrimPrefix(key, "hook."), ".event"); !strings.Contains(name, "=") {
+				names = append(names, "-c", "hook."+name+".enabled=false")
+			}
+		}
+		if r.hookNames == nil {
+			r.hookNames = map[string][]string{}
+		}
+		r.hookNames[abs] = names
+	}
+	return append(slices.Clone(noRepoHooks), names...)
 }
 
 // gitExitError carries git's exit code and stderr without the "exit status N"

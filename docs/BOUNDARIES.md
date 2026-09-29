@@ -287,9 +287,11 @@ tool):
   resolves them, `url.<base>.insteadOf` included); the old URL is put back
   if that fetch fails.
   Every git command these runs start runs no hook of the repo it works
-  in: `core.hooksPath=/dev/null`, `core.fsmonitor=false`, and
-  `hook.<event>.enabled=false` for the events they fire (a push to a
-  local-path remote still runs that remote's receive hooks). Otherwise
+  in: `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
+  `hook.<event>.enabled=false` for the events they fire (git 2.55), and
+  `hook.<name>.enabled=false` for each hook the repo's config defines
+  (git 2.54) (a push to a local-path remote still runs that remote's
+  receive hooks). Otherwise
   the worktree is never written by git; preview (`dot peer git status`,
   default `realign`, `--dry-run`) writes nothing; linked worktrees and
   locked, staged, conflicting or in-progress repositories are never

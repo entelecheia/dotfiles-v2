@@ -782,6 +782,28 @@ func TestPeerGit_RunsNoRepoHooks(t *testing.T) {
 	ran(t)
 }
 
+// git 2.54 reads hook.<event>.enabled only as a hook named after the
+// event, so each configured hook is also turned off by its own name, dotted
+// names included (#204). Checked on the flags: git 2.55 stops the hook by
+// event either way.
+func TestNoHooksNamesEachConfigHook(t *testing.T) {
+	repo := t.TempDir()
+	gitStateInitRepo(t, repo)
+	gitStateRun_(t, repo, "config", "hook.mark.event", "post-checkout")
+	gitStateRun_(t, repo, "config", "hook.team.Guard.event", "pre-push")
+	gitStateRun_(t, repo, "config", "hook.idle.command", "true") // no event: never runs
+	r := &gitStateRun{git: "git"}
+	got := strings.Join(r.noHooks(context.Background(), repo), " ")
+	for _, want := range []string{"-c hook.mark.enabled=false", "-c hook.team.Guard.enabled=false", "-c core.hooksPath=/dev/null"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("noHooks = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "hook.idle.") {
+		t.Errorf("noHooks = %q, names a hook with no event", got)
+	}
+}
+
 // A pushed rescue branch in a Git LFS repo would point at objects the
 // remote lacks, so the rescue is refused unless it stays local (#204).
 func TestPeerGitRescue_LFSRepoRescuesOnlyLocally(t *testing.T) {
