@@ -17,7 +17,8 @@ import (
 const rescueChainLimit = 50
 
 // classifyNoMatch refines a no-match repo into one of the #178 classes with a
-// one-line next step. It only reads: refs, counts and content comparisons.
+// one-line next step. It reads refs, counts and content comparisons; under
+// --apply --fetch its children's evidence can fetch a child first (#201).
 // Diverged and branch-mismatch repos get a RescueTarget when a commit on the
 // upstream or default branch matches the files better than HEAD.
 func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, rep *GitRepoReport) {

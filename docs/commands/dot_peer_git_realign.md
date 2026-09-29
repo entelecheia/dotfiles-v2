@@ -38,8 +38,9 @@ resolves the two spellings (insteadOf applied) differently. A submodule
 whose gitlink commit is missing is reported with the
 fetch (and set-url, for a moved URL) commands; --apply --fetch runs them and
 retries it. With --apply --fetch a child that lacks a commit one of its
-parent's candidates records is also fetched from its origin, once, before
-that parent's candidates are judged, so it is judged with the commit there.
+parent's tied candidates records is also fetched from its origin, once,
+before those candidates are compared, so it is judged with the commit there
+(a lone candidate the parent's own files require is taken without asking).
 
 ```
 dot peer git realign [--apply [--fetch]] [--rescue [--no-push]] [<repo>...] [flags]

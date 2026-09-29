@@ -609,7 +609,7 @@ func TestPeerGitRescue_ChildAtItsRescueTargetRulesOutAMissingCommit(t *testing.T
 				want = local
 			}
 			if gitStateHead(t, ws) != p0 || gitStateHead(t, sub) != want {
-				t.Fatalf("parent %s child %s, want p0 kept and the child rescued to s1", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)))
+				t.Fatalf("parent %s child %s, want p0 kept and the child at %s", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)), shortRev(want))
 			}
 			if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "  <") || strings.Contains(log, "not present") {
 				t.Fatalf("the parent records a commit the child lacks:\n%s", log)

@@ -156,7 +156,9 @@ type RealignOptions struct {
 	// NoPush keeps rescue branches local instead of pushing them.
 	NoPush bool
 	// Fetch lets an applied run fetch a child whose parent gitlink object is
-	// missing, after pointing it at a moved submodule URL, then retry it.
+	// missing, after pointing it at a moved submodule URL, then retry it; and
+	// fetch a child lacking a commit a candidate of its parent records,
+	// before those candidates are judged (#201).
 	Fetch bool
 	// Now dates rescue branch names; nil means time.Now.
 	Now func() time.Time
@@ -352,19 +354,7 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink, wantURL st
 	}
 
 	if included {
-		// A child fetched while this repo was judged (#201) can change
-		// answers already given: judge it again, with what the fetch
-		// brought. Each child fetches once per run, so this ends.
-		// ponytail: defensive; no test builds an answer that a later fetch
-		// in the same judgment makes stale (the tests fetch before any).
-		for {
-			fetches := len(r.fetched)
-			r.classify(ctx, abs, gitdir, gitlink, rep)
-			if len(r.fetched) == fetches {
-				break
-			}
-			*rep = GitRepoReport{Path: rel}
-		}
+		r.judge(ctx, abs, gitdir, gitlink, rep)
 		if rep.Status == GitRepoUnresolvable && rep.Reason == gitlinkMissing {
 			r.missingGitlink(ctx, abs, gitdir, gitlink, wantURL, apply, rep)
 		}
@@ -414,7 +404,22 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink, wantURL st
 	}
 }
 
-// classify fills rep with the repo's status without mutating anything.
+// judge classifies a repo, and again when a child was fetched while it
+// was judged (#201): answers given before that fetch may not hold after it.
+// Each child fetches once per run, so this ends.
+func (r *gitStateRun) judge(ctx context.Context, abs, gitdir, gitlink string, rep *GitRepoReport) {
+	for {
+		fetches := len(r.fetched)
+		r.classify(ctx, abs, gitdir, gitlink, rep)
+		if len(r.fetched) == fetches {
+			return
+		}
+		*rep = GitRepoReport{Path: rep.Path}
+	}
+}
+
+// classify fills rep with the repo's status; it writes nothing, except
+// the pre-judgment fetch of a child under --apply --fetch (#201).
 func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string, rep *GitRepoReport) {
 	if reason := r.blockReason(ctx, abs, gitdir); reason != "" {
 		rep.Status = GitRepoSkipped
@@ -627,7 +632,7 @@ func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []str
 		note = " (" + lacking(ev.unknown) + "; fetch it there, from the URL the candidate's .gitmodules names if it moved, then realign again)"
 	}
 	if len(ev.fetched) > 0 {
-		note += " (" + strings.Join(ev.fetched, ", ") + " before judging)"
+		note += " (" + strings.Join(ev.fetched, "; ") + ")"
 	}
 	pool := ev.pool
 	if withHead {
@@ -736,7 +741,7 @@ type tieEvidence struct {
 	split   bool     // the evidence told the contenders apart
 	behind  []string // the paths whose child has not reached a candidate's gitlink
 	unknown []string // "<path> lacks <sha>": commits a child could not compare with
-	fetched []string // "<path> fetched" (or "fetch failed: ..."): fetched to be judged
+	fetched []string // "<path>: fetched before judging" (or its failure)
 }
 
 // childrenEvidence asks each child whose gitlink differs between the
@@ -809,7 +814,7 @@ func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []s
 			}
 		}
 		if outcome, ok := r.fetched[child]; ok {
-			ev.fetched = append(ev.fetched, path+" "+outcome)
+			ev.fetched = append(ev.fetched, path+": "+outcome)
 		}
 		placed := false
 		for i := range tied {
@@ -897,7 +902,13 @@ func (r *gitStateRun) childTarget(ctx context.Context, abs, gitlink string) chil
 	if a, ok := r.targets[key]; ok {
 		return a
 	}
+	fetches := len(r.fetched)
 	a := r.childTurn(ctx, abs, gitlink)
+	if len(r.fetched) != fetches {
+		// A fetch during this answer may have changed what it rests on;
+		// the repo being judged is judged again (judge), so do not keep it.
+		return a
+	}
 	if r.targets == nil {
 		r.targets = map[string]childAnswer{}
 	}
@@ -1011,9 +1022,9 @@ func (r *gitStateRun) fetchToJudge(ctx context.Context, child string) {
 	if err != nil || r.leftAlone(ctx, child, gitdir) != "" {
 		return
 	}
-	outcome := "fetched"
+	outcome := "fetched before judging"
 	if err := r.fetchOrigin(ctx, child); err != nil {
-		outcome = "fetch failed: " + shortErr(err)
+		outcome = "fetch failed before judging: " + shortErr(err)
 	}
 	if r.fetched == nil {
 		r.fetched = map[string]string{}
