@@ -645,4 +645,54 @@ func TestPeerGitRescue_ParentRescuePastAChildSaysSo(t *testing.T) {
 	if rep.Status != GitRepoRealignable || !strings.Contains(rep.TieBreak, "is past what sub holds") {
 		t.Fatalf("rescue = %+v, want a move whose tie line names sub", rep)
 	}
+	// Without --rescue nothing moves, and no tie line describes the rescue
+	// (round 21).
+	if rep := rescueRealign(t, ws, RealignOptions{}); rep.Status != GitRepoNoMatch || rep.TieBreak != "" {
+		t.Fatalf("no rescue = %+v, want no-match with no tie line", rep)
+	}
+}
+
+// A rescue that follows a no-match where HEAD won its own tie shows the
+// rescue's tie line, with the children it passes, not "HEAD stays"
+// (#189 round 21).
+func TestPeerGitRescue_RescueAfterAHeadTieShowsItsOwnTieLine(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	s0 := gitStateCommitFile(t, subSrc, "f.txt", "0\n", "s0")
+	s1 := gitStateCommitFile(t, subSrc, "f.txt", "1\n", "s1")
+
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "a.txt", "0\n", "a")
+	gitStateCommitFile(t, origin, "c.txt", "F\n", "c")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s0)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "b0")
+	gitStateRun_(t, origin, "checkout", "-q", "-b", "feature")
+	f1 := gitStateCommitFile(t, origin, "a.txt", "1\n", "f1 feature work")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "f2 bump sub only")
+	gitStateRun_(t, origin, "checkout", "-q", "main")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	gitStateRewriteTracked(t, filepath.Join(origin, "a.txt"), "1\n")
+	gitStateRewriteTracked(t, filepath.Join(origin, "c.txt"), "M\n")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "a.txt", "c.txt", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "m1 squash of the feature, sub@s1, c.txt")
+
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "checkout", "-q", "-b", "feature", "--track", "origin/feature")
+	gitStateRun_(t, ws, "reset", "-q", "--hard", f1)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	gitStateRewriteTracked(t, filepath.Join(ws, "c.txt"), "M\n")
+
+	rep := rescueRealign(t, ws, RealignOptions{Rescue: true, NoPush: true})
+	if rep.Status != GitRepoRealignable || rep.Class != GitClassBranchMismatch ||
+		strings.Contains(rep.TieBreak, "HEAD stays") || !strings.Contains(rep.TieBreak, "is past what sub holds") {
+		t.Fatalf("rescue = %+v, want a branch-mismatch move whose tie line names sub", rep)
+	}
 }

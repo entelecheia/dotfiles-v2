@@ -55,7 +55,8 @@ type GitRepoReport struct {
 	TargetDiffs int    `json:"targetDiffs,omitempty"`
 	Candidates  int    `json:"candidates,omitempty"`
 	// TieBreak says which rule chose Target when several candidates matched
-	// the worktree equally well (#177); empty when there was no tie.
+	// the worktree equally well (#177), and for a move the parent's own
+	// content forces, which children it passes; empty when neither applies.
 	TieBreak string `json:"tieBreak,omitempty"`
 	// PreviousHead is HEAD's commit before an applied move; Undo is the exact
 	// command that restores it (for a branch switch, HEAD's branch too; a
@@ -93,6 +94,7 @@ type GitRepoReport struct {
 	rescueBranch string // branch-mismatch: the default branch HEAD moves onto
 	remote       string // remote a rescue branch is pushed to
 	rescueDiffs  int    // worktree differences against RescueTarget
+	rescueTie    string // how RescueTarget won a tie, shown once a rescue moves
 }
 
 // Classes of no-match and skipped outcomes (#178) and of unresolvable ones
@@ -532,8 +534,8 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 //  2. the parent's gitlink, which keeps the parent's status clean;
 //  3. the newest candidate, the upstream tip side of the chain.
 //
-// It returns the choice and a one-line account of the rule, empty only
-// when a lone candidate had nothing to beat.
+// It returns the choice and a one-line account of the rule, empty when a
+// lone candidate had nothing to beat and a forced move passes no child.
 //
 // A forced move (no head: the parent's own content needs it, whatever the
 // children hold) also names the children it passes, so the user is warned
@@ -663,13 +665,17 @@ func (r *gitStateRun) passedChildren(ctx context.Context, abs, choice string) st
 			continue
 		}
 		child := filepath.Join(abs, filepath.FromSlash(e.path))
-		switch _, err := os.Lstat(child); {
-		case os.IsNotExist(err), err == nil && !r.hasCommit(ctx, child, e.sha):
+		if _, err := os.Lstat(child); os.IsNotExist(err) {
+			past = append(past, e.path) // never delivered: a commit -a records its removal
+			continue
+		}
+		if _, err := r.gitDir(ctx, child); err != nil {
+			continue // delivered files with no checkout: nothing to rewind
+		}
+		if !r.hasCommit(ctx, child, e.sha) {
 			past = append(past, e.path)
-		case err == nil:
-			if a := r.childTarget(ctx, child, e.sha); a.ok && r.pastChild(ctx, child, e.sha, a) {
-				past = append(past, e.path)
-			}
+		} else if a := r.childTarget(ctx, child, e.sha); a.ok && r.pastChild(ctx, child, e.sha, a) {
+			past = append(past, e.path)
 		}
 	}
 	return strings.Join(past, ", ")

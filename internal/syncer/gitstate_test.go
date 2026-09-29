@@ -1435,3 +1435,37 @@ func TestLackingGroupsPerPath(t *testing.T) {
 		t.Fatalf("lacking = %q", got)
 	}
 }
+
+// A submodule the move adds whose files arrived without a .git is nothing
+// a commit -a can rewind: the forced move's tie line leaves it out
+// (#189 round 21).
+func TestPeerGitRealign_ForcedMoveIgnoresADeliveredAddition(t *testing.T) {
+	tmp := t.TempDir()
+	xSrc := filepath.Join(tmp, "x-src")
+	gitStateInitRepo(t, xSrc)
+	gitStateCommitFile(t, xSrc, "file.txt", "v1\n", "x1")
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	p0 := gitStateCommitFile(t, origin, "readme.md", "parent\n", "p0")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", xSrc, "x")
+	gitStateCommitFile(t, origin, "readme.md", "parent v2\n", "p1 readme and add x")
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "clone", "-q", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	if err := os.RemoveAll(filepath.Join(ws, "x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitStateRewriteTracked(t, filepath.Join(ws, "x", "file.txt"), "v1\n")
+	gitStateRewriteTracked(t, filepath.Join(ws, "readme.md"), "parent v2\n")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); root.Status != GitRepoRealignable || strings.Contains(root.TieBreak, "past what x") {
+		t.Fatalf("root = %+v, want a move that does not warn about x", root)
+	}
+}
