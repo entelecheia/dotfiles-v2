@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -740,9 +741,9 @@ func TestPeerGit_RunsNoRepoHooks(t *testing.T) {
 			}
 			// The same hook defined in config (git 2.54+), which the hooks
 			// directory setting does not control.
-			gitStateRun_(t, repo, "config", "--add", "hook.mark.event", hook)
+			gitStateRun_(t, repo, "config", "--add", "hook.mark it=now.event", hook)
 		}
-		gitStateRun_(t, repo, "config", "hook.mark.command", "touch "+shellQuote(filepath.Join(marks, "config-hook")))
+		gitStateRun_(t, repo, "config", "hook.mark it=now.command", "touch "+shellQuote(filepath.Join(marks, "config-hook")))
 		// And the fsmonitor hook.
 		monitor := filepath.Join(dir, "fsmonitor")
 		if err := os.WriteFile(monitor, []byte("#!/bin/sh\ntouch "+shellQuote(filepath.Join(marks, "fsmonitor"))+"\n"), 0o755); err != nil {
@@ -783,24 +784,28 @@ func TestPeerGit_RunsNoRepoHooks(t *testing.T) {
 }
 
 // git 2.54 reads hook.<event>.enabled only as a hook named after the
-// event, so each configured hook is also turned off by its own name, dotted
-// names included (#204). Checked on the flags: git 2.55 stops the hook by
-// event either way.
+// event, so each configured hook is also turned off by its own name, a name
+// with dots, spaces or "=" included (#204). Checked on the flags: git 2.55
+// stops the hook by event either way.
 func TestNoHooksNamesEachConfigHook(t *testing.T) {
 	repo := t.TempDir()
 	gitStateInitRepo(t, repo)
-	gitStateRun_(t, repo, "config", "hook.mark.event", "post-checkout")
-	gitStateRun_(t, repo, "config", "hook.team.Guard.event", "pre-push")
+	for _, name := range []string{"mark", "team.Guard", "lint staged", "a=b"} {
+		gitStateRun_(t, repo, "config", "hook."+name+".event", "post-checkout")
+	}
 	gitStateRun_(t, repo, "config", "hook.idle.command", "true") // no event: never runs
 	r := &gitStateRun{git: "git"}
-	got := strings.Join(r.noHooks(context.Background(), repo), " ")
-	for _, want := range []string{"-c hook.mark.enabled=false", "-c hook.team.Guard.enabled=false", "-c core.hooksPath=/dev/null"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("noHooks = %q, missing %q", got, want)
+	flags := r.noHooks(context.Background(), repo)
+	for _, name := range []string{"mark", "team.Guard", "lint staged", "a=b"} {
+		if want := "--config-env=hook." + name + ".enabled=" + hookOffEnv; !slices.Contains(flags, want) {
+			t.Errorf("noHooks = %q, missing %q", flags, want)
 		}
 	}
-	if strings.Contains(got, "hook.idle.") {
-		t.Errorf("noHooks = %q, names a hook with no event", got)
+	if !slices.Contains(flags, "core.hooksPath=/dev/null") {
+		t.Errorf("noHooks = %q, missing the hooks directory setting", flags)
+	}
+	if strings.Contains(strings.Join(flags, " "), "hook.idle.") {
+		t.Errorf("noHooks = %q, names a hook with no event", flags)
 	}
 }
 
@@ -836,6 +841,23 @@ func TestPeerGitRescue_LFSRepoRescuesOnlyLocally(t *testing.T) {
 	gitStateRun_(t, f.ws, "config", "--unset", "grep.threads")
 	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
 		t.Fatalf("local rescue in an LFS repo = %+v, want realigned", rep)
+	}
+}
+
+// "#" starts a comment only as a line's first non-blank character, so a
+// pattern holding "#" still sets the attribute (#204).
+func TestLFSRefusalReadsCommentsAsGitDoes(t *testing.T) {
+	for attrs, lfs := range map[string]bool{
+		"assets/#raw/*.psd filter=lfs\n": true,
+		"  # *.bin filter=lfs\n":         false,
+	} {
+		repo := t.TempDir()
+		gitStateInitRepo(t, repo)
+		gitStateCommitFile(t, repo, ".gitattributes", attrs, "attributes")
+		r := &gitStateRun{git: "git"}
+		if got := r.lfsRefusal(context.Background(), repo) != ""; got != lfs {
+			t.Errorf("%q: refused = %v, want %v", attrs, got, lfs)
+		}
 	}
 }
 

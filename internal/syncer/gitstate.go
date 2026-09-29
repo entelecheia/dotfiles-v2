@@ -1359,7 +1359,7 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 	if base == nil {
 		base = os.Environ() // a run built without runGitState
 	}
-	cmd.Env = append(append([]string{}, base...), env...)
+	cmd.Env = append(append(append([]string{}, base...), env...), hookOffEnv+"=false")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1391,18 +1391,18 @@ var noRepoHooks = []string{
 // noHooks is noRepoHooks plus hook.<name>.enabled=false for every hook the
 // repo's config defines: git 2.54 runs config hooks but reads
 // hook.<event>.enabled only as a hook named after the event, so each hook is
-// turned off by its own name. The names are read once per repo.
-// ponytail: a hook name containing "=" cannot be passed with -c; such a hook
-// still runs on git 2.54 (2.55 stops it by event).
+// turned off by its own name. The names are read NUL-separated and passed
+// with --config-env (split at the last "="), so a name may hold spaces or
+// "=". The names are read once per repo.
 func (r *gitStateRun) noHooks(ctx context.Context, abs string) []string {
 	names, ok := r.hookNames[abs]
 	if !ok {
-		cmd := exec.CommandContext(ctx, r.git, "-C", abs, "config", "--name-only", "--get-regexp", `^hook\..*\.event$`)
+		cmd := exec.CommandContext(ctx, r.git, "-C", abs, "config", "-z", "--name-only", "--get-regexp", `^hook\..*\.event$`)
 		cmd.Env = r.env        // nil inherits the process environment
 		out, _ := cmd.Output() // exit 1: no hook configured
-		for _, key := range strings.Fields(string(out)) {
-			if name := strings.TrimSuffix(strings.TrimPrefix(key, "hook."), ".event"); !strings.Contains(name, "=") {
-				names = append(names, "-c", "hook."+name+".enabled=false")
+		for _, key := range strings.Split(string(out), "\x00") {
+			if key != "" {
+				names = append(names, "--config-env=hook."+strings.TrimSuffix(strings.TrimPrefix(key, "hook."), ".event")+".enabled="+hookOffEnv)
 			}
 		}
 		if r.hookNames == nil {
@@ -1412,6 +1412,9 @@ func (r *gitStateRun) noHooks(ctx context.Context, abs string) []string {
 	}
 	return append(slices.Clone(noRepoHooks), names...)
 }
+
+// hookOffEnv holds "false" for noHooks' --config-env flags.
+const hookOffEnv = "DOT_PEER_GIT_HOOK_OFF"
 
 // gitExitError carries git's exit code and stderr without the "exit status N"
 // wrapper text, so skip/unresolvable reasons stay readable.

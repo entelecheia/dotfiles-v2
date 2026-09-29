@@ -297,7 +297,7 @@ func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoRe
 // pushed rescue branch would lack its LFS objects), or a check that could
 // not tell, which refuses too. Empty when the push may go.
 func (r *gitStateRun) lfsRefusal(ctx context.Context, abs string) string {
-	code, err := r.run(ctx, abs, nil, true, "grep", "--cached", "-q", "-E", `^[^#]*[[:space:]]filter=lfs([[:space:]]|$)`, "--", ":(glob)**/.gitattributes")
+	code, err := r.run(ctx, abs, nil, true, "grep", "--cached", "-q", "-E", `^[[:space:]]*[^#[:space:]].*[[:space:]]filter=lfs([[:space:]]|$)`, "--", ":(glob)**/.gitattributes")
 	switch {
 	case err != nil || code > 1:
 		return "cannot tell whether the repo uses Git LFS"
