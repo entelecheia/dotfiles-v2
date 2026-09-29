@@ -165,7 +165,10 @@ printing an undo for each origin it rewrites. A URL counts as moved when git
 resolves the two spellings (insteadOf applied) differently. A submodule
 whose gitlink commit is missing is reported with the
 fetch (and set-url, for a moved URL) commands; --apply --fetch runs them and
-retries it.`,
+retries it. With --apply --fetch a child that lacks a commit one of its
+parent's tied candidates records is also fetched from its origin, once,
+before those candidates are compared, so it is judged with the commit there
+(a lone candidate the parent's own files require is taken without asking).`,
 		Args:         cobra.ArbitraryArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -212,7 +215,7 @@ retries it.`,
 	cmd.Flags().BoolVar(&apply, "apply", false, "move HEAD and index (default is a dry-run preview)")
 	cmd.Flags().BoolVar(&rescue, "rescue", false, "also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch")
 	cmd.Flags().BoolVar(&noPush, "no-push", false, "with --rescue, keep rescue branches local")
-	cmd.Flags().BoolVar(&fetch, "fetch", false, "with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it")
+	cmd.Flags().BoolVar(&fetch, "fetch", false, "with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it, and fetch a child before judging a candidate that records a commit it lacks")
 	return cmd
 }
 

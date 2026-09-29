@@ -200,6 +200,19 @@ func (r *gitStateRun) gitmodulesURLs(ctx context.Context, abs, flag, source stri
 	return byPath
 }
 
+// fetchOrigin fetches a child's origin for its gitlinks. Its URL can come
+// from a committed .gitmodules, so the fetch runs with the protocol
+// restrictions git submodule itself applies to such URLs; like the rescue
+// push, no prompt anyone can answer, and a time bound. Only this child:
+// its nested submodules get their own pass.
+func (r *gitStateRun) fetchOrigin(ctx context.Context, abs string) error {
+	fctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	_, err := r.runOutput(fctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0"}, false, "fetch", "-q", "--no-recurse-submodules", "origin")
+	r.forgetFetched(abs)
+	return err
+}
+
 // missingGitlink handles a child whose parent gitlink commit is not in its
 // object store. A moved submodule URL is the usual cause after a peer
 // switch: the new commit exists only at the new remote. The child compares
@@ -236,20 +249,24 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 		}
 		return
 	}
+	// Fetched from this same origin URL before its parent was judged (#201):
+	// a second fetch brings nothing new, so say what the first did. A URL
+	// the parent's .gitmodules restore synced since, or a first fetch that
+	// failed, is fetched again.
+	if r.fetched[abs] == fetchedToJudge && move == nil {
+		if now, err := r.read(ctx, abs, "remote", "get-url", "origin"); err == nil && now == r.fetchedFrom[abs] {
+			rep.Class = GitClassGitlinkMissing
+			rep.Suggestion = "origin was " + fetchedToJudge + " but " + shortRev(gitlink) + " is still missing; check that the parent's commit was pushed with its submodule"
+			return
+		}
+	}
 	if move != nil {
 		if _, err := r.runOutput(ctx, abs, nil, false, "remote", "set-url", "--", "origin", move.new); err != nil {
 			rep.Reason = gitlinkMissing + "; setting the moved URL failed: " + shortErr(err)
 			return
 		}
 	}
-	// The URL comes from a committed .gitmodules, so the fetch runs with the
-	// protocol restrictions git submodule itself applies to such URLs.
-	// Like the rescue push: no prompt anyone can answer, and a time bound.
-	fctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	// Only this child: its nested submodules get their own pass.
-	_, err := r.runOutput(fctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0"}, false, "fetch", "-q", "--no-recurse-submodules", "origin")
-	r.forgetAbsent(abs)
-	cancel()
+	err := r.fetchOrigin(ctx, abs)
 	if err != nil {
 		rep.Reason = gitlinkMissing + "; fetch failed: " + shortErr(err)
 		if move != nil && rawOrigin != "" {
@@ -260,7 +277,7 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 		return
 	}
 	fresh := &GitRepoReport{Path: rep.Path}
-	r.classify(ctx, abs, gitdir, gitlink, fresh)
+	r.judge(ctx, abs, gitdir, gitlink, fresh)
 	if fresh.Reason == gitlinkMissing {
 		fresh.Class = GitClassGitlinkMissing
 		fresh.Suggestion = "origin was fetched but " + shortRev(gitlink) + " is still missing; check that the parent's commit was pushed with its submodule"

@@ -562,8 +562,9 @@ func TestPeerGitRescue_ParentHoldsForEitherRescueEnding(t *testing.T) {
 // exactly cannot be where a candidate's missing commit is, so that
 // candidate drops out, with --fetch too (#189 round 20).
 func TestPeerGitRescue_ChildAtItsRescueTargetRulesOutAMissingCommit(t *testing.T) {
-	for _, fetch := range []bool{false, true} {
-		t.Run(fmt.Sprintf("fetch=%v", fetch), func(t *testing.T) {
+	for _, tc := range []struct{ rescue, fetch bool }{{true, false}, {true, true}, {false, false}} {
+		rescue, fetch := tc.rescue, tc.fetch
+		t.Run(fmt.Sprintf("rescue=%v fetch=%v", rescue, fetch), func(t *testing.T) {
 			tmp := t.TempDir()
 			subSrc := filepath.Join(tmp, "sub-src")
 			gitStateInitRepo(t, subSrc)
@@ -597,12 +598,19 @@ func TestPeerGitRescue_ChildAtItsRescueTargetRulesOutAMissingCommit(t *testing.T
 			}
 			gitStateRewriteTracked(t, filepath.Join(sub, "a.txt"), "1\n") // s1's files exactly
 
-			opts := RealignOptions{Apply: true, Rescue: true, NoPush: true, Fetch: fetch, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}
+			opts := RealignOptions{Apply: true, Rescue: rescue, NoPush: true, Fetch: fetch, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}
+			local := gitStateHead(t, sub)
 			if _, err := PeerGitRealign(context.Background(), ws, nil, opts); err != nil {
 				t.Fatal(err)
 			}
-			if gitStateHead(t, ws) != p0 || gitStateHead(t, sub) != s1 {
-				t.Fatalf("parent %s child %s, want p0 kept and the child rescued to s1", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)))
+			// Without --rescue the child stays diverged; the parent stays
+			// either way (#201).
+			want := s1
+			if !rescue {
+				want = local
+			}
+			if gitStateHead(t, ws) != p0 || gitStateHead(t, sub) != want {
+				t.Fatalf("parent %s child %s, want p0 kept and the child at %s", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)), shortRev(want))
 			}
 			if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "  <") || strings.Contains(log, "not present") {
 				t.Fatalf("the parent records a commit the child lacks:\n%s", log)

@@ -1469,3 +1469,252 @@ func TestPeerGitRealign_ForcedMoveIgnoresADeliveredAddition(t *testing.T) {
 		t.Fatalf("root = %+v, want a move that does not warn about x", root)
 	}
 }
+
+// fetchFixture is a clean parent at p0 whose upstream p1 bumps sub to s2,
+// a commit made after the workspace was cloned, so its child lacks it and
+// can fetch it from its origin; the child has an edit in other.txt, and
+// with delivered it holds s2's file.txt too.
+func fetchFixture(t *testing.T, delivered bool) (ws, sub, p0, p1, s2 string) {
+	t.Helper()
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	gitStateCommitFile(t, subSrc, "other.txt", "o\n", "other")
+	gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 = gitStateHead(t, origin)
+	ws = filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	s2 = gitStateCommitFile(t, subSrc, "file.txt", "v2\n", "s2")
+	gitStateRun_(t, origin, "-C", "sub", "fetch", "-q")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump sub to s2")
+	p1 = gitStateHead(t, origin)
+	gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+	sub = filepath.Join(ws, "sub")
+	gitStateRun_(t, sub, "config", "protocol.file.allow", "always")
+	gitStateRewriteTracked(t, filepath.Join(sub, "other.txt"), "work in progress\n")
+	if delivered {
+		gitStateRewriteTracked(t, filepath.Join(sub, "file.txt"), "v2\n")
+	}
+	return ws, sub, p0, p1, s2
+}
+
+// #201: under --apply --fetch a child that lacks the commit a candidate
+// records is fetched before it is judged, so a child with edits keeps a
+// clean parent behind a bump whose content it does not hold, and lets it
+// move when it does.
+func TestPeerGitRealign_FetchesAChildBeforeJudgingIt(t *testing.T) {
+	for _, delivered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delivered=%v", delivered), func(t *testing.T) {
+			ws, sub, p0, p1, s2 := fetchFixture(t, delivered)
+			res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := gitStateReport(t, res, ".")
+			if !strings.Contains(root.TieBreak, "sub: fetched before judging") {
+				t.Errorf("tie line does not say the child was fetched: %q", root.TieBreak)
+			}
+			if !delivered {
+				if gitStateHead(t, ws) != p0 {
+					t.Fatalf("root = %+v, want HEAD kept behind a bump the child does not hold", root)
+				}
+			} else if gitStateHead(t, ws) != p1 || gitStateHead(t, sub) != s2 {
+				t.Fatalf("root %s child %s, want both moved (%+v)", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)), root)
+			}
+			if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "  <") {
+				t.Fatalf("the parent records a commit the child lacks:\n%s", log)
+			}
+		})
+	}
+}
+
+// #201: the pre-judgment fetch happens only under --apply --fetch, and
+// never in a child the run leaves alone (outside the restriction, or
+// blocked).
+func TestPeerGitRealign_FetchesOnlyWhenAllowed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		opts     RealignOptions
+		restrict []string
+		lock     bool
+	}{
+		{"preview", RealignOptions{Fetch: true}, nil, false},
+		{"apply without fetch", RealignOptions{Apply: true}, nil, false},
+		{"child outside the restriction", RealignOptions{Apply: true, Fetch: true}, []string{"."}, false},
+		{"locked child", RealignOptions{Apply: true, Fetch: true}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws, sub, _, _, s2 := fetchFixture(t, false)
+			if tc.lock {
+				if err := os.WriteFile(filepath.Join(gitStateRun_(t, sub, "rev-parse", "--absolute-git-dir"), "index.lock"), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res, err := PeerGitRealign(context.Background(), ws, tc.restrict, tc.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := exec.Command("git", "-C", sub, "cat-file", "-e", s2+"^{commit}").Run(); err == nil {
+				t.Fatalf("the child was fetched (it has %s)", shortRev(s2))
+			}
+			if root := gitStateReport(t, res, "."); strings.Contains(root.TieBreak, "fetch") && strings.Contains(root.TieBreak, "before judging") {
+				t.Fatalf("tie line reports a fetch: %q", root.TieBreak)
+			}
+		})
+	}
+}
+
+// A childTarget answer during which a child was fetched is not kept: the
+// fetch can change what it rests on, and the repo is judged again (#208
+// review). Asked again with nothing left to fetch, it is kept.
+func TestChildTargetKeepsNoAnswerAFetchCrossed(t *testing.T) {
+	tmp := t.TempDir()
+	maruSrc := filepath.Join(tmp, "maru-src")
+	gitStateInitRepo(t, maruSrc)
+	gitStateCommitFile(t, maruSrc, "file.txt", "m0\n", "m0")
+	devSrc := filepath.Join(tmp, "dev-src")
+	gitStateInitRepo(t, devSrc)
+	gitStateCommitFile(t, devSrc, "readme.md", "dev\n", "base")
+	gitStateRun_(t, devSrc, "-c", "protocol.file.allow=always", "submodule", "add", "-q", maruSrc, "maru")
+	gitStateRun_(t, devSrc, "commit", "-q", "-m", "d0")
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", devSrc, ws)
+	m1 := gitStateCommitFile(t, maruSrc, "file.txt", "m1\n", "m1")
+	gitStateRun_(t, devSrc, "-C", "maru", "fetch", "-q")
+	gitStateRun_(t, devSrc, "-C", "maru", "checkout", "-q", m1)
+	gitStateRun_(t, devSrc, "add", "maru")
+	gitStateRun_(t, devSrc, "commit", "-q", "-m", "d1 bump maru only")
+	d1 := gitStateHead(t, devSrc)
+	gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+	gitStateRun_(t, filepath.Join(ws, "maru"), "config", "protocol.file.allow", "always")
+
+	// ws plays the middle repo: asked where it ends if its parent records
+	// d1, it judges maru, which lacks m1 and is fetched on the way.
+	r := &gitStateRun{root: ws, git: "git", opts: RealignOptions{Apply: true, Fetch: true}}
+	// An answer given before the fetch (maru where it is) is forgotten by it.
+	maru := filepath.Join(ws, "maru")
+	r.childTarget(context.Background(), maru, "")
+	if _, kept := r.targets[maru+"\x00"]; !kept {
+		t.Fatal("an answer before any fetch was not kept")
+	}
+	key := ws + "\x00" + d1
+	r.childTarget(context.Background(), ws, d1)
+	if _, kept := r.targets[key]; kept || len(r.fetched) != 1 {
+		t.Fatalf("kept an answer a fetch crossed (fetched %v)", r.fetched)
+	}
+	if _, kept := r.targets[maru+"\x00"]; kept {
+		t.Fatal("an answer from before the fetch survived it")
+	}
+	r.childTarget(context.Background(), ws, d1)
+	if _, kept := r.targets[key]; !kept {
+		t.Fatal("an answer with no fetch during it was not kept")
+	}
+}
+
+// #201, nested: a middle repo lacking a gitlink-only bump of its own child
+// is fetched too, and each level is judged with the commits present.
+func TestPeerGitRealign_FetchesANestedChildBeforeJudgingIt(t *testing.T) {
+	for _, delivered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delivered=%v", delivered), func(t *testing.T) {
+			tmp := t.TempDir()
+			maruSrc := filepath.Join(tmp, "maru-src")
+			gitStateInitRepo(t, maruSrc)
+			gitStateCommitFile(t, maruSrc, "file.txt", "m0\n", "m0")
+			devSrc := filepath.Join(tmp, "dev-src")
+			gitStateInitRepo(t, devSrc)
+			gitStateCommitFile(t, devSrc, "readme.md", "dev\n", "base")
+			gitStateRun_(t, devSrc, "-c", "protocol.file.allow=always", "submodule", "add", "-q", maruSrc, "maru")
+			gitStateRun_(t, devSrc, "commit", "-q", "-m", "d0")
+			origin := filepath.Join(tmp, "origin")
+			gitStateInitRepo(t, origin)
+			gitStateCommitFile(t, origin, "readme.md", "work\n", "base")
+			gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", devSrc, "dev")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "r0")
+			r0 := gitStateHead(t, origin)
+			ws := filepath.Join(tmp, "ws")
+			gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+
+			// After the clone: m1, the dev bump d1 and the root bump r1.
+			m1 := gitStateCommitFile(t, maruSrc, "file.txt", "m1\n", "m1")
+			gitStateRun_(t, devSrc, "-C", "maru", "fetch", "-q")
+			gitStateRun_(t, devSrc, "-C", "maru", "checkout", "-q", m1)
+			gitStateRun_(t, devSrc, "add", "maru")
+			gitStateRun_(t, devSrc, "commit", "-q", "-m", "d1 bump maru only")
+			d1 := gitStateHead(t, devSrc)
+			gitStateRun_(t, origin, "-C", "dev", "fetch", "-q")
+			gitStateRun_(t, origin, "-C", "dev", "checkout", "-q", d1)
+			gitStateRun_(t, origin, "add", "dev")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "r1 bump dev only")
+			r1 := gitStateHead(t, origin)
+			gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+			dev, maru := filepath.Join(ws, "dev"), filepath.Join(ws, "dev", "maru")
+			gitStateRun_(t, dev, "config", "protocol.file.allow", "always")
+			gitStateRun_(t, maru, "config", "protocol.file.allow", "always")
+			if delivered {
+				gitStateRewriteTracked(t, filepath.Join(maru, "file.txt"), "m1\n")
+			}
+
+			if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true}); err != nil {
+				t.Fatal(err)
+			}
+			if !delivered {
+				if gitStateHead(t, ws) != r0 {
+					t.Fatalf("root moved to %s past a nested bump nobody holds", shortRev(gitStateHead(t, ws)))
+				}
+			} else {
+				for _, c := range []struct{ repo, want string }{{ws, r1}, {dev, d1}, {maru, m1}} {
+					if got := gitStateHead(t, c.repo); got != c.want {
+						t.Errorf("%s HEAD = %s, want %s", c.repo, shortRev(got), shortRev(c.want))
+					}
+				}
+			}
+			for _, repo := range []string{ws, dev} {
+				if log := gitStateRun_(t, repo, "diff", "--submodule=log"); strings.Contains(log, "  <") {
+					t.Errorf("%s records a commit its child lacks:\n%s", repo, log)
+				}
+			}
+		})
+	}
+}
+
+// A child fetched before its parent was judged, whose commit is still
+// missing (never pushed), is not fetched again from the same origin in its
+// own turn: the report says what the first fetch did (#208 review).
+func TestPeerGitRealign_FetchesAChildOnce(t *testing.T) {
+	ws, sub, _, _, s2 := fetchFixture(t, false)
+	// The bumped commit never reached the child's origin.
+	src := gitStateRun_(t, sub, "remote", "get-url", "origin")
+	gitStateRun_(t, src, "reset", "-q", "--hard", "HEAD~1")
+	gitStateRun_(t, src, "reflog", "expire", "--expire=now", "--all")
+	gitStateRun_(t, src, "gc", "-q", "--prune=now")
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := gitStateReport(t, res, "sub")
+	if !strings.Contains(child.Suggestion, "origin was fetched before judging but "+shortRev(s2)+" is still missing") {
+		t.Fatalf("child = %+v, want the first fetch's outcome", child)
+	}
+}
+
+// A fetch that failed before the parent was judged is tried again in the
+// child's own turn, and the report says the fetch failed (#201).
+func TestPeerGitRealign_RetriesAFailedFetchToJudge(t *testing.T) {
+	ws, sub, _, _, _ := fetchFixture(t, false)
+	gitStateRun_(t, sub, "config", "--unset", "protocol.file.allow")
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := gitStateReport(t, res, "sub")
+	if !strings.Contains(child.Reason, "fetch failed") || strings.Contains(child.Suggestion, "pushed with its submodule") {
+		t.Fatalf("child = %+v, want the fetch failure, not push advice", child)
+	}
+}

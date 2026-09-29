@@ -285,17 +285,19 @@ tool):
   submodule's protocol rules (`GIT_PROTOCOL_FROM_USER=0`), after
   `remote set-url origin` when its URL moved (both URLs compared as git
   resolves them, `url.<base>.insteadOf` included); the old URL is put back
-  if that fetch fails.
+  if that fetch fails. Under the same flags a submodule that lacks a commit
+  one of its parent's tied candidates records (and that the run does not
+  leave alone) gets the same fetch from its current origin, once per run,
+  before those candidates are compared.
   Every git command these runs start runs no hook of the repo it works
   in: `core.hooksPath=/dev/null`, `core.fsmonitor=false`,
   `hook.<event>.enabled=false` for the events they fire (git 2.55), and
   `hook.<name>.enabled=false` for each hook the repo's config defines
   (git 2.54) (a push to a local-path remote still runs that remote's
-  receive hooks). Otherwise
-  the worktree is never written by git; preview (`dot peer git status`,
-  default `realign`, `--dry-run`) writes nothing; linked worktrees and
-  locked, staged, conflicting or in-progress repositories are never
-  touched.
+  receive hooks). Otherwise the worktree is never written by git; preview
+  (`dot peer git status`, default `realign`, `--dry-run`) writes nothing;
+  linked worktrees and locked, staged, conflicting or in-progress
+  repositories are never touched.
 - host files the operator lists under `host_merge` in the peer config (for
   example `~/.claude.json`), on both machines: before the additive
   host-path pass of a two-way `dot peer sync`, the entries of the listed
