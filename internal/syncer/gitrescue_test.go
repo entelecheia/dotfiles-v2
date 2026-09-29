@@ -883,15 +883,22 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		wt := filepath.Join(t.TempDir(), "wt-main")
 		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
 		refused(t, f.ws, "main is checked out in the linked worktree")
-		// The same refusal for a worktree whose directory is gone names the
-		// prune that lifts it.
+		// The same refusal for a locked worktree whose directory is gone
+		// names the unlock and prune that lift it, in this repo.
+		gitStateRun_(t, f.ws, "worktree", "lock", wt)
+		listed, err := filepath.EvalSymlinks(wt) // the path git lists
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := os.RemoveAll(wt); err != nil {
 			t.Fatal(err)
 		}
 		refused(t, f.ws, "main is checked out in the linked worktree")
-		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "git worktree prune") {
-			t.Fatalf("suggestion %q does not name git worktree prune", s)
+		git := "git -C " + shellWord(f.ws)
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, git+" worktree unlock "+shellWord(listed)+"; "+git+" worktree prune") {
+			t.Fatalf("suggestion %q, want this repo's unlock and prune", s)
 		}
+		gitStateRun_(t, f.ws, "worktree", "unlock", wt)
 		gitStateRun_(t, f.ws, "worktree", "prune")
 		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
 			t.Fatalf("after the prune: suggestion %q, want the rescue", s)
@@ -904,18 +911,20 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
 		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
 		refused(t, f.ws, "local main has commits")
-		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, " branch -m main main-kept") {
-			t.Fatalf("suggestion %q, want the branch move that lifts it", s)
+		// A name an earlier move took is skipped.
+		gitStateRun_(t, f.ws, "branch", "main-kept", f.base)
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "git -C "+shellWord(f.ws)+" branch -m main main-kept-2") {
+			t.Fatalf("suggestion %q, want the branch move to a free name", s)
 		}
 		// Following the advice lifts the refusal, and the kept branch
 		// holds the commits.
 		mine := gitStateRun_(t, f.ws, "rev-parse", "main")
-		gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept")
+		gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept-2")
 		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
 			t.Fatalf("after the advice: suggestion %q, want the rescue", s)
 		}
-		if got := gitStateRun_(t, f.ws, "rev-parse", "main-kept"); got != mine {
-			t.Fatalf("main-kept = %s, want %s", got, mine)
+		if got := gitStateRun_(t, f.ws, "rev-parse", "main-kept-2"); got != mine {
+			t.Fatalf("main-kept-2 = %s, want %s", got, mine)
 		}
 	})
 }

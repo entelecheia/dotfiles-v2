@@ -155,13 +155,24 @@ func (r *gitStateRun) suggestRescue(ctx context.Context, abs string, rep *GitRep
 func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRepoReport) (why string, localOnly bool) {
 	if rep.rescueBranch != "" {
 		defRef := "refs/heads/" + rep.rescueBranch
+		git := "git -C " + shellWord(abs)
 		if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
-			return rep.rescueBranch + " is checked out in the linked worktree " + other + "; switch that worktree to another branch, or run git worktree prune if its directory is gone", false
+			// git never prunes a locked worktree, so a gone one is unlocked first.
+			return rep.rescueBranch + " is checked out in the linked worktree " + other + "; switch that worktree to another branch, or, if its directory is gone: " +
+				git + " worktree unlock " + shellWord(other) + "; " + git + " worktree prune", false
 		}
 		// Pushing or merging those commits keeps the branch off the
 		// target's history, so only moving the branch aside lifts this.
 		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
-			return "local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks; keep them on another branch first: git -C " + shellWord(abs) + " branch -m " + shellWord(rep.rescueBranch) + " " + shellWord(rep.rescueBranch+"-kept"), false
+			kept := rep.rescueBranch + "-kept"
+			for i := 2; ; i++ {
+				if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "refs/heads/"+kept); err != nil {
+					break
+				}
+				kept = rep.rescueBranch + "-kept-" + strconv.Itoa(i)
+			}
+			return "local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks; keep them on another branch first: " +
+				git + " branch -m " + shellWord(rep.rescueBranch) + " " + shellWord(kept), false
 		}
 	}
 	if rep.remote != "." {
