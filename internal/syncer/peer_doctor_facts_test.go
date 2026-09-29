@@ -15,7 +15,8 @@ import (
 func doctorFacts() (*PeerSideFacts, *PeerSideFacts) {
 	base := func() *PeerSideFacts {
 		return &PeerSideFacts{RsyncPath: "/opt/homebrew/bin/rsync", RsyncVersion: "rsync  version 3.4.4", Owner: "m5x26", OwnerEpoch: 2,
-			MaxDelete: 100, Propagation: PropagationPolicy{Create: true, Update: true, Delete: true}, Filters: map[string]string{"exclude.txt": "a"}}
+			MaxDelete: 100, Propagation: PropagationPolicy{Create: true, Update: true, Delete: true}, Filters: map[string]string{"exclude.txt": "a"},
+			CoordConfig: &CoordinatorConfig{HostMerge: map[string][]string{".claude.json": {"mcpServers", "projects"}}, FilterMode: "exclude"}}
 	}
 	local, peer := base(), base()
 	local.Coordinator, local.Scheduler = true, true
@@ -547,5 +548,68 @@ func TestDoctorNFDVerdictMatchesTheSync(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// #203: the rest of the coordinator-only config is compared, each side's
+// host_merge is judged as the roles fix leaves it, and a peer whose dot
+// predates the report is told to upgrade rather than compared.
+func TestEvaluatePeerSidesComparesCoordinatorConfig(t *testing.T) {
+	local, peer := doctorFacts()
+	peer.CoordConfig.HostMerge = map[string][]string{".claude.json": {"projects", "mcpServers"}} // same set, other order
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "config", DoctorPass); c == nil {
+		t.Errorf("host_merge keys in another order counted as a difference")
+	}
+
+	local, peer = doctorFacts()
+	peer.CoordConfig.IncludeSubmodules, peer.CoordConfig.SharedExcludes, peer.CoordConfig.FilterMode = true, []string{"x"}, "include"
+	peer.CoordConfig.HostMerge = nil
+	c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "config", DoctorWarn)
+	if c == nil || c.Detail != "host_merge, include_submodules, shared_excludes, filter_mode differ between the Macs; only the coordinator's applies" {
+		t.Errorf("differing keys: %+v", c)
+	}
+
+	// The coordinator's bad host_merge stops its sync; the other Mac's
+	// would once it coordinates.
+	local, peer = doctorFacts()
+	local.CoordConfig.HostMergeError, peer.CoordConfig.HostMergeError = ".claude.json: not a JSON object here", "host_merge: bad"
+	checks := evaluatePeerSides(local, peer, "m5x26", "m3x23")
+	if c := checkFor(checks, "config", DoctorFail); c == nil || !strings.Contains(c.Detail, "m5x26: host_merge stops its peer sync") {
+		t.Errorf("coordinator's host_merge error: %+v", checks)
+	}
+	if c := checkFor(checks, "config", DoctorWarn); c == nil || !strings.Contains(c.Detail, "m3x23: host_merge would stop its peer sync once it coordinates") {
+		t.Errorf("other Mac's host_merge error: %+v", checks)
+	}
+
+	local, peer = doctorFacts()
+	peer.CoordConfig = nil
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "config", DoctorWarn); c == nil || c.Fix != "upgrade dot on m3x23 to compare them" {
+		t.Errorf("older peer dot: %+v", c)
+	}
+}
+
+// localCoordConfig checks host_merge as the coordinator's run would: the
+// config, then each listed file here (#203).
+func TestLocalCoordConfigChecksHostMerge(t *testing.T) {
+	home := t.TempDir()
+	cfg := &Config{Home: home, LocalPaths: &LocalPaths{StoreDir: t.TempDir()}, HostMerge: map[string][]string{"../x.json": {"a"}}}
+	if c := localCoordConfig(cfg); !strings.Contains(c.HostMergeError, "relative to $HOME") {
+		t.Fatalf("invalid config: %+v", c)
+	}
+	cfg.HostMerge = map[string][]string{".claude.json": {"projects"}}
+	if err := os.WriteFile(filepath.Join(home, "real.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "real.json"), filepath.Join(home, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.LocalPaths.StoreDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.LocalPaths.StoreDir, "home-paths.txt"), []byte(".claude.json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := localCoordConfig(cfg); !strings.Contains(c.HostMergeError, "not a regular file here") {
+		t.Fatalf("symlinked copy: %+v", c)
 	}
 }
