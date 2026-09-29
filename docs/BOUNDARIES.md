@@ -266,9 +266,9 @@ tool):
   strict descendant, the old value recorded in the reflog for undo).
   Only `--rescue` moves a branch sideways: HEAD's commits are first kept
   on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed where
-  git pushes the branch (pushRemote, pushDefault, then its remote, with
-  `--no-verify` so no pre-push hook runs) unless `--no-push`; then the branch, or for a branch mismatch the default
-  branch (created with `branch.<name>.remote` and `.merge` pointing at
+  git pushes the branch (pushRemote, pushDefault, then its remote)
+  unless `--no-push` (a Git LFS repo is rescued only with `--no-push`);
+  then the branch, or for a branch mismatch the default branch (created with `branch.<name>.remote` and `.merge` pointing at
   origin's, or fast-forwarded; never while a linked worktree has it checked
   out; HEAD re-pointed after re-checking it under the index lock), moves
   under the same protocol.
@@ -285,8 +285,10 @@ tool):
   `remote set-url origin` when its URL moved (both URLs compared as git
   resolves them, `url.<base>.insteadOf` included); the old URL is put back
   if that fetch fails.
-  Otherwise the worktree is never written by git; preview (`dot peer git
-  status`, default `realign`, `--dry-run`) writes nothing; linked
+  Every git command these runs start carries `core.hooksPath=/dev/null`,
+  so no repo hook runs. Otherwise the worktree is never written by git;
+  preview (`dot peer git status`, default `realign`, `--dry-run`) writes
+  nothing; linked
   worktrees and locked, staged, conflicting or in-progress repositories
   are never touched.
 - host files the operator lists under `host_merge` in the peer config (for

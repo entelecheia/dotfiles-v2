@@ -720,3 +720,78 @@ func TestPeerGitRescue_PushRunsNoHook(t *testing.T) {
 		t.Fatal("the pre-push hook ran")
 	}
 }
+
+// No git command a peer git run starts runs a repo hook, in a preview or
+// an apply: post-checkout (the .gitmodules restore), post-index-change
+// (the temp-index refresh), reference-transaction (ref moves) and pre-push
+// (the rescue push) all stay silent (#204).
+func TestPeerGit_RunsNoRepoHooks(t *testing.T) {
+	marks := t.TempDir()
+	install := func(t *testing.T, repo string) {
+		t.Helper()
+		dir := filepath.Join(gitStateRun_(t, repo, "rev-parse", "--absolute-git-dir"), "hooks")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, hook := range []string{"post-checkout", "post-index-change", "reference-transaction", "pre-push"} {
+			script := "#!/bin/sh\ntouch " + shellQuote(filepath.Join(marks, hook)) + "\n"
+			if err := os.WriteFile(filepath.Join(dir, hook), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	ran := func(t *testing.T) {
+		t.Helper()
+		if entries, _ := os.ReadDir(marks); len(entries) > 0 {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Fatalf("repo hooks ran: %v", names)
+		}
+	}
+
+	// A stale .gitmodules restored and a realign (URL move fixture).
+	ws, _, _, _, _, _ := urlMoveFixture(t)
+	install(t, ws)
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	ran(t)
+	if _, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true}); err != nil {
+		t.Fatal(err)
+	}
+	ran(t)
+
+	// A pushed rescue.
+	f, _, tip := divergedFixture(t)
+	install(t, f.ws)
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("rescue = %+v", rep)
+	}
+	ran(t)
+}
+
+// A pushed rescue branch in a Git LFS repo would point at objects the
+// remote lacks, so the rescue is refused unless it stays local (#204).
+func TestPeerGitRescue_LFSRepoRescuesOnlyLocally(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateCommitFile(t, f.writer, ".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n", "lfs")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	local := gitStateCommitFile(t, f.ws, "docs.md", "unpushed docs\n", "local docs")
+	f.publish(t, "b.txt", "b1\n")
+	tip := f.publish(t, "b.txt", "b2\n")
+	f.deliver(t, tip)
+
+	rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+	if rep.Status != GitRepoNoMatch || !strings.Contains(rep.Suggestion, "Git LFS") || gitStateHead(t, f.ws) != local {
+		t.Fatalf("pushed rescue in an LFS repo = %+v, want refused with HEAD kept", rep)
+	}
+	if out := gitStateRun_(t, f.ws, "branch", "--list", "rescue/*"); out != "" {
+		t.Fatalf("a rescue branch was created: %s", out)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("local rescue in an LFS repo = %+v, want realigned", rep)
+	}
+}

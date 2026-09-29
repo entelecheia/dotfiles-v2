@@ -1343,9 +1343,12 @@ func (r *gitStateRun) run(ctx context.Context, abs string, env []string, readOnl
 }
 
 func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, readOnly bool, args ...string) (string, error) {
-	full := []string{"-C", abs}
+	// No repo hook runs: a post-checkout, post-index-change or
+	// reference-transaction hook would write or run things BOUNDARIES does
+	// not name, a preview included (#204).
+	full := []string{"-c", "core.hooksPath=/dev/null", "-C", abs}
 	if readOnly {
-		full = []string{"--no-optional-locks", "-C", abs}
+		full = append([]string{"--no-optional-locks"}, full...)
 	}
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.git, full...)

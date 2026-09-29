@@ -258,6 +258,13 @@ func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoRe
 			return
 		}
 	}
+	// A pushed rescue branch in a Git LFS repo would point at objects the
+	// remote lacks: dot does not drive git-lfs, so it keeps such a rescue
+	// local or not at all (#204).
+	if !r.opts.NoPush && rep.remote != "." && r.usesLFS(ctx, abs) {
+		rep.Suggestion += "; not rescued: the repo uses Git LFS, and a pushed rescue branch would lack its LFS objects; rescue with --no-push"
+		return
+	}
 	name := rep.branch
 	if name == "" {
 		name = "detached"
@@ -281,6 +288,13 @@ func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoRe
 	if !r.opts.NoPush && rep.remote != "." {
 		rep.RescueRemote = rep.remote
 	}
+}
+
+// usesLFS reports a tracked .gitattributes, at any depth, that sends files
+// through the lfs filter.
+func (r *gitStateRun) usesLFS(ctx context.Context, abs string) bool {
+	code, err := r.run(ctx, abs, nil, true, "grep", "--cached", "-q", "-F", "filter=lfs", "--", ":(glob)**/.gitattributes")
+	return err == nil && code == 0
 }
 
 // rescue keeps HEAD on the rescue branch, pushes it unless NoPush, then moves
