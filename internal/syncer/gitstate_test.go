@@ -1683,3 +1683,23 @@ func TestPeerGitRealign_FetchesANestedChildBeforeJudgingIt(t *testing.T) {
 		})
 	}
 }
+
+// A child fetched before its parent was judged, whose commit is still
+// missing (never pushed), is not fetched again from the same origin in its
+// own turn: the report says what the first fetch did (#208 review).
+func TestPeerGitRealign_FetchesAChildOnce(t *testing.T) {
+	ws, sub, _, _, s2 := fetchFixture(t, false)
+	// The bumped commit never reached the child's origin.
+	src := gitStateRun_(t, sub, "remote", "get-url", "origin")
+	gitStateRun_(t, src, "reset", "-q", "--hard", "HEAD~1")
+	gitStateRun_(t, src, "reflog", "expire", "--expire=now", "--all")
+	gitStateRun_(t, src, "gc", "-q", "--prune=now")
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{Apply: true, Fetch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := gitStateReport(t, res, "sub")
+	if !strings.Contains(child.Suggestion, "origin was fetched before judging but "+shortRev(s2)+" is still missing") {
+		t.Fatalf("child = %+v, want the first fetch's outcome", child)
+	}
+}

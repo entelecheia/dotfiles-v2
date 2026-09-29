@@ -249,12 +249,15 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 		}
 		return
 	}
-	// Fetched from this origin before its parent was judged (#201): a second
-	// fetch from the same URL brings nothing new, so say what the first did.
+	// Fetched from this same origin URL before its parent was judged (#201):
+	// a second fetch brings nothing new, so say what the first did. A URL
+	// the parent's .gitmodules restore synced since is fetched again.
 	if outcome, done := r.fetched[abs]; done && move == nil {
-		rep.Class = GitClassGitlinkMissing
-		rep.Suggestion = "origin was " + outcome + " but " + shortRev(gitlink) + " is still missing; check that the parent's commit was pushed with its submodule"
-		return
+		if now, err := r.read(ctx, abs, "remote", "get-url", "origin"); err == nil && now == r.fetchedFrom[abs] {
+			rep.Class = GitClassGitlinkMissing
+			rep.Suggestion = "origin was " + outcome + " but " + shortRev(gitlink) + " is still missing; check that the parent's commit was pushed with its submodule"
+			return
+		}
 	}
 	if move != nil {
 		if _, err := r.runOutput(ctx, abs, nil, false, "remote", "set-url", "--", "origin", move.new); err != nil {

@@ -190,8 +190,10 @@ type gitStateRun struct {
 	// Commits a repo lacks, forgotten after a fetch there (forgetFetched).
 	absent map[string]bool
 	// Children fetched before their parent's candidates were judged, with
-	// the fetch's outcome for the tie line (#201).
-	fetched map[string]string
+	// the fetch's outcome for the tie line and the origin URL fetched
+	// (#201).
+	fetched     map[string]string
+	fetchedFrom map[string]string
 	// contentDiffs, keyed the same way: a run never writes the files it
 	// compares (gitlinks and .gitmodules are left out), so a child scored
 	// for its parent's question is not scored again in its own turn.
@@ -1022,14 +1024,15 @@ func (r *gitStateRun) fetchToJudge(ctx context.Context, child string) {
 	if err != nil || r.leftAlone(ctx, child, gitdir) != "" {
 		return
 	}
+	from, _ := r.read(ctx, child, "remote", "get-url", "origin")
 	outcome := "fetched before judging"
 	if err := r.fetchOrigin(ctx, child); err != nil {
 		outcome = "fetch failed before judging: " + shortErr(err)
 	}
 	if r.fetched == nil {
-		r.fetched = map[string]string{}
+		r.fetched, r.fetchedFrom = map[string]string{}, map[string]string{}
 	}
-	r.fetched[child] = outcome
+	r.fetched[child], r.fetchedFrom[child] = outcome, from
 }
 
 // isCommitID reports a full object id, the only key the run's caches take.
