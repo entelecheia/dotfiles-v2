@@ -895,14 +895,38 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		}
 		refused(t, f.ws, "main is checked out in the linked worktree")
 		git := "git -C " + shellWord(f.ws)
-		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, git+" worktree unlock "+shellWord(listed)+"; "+git+" worktree prune") {
-			t.Fatalf("suggestion %q, want this repo's unlock and prune", s)
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "(locked)") || !strings.HasSuffix(s, "gone for good, not just unmounted: "+git+" worktree unlock "+shellWord(listed)+"; "+git+" worktree prune") {
+			t.Fatalf("suggestion %q, want this repo's unlock and prune for a locked worktree", s)
 		}
 		gitStateRun_(t, f.ws, "worktree", "unlock", wt)
+		// Unlocked, the prune alone lifts it.
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; strings.Contains(s, "unlock") || !strings.HasSuffix(s, "its directory is gone: "+git+" worktree prune") {
+			t.Fatalf("suggestion %q, want this repo's prune alone", s)
+		}
 		gitStateRun_(t, f.ws, "worktree", "prune")
 		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
 			t.Fatalf("after the prune: suggestion %q, want the rescue", s)
 		}
+	})
+	t.Run("every refusal at once", func(t *testing.T) {
+		f := lfsFixture(t)
+		gitStateCommitFile(t, f.ws, "mine.txt", "m\n", "unpushed on main")
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		tip := f.publish(t, "a.txt", "a2\n")
+		f.deliver(t, tip)
+		wt := filepath.Join(t.TempDir(), "wt-main")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
+		refused(t, f.ws, "(1) main is checked out in the linked worktree")
+		for _, s := range suggestions(t, f.ws) {
+			if !strings.Contains(s, "(2) local main has commits") || !strings.HasSuffix(s, "(3) the repo uses Git LFS, and a pushed rescue branch would lack its LFS objects; rescue with --no-push after that") {
+				t.Fatalf("suggestion %q, want all three steps", s)
+			}
+		}
+		// Following the steps in order lifts all three.
+		gitStateRun_(t, f.ws, "worktree", "remove", wt)
+		gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept")
+		keptLocal(t, f.ws, tip)
 	})
 	t.Run("local default branch the target lacks", func(t *testing.T) {
 		f := newRescueFixture(t)
