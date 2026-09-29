@@ -217,7 +217,10 @@ without writing anything: run it first.
 
 With --profile=peer, a --set or --clear that leaves this Mac without the
 coordinator role also removes its peer scheduler and runs its on_deactivate
-hooks, as a demotion does.
+hooks, as a demotion does. A --clear leaves a higher epoch with no owner, so
+the coordinator's next peer sync refuses (it does not demote itself to no
+owner) until this Mac records an owner again: dot peer adopt --owner
+<coordinator> --epoch <its epoch>, as the refusal says.
 
 Keep the peer target's ssh alias through a rename: the target is part of the
 baseline identity (baseline.peer-target), and editing target: in the peer

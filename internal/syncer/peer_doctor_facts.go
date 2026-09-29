@@ -400,8 +400,6 @@ func rolesVerdict(local, peer *PeerSideFacts, here, there string) (checks []Doct
 	switch {
 	case err != nil:
 		add(DoctorFail, fmt.Sprintf("%s's next sync is refused: %v", coord, err), align)
-	case demote && NormalizeHostname(n.Owner) == "":
-		add(DoctorFail, fmt.Sprintf("%s records no owner at epoch %d over %s's %d: every sync of %s runs its on_deactivate hooks to demote it, then fails to adopt an empty owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
 	case demote && passesAfterAdopting(c, n.Owner):
 		add(DoctorWarn, fmt.Sprintf("%s records epoch %d over %s's %d: %s's next sync demotes it, removing its scheduler and running its on_deactivate hooks, though it stays the owner", other, n.OwnerEpoch, coord, c.OwnerEpoch, coord), align)
 	case demote:

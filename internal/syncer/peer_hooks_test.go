@@ -230,6 +230,25 @@ func TestPeerSyncDemotion_RunsOnDeactivateFirst(t *testing.T) {
 	}
 }
 
+// #202: a peer that records a higher epoch with no owner (a --clear there)
+// is refused at the fence: this Mac runs no on_deactivate hook and keeps its
+// scheduler, instead of demoting and then failing to adopt no owner.
+func TestPeerSyncRefusesAnOwnerlessHigherEpoch(t *testing.T) {
+	sb := newPeerHandoverSandbox(t, peerStatusFields{noOwner: true, epoch: 5, dotVersion: "9.9.9 (fake)"}, 1)
+	installHookServiceStubs(t, sb.record, "com.maru.job.mail-digest.1")
+	sb.plantPeerPlist(t)
+	plantAgentPlists(t, sb.home, "com.maru.job.mail-digest.1")
+	sb.cfg.Hooks = PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.*"}}
+
+	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true})
+	if err == nil || !strings.Contains(err.Error(), "no owner") || (res != nil && (res.Demoted || len(res.Hooks) > 0)) {
+		t.Fatalf("PeerSync = %+v, %v; want a refusal with no demotion and no hooks", res, err)
+	}
+	if lines := sb.recordLines(t); len(lines) != 0 {
+		t.Fatalf("service actions ran: %v", lines)
+	}
+}
+
 func TestRunPeerHooks_BadGlobAndTargetUserHome(t *testing.T) {
 	record := filepath.Join(t.TempDir(), "record.log")
 	installHookServiceStubs(t, record, "com.maru.job.a")

@@ -229,6 +229,12 @@ func fenceDecision(local, remote fenceSide) (demote bool, err error) {
 		return false, ownerMatchError(local, remote)
 	}
 	switch {
+	case remote.Epoch > local.Epoch && strings.TrimSpace(remote.Owner) == "":
+		// A demotion would run this Mac's on_deactivate hooks and then fail
+		// to adopt no owner, on every run (#202): refuse before either.
+		return false, fmt.Errorf(
+			"peer fence: the peer records epoch %d with no owner (a `dot sync owner --clear` there?); demoting to no owner would stop this Mac's jobs and then fail, so nothing runs — on the other Mac: dot peer adopt --owner %s --epoch %d",
+			remote.Epoch, shellQuote(local.Owner), local.Epoch)
 	case remote.Epoch > local.Epoch:
 		return true, nil
 	case local.Epoch > remote.Epoch:

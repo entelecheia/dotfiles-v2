@@ -32,6 +32,7 @@ type peerHandoverSandbox struct {
 
 type peerStatusFields struct {
 	owner      string // empty = sandbox owner
+	noOwner    bool   // the peer records no owner (a --clear there)
 	epoch      int
 	dotVersion string // empty = omitted (previous release)
 }
@@ -46,7 +47,7 @@ func (f peerStatusFields) json(owner, peer, local string) string {
 		fmt.Fprintf(&b, `,"dotVersion":%q`, f.dotVersion)
 	}
 	statusOwner := f.owner
-	if statusOwner == "" {
+	if statusOwner == "" && !f.noOwner {
 		statusOwner = owner
 	}
 	fmt.Fprintf(&b, `,"profile":{"configured":true,"owner":%q,"workspacePath":%q,"target":{"path":%q}}}`,
@@ -236,6 +237,12 @@ func TestPeerFence(t *testing.T) {
 	demote, _, err = peerFence(cfg, remote("mac-b", 3, "1.2.3"))
 	if err != nil || !demote {
 		t.Fatalf("higher remote epoch: demote=%v err=%v", demote, err)
+	}
+	// A higher remote epoch with no owner refuses instead of demoting to no
+	// owner (#202).
+	demote, _, err = peerFence(cfg, remote("", 3, "1.2.3"))
+	if demote || err == nil || !strings.Contains(err.Error(), "no owner") || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-a' --epoch 2") {
+		t.Fatalf("higher remote epoch, no owner: demote=%v err=%v", demote, err)
 	}
 	// Higher local epoch wins: proceed.
 	demote, _, err = peerFence(cfg, remote("mac-b", 1, "1.2.3"))

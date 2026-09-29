@@ -360,12 +360,12 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 		t.Errorf("an alias kept through the demotion: %+v", checks)
 	}
 
-	// A higher epoch with no owner: the demotion runs on_deactivate and
-	// then cannot adopt an empty owner, on every run.
+	// A higher epoch with no owner: the coordinator's fence refuses, as the
+	// sync does (#202), and the align fix restores its owner there.
 	local, peer = doctorFacts()
 	local.MachineNames = []string{"m5x26"}
 	peer.Owner, peer.OwnerEpoch = "", 3
-	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "fails to adopt an empty owner") {
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "next sync is refused") || !strings.Contains(c.Detail, "no owner") {
 		t.Errorf("demotion to no owner: %+v", c)
 	}
 
