@@ -216,6 +216,13 @@ func remoteFenceSide(r *remotePeerStatus) fenceSide {
 	return fenceSide{Owner: r.Profile.Owner, Aliases: r.Profile.OwnerAliases, Epoch: r.OwnerEpoch, CanPush: r.Profile.CanPush}
 }
 
+// noPeerOwnerFix is what restores a pair whose other Mac records no owner:
+// it records this Mac's owner at this Mac's epoch (adopt writes the epoch
+// as given), and the next fence proceeds (#202).
+func noPeerOwnerFix(local fenceSide) string {
+	return fmt.Sprintf("on the other Mac: dot peer adopt --owner %s --epoch %d", shellQuote(local.Owner), local.Epoch)
+}
+
 // fenceDecision is peerFence's verdict from the two owner records once the
 // topology matches. `dot peer doctor` asks it from the coordinator's side,
 // so the doctor cannot drift from the fence (#182).
@@ -228,13 +235,15 @@ func fenceDecision(local, remote fenceSide) (demote bool, err error) {
 		// existing owner-mismatch check, exactly as before epochs existed.
 		return false, ownerMatchError(local, remote)
 	}
-	switch {
-	case remote.Epoch > local.Epoch && strings.TrimSpace(remote.Owner) == "":
+	if strings.TrimSpace(remote.Owner) == "" && remote.Epoch >= local.Epoch {
 		// A demotion would run this Mac's on_deactivate hooks and then fail
-		// to adopt no owner, on every run (#202): refuse before either.
+		// to adopt no owner, on every run, and at an equal epoch the peer
+		// passes its own guard (#202): stop before either.
 		return false, fmt.Errorf(
-			"peer fence: the peer records epoch %d with no owner (a `dot sync owner --clear` there?); demoting to no owner would stop this Mac's jobs and then fail, so nothing runs — on the other Mac: dot peer adopt --owner %s --epoch %d",
-			remote.Epoch, shellQuote(local.Owner), local.Epoch)
+			"peer fence: the peer records epoch %d with no owner (a `dot sync owner --clear` there?); this run stops without demoting this Mac, since a demotion to no owner would stop its jobs and then fail — %s",
+			remote.Epoch, noPeerOwnerFix(local))
+	}
+	switch {
 	case remote.Epoch > local.Epoch:
 		return true, nil
 	case local.Epoch > remote.Epoch:

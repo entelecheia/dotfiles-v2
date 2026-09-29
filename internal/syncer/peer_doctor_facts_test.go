@@ -365,7 +365,8 @@ func TestEvaluatePeerSidesFixesDoNotContradict(t *testing.T) {
 	local, peer = doctorFacts()
 	local.MachineNames = []string{"m5x26"}
 	peer.Owner, peer.OwnerEpoch = "", 3
-	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "next sync is refused") || !strings.Contains(c.Detail, "no owner") {
+	if c := checkFor(evaluatePeerSides(local, peer, "m5x26", "m3x23"), "roles", DoctorFail); c == nil || !strings.Contains(c.Detail, "next sync is refused") || !strings.Contains(c.Detail, "no owner") ||
+		!strings.HasSuffix(c.Fix, "dot peer adopt --owner 'm5x26' --epoch 2") || !strings.Contains(c.Detail, "dot peer adopt --owner 'm5x26' --epoch 2") {
 		t.Errorf("demotion to no owner: %+v", c)
 	}
 

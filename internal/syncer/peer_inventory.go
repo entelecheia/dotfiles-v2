@@ -427,6 +427,11 @@ func checkRemotePeerOwnerMatch(cfg *Config, status *remotePeerStatus) error {
 }
 
 func ownerMatchError(local, remote fenceSide) error {
+	if strings.TrimSpace(remote.Owner) == "" && strings.TrimSpace(local.Owner) != "" {
+		// A cleared peer passes its own guard, but `--set` on both Macs
+		// would bump them apart and demote this one (#202).
+		return fmt.Errorf("peer coordinator check: the peer records no owner (a `dot sync owner --clear` there?) — %s", noPeerOwnerFix(local))
+	}
 	if remote.CanPush {
 		return fmt.Errorf(
 			"peer coordinator check: the peer also passes its own owner guard (its owner %q, local %q); two coordinators would write to each other. Set one owner on both machines with `dot sync owner --profile=peer --set <coordinator>`",

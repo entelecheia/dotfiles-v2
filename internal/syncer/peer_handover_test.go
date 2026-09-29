@@ -244,6 +244,17 @@ func TestPeerFence(t *testing.T) {
 	if demote || err == nil || !strings.Contains(err.Error(), "no owner") || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-a' --epoch 2") {
 		t.Fatalf("higher remote epoch, no owner: demote=%v err=%v", demote, err)
 	}
+	// So does one at this Mac's epoch (a --clear from one epoch behind),
+	// where the cleared peer also passes its own guard.
+	cleared := remote("", 2, "1.2.3")
+	cleared.Profile.CanPush = true
+	if demote, _, err := peerFence(cfg, cleared); demote || err == nil || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-a' --epoch 2") {
+		t.Fatalf("equal epoch, no owner: demote=%v err=%v", demote, err)
+	}
+	// And dot peer setup's owner check, which advised --set on both Macs.
+	if err := ownerMatchError(fenceSide{Owner: "mac-a", Epoch: 2}, fenceSide{CanPush: true}); err == nil || !strings.Contains(err.Error(), "dot peer adopt --owner 'mac-a' --epoch 2") || strings.Contains(err.Error(), "--set") {
+		t.Fatalf("setup check, no owner: %v", err)
+	}
 	// Higher local epoch wins: proceed.
 	demote, _, err = peerFence(cfg, remote("mac-b", 1, "1.2.3"))
 	if err != nil || demote {

@@ -236,9 +236,10 @@ func TestPeerSyncDemotion_RunsOnDeactivateFirst(t *testing.T) {
 func TestPeerSyncRefusesAnOwnerlessHigherEpoch(t *testing.T) {
 	sb := newPeerHandoverSandbox(t, peerStatusFields{noOwner: true, epoch: 5, dotVersion: "9.9.9 (fake)"}, 1)
 	installHookServiceStubs(t, sb.record, "com.maru.job.mail-digest.1")
-	sb.plantPeerPlist(t)
+	plist := sb.plantPeerPlist(t)
 	plantAgentPlists(t, sb.home, "com.maru.job.mail-digest.1")
 	sb.cfg.Hooks = PeerHooks{OnDeactivate: []string{"launchd-bootout com.maru.job.*"}}
+	before := loadPeerStoreConfig(t, sb.paths)
 
 	res, err := PeerSync(context.Background(), PeerSyncOptions{Config: sb.cfg, Runner: peerScheduleRunner(false), Probe: peerScheduleRunner(false), SkipHome: true})
 	if err == nil || !strings.Contains(err.Error(), "no owner") || (res != nil && (res.Demoted || len(res.Hooks) > 0)) {
@@ -246,6 +247,12 @@ func TestPeerSyncRefusesAnOwnerlessHigherEpoch(t *testing.T) {
 	}
 	if lines := sb.recordLines(t); len(lines) != 0 {
 		t.Fatalf("service actions ran: %v", lines)
+	}
+	if _, err := os.Stat(plist); err != nil {
+		t.Fatalf("the peer scheduler plist went: %v", err)
+	}
+	if after := loadPeerStoreConfig(t, sb.paths); after.Owner != before.Owner || after.OwnerEpoch != before.OwnerEpoch {
+		t.Fatalf("local owner %q/%d became %q/%d", before.Owner, before.OwnerEpoch, after.Owner, after.OwnerEpoch)
 	}
 }
 
