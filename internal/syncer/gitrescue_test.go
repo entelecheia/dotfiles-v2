@@ -556,3 +556,93 @@ func TestPeerGitRescue_ParentHoldsForEitherRescueEnding(t *testing.T) {
 		})
 	}
 }
+
+// A child whose rescue is planned and whose files match its rescue target
+// exactly cannot be where a candidate's missing commit is, so that
+// candidate drops out, with --fetch too (#189 round 20).
+func TestPeerGitRescue_ChildAtItsRescueTargetRulesOutAMissingCommit(t *testing.T) {
+	for _, fetch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fetch=%v", fetch), func(t *testing.T) {
+			tmp := t.TempDir()
+			subSrc := filepath.Join(tmp, "sub-src")
+			gitStateInitRepo(t, subSrc)
+			s0 := gitStateCommitFile(t, subSrc, "a.txt", "0\n", "s0")
+			s1 := gitStateCommitFile(t, subSrc, "a.txt", "1\n", "s1")
+			origin := filepath.Join(tmp, "origin")
+			gitStateInitRepo(t, origin)
+			gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+			gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+			gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s0)
+			gitStateRun_(t, origin, "add", "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+			p0 := gitStateHead(t, origin)
+			ws := filepath.Join(tmp, "ws")
+			gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+			// s2 exists only upstream: the child never fetched it.
+			s2 := gitStateCommitFile(t, subSrc, "a.txt", "2\n", "s2")
+			gitStateRun_(t, origin, "-C", "sub", "fetch", "-q")
+			gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+			gitStateRun_(t, origin, "add", "sub")
+			gitStateRun_(t, origin, "commit", "-q", "-m", "p1 bump sub to s2")
+			gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+
+			sub := filepath.Join(ws, "sub")
+			gitStateRun_(t, sub, "checkout", "-q", "-B", "main", s0)
+			gitStateRun_(t, sub, "update-ref", "refs/remotes/origin/main", s1)
+			gitStateRun_(t, sub, "branch", "-q", "--set-upstream-to=origin/main")
+			gitStateCommitFile(t, sub, "docs.md", "mine\n", "local docs")
+			if err := os.Remove(filepath.Join(sub, "docs.md")); err != nil {
+				t.Fatal(err)
+			}
+			gitStateRewriteTracked(t, filepath.Join(sub, "a.txt"), "1\n") // s1's files exactly
+
+			opts := RealignOptions{Apply: true, Rescue: true, NoPush: true, Fetch: fetch, Now: func() time.Time { return time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC) }}
+			if _, err := PeerGitRealign(context.Background(), ws, nil, opts); err != nil {
+				t.Fatal(err)
+			}
+			if gitStateHead(t, ws) != p0 || gitStateHead(t, sub) != s1 {
+				t.Fatalf("parent %s child %s, want p0 kept and the child rescued to s1", shortRev(gitStateHead(t, ws)), shortRev(gitStateHead(t, sub)))
+			}
+			if log := gitStateRun_(t, ws, "diff", "--submodule=log"); strings.Contains(log, "  <") || strings.Contains(log, "not present") {
+				t.Fatalf("the parent records a commit the child lacks:\n%s", log)
+			}
+		})
+	}
+}
+
+// A diverged parent's rescue past a child it leaves behind says so in the
+// tie line (#189 round 20).
+func TestPeerGitRescue_ParentRescuePastAChildSaysSo(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	gitStateCommitFile(t, subSrc, "f.txt", "0\n", "s0")
+	s1 := gitStateCommitFile(t, subSrc, "f.txt", "1\n", "s1")
+	s2 := gitStateCommitFile(t, subSrc, "f.txt", "2\n", "s2")
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s2)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateCommitFile(t, origin, "readme.md", "parent v2\n", "p1 readme and bump s2")
+	gitStateRun_(t, ws, "fetch", "-q", "--no-recurse-submodules")
+
+	// Diverged root: a local commit whose file peer sync removed, p1's readme
+	// delivered; the child keeps s1's files.
+	gitStateCommitFile(t, ws, "docs.md", "mine\n", "local docs")
+	if err := os.Remove(filepath.Join(ws, "docs.md")); err != nil {
+		t.Fatal(err)
+	}
+	gitStateRewriteTracked(t, filepath.Join(ws, "readme.md"), "parent v2\n")
+
+	rep := rescueRealign(t, ws, RealignOptions{Rescue: true, NoPush: true})
+	if rep.Status != GitRepoRealignable || !strings.Contains(rep.TieBreak, "is past what sub holds") {
+		t.Fatalf("rescue = %+v, want a move whose tie line names sub", rep)
+	}
+}

@@ -248,6 +248,7 @@ func (r *gitStateRun) missingGitlink(ctx context.Context, abs, gitdir, gitlink, 
 	fctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	// Only this child: its nested submodules get their own pass.
 	_, err := r.runOutput(fctx, abs, []string{"GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0"}, false, "fetch", "-q", "--no-recurse-submodules", "origin")
+	r.forgetAbsent(abs)
 	cancel()
 	if err != nil {
 		rep.Reason = gitlinkMissing + "; fetch failed: " + shortErr(err)

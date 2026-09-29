@@ -1254,7 +1254,7 @@ func TestPeerGitRealign_ForcedMovePastEveryChildSaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root := gitStateReport(t, res, "."); root.Status != GitRepoRealignable || !strings.Contains(root.TieBreak, "every candidate is past what sub") {
+	if root := gitStateReport(t, res, "."); root.Status != GitRepoRealignable || !strings.Contains(root.TieBreak, "is past what sub holds") {
 		t.Fatalf("root = %+v, want a move whose tie line names sub", root)
 	}
 }
@@ -1392,5 +1392,46 @@ func TestPeerGitRealign_NestedTurnsAgree(t *testing.T) {
 		if log := gitStateRun_(t, repo, "diff", "--submodule=log"); strings.Contains(log, "rewind") {
 			t.Errorf("%s records a rewind:\n%s", repo, log)
 		}
+	}
+}
+
+// A forced move with a single candidate warns too (#189 round 20): the
+// parent's own content needs p1, which records a gitlink the child is not at.
+func TestPeerGitRealign_ForcedSingleMoveSaysSo(t *testing.T) {
+	tmp := t.TempDir()
+	subSrc := filepath.Join(tmp, "sub-src")
+	gitStateInitRepo(t, subSrc)
+	s0 := gitStateCommitFile(t, subSrc, "file.txt", "v0\n", "s0")
+	s1 := gitStateCommitFile(t, subSrc, "file.txt", "v1\n", "s1")
+	origin := filepath.Join(tmp, "origin")
+	gitStateInitRepo(t, origin)
+	gitStateCommitFile(t, origin, "readme.md", "parent\n", "base")
+	gitStateRun_(t, origin, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subSrc, "sub")
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s0)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateRun_(t, origin, "commit", "-q", "-m", "p0")
+	p0 := gitStateHead(t, origin)
+	gitStateRun_(t, origin, "-C", "sub", "checkout", "-q", s1)
+	gitStateRun_(t, origin, "add", "sub")
+	gitStateCommitFile(t, origin, "readme.md", "parent v2\n", "p1 readme and bump s1")
+	ws := filepath.Join(tmp, "ws")
+	gitStateRun_(t, tmp, "-c", "protocol.file.allow=always", "clone", "-q", "--recurse-submodules", origin, ws)
+	gitStateRun_(t, ws, "reset", "-q", "--hard", p0)
+	gitStateRun_(t, ws, "-c", "protocol.file.allow=always", "submodule", "update", "-q")
+	gitStateRewriteTracked(t, filepath.Join(ws, "readme.md"), "parent v2\n")
+
+	res, err := PeerGitRealign(context.Background(), ws, nil, RealignOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := gitStateReport(t, res, "."); root.Status != GitRepoRealignable || !strings.Contains(root.TieBreak, "is past what sub holds") {
+		t.Fatalf("root = %+v, want a move whose tie line names sub", root)
+	}
+}
+
+func TestLackingGroupsPerPath(t *testing.T) {
+	got := lacking([]string{"leaf lacks a1", "leaf lacks a2", "other lacks b1", "leaf lacks a3"})
+	if got != "leaf lacks 3 commits (a1, ...), other lacks b1" {
+		t.Fatalf("lacking = %q", got)
 	}
 }

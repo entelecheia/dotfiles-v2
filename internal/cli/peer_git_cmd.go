@@ -149,8 +149,9 @@ stale-rebase-head with the command that clears it.
 kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
 local), then HEAD and the index move to the matching commit, on the default
 branch for a branch mismatch. The worktree is never written; every move
-prints its undo command. A rescue can still fail (a push), so the parent
-of a rescued child does not move in that run; it follows on the next.
+prints its undo command. A rescue can still fail (a push), so a parent
+does not record a commit past where its rescued child may end; it follows
+on the next run.
 
 Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
 at its upstream tip, a worktree .gitmodules that is missing, or equal to an
