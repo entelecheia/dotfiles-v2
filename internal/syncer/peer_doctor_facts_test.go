@@ -689,3 +689,21 @@ func TestHostMergeVerdictsReadTheOtherMacsCopy(t *testing.T) {
 		t.Fatalf("verdict = %q, want the sync's refusal of the other Mac's symlink", local.CoordConfig.HostMergeError)
 	}
 }
+
+// The other Mac's verdict reads this Mac's copy as the other side: a
+// symlink here stops the other Mac's sync once it coordinates (#203).
+func TestHostMergeVerdictsJudgeThisMacsCopyForTheOther(t *testing.T) {
+	cfg, localHome, _ := claudeJSONFixture(t, `{"mcpServers":{"a":{}}}`, `{"mcpServers":{"b":{}}}`)
+	path := filepath.Join(localHome, ".claude.json")
+	if err := os.Rename(path, path+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(path+".real", path); err != nil {
+		t.Fatal(err)
+	}
+	peer := &PeerSideFacts{CoordConfig: &CoordinatorConfig{HostMergeFiles: []HostMergeFile{{Rel: ".claude.json", State: "ok"}}}}
+	hostMergeVerdicts(context.Background(), peerScheduleRunner(false), cfg, &PeerSideFacts{}, peer, "here", "there")
+	if !strings.Contains(peer.CoordConfig.HostMergeError, "a symlink on here") {
+		t.Fatalf("verdict = %q, want the other Mac's sync refusing this Mac's symlink", peer.CoordConfig.HostMergeError)
+	}
+}

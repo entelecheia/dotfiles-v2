@@ -234,9 +234,8 @@ decides it (a takeover's pending fence settles at the lower epoch's next
 run); a scheduler only on the coordinator; a takeover replica on the other
 Mac that a takeover would accept; the config only the coordinator's copy
 applies (max_delete, propagation, filter files, host_merge,
-include_submodules, shared_excludes, filter_mode) where it differs, and a
-host_merge that would stop the coordinator's sync. The doctor writes
-nothing on either Mac.`,
+include_submodules, filter_mode) where it differs, and a host_merge that
+would stop the coordinator's sync. The doctor writes nothing on either Mac.`,
 		RunE: func(c *cobra.Command, _ []string) error {
 			p := printerFrom(c)
 			if self {

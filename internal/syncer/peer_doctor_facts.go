@@ -112,6 +112,9 @@ func localCoordConfig(cfg *Config) *CoordinatorConfig {
 
 // hostFileState is a host_merge copy's state, in the terms planHostMerges
 // decides by.
+// ponytail: an Lstat error other than not-exist (EACCES, a parent that is a
+// file) reads as nonregular, where the sync errors on the coordinator and
+// its ssh probe reads absent; split the state if that ever shows up.
 func hostFileState(path string) string {
 	info, err := os.Lstat(path)
 	switch {
@@ -726,9 +729,9 @@ func appendConfigChecks(checks []DoctorCheck, local, peer *PeerSideFacts, here, 
 		}
 		msg := s.f.CoordConfig.HostMergeError
 		if s.f.Coordinator {
-			add("config", DoctorFail, s.host+"'s peer sync stops over host_merge: "+msg, "fix host_merge in .dotfiles/peer/config.yaml, or the file it names, on "+s.host)
+			add("config", DoctorFail, s.host+"'s peer sync stops over host_merge: "+msg, "fix host_merge in .dotfiles/peer/config.yaml on "+s.host+", or the file the detail names")
 		} else {
-			add("config", DoctorWarn, s.host+"'s peer sync would stop over host_merge once it coordinates: "+msg, "fix host_merge in .dotfiles/peer/config.yaml, or the file it names, on "+s.host)
+			add("config", DoctorWarn, s.host+"'s peer sync would stop over host_merge once it coordinates: "+msg, "fix host_merge in .dotfiles/peer/config.yaml on "+s.host+", or the file the detail names")
 		}
 	}
 	if checks[len(checks)-1].Name != "config" {
