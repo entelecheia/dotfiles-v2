@@ -8,12 +8,13 @@ Peer sync moves files, not git state: HEAD, index and refs stay behind on
 the machine that did not make the commits. After a switch, the newly active
 Mac realigns instead of pulling: each repo's HEAD and index move forward to
 the descendant commit its files already match, through git's compare-and-swap
-ref update. The worktree is never written by git, uncommitted modifications
-survive, and untracked files never block.
+ref update. Uncommitted modifications survive and untracked files never block;
+the only worktree file git may write is a missing or stale .gitmodules that
+realign --apply restores.
 
 Repos with a lock, an operation in progress, unmerged entries or staged
-changes are skipped and reported. The commands never fetch; run git fetch
-first when fresh upstream state is wanted.
+changes are skipped and reported. Nothing is fetched unless realign runs with
+--apply --fetch; run git fetch first when fresh upstream state is wanted.
 
 ```
 dot peer git [flags]

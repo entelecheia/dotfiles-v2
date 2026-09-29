@@ -5,18 +5,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // GitRepoStatus classifies one discovered repository in a peer git run.
 type GitRepoStatus string
 
 const (
-	// GitRepoAligned means the worktree already matches HEAD's tree.
+	// GitRepoAligned means the worktree already matches HEAD's own content
+	// (gitlinks and .gitmodules aside: the children and peer sync's
+	// exclusion account for those).
 	GitRepoAligned GitRepoStatus = "aligned"
 	// GitRepoRealignable means a strict descendant of HEAD matches the
 	// worktree at least as well as HEAD does.
@@ -49,10 +54,60 @@ type GitRepoReport struct {
 	Target      string `json:"target,omitempty"`
 	TargetDiffs int    `json:"targetDiffs,omitempty"`
 	Candidates  int    `json:"candidates,omitempty"`
-	// PreviousHead is the undo record after an applied realign; restore with
-	// `git reset --mixed -q <PreviousHead>`.
+	// TieBreak says which rule chose Target when several candidates matched
+	// the worktree equally well (#177), and for a move the parent's own
+	// content forces, which children it passes; empty when neither applies.
+	TieBreak string `json:"tieBreak,omitempty"`
+	// PreviousHead is HEAD's commit before an applied move; Undo is the exact
+	// command that restores it (for a branch switch, HEAD's branch too; a
+	// default branch the switch created or fast-forwarded stays, and so does
+	// a .gitmodules the run restored and synced).
 	PreviousHead string `json:"previousHead,omitempty"`
+	// Class refines a no-match or skipped outcome (#178), or an
+	// unresolvable one whose URL moved or whose gitlink commit is missing
+	// (#179), and Suggestion is the one-line next step for it.
+	Class      string `json:"class,omitempty"`
+	Suggestion string `json:"suggestion,omitempty"`
+	// RescueTarget is the commit on the upstream or default branch the files
+	// match, for a diverged or branch-mismatch repo; --rescue moves there.
+	RescueTarget string `json:"rescueTarget,omitempty"`
+	// Rescue names the branch that keeps HEAD's commits when --rescue moves
+	// the repo; RescueRemote is where it is pushed and RescuePushed says it
+	// got there.
+	Rescue       string `json:"rescue,omitempty"`
+	RescueRemote string `json:"rescueRemote,omitempty"` // empty: kept local (--no-push)
+	RescuePushed bool   `json:"rescuePushed,omitempty"`
+	// Undo is the exact command that reverses an applied realign or rescue.
+	Undo string `json:"undo,omitempty"`
+	// Gitmodules reports the worktree .gitmodules against the commit the
+	// repo sits on (or moves to): "stale" (an older committed version peer
+	// sync never replaced), "missing" (absent from the worktree), "restored"
+	// (put back from HEAD by --apply) or "modified" (local edits, left
+	// alone). URLMoves lists the submodule URLs that version changes, or the
+	// origin --fetch re-pointed, "path: old -> new" (#179); URLUndo puts a
+	// re-pointed origin back.
+	Gitmodules string   `json:"gitmodules,omitempty"`
+	URLMoves   []string `json:"urlMoves,omitempty"`
+	URLUndo    string   `json:"urlUndo,omitempty"`
+
+	branch       string // HEAD's branch, empty when detached
+	rescueBranch string // branch-mismatch: the default branch HEAD moves onto
+	remote       string // remote a rescue branch is pushed to
+	rescueDiffs  int    // worktree differences against RescueTarget
+	rescueTie    string // how RescueTarget won a tie, shown once a rescue moves
 }
+
+// Classes of no-match and skipped outcomes (#178) and of unresolvable ones
+// (url-moved, gitlink-missing; #179).
+const (
+	GitClassAtTip           = "at-tip"
+	GitClassAheadUnpushed   = "ahead-unpushed"
+	GitClassDiverged        = "diverged"
+	GitClassBranchMismatch  = "branch-mismatch"
+	GitClassStaleRebaseHead = "stale-rebase-head"
+	GitClassURLMoved        = "url-moved"
+	GitClassGitlinkMissing  = "gitlink-missing"
+)
 
 // GitStateResult is one status or realign run over the workspace tree.
 type GitStateResult struct {
@@ -88,25 +143,90 @@ var GitRepoStatuses = []GitRepoStatus{
 // worktree files. repos optionally restricts the report to
 // workspace-relative paths ("." is the root).
 func PeerGitStatus(ctx context.Context, root string, repos []string) (*GitStateResult, error) {
-	return runGitState(ctx, root, repos, false)
+	return runGitState(ctx, root, repos, RealignOptions{})
 }
 
-// PeerGitRealign runs the same classification and, when apply is true, moves
+// RealignOptions controls PeerGitRealign.
+type RealignOptions struct {
+	// Apply moves HEAD and index; false is a pure preview.
+	Apply bool
+	// Rescue also moves diverged and branch-mismatch repos to the commit
+	// their files match, after keeping HEAD on a rescue branch (#178).
+	Rescue bool
+	// NoPush keeps rescue branches local instead of pushing them.
+	NoPush bool
+	// Fetch lets an applied run fetch a child whose parent gitlink object is
+	// missing, after pointing it at a moved submodule URL, then retry it.
+	Fetch bool
+	// Now dates rescue branch names; nil means time.Now.
+	Now func() time.Time
+}
+
+// PeerGitRealign runs the same classification and, with opts.Apply, moves
 // each realignable repo's HEAD and index to its best candidate through git's
-// lockfile protocol. With apply false it is a pure preview and changes
-// nothing under .git.
-func PeerGitRealign(ctx context.Context, root string, repos []string, apply bool) (*GitStateResult, error) {
-	return runGitState(ctx, root, repos, apply)
+// lockfile protocol. Without Apply it is a pure preview and changes nothing
+// under .git.
+func PeerGitRealign(ctx context.Context, root string, repos []string, opts RealignOptions) (*GitStateResult, error) {
+	return runGitState(ctx, root, repos, opts)
 }
 
-// gitStateRun carries the per-run state: the resolved git binary and the
-// optional repo restriction.
+// gitStateRun carries the per-run state: the resolved git binary, the
+// options and the optional repo restriction.
 type gitStateRun struct {
+	root     string // the workspace, for the restriction's relative paths
 	git      string
+	opts     RealignOptions
 	restrict map[string]bool // nil means all repos
+	env      []string        // the environment without git's repo-local variables
+	// Answers that hold for the whole run, keyed by repo and full commit ids
+	// (a ref name can move, so it is never a key): a present commit stays
+	// present, and ancestry between two present commits never changes. A
+	// missing commit's ancestry is not cached, so a --fetch can still bring
+	// it.
+	present  map[string]bool
+	ancestry map[string]bool
+	// Commits a repo lacks, forgotten after that repo's own fetch
+	// (forgetAbsent), the only place a run brings commits in.
+	absent map[string]bool
+	// contentDiffs, keyed the same way: a run never writes the files it
+	// compares (gitlinks and .gitmodules are left out), so a child scored
+	// for its parent's question is not scored again in its own turn.
+	diffs map[string]int
+	// childTarget's answers by child and the gitlink asked about, and the
+	// gitlinks each commit's tree records.
+	targets map[string]childAnswer
+	links   map[string][]gitlinkEntry
+	// Answers about two commits' trees (sameOwnContent) and a move's
+	// rescue score (rescueDiffs, against the HEAD it names).
+	same    map[string]bool
+	rescued map[string]int
 }
 
-func runGitState(ctx context.Context, root string, repos []string, apply bool) (*GitStateResult, error) {
+// gitCleanEnv drops the variables that pin git to one repository (GIT_DIR,
+// GIT_WORK_TREE, GIT_INDEX_FILE, ...): run from a git hook, they would aim
+// every per-repo command at the hook's repository. Like git entering a
+// submodule, it keeps `git -c` settings (GIT_CONFIG_PARAMETERS,
+// GIT_CONFIG_COUNT and its keys): they are the caller's config, not a repo.
+func gitCleanEnv(ctx context.Context, git string) []string {
+	out, err := exec.CommandContext(ctx, git, "rev-parse", "--local-env-vars").Output()
+	if err != nil {
+		return os.Environ()
+	}
+	local := map[string]bool{}
+	for _, name := range strings.Fields(string(out)) {
+		local[name] = name != "GIT_CONFIG_PARAMETERS" && name != "GIT_CONFIG_COUNT"
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if !local[name] {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
+func runGitState(ctx context.Context, root string, repos []string, opts RealignOptions) (*GitStateResult, error) {
 	root = strings.TrimRight(root, "/")
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
@@ -117,7 +237,10 @@ func runGitState(ctx context.Context, root string, repos []string, apply bool) (
 	if gitPath, err = filepath.Abs(gitPath); err != nil {
 		return nil, fmt.Errorf("resolving git path: %w", err)
 	}
-	run := &gitStateRun{git: gitPath}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	run := &gitStateRun{root: root, git: gitPath, opts: opts, env: gitCleanEnv(ctx, gitPath)}
 	if len(repos) > 0 {
 		run.restrict = map[string]bool{}
 		for _, arg := range repos {
@@ -140,7 +263,7 @@ func runGitState(ctx context.Context, root string, repos []string, apply bool) (
 		}
 	}
 
-	run.process(ctx, root, ".", "", apply, result)
+	run.process(ctx, root, ".", "", "", opts.Apply, result)
 	return result, nil
 }
 
@@ -170,7 +293,7 @@ func (r *gitStateRun) discoverPaths(ctx context.Context, root string) (map[strin
 		if _, err := r.gitDir(ctx, abs); err != nil {
 			return nil // not a checked-out repo: no children to find
 		}
-		gitlinks, err := r.childGitlinks(ctx, abs)
+		gitlinks, err := r.childGitlinks(ctx, abs, "HEAD")
 		if err != nil {
 			return nil // unenumerable: the real pass reports the repo itself
 		}
@@ -198,7 +321,7 @@ func (r *gitStateRun) discoverPaths(ctx context.Context, root string) (map[strin
 // its submodule gitlinks. Children are enumerated AFTER the parent has been
 // processed, so a child's candidate gitlink is read from the parent's
 // realigned HEAD.
-func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, apply bool, result *GitStateResult) {
+func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink, wantURL string, apply bool, result *GitStateResult) {
 	rep := &GitRepoReport{Path: rel}
 	included := r.included(rel)
 	defer func() {
@@ -228,12 +351,35 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, app
 
 	if included {
 		r.classify(ctx, abs, gitdir, gitlink, rep)
+		if rep.Status == GitRepoUnresolvable && rep.Reason == gitlinkMissing {
+			r.missingGitlink(ctx, abs, gitdir, gitlink, wantURL, apply, rep)
+		}
+		if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
+			r.planRescue(ctx, abs, rep)
+		}
 		if apply && rep.Status == GitRepoRealignable {
-			r.realign(ctx, abs, gitdir, rep)
+			if rep.Rescue != "" {
+				r.rescue(ctx, abs, gitdir, rep)
+			} else {
+				r.realign(ctx, abs, gitdir, rep)
+			}
 		}
 	}
 
-	gitlinks, err := r.childGitlinks(ctx, abs)
+	// A preview reads the children from the commit the parent would move to,
+	// so it shows what --apply does: apply reads them from the moved HEAD.
+	rev := "HEAD"
+	if included && !apply && rep.Status == GitRepoRealignable {
+		rev = rep.Target
+	}
+	if included {
+		r.checkGitmodules(ctx, abs, rev, apply, rep)
+	}
+	// Each child learns the URL rev's .gitmodules gives it, read even when
+	// this repo is outside the restriction, so a child whose gitlink commit
+	// is missing can tell a moved URL from a missing fetch.
+	urls := r.gitmodulesURLs(ctx, abs, "--blob", rev+":.gitmodules")
+	gitlinks, err := r.childGitlinks(ctx, abs, rev)
 	if err != nil {
 		// Children of a repo whose HEAD cannot be read cannot be discovered;
 		// say so on the parent rather than failing the whole run, but do not
@@ -250,7 +396,7 @@ func (r *gitStateRun) process(ctx context.Context, abs, rel, gitlink string, app
 		if rel != "." {
 			childRel = rel + "/" + child.path
 		}
-		r.process(ctx, filepath.Join(abs, filepath.FromSlash(child.path)), childRel, child.sha, apply, result)
+		r.process(ctx, filepath.Join(abs, filepath.FromSlash(child.path)), childRel, child.sha, urls[child.path], apply, result)
 	}
 }
 
@@ -259,6 +405,10 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 	if reason := r.blockReason(ctx, abs, gitdir); reason != "" {
 		rep.Status = GitRepoSkipped
 		rep.Reason = reason
+		if reason == staleRebaseHead {
+			rep.Class = GitClassStaleRebaseHead
+			rep.Suggestion = "no rebase is in progress; clear it: git -C " + shellWord(abs) + " update-ref -d REBASE_HEAD"
+		}
 		return
 	}
 
@@ -277,70 +427,576 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 		return
 	}
 	rep.HeadDiffs = headDiffs
-	if headDiffs == 0 {
-		// HEAD's tree matching does not end the search: a strict descendant
-		// with the same tree (empty commits, a net-unchanged sequence, or the
-		// parent gitlink) would otherwise leave HEAD behind forever. Moving
-		// is fast-forward onto a descendant, so no commit is ever dropped.
-		if cands, cerr := r.candidates(ctx, abs, head, gitlink); cerr == nil {
-			rep.Candidates = len(cands)
-			for _, cand := range cands {
-				diffs, derr := r.contentDiffs(ctx, abs, gitdir, cand)
-				if derr != nil {
-					break
-				}
-				if diffs == 0 {
-					rep.Status = GitRepoRealignable
-					rep.Target = cand
-					rep.TargetDiffs = 0
-					return
-				}
-			}
-		}
-		rep.Status = GitRepoAligned
-		return
-	}
-
+	// HEAD's tree matching does not end the search: a strict descendant with
+	// the same content (empty commits, a net-unchanged sequence, gitlink-only
+	// commits, or the parent gitlink) would otherwise leave HEAD behind
+	// forever. Moving is fast-forward onto a descendant, so no commit is ever
+	// dropped. While HEAD matches, a candidate that cannot be read keeps the
+	// repo aligned instead of unresolvable.
+	aligned := func() { rep.Status = GitRepoAligned }
 	candidates, err := r.candidates(ctx, abs, head, gitlink)
 	if err != nil {
+		// A missing parent gitlink commit is reported even when HEAD's own
+		// content matches: its content can be identical while the parent
+		// already points past HEAD, and only the report leads to the fetch.
+		if headDiffs == 0 && err.Error() != gitlinkMissing {
+			aligned()
+			return
+		}
 		rep.Status = GitRepoUnresolvable
 		rep.Reason = err.Error()
 		return
 	}
 	rep.Candidates = len(candidates)
 	if len(candidates) == 0 {
+		if headDiffs == 0 {
+			aligned()
+			return
+		}
 		rep.Status = GitRepoNoMatch
 		rep.Reason = "no strict descendant candidate"
+		r.classifyNoMatch(ctx, abs, gitdir, rep)
 		return
 	}
 
-	best, bestDiffs := "", -1
+	var tied []string
+	bestDiffs := -1
 	for _, cand := range candidates {
 		diffs, err := r.contentDiffs(ctx, abs, gitdir, cand)
 		if err != nil {
+			if headDiffs == 0 {
+				aligned()
+				return
+			}
 			rep.Status = GitRepoUnresolvable
 			rep.Reason = "cannot read candidate tree: " + shortErr(err)
 			return
 		}
-		if bestDiffs < 0 || diffs < bestDiffs {
-			best, bestDiffs = cand, diffs
+		switch {
+		case bestDiffs < 0 || diffs < bestDiffs:
+			bestDiffs, tied = diffs, []string{cand}
+		case diffs == bestDiffs:
+			tied = append(tied, cand)
 		}
 	}
-	// A tie (best == headDiffs) is still a realign: moving to a strict
-	// descendant never makes the classification worse, and a parent whose
-	// only drift is a child's gitlink must move so the child's own realign
-	// reads the parent's new HEAD.
 	if bestDiffs > headDiffs {
+		if headDiffs == 0 {
+			aligned()
+			return
+		}
 		rep.Status = GitRepoNoMatch
 		rep.Reason = "no descendant commit improves on HEAD"
-		rep.Target = best
+		rep.Target = tied[0]
 		rep.TargetDiffs = bestDiffs
+		r.classifyNoMatch(ctx, abs, gitdir, rep)
+		return
+	}
+	// A tie with HEAD (best == headDiffs) is still a realign unless the
+	// children say HEAD is right: moving to a strict descendant never makes
+	// the own-content classification worse, and a parent whose only drift is
+	// in its children's gitlinks must move so each child reads the new
+	// gitlinks. But a clean parent must not move past gitlink bumps whose
+	// content its children do not have yet.
+	headTie := ""
+	if bestDiffs == headDiffs {
+		headTie = head
+	}
+	target, rule, stay := r.breakTie(ctx, abs, gitlink, headTie, headDiffs > 0, tied)
+	rep.TieBreak = rule
+	if stay {
+		if headDiffs == 0 {
+			aligned()
+			return
+		}
+		rep.Status = GitRepoNoMatch
+		rep.Reason = "HEAD wins the tie with its descendants (see tie)"
+		r.classifyNoMatch(ctx, abs, gitdir, rep)
 		return
 	}
 	rep.Status = GitRepoRealignable
-	rep.Target = best
+	rep.Target = target
 	rep.TargetDiffs = bestDiffs
 }
+
+// breakTie picks among candidates whose own content matches the worktree
+// equally well. Content excludes gitlinks, so a run of gitlink-only commits
+// ties, and taking the nearest one (the old rule) moved a parent to its
+// oldest candidate and every child to a stale gitlink (#177). In order:
+//
+//  1. children: each child tells where its own turn ends with the gitlink a
+//     candidate records (childTarget), and a candidate may not record a
+//     gitlink the child does not end at or past; of the rest, those whose
+//     gitlinks name exactly where the children end win.
+//     When HEAD ties too (head is set), it competes, and stay reports that
+//     it won or that no candidate was left. On an inexact tie (edited
+//     files) a candidate whose own content differs from HEAD's drops out
+//     first: the edits could sit on either, and staying moves nothing;
+//  2. the parent's gitlink, which keeps the parent's status clean;
+//  3. the newest candidate, the upstream tip side of the chain.
+//
+// It returns the choice and a one-line account of the rule, empty when a
+// lone candidate had nothing to beat and a forced move passes no child.
+//
+// A forced move (no head: the parent's own content needs it, whatever the
+// children hold) also names the children it passes, so the user is warned
+// before a commit -a records a rewind (#189 rounds 16-20).
+func (r *gitStateRun) breakTie(ctx context.Context, abs, gitlink, head string, inexact bool, tied []string) (string, string, bool) {
+	choice, rule, stay := r.pickTied(ctx, abs, gitlink, head, inexact, tied)
+	if head == "" && !stay {
+		if past := r.passedChildren(ctx, abs, choice); past != "" {
+			if rule != "" {
+				rule += "; "
+			}
+			rule += shortRev(choice) + " is past what " + past + " holds, so a commit -a before they catch up records them going back (or, for one never delivered, removed)"
+		}
+	}
+	return choice, rule, stay
+}
+
+func (r *gitStateRun) pickTied(ctx context.Context, abs, gitlink, head string, inexact bool, tied []string) (string, string, bool) {
+	contenders := tied
+	prefix := fmt.Sprintf("%d candidates tie on content; ", len(tied))
+	if head != "" {
+		prefix = fmt.Sprintf("HEAD and %d candidate(s) tie on content; ", len(tied))
+		if inexact {
+			tied = slices.DeleteFunc(slices.Clone(tied), func(c string) bool { return !r.sameOwnContent(ctx, abs, head, c) })
+			if len(tied) == 0 {
+				return "", prefix + "the edited files differ from every candidate's own content, so HEAD stays", true
+			}
+		}
+		contenders = append([]string{head}, tied...)
+	}
+	if len(contenders) == 1 {
+		return tied[0], "", false
+	}
+	pool, children := r.bestByChildren(ctx, abs, contenders, head != "")
+	if len(pool) == 0 {
+		return "", prefix + children + ", so HEAD stays", true
+	}
+	if len(pool) == 1 {
+		if children == "" {
+			children = "no child tells them apart"
+		}
+		return pool[0], prefix + children, false
+	}
+	if children != "" {
+		prefix += children + ", then "
+	}
+	for _, cand := range pool {
+		if cand == gitlink {
+			return cand, prefix + "parent gitlink", false
+		}
+	}
+	return r.newest(ctx, abs, pool), prefix + "newest candidate", false
+}
+
+// newest is the pool member that descends from every other one, so the
+// choice does not depend on list order (a child's own run and its parent's
+// question list its commits differently). Without one, the last in order:
+// the first-parent chain runs nearest HEAD first. One merge-base call
+// answers it: the only independent commit of the pool is that member.
+func (r *gitStateRun) newest(ctx context.Context, abs string, pool []string) string {
+	out, err := r.read(ctx, abs, append([]string{"merge-base", "--independent"}, pool...)...)
+	if err == nil && slices.Contains(pool, out) {
+		return out
+	}
+	return pool[len(pool)-1]
+}
+
+// bestByChildren is childrenEvidence for breakTie: the candidates left
+// (none when HEAD stays) and an account of the children's evidence, empty
+// when it decided nothing and no commit was missing.
+func (r *gitStateRun) bestByChildren(ctx context.Context, abs string, tied []string, withHead bool) ([]string, string) {
+	ev := r.childrenEvidence(ctx, abs, tied, withHead)
+	note := ""
+	if len(ev.unknown) > 0 {
+		note = " (" + lacking(ev.unknown) + "; fetch it there, from the URL the candidate's .gitmodules names if it moved, then realign again)"
+	}
+	pool := ev.pool
+	if withHead {
+		if len(pool) == 1 && pool[0] == tied[0] {
+			why := "the children are where HEAD's gitlinks say"
+			if len(ev.behind) > 0 {
+				why = "the children have not reached a candidate's gitlinks (" + strings.Join(ev.behind, ", ") + ")"
+			}
+			return nil, why + note
+		}
+		pool = slices.DeleteFunc(slices.Clone(pool), func(c string) bool { return c == tied[0] })
+	}
+	switch {
+	case ev.split:
+		var why []string
+		if ev.decided > 0 {
+			why = append(why, fmt.Sprintf("children are at %d of %d differing gitlinks", ev.best, ev.decided))
+		}
+		if len(ev.behind) > 0 {
+			why = append(why, "not reached: "+strings.Join(ev.behind, ", "))
+		}
+		return pool, strings.Join(why, "; ") + note
+	case note != "":
+		return pool, "children cannot tell" + note
+	}
+	return pool, ""
+}
+
+// passedChildren lists the children whose gitlink the move to choice
+// changes and whose own turn will not end at or past it (or that lack the
+// commit, or were never delivered).
+func (r *gitStateRun) passedChildren(ctx context.Context, abs, choice string) string {
+	head, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "HEAD")
+	if err != nil {
+		return ""
+	}
+	now, err := r.childGitlinks(ctx, abs, head)
+	if err != nil {
+		return ""
+	}
+	next, err := r.childGitlinks(ctx, abs, choice)
+	if err != nil {
+		return ""
+	}
+	was := map[string]string{}
+	for _, e := range now {
+		was[e.path] = e.sha
+	}
+	var past []string
+	for _, e := range next {
+		if e.sha == was[e.path] {
+			continue
+		}
+		child := filepath.Join(abs, filepath.FromSlash(e.path))
+		if _, err := os.Lstat(child); os.IsNotExist(err) {
+			past = append(past, e.path) // never delivered: a commit -a records its removal
+			continue
+		}
+		if _, err := r.gitDir(ctx, child); err != nil {
+			continue // delivered files with no checkout: nothing to rewind
+		}
+		if !r.hasCommit(ctx, child, e.sha) {
+			past = append(past, e.path)
+		} else if a := r.childTarget(ctx, child, e.sha); a.ok && r.pastChild(ctx, child, e.sha, a) {
+			past = append(past, e.path)
+		}
+	}
+	return strings.Join(past, ", ")
+}
+
+// pastChild reports a gitlink sha that some ending of the child's turn is
+// neither at nor past: recording it leaves the child behind.
+func (r *gitStateRun) pastChild(ctx context.Context, child, sha string, a childAnswer) bool {
+	return slices.ContainsFunc(a.ends, func(end string) bool { return end != sha && !r.strictDescendant(ctx, child, sha, end) })
+}
+
+// lacking groups "<path> lacks <sha>" notes per path, so a child missing
+// many commits reads as one item.
+func lacking(unknown []string) string {
+	var paths []string
+	shas := map[string][]string{}
+	for _, note := range unknown {
+		path, sha, _ := strings.Cut(note, " lacks ")
+		if _, seen := shas[path]; !seen {
+			paths = append(paths, path)
+		}
+		shas[path] = append(shas[path], sha)
+	}
+	var out []string
+	for _, path := range paths {
+		if n := len(shas[path]); n > 1 {
+			out = append(out, fmt.Sprintf("%s lacks %d commits (%s, ...)", path, n, shas[path][0]))
+			continue
+		}
+		out = append(out, path+" lacks "+shas[path][0])
+	}
+	return strings.Join(out, ", ")
+}
+
+// tieEvidence is what the children say about contenders that tie on
+// content.
+type tieEvidence struct {
+	pool    []string // the top contenders, in order, HEAD among them when it is
+	decided int      // differing gitlinks whose child is exactly at one of them
+	best    int      // the exact placements each of the pool got
+	split   bool     // the evidence told the contenders apart
+	behind  []string // the paths whose child has not reached a candidate's gitlink
+	unknown []string // "<path> lacks <sha>": commits a child could not compare with
+}
+
+// childrenEvidence asks each child whose gitlink differs between the
+// contenders where it ends once each contender is recorded (childTarget:
+// its own turn with that gitlink) and judges the contender by it. A
+// contender whose commit the child does not end at or past would move the
+// parent past a bump the child never takes, and a later commit -a would
+// record it reverted; the same holds for a submodule it adds whose checkout
+// was never delivered, and for a commit the child lacks while its files, or
+// a run that leaves it alone, hold it elsewhere. With withHead, tied[0] is
+// HEAD, which such a record never drops: the others are dropped, and with
+// none left HEAD alone is the pool.
+// Without it (the parent's own content needs a move) they are only a last
+// resort. The rest are scored by how many gitlinks name exactly where their
+// child is.
+func (r *gitStateRun) childrenEvidence(ctx context.Context, abs string, tied []string, withHead bool) tieEvidence {
+	links := make([]map[string]string, len(tied))
+	varying := map[string]bool{}
+	for i, cand := range tied {
+		entries, err := r.childGitlinks(ctx, abs, cand)
+		if err != nil {
+			return tieEvidence{pool: tied}
+		}
+		links[i] = map[string]string{}
+		for _, e := range entries {
+			links[i][e.path] = e.sha
+		}
+	}
+	for i := range tied {
+		for path, sha := range links[i] {
+			for _, other := range links {
+				if other[path] != sha {
+					varying[path] = true
+				}
+			}
+		}
+	}
+	var ev tieEvidence
+	scores := make([]int, len(tied))
+	behind := make([]bool, len(tied))
+	for _, path := range slices.Sorted(maps.Keys(varying)) {
+		child := filepath.Join(abs, filepath.FromSlash(path))
+		if _, err := os.Lstat(child); os.IsNotExist(err) {
+			// Not delivered: a contender that adds the submodule would leave
+			// it deleted in the worktree.
+			for i := range tied {
+				if links[i][path] != "" && (!withHead || links[0][path] == "") {
+					behind[i] = true
+					if !slices.Contains(ev.behind, path) {
+						ev.behind = append(ev.behind, path)
+					}
+				}
+			}
+			continue
+		}
+		dropped := func(i int, held string) {
+			behind[i] = true
+			label := path
+			if held != "" {
+				label += " (left alone: " + held + ")"
+			}
+			if !slices.Contains(ev.behind, label) {
+				ev.behind = append(ev.behind, label)
+			}
+		}
+		placed := false
+		for i := range tied {
+			sha := links[i][path]
+			if sha == "" {
+				continue // a removal: the checkout stays as an untracked directory
+			}
+			if !r.hasCommit(ctx, child, sha) {
+				// It could be where the content is; only an exact match
+				// elsewhere, or a child left alone, says it is not (the #179
+				// case moves on).
+				a := r.childTarget(ctx, child, "")
+				if !a.ok {
+					continue
+				}
+				if note := path + " lacks " + shortRev(sha); !slices.Contains(ev.unknown, note) {
+					ev.unknown = append(ev.unknown, note)
+				}
+				if a.known || a.held != "" {
+					dropped(i, a.held)
+				}
+				continue
+			}
+			// Where the child ends once this contender is recorded: its own
+			// turn, with that gitlink.
+			a := r.childTarget(ctx, child, sha)
+			switch {
+			case !a.ok:
+				// No checkout to ask (a delivered addition has no .git).
+			case r.pastChild(ctx, child, sha, a):
+				dropped(i, a.held)
+			case a.exact && len(a.ends) == 1 && a.ends[0] == sha:
+				scores[i]++
+				placed = true
+			default:
+				// The child ends at or ahead of it: a forward change to record.
+			}
+		}
+		if placed {
+			ev.decided++
+		}
+	}
+	first := 0
+	if withHead {
+		first = 1
+	}
+	eligible := func(i int) bool { return i < first || !behind[i] }
+	if !withHead && !slices.ContainsFunc(tied, func(c string) bool { return !behind[slices.Index(tied, c)] }) {
+		// The parent's own content needs a move: the rules below pick among
+		// them all, and breakTie warns about the children the move passes.
+		eligible = func(int) bool { return true }
+	}
+	best, worst, dropped := -1, -1, false
+	for i := range tied {
+		if !eligible(i) {
+			dropped = true
+			continue
+		}
+		best = max(best, scores[i])
+		if worst < 0 || scores[i] < worst {
+			worst = scores[i]
+		}
+	}
+	for i := range tied {
+		if eligible(i) && scores[i] == best {
+			ev.pool = append(ev.pool, tied[i])
+		}
+	}
+	ev.best = best
+	ev.split = best != worst || dropped
+	return ev
+}
+
+// childTarget is where the child checkout at abs can end when its parent
+// records gitlink ("" asks where it is without one): the child's own turn
+// (classify, then a planned rescue) run on a report that is thrown away, so
+// the parent's question and the child's answer cannot differ (#189 round
+// 17). A rescue can fail after the parent has moved (a push, a ref it
+// cannot create), so it has two endings, HEAD and its target, and the
+// parent must hold for both (round 19). A child this run leaves alone (a
+// lock, an operation, staged changes, a linked worktree, outside the
+// restriction) stays at HEAD whatever its files show, and held says why.
+func (r *gitStateRun) childTarget(ctx context.Context, abs, gitlink string) childAnswer {
+	key := abs + "\x00" + gitlink
+	if a, ok := r.targets[key]; ok {
+		return a
+	}
+	a := r.childTurn(ctx, abs, gitlink)
+	if r.targets == nil {
+		r.targets = map[string]childAnswer{}
+	}
+	r.targets[key] = a
+	return a
+}
+
+// childAnswer is a remembered childTarget. A child is asked only before its
+// own turn moves anything, so an answer holds for the run.
+type childAnswer struct {
+	ends  []string // where it can end: one commit, or HEAD and a rescue's target
+	exact bool     // its files match the one ending with no difference
+	known bool     // its files match a commit it has (HEAD or where it moves) exactly
+	ok    bool     // false when there is no checkout to read
+	held  string   // why this run leaves it alone
+}
+
+func (r *gitStateRun) childTurn(ctx context.Context, abs, gitlink string) childAnswer {
+	gitdir, err := r.gitDir(ctx, abs)
+	if err != nil {
+		return childAnswer{}
+	}
+	if held := r.leftAlone(ctx, abs, gitdir); held != "" {
+		head, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "HEAD")
+		if err != nil {
+			return childAnswer{}
+		}
+		diffs, err := r.contentDiffs(ctx, abs, gitdir, head)
+		if err != nil {
+			return childAnswer{}
+		}
+		return childAnswer{ends: []string{head}, exact: diffs == 0, known: diffs == 0, ok: true, held: held}
+	}
+	rep := &GitRepoReport{}
+	r.classify(ctx, abs, gitdir, gitlink, rep)
+	if r.opts.Rescue && rep.Status == GitRepoNoMatch && rep.RescueTarget != "" {
+		if r.planRescue(ctx, abs, rep); rep.Status == GitRepoRealignable {
+			return childAnswer{ends: []string{rep.Head, rep.Target}, known: rep.TargetDiffs == 0, ok: true}
+		}
+	}
+	switch {
+	case rep.Head == "":
+		return childAnswer{}
+	case rep.Status == GitRepoRealignable:
+		return childAnswer{ends: []string{rep.Target}, exact: rep.TargetDiffs == 0, known: rep.TargetDiffs == 0 || rep.HeadDiffs == 0, ok: true}
+	}
+	return childAnswer{ends: []string{rep.Head}, exact: rep.HeadDiffs == 0, known: rep.HeadDiffs == 0, ok: true}
+}
+
+// leftAlone says why process will not realign the checkout at abs, as it
+// decides: a linked worktree, a repo outside the restriction, a block.
+func (r *gitStateRun) leftAlone(ctx context.Context, abs, gitdir string) string {
+	if _, err := os.Stat(filepath.Join(gitdir, "commondir")); err == nil {
+		return "linked worktree"
+	}
+	if rel, err := filepath.Rel(r.root, abs); err == nil && !r.included(filepath.ToSlash(rel)) {
+		return "not named in the restriction"
+	}
+	return r.blockReason(ctx, abs, gitdir)
+}
+
+// sameOwnContent reports two commits with the same content outside their
+// gitlinks and .gitmodules: they differ in their children only.
+func (r *gitStateRun) sameOwnContent(ctx context.Context, abs, a, b string) bool {
+	key := abs + "\x00" + a + "\x00" + b
+	if same, ok := r.same[key]; ok {
+		return same
+	}
+	code, err := r.run(ctx, abs, nil, true, "diff", "--quiet", "--ignore-submodules", a, b, "--", ".", ":(exclude).gitmodules")
+	if err != nil || code > 1 {
+		return false
+	}
+	if r.same == nil {
+		r.same = map[string]bool{}
+	}
+	if isCommitID(a) && isCommitID(b) {
+		r.same[key] = code == 0
+	}
+	return code == 0
+}
+
+// forgetAbsent drops what the run remembered as missing in the repo at abs,
+// after a fetch there.
+func (r *gitStateRun) forgetAbsent(abs string) {
+	for key := range r.absent {
+		if strings.HasPrefix(key, abs+"\x00") {
+			delete(r.absent, key)
+		}
+	}
+}
+
+// isCommitID reports a full object id, the only key the run's caches take.
+func isCommitID(s string) bool {
+	return (len(s) == 40 || len(s) == 64) && strings.Trim(s, "0123456789abcdef") == ""
+}
+
+func (r *gitStateRun) hasCommit(ctx context.Context, abs, sha string) bool {
+	key := abs + "\x00" + sha
+	if r.present[key] {
+		return true
+	}
+	if r.absent[key] {
+		return false
+	}
+	if _, err := r.read(ctx, abs, "cat-file", "-e", sha+"^{commit}"); err != nil {
+		if isCommitID(sha) {
+			if r.absent == nil {
+				r.absent = map[string]bool{}
+			}
+			r.absent[key] = true
+		}
+		return false
+	}
+	if r.present == nil {
+		r.present = map[string]bool{}
+	}
+	if isCommitID(sha) {
+		r.present[key] = true
+	}
+	return true
+}
+
+const (
+	staleRebaseHead = "stale REBASE_HEAD"
+	gitlinkMissing  = "parent gitlink object is not present locally"
+)
 
 // blockReason reports why a repo must be skipped and reported rather than
 // classified or realigned: a lock, an operation in progress, unmerged
@@ -356,7 +1012,7 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 	} else if strings.TrimSpace(out) != "" {
 		return "unmerged index entries"
 	}
-	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"} {
+	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
 		if _, err := os.Stat(filepath.Join(gitdir, marker)); err == nil {
 			return "operation in progress (" + marker + ")"
 		}
@@ -365,6 +1021,11 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 		if st, err := os.Stat(filepath.Join(gitdir, dir)); err == nil && st.IsDir() {
 			return "operation in progress (" + dir + ")"
 		}
+	}
+	// A rebase in progress always has one of the directories above; a
+	// REBASE_HEAD without them is a leftover (#178).
+	if _, err := os.Stat(filepath.Join(gitdir, "REBASE_HEAD")); err == nil {
+		return staleRebaseHead
 	}
 	if _, err := r.read(ctx, abs, "diff", "--cached", "--quiet"); err != nil {
 		var exitErr *gitExitError
@@ -383,8 +1044,8 @@ func (r *gitStateRun) blockReason(ctx context.Context, abs, gitdir string) strin
 func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string) ([]string, error) {
 	var out []string
 	if gitlink != "" && gitlink != head {
-		if _, err := r.read(ctx, abs, "cat-file", "-e", gitlink+"^{commit}"); err != nil {
-			return nil, errors.New("parent gitlink object is not present locally")
+		if !r.hasCommit(ctx, abs, gitlink) {
+			return nil, errors.New(gitlinkMissing)
 		}
 		if r.strictDescendant(ctx, abs, head, gitlink) {
 			out = append(out, gitlink)
@@ -400,8 +1061,8 @@ func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string)
 	lines := strings.Split(strings.TrimSpace(chain), "\n")
 	for i := len(lines) - 1; i >= 0; i-- { // rev-list is newest-first; want nearest HEAD first
 		sha := strings.TrimSpace(lines[i])
-		if sha == "" || sha == head {
-			continue
+		if sha == "" || sha == head || sha == gitlink {
+			continue // the parent gitlink is already the first candidate
 		}
 		if r.strictDescendant(ctx, abs, head, sha) {
 			out = append(out, sha)
@@ -417,8 +1078,21 @@ func (r *gitStateRun) strictDescendant(ctx context.Context, abs, head, cand stri
 	if cand == head {
 		return false
 	}
+	key := abs + "\x00" + head + "\x00" + cand
+	if yes, ok := r.ancestry[key]; ok {
+		return yes
+	}
 	code, err := r.run(ctx, abs, nil, true, "merge-base", "--is-ancestor", head, cand)
-	return err == nil && code == 0
+	if err != nil || code > 1 {
+		return false // a missing commit: ask again after a fetch
+	}
+	if r.ancestry == nil {
+		r.ancestry = map[string]bool{}
+	}
+	if isCommitID(head) && isCommitID(cand) {
+		r.ancestry[key] = code == 0
+	}
+	return code == 0
 }
 
 // contentDiffs counts tracked files whose worktree content differs from a
@@ -426,6 +1100,10 @@ func (r *gitStateRun) strictDescendant(ctx context.Context, abs, head, cand stri
 // read-tree -m into it, refresh stat info, then diff-files. This writes no
 // objects and holds no lock on the real index. Untracked files never appear.
 func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit string) (int, error) {
+	key := abs + "\x00" + commit
+	if n, ok := r.diffs[key]; ok {
+		return n, nil
+	}
 	tempIndex, cleanup, err := r.tempIndexFor(ctx, abs, gitdir, commit)
 	if err != nil {
 		return -1, err
@@ -435,7 +1113,11 @@ func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit stri
 	// update-index exits non-zero exactly when files need update; that is the
 	// expected signal here, not an error.
 	_, _ = r.run(ctx, abs, env, false, "update-index", "-q", "--refresh")
-	out, err := r.readEnv(ctx, abs, env, "diff-files", "--name-only")
+	// Gitlinks are the children's business: a child realigns separately and
+	// its HEAD is stale until then, so counting it here would favor the
+	// parent commit that changed the fewest gitlinks (#177). .gitmodules is
+	// never carried by peer sync, so it is no evidence either (#179).
+	out, err := r.readEnv(ctx, abs, env, "diff-files", "--ignore-submodules", "--name-only", "--", ":(exclude).gitmodules")
 	if err != nil {
 		return -1, err
 	}
@@ -444,6 +1126,12 @@ func (r *gitStateRun) contentDiffs(ctx context.Context, abs, gitdir, commit stri
 		if strings.TrimSpace(line) != "" {
 			count++
 		}
+	}
+	if r.diffs == nil {
+		r.diffs = map[string]int{}
+	}
+	if isCommitID(commit) { // a ref name can move within a run
+		r.diffs[key] = count
 	}
 	return count, nil
 }
@@ -561,10 +1249,31 @@ func (r *gitStateRun) realign(ctx context.Context, abs, gitdir string, rep *GitR
 	}
 	rep.PreviousHead = rep.Head
 	rep.Status = GitRepoRealigned
+	rep.Undo = "git -C " + shellWord(abs) + " reset --mixed -q " + rep.Head
 }
 
 // gitDir resolves the absolute gitdir of the checkout at abs.
+//
+// abs must be the top level of that checkout. git searches upward from a
+// directory without its own .git, so an uninitialized submodule (an empty
+// directory, a deinit, files peer sync delivered without the gitfile) would
+// otherwise resolve to the parent: the parent would be classified, fetched
+// and re-pointed as if it were the child, and ls-tree there lists the
+// child's own gitlink as "./", recursing forever.
 func (r *gitStateRun) gitDir(ctx context.Context, abs string) (string, error) {
+	top, err := r.read(ctx, abs, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	want, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	// SameFile, not a path compare: symlinks and a case-insensitive volume
+	// spell one directory several ways.
+	if got, err := os.Stat(top); err != nil || !os.SameFile(got, want) {
+		return "", fmt.Errorf("%s is not the top of a checkout (git resolves it to %s)", abs, top)
+	}
 	return r.read(ctx, abs, "rev-parse", "--absolute-git-dir")
 }
 
@@ -573,11 +1282,15 @@ type gitlinkEntry struct {
 	sha  string
 }
 
-// childGitlinks lists the submodule gitlinks recorded in the repo's current
-// HEAD: ls-tree mode 160000 entries, at any depth within this repo (ls-tree
-// does not cross into submodules).
-func (r *gitStateRun) childGitlinks(ctx context.Context, abs string) ([]gitlinkEntry, error) {
-	out, err := r.read(ctx, abs, "ls-tree", "-r", "-z", "HEAD")
+// childGitlinks lists the submodule gitlinks recorded in commit rev: ls-tree
+// mode 160000 entries, at any depth within this repo (ls-tree does not cross
+// into submodules).
+func (r *gitStateRun) childGitlinks(ctx context.Context, abs, rev string) ([]gitlinkEntry, error) {
+	key := abs + "\x00" + rev
+	if entries, ok := r.links[key]; ok {
+		return entries, nil
+	}
+	out, err := r.read(ctx, abs, "ls-tree", "-r", "-z", rev)
 	if err != nil {
 		return nil, err
 	}
@@ -592,6 +1305,12 @@ func (r *gitStateRun) childGitlinks(ctx context.Context, abs string) ([]gitlinkE
 			continue
 		}
 		entries = append(entries, gitlinkEntry{path: string(path), sha: string(fields[2])})
+	}
+	if isCommitID(rev) { // a commit's tree never changes; HEAD does
+		if r.links == nil {
+			r.links = map[string][]gitlinkEntry{}
+		}
+		r.links[key] = entries
 	}
 	return entries, nil
 }
@@ -631,7 +1350,14 @@ func (r *gitStateRun) runOutput(ctx context.Context, abs string, env []string, r
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, r.git, full...)
 	cmd.Dir = abs
-	cmd.Env = append(os.Environ(), env...)
+	// After a timeout kills git, its ssh or https helper can hold the output
+	// pipes open; stop waiting on them.
+	cmd.WaitDelay = 5 * time.Second
+	base := r.env
+	if base == nil {
+		base = os.Environ() // a run built without runGitState
+	}
+	cmd.Env = append(append([]string{}, base...), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

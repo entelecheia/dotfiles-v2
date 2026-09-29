@@ -264,10 +264,31 @@ tool):
   together by `dot peer git realign --apply` through git's lockfile
   protocol (compare-and-swap `update-ref`, fast-forward only onto a
   strict descendant, the old value recorded in the reflog for undo).
-  The worktree is never written by git; preview (`dot peer git status`,
-  default `realign`, `--dry-run`) writes nothing; linked worktrees and
-  locked, staged, conflicting or in-progress repositories are never
-  touched.
+  Only `--rescue` moves a branch sideways: HEAD's commits are first kept
+  on a new `rescue/<yymmdd>-<branch>` ref (create-only) and pushed where
+  git pushes the branch (pushRemote, pushDefault, then its remote, with
+  `--no-verify` so no pre-push hook runs) unless `--no-push`; then the branch, or for a branch mismatch the default
+  branch (created with `branch.<name>.remote` and `.merge` pointing at
+  origin's, or fast-forwarded; never while a linked worktree has it checked
+  out; HEAD re-pointed after re-checking it under the index lock), moves
+  under the same protocol.
+- `<workspace repo>/.gitmodules`: restored from the index by
+  `realign --apply` only when it equals an older committed version or is
+  missing (peer sync never carries it), then `git submodule sync` for the
+  URLs it moves (`.git/config` and the submodule's default remote URL: its
+  branch's remote, else origin), only in submodules the run names and that
+  are not locked or mid-operation, each rewritten remote URL printed with
+  its undo. With `--apply --fetch` a submodule whose gitlink commit is
+  missing (and is a checkout of its own, never a directory git resolves to
+  the parent) gets `git fetch --no-recurse-submodules` under git
+  submodule's protocol rules (`GIT_PROTOCOL_FROM_USER=0`), after
+  `remote set-url origin` when its URL moved (both URLs compared as git
+  resolves them, `url.<base>.insteadOf` included); the old URL is put back
+  if that fetch fails.
+  Otherwise the worktree is never written by git; preview (`dot peer git
+  status`, default `realign`, `--dry-run`) writes nothing; linked
+  worktrees and locked, staged, conflicting or in-progress repositories
+  are never touched.
 - host files the operator lists under `host_merge` in the peer config (for
   example `~/.claude.json`), on both machines: before the additive
   host-path pass of a two-way `dot peer sync`, the entries of the listed

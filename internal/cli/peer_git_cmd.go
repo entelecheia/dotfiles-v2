@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -69,12 +70,13 @@ func newPeerGitCmd() *cobra.Command {
 the machine that did not make the commits. After a switch, the newly active
 Mac realigns instead of pulling: each repo's HEAD and index move forward to
 the descendant commit its files already match, through git's compare-and-swap
-ref update. The worktree is never written by git, uncommitted modifications
-survive, and untracked files never block.
+ref update. Uncommitted modifications survive and untracked files never block;
+the only worktree file git may write is a missing or stale .gitmodules that
+realign --apply restores.
 
 Repos with a lock, an operation in progress, unmerged entries or staged
-changes are skipped and reported. The commands never fetch; run git fetch
-first when fresh upstream state is wanted.`,
+changes are skipped and reported. Nothing is fetched unless realign runs with
+--apply --fetch; run git fetch first when fresh upstream state is wanted.`,
 		RunE: func(c *cobra.Command, _ []string) error { return c.Help() },
 	}
 	cmd.AddCommand(newPeerGitStatusCmd())
@@ -125,10 +127,44 @@ func newPeerGitStatusCmd() *cobra.Command {
 }
 
 func newPeerGitRealignCmd() *cobra.Command {
-	var apply bool
+	var apply, rescue, noPush, fetch bool
 	cmd := &cobra.Command{
-		Use:          "realign [--apply] [<repo>...]",
-		Short:        "Move HEAD and index to the descendant commit the files already match",
+		Use:   "realign [--apply [--fetch]] [--rescue [--no-push]] [<repo>...]",
+		Short: "Move HEAD and index to the descendant commit the files already match",
+		Long: `Move each repo's HEAD and index forward to the descendant commit its files
+already match. The default is a preview; --apply moves.
+
+A repo with no such descendant is reported as no-match with a class and the
+next step:
+  at-tip            at the upstream tip; only uncommitted changes differ
+  ahead-unpushed    local-only commits the upstream lacks; push them
+  diverged          local-only commits and upstream commits; the files match
+                    an upstream commit
+  branch-mismatch   HEAD is on another branch, the files match the default
+                    branch
+A leftover REBASE_HEAD with no rebase in progress is skipped as
+stale-rebase-head with the command that clears it.
+
+--rescue also moves diverged and branch-mismatch repos: HEAD's commits are
+kept on rescue/<yymmdd>-<branch>, pushed to the remote without hooks
+(--no-push keeps it local), then HEAD and the index move to the matching
+commit, on the default branch for a branch mismatch. No worktree file but
+.gitmodules is written; every move prints its undo command. A rescue can
+still fail (a push), so a parent that can stay does not record a commit
+past where its rescued child may end, and follows on the next run; a
+parent whose own files need the move names in its tie line the children
+it passes.
+
+Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
+at its upstream tip, a worktree .gitmodules that is missing, or equal to an
+older committed version of the commit it sits on or moves to, is reported
+(missing or stale); --apply restores it from HEAD and runs
+git submodule sync for the URLs it moves, in children the run may touch,
+printing an undo for each origin it rewrites. A URL counts as moved when git
+resolves the two spellings (insteadOf applied) differently. A submodule
+whose gitlink commit is missing is reported with the
+fetch (and set-url, for a moved URL) commands; --apply --fetch runs them and
+retries it.`,
 		Args:         cobra.ArbitraryArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -139,9 +175,20 @@ func newPeerGitRealignCmd() *cobra.Command {
 			// The preview is the default. The global --dry-run flag always
 			// wins over --apply: under it nothing changes in .git or in
 			// either peer store (#99, #103).
+			if fetch && !apply {
+				return fmt.Errorf("--fetch only acts with --apply")
+			}
+			if noPush && !rescue {
+				return fmt.Errorf("--no-push only applies to --rescue")
+			}
 			dryRun, _ := c.Flags().GetBool("dry-run")
 			apply = apply && !dryRun
-			res, err := syncer.PeerGitRealign(c.Context(), root, args, apply)
+			res, err := syncer.PeerGitRealign(c.Context(), root, args, syncer.RealignOptions{
+				Apply:  apply,
+				Rescue: rescue,
+				NoPush: noPush,
+				Fetch:  fetch,
+			})
 			if err != nil {
 				return err
 			}
@@ -160,6 +207,9 @@ func newPeerGitRealignCmd() *cobra.Command {
 			case dryRun && summary.Realignable > 0:
 				p.Blank()
 				p.Line("--dry-run: nothing changed. Re-run without it to apply.")
+			case summary.Realignable > 0 && rescue:
+				p.Blank()
+				p.Line("Run with --rescue --apply to realign.")
 			case summary.Realignable > 0:
 				p.Blank()
 				p.Line("Run with --apply to realign.")
@@ -168,6 +218,9 @@ func newPeerGitRealignCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&apply, "apply", false, "move HEAD and index (default is a dry-run preview)")
+	cmd.Flags().BoolVar(&rescue, "rescue", false, "also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch")
+	cmd.Flags().BoolVar(&noPush, "no-push", false, "with --rescue, keep rescue branches local")
+	cmd.Flags().BoolVar(&fetch, "fetch", false, "with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it")
 	return cmd
 }
 
@@ -187,8 +240,34 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 			line += "  (" + rep.Reason + ")"
 		}
 		p.Bullet(peerGitStatusMarker(rep.Status), rep.Path+"  "+line)
-		if rep.Status == syncer.GitRepoRealigned {
-			p.Line("      undo: git -C %s reset --mixed -q %s", peerGitRepoAbs(res.Root, rep.Path), rep.PreviousHead)
+		// A no-match repo's reason can point at its tie line ("see tie").
+		if rep.TieBreak != "" && (withMoves || rep.Status == syncer.GitRepoRealigned || rep.Status == syncer.GitRepoNoMatch) {
+			p.Line("      tie: %s", rep.TieBreak)
+		}
+		if rep.Rescue != "" && (rep.Status == syncer.GitRepoRealignable && withMoves || rep.Status == syncer.GitRepoRealigned) {
+			where := "stays local"
+			switch {
+			case rep.RescuePushed:
+				where = "pushed to " + rep.RescueRemote
+			case rep.Status == syncer.GitRepoRealignable && rep.RescueRemote != "":
+				where = "to be pushed to " + rep.RescueRemote
+			}
+			p.Line("      rescue: %s keeps %s (%s)", rep.Rescue, shortSHA(rep.Head), where)
+		}
+		if rep.Class != "" && rep.Status != syncer.GitRepoRealignable && rep.Status != syncer.GitRepoRealigned {
+			p.Line("      %s: %s", rep.Class, rep.Suggestion)
+		}
+		if rep.Gitmodules != "" {
+			p.Line("      .gitmodules: %s", rep.Gitmodules)
+		}
+		for _, move := range rep.URLMoves {
+			p.Line("        url moved: %s", move)
+		}
+		if rep.Status == syncer.GitRepoRealigned && rep.Undo != "" {
+			p.Line("      undo: %s", rep.Undo)
+		}
+		if rep.URLUndo != "" {
+			p.Line("      undo url: %s", rep.URLUndo)
 		}
 	}
 	summary := peerGitSummary(res)
@@ -224,11 +303,4 @@ func shortSHA(sha string) string {
 		return sha[:12]
 	}
 	return sha
-}
-
-func peerGitRepoAbs(root, rel string) string {
-	if rel == "." {
-		return root
-	}
-	return root + "/" + rel
 }
