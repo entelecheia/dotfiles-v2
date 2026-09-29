@@ -156,10 +156,12 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	if rep.rescueBranch != "" {
 		defRef := "refs/heads/" + rep.rescueBranch
 		if other := r.worktreeOnBranch(ctx, abs, defRef); other != "" {
-			return rep.rescueBranch + " is checked out in the linked worktree " + other + "; switch that worktree to another branch first", false
+			return rep.rescueBranch + " is checked out in the linked worktree " + other + "; switch that worktree to another branch, or run git worktree prune if its directory is gone", false
 		}
+		// Pushing or merging those commits keeps the branch off the
+		// target's history, so only moving the branch aside lifts this.
 		if oldDef, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", defRef); oldDef != "" && oldDef != rep.RescueTarget && !r.strictDescendant(ctx, abs, oldDef, rep.RescueTarget) {
-			return "local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks; push or merge them by hand first", false
+			return "local " + rep.rescueBranch + " has commits " + shortRev(rep.RescueTarget) + " lacks; keep them on another branch first: git -C " + shellWord(abs) + " branch -m " + shellWord(rep.rescueBranch) + " " + shellWord(rep.rescueBranch+"-kept"), false
 		}
 	}
 	if rep.remote != "." {

@@ -834,22 +834,38 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		}
 		return out
 	}
-	t.Run("lfs", func(t *testing.T) {
+	lfsFixture := func(t *testing.T) *rescueFixture {
 		f := newRescueFixture(t)
 		gitStateCommitFile(t, f.writer, ".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n", "lfs")
 		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
 		gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
-		gitStateCommitFile(t, f.ws, "docs.md", "unpushed docs\n", "local docs")
-		tip := f.publish(t, "b.txt", "b1\n")
-		f.deliver(t, tip)
-		for _, s := range suggestions(t, f.ws) {
+		return f
+	}
+	keptLocal := func(t *testing.T, ws, tip string) {
+		t.Helper()
+		for _, s := range suggestions(t, ws) {
 			if !strings.HasSuffix(s, "keeping it local: dot peer git realign --rescue --no-push --apply .") || !strings.Contains(s, "Git LFS") {
 				t.Fatalf("suggestion %q, want the LFS reason and the --no-push rescue", s)
 			}
 		}
-		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+		if rep := rescueRealign(t, ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, ws) != tip {
 			t.Fatalf("the suggested command did not realign: %+v", rep)
 		}
+	}
+	t.Run("lfs diverged", func(t *testing.T) {
+		f := lfsFixture(t)
+		gitStateCommitFile(t, f.ws, "docs.md", "unpushed docs\n", "local docs")
+		tip := f.publish(t, "b.txt", "b1\n")
+		f.deliver(t, tip)
+		keptLocal(t, f.ws, tip)
+	})
+	t.Run("lfs branch mismatch", func(t *testing.T) {
+		f := lfsFixture(t)
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		tip := f.publish(t, "a.txt", "a2\n")
+		f.deliver(t, tip)
+		keptLocal(t, f.ws, tip)
 	})
 	refused := func(t *testing.T, ws, why string) {
 		t.Helper()
@@ -864,8 +880,22 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
 		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
 		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
-		gitStateRun_(t, f.ws, "worktree", "add", "-q", filepath.Join(t.TempDir(), "wt-main"), "main")
+		wt := filepath.Join(t.TempDir(), "wt-main")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
 		refused(t, f.ws, "main is checked out in the linked worktree")
+		// The same refusal for a worktree whose directory is gone names the
+		// prune that lifts it.
+		if err := os.RemoveAll(wt); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, f.ws, "main is checked out in the linked worktree")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "git worktree prune") {
+			t.Fatalf("suggestion %q does not name git worktree prune", s)
+		}
+		gitStateRun_(t, f.ws, "worktree", "prune")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
+			t.Fatalf("after the prune: suggestion %q, want the rescue", s)
+		}
 	})
 	t.Run("local default branch the target lacks", func(t *testing.T) {
 		f := newRescueFixture(t)
@@ -874,6 +904,19 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
 		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
 		refused(t, f.ws, "local main has commits")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, " branch -m main main-kept") {
+			t.Fatalf("suggestion %q, want the branch move that lifts it", s)
+		}
+		// Following the advice lifts the refusal, and the kept branch
+		// holds the commits.
+		mine := gitStateRun_(t, f.ws, "rev-parse", "main")
+		gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
+			t.Fatalf("after the advice: suggestion %q, want the rescue", s)
+		}
+		if got := gitStateRun_(t, f.ws, "rev-parse", "main-kept"); got != mine {
+			t.Fatalf("main-kept = %s, want %s", got, mine)
+		}
 	})
 }
 
