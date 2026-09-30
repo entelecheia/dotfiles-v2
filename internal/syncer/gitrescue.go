@@ -60,7 +60,6 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		if cand, diffs, tie, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok && (upBest < 0 || diffs < upBest) {
 			rep.Class = GitClassBranchMismatch
 			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, r.pushRemote(ctx, abs, rep.branch)
-			rep.rescueFrom = ref
 			rep.rescueDiffs = diffs
 			rep.rescueTie = tie
 			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("on %s, but %s %s at %s", label, matchWords(diffs), def, shortRev(cand)),
@@ -105,15 +104,15 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			facts = fmt.Sprintf("%s was rewritten: the %d local-only commit(s) are pre-rewrite versions of commits on it (same author, date and subject); tags it moved stay at the old commits until git -C %s fetch --tags --force, which replaces them", upName, ahead, shellWord(abs))
 		}
 		if upOK {
-			rep.RescueTarget, rep.rescueFrom = upCand, "@{upstream}"
+			rep.RescueTarget = upCand
 			rep.rescueDiffs = upDiffs
 			rep.rescueTie = upTie
 			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%s, and %s %s", facts, matchWords(upDiffs), shortRev(upCand)),
 				"keep the local commits on a rescue branch and realign")
 		} else if rep.Class == GitClassRewrittenUpstream {
 			rep.Suggestion = facts + "; no upstream commit matches the files better than HEAD: move by hand, and do not push these commits"
-		} else if twins, _, err := r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", "@{upstream}"}, []string{"--remotes"}); err == nil && twins > 0 {
-			rep.Suggestion = fmt.Sprintf("%s, and no upstream commit matches the files better than HEAD; rebase or merge by hand, but %d of them are pre-rewrite versions of commits on the remote (same author, date and subject): do not push those", facts, twins)
+		} else if twins, _, err := r.rewriteTwins(ctx, abs, []string{"HEAD"}, []string{"--remotes"}); err == nil && twins > 0 {
+			rep.Suggestion = fmt.Sprintf("%s, and no upstream commit matches the files better than HEAD; rebase or merge by hand, but %d commit(s) in HEAD's history are pre-rewrite versions of commits on the remote (same author, date and subject): do not push them", facts, twins)
 		} else {
 			rep.Suggestion = facts + ", and no upstream commit matches the files better than HEAD; rebase or merge by hand"
 		}
@@ -270,24 +269,20 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	// show, which blocks every pushed rescue name there (#214).
 	var pushOnly []string
 	if rep.remote != "." {
-		// A commit HEAD has and the branch the rescue target is on lacks,
-		// with a twin anywhere in a remote-tracking ref's history, is a
-		// pre-rewrite version: pushing a rescue that holds it publishes what
-		// the rewrite took out, whatever the class (#216). Stale tracking
-		// refs cannot hide the local side; the remote side reads whole
-		// histories, so a rewrite merged into the old history still shows,
-		// and does not depend on where the push goes.
-		twins, total, failed := 0, 0, rep.rescueFrom == ""
-		if !failed {
-			var err error
-			twins, total, err = r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", rep.rescueFrom}, []string{"--remotes"})
-			failed = err != nil
-		}
+		// A commit in HEAD's history with a twin in a remote-tracking ref's
+		// history is a pre-rewrite version: pushing a rescue that holds it
+		// publishes what the rewrite took out, whatever the class (#216).
+		// Both sides are whole histories, so no ref hides either: not a
+		// stale tracking ref (HEAD's own upstream included), not a push
+		// remote without tracking refs, not a rewrite merged into the old
+		// history.
+		twins, total, err := r.rewriteTwins(ctx, abs, []string{"HEAD"}, []string{"--remotes"})
+		failed := err != nil
 		switch {
 		case rep.Class == GitClassRewrittenUpstream:
 			pushOnly = append(pushOnly, "a pushed rescue branch would publish the history the rewrite took out")
 		case twins > 0:
-			pushOnly = append(pushOnly, fmt.Sprintf("%d of the %d local-only commit(s) are pre-rewrite versions of commits on the remote (same author, date and subject), so a pushed rescue would publish the history a rewrite took out", twins, total))
+			pushOnly = append(pushOnly, fmt.Sprintf("%d of the %d commit(s) in HEAD's history are pre-rewrite versions of commits on the remote (same author, date and subject), so a pushed rescue would publish the history a rewrite took out", twins, total))
 		case failed:
 			pushOnly = append(pushOnly, "cannot tell whether a pushed rescue would publish history a rewrite took out")
 		}

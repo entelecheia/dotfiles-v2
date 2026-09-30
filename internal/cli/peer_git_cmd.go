@@ -167,12 +167,12 @@ A rewritten upstream (a history rewrite that kept authors, dates and
 subjects, as git filter-repo does; a rebase or amend counts too) leaves the
 Mac that did not rewrite with the pre-rewrite commits as local-only work.
 Pushing them would publish what the rewrite took out, so rewritten-upstream
-repos are rescued only with --no-push, and so is any repo with a local-only
-commit that has such a twin on a remote branch (a commit made on top of the
-old history, a branch cut from it, a feature branch whose upstream was
-rewritten) or where that cannot be checked; the old commits stay on the
-local rescue branch. Tags the rewrite moved stay at the old commits until
-git fetch --tags --force.
+repos are rescued only with --no-push, and so is any repo whose history has
+a commit with such a twin in a remote branch's history (a commit made on top
+of the old history, a branch cut from it, a feature branch whose upstream
+was rewritten, the rewrite merged into the old history) or where that cannot
+be checked; the old commits stay on the local rescue branch. Tags the
+rewrite moved stay at the old commits until git fetch --tags --force.
 
 --candidate-refs <pattern> (repeatable) also takes the commits of refs
 matching a git for-each-ref pattern as candidates, in every repo, for the

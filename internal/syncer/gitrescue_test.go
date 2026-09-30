@@ -1304,7 +1304,7 @@ func TestPeerGitClass_RewriteWithRealLocalWorkRescuesOnlyLocally(t *testing.T) {
 	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
 	f.deliver(t, newTip) // the other Mac's files, as peer sync leaves them
 	rep := rescueRealign(t, f.ws, RealignOptions{})
-	if rep.Class != GitClassDiverged || !strings.Contains(rep.Suggestion, "3 of the 4 local-only commit(s) are pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+	if rep.Class != GitClassDiverged || !strings.Contains(rep.Suggestion, "3 of the 5 commit(s) in HEAD's history are pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
 		t.Fatalf("class %q suggestion %q, want diverged with the --no-push rescue and why", rep.Class, rep.Suggestion)
 	}
 	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoNoMatch {
@@ -1455,7 +1455,7 @@ func TestPeerGitClass_PartialRewriteWithoutAMatchWarns(t *testing.T) {
 	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
 	gitStateRewriteTracked(t, filepath.Join(f.ws, "a.txt"), "edited here\n")
 	rep := rescueRealign(t, f.ws, RealignOptions{})
-	if rep.Class != GitClassDiverged || rep.RescueTarget != "" || !strings.HasSuffix(rep.Suggestion, "rebase or merge by hand, but 3 of them are pre-rewrite versions of commits on the remote (same author, date and subject): do not push those") {
+	if rep.Class != GitClassDiverged || rep.RescueTarget != "" || !strings.HasSuffix(rep.Suggestion, "rebase or merge by hand, but 3 commit(s) in HEAD's history are pre-rewrite versions of commits on the remote (same author, date and subject): do not push them") {
 		t.Fatalf("class %q target %q suggestion %q, want the hand move with the warning", rep.Class, rep.RescueTarget, rep.Suggestion)
 	}
 }
@@ -1470,6 +1470,47 @@ func TestPeerGitClass_ACommitOnAnotherRemoteBranchIsNotARewrite(t *testing.T) {
 	rep := rescueRealign(t, f.ws, RealignOptions{})
 	if rep.Class != GitClassDiverged || !strings.HasSuffix(rep.Suggestion, "dot peer git realign --rescue --apply .") {
 		t.Fatalf("class %q suggestion %q, want diverged with the pushed rescue", rep.Class, rep.Suggestion)
+	}
+}
+
+// HEAD's own upstream can be the stale ref: a feature branch cut from the
+// old main, dropped when the rewritten repository was recreated, still
+// fetched here. The pre-rewrite commits are then in @{upstream} too, and
+// only a comparison of HEAD's whole history sees them (#216).
+func TestPeerGitRescue_StaleUpstreamOfTheOldHistoryStaysLocal(t *testing.T) {
+	f := newRescueFixture(t)
+	dates := []string{"1700000000 +0900", "1700000100 +0900", "1700000200 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.writer, "checkout", "-q", "-b", "feat")
+	commitAt(t, f.writer, "feat.txt", "f1\n", "feat 1", "1700000300 +0900")
+	gitStateRun_(t, f.writer, "push", "-q", "-u", "origin", "feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "origin/feat")
+	feat2 := commitAt(t, f.writer, "feat.txt", "f2\n", "feat 2", "1700000400 +0900")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000500 +0900")
+	// The rewrite: a redacted main, and feat gone from the remote.
+	gitStateRun_(t, f.writer, "checkout", "-q", "main")
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", ":refs/heads/feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin") // no prune: origin/feat stays
+	f.deliver(t, feat2)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.RescuePushed || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: %+v, want the push refused", opts, rep)
+		}
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
 	}
 }
 

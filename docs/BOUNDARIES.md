@@ -272,10 +272,10 @@ tool):
   push remote's remote-tracking refs hold) and pushed where git pushes
   the branch (pushRemote, pushDefault, then its remote) unless
   `--no-push` (a Git LFS repo, one the check cannot read, one whose
-  push remote has a `rescue` branch, or one with a local-only commit
-  that has a rewritten twin on a remote branch, the history a rewrite
-  took out, or where that cannot be checked, is rescued only with
-  `--no-push`);
+  push remote has a `rescue` branch, or one whose history has a commit
+  with a rewritten twin in a remote branch's history, the history a
+  rewrite took out, or where that cannot be checked, is rescued only
+  with `--no-push`);
   then the branch, or for a branch mismatch the default
   branch (created with `branch.<name>.remote` and `.merge` pointing at
   origin's, or fast-forwarded; never while a linked worktree has it
