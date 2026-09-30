@@ -465,10 +465,12 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		cancel()
 		if err != nil {
 			rep.Status = GitRepoUnresolvable
-			// The remote may hold the name, or a rescue branch, unseen: a
-			// fetch first shows it, so the next run picks a free name or
-			// names --no-push; a bare rerun would fail the same way. Other
-			// failures (access, a server rule) need their own fix.
+			// The remote may hold the name, or a rescue branch, unseen. The
+			// kept rescue branch already moves a rerun to the next name; only
+			// the fetch shows a remote rescue branch, which then turns the
+			// rerun into the --no-push refusal. Other failures (access, a
+			// server rule) need their own fix. A remote whose fetch does not
+			// map its branches to refs/remotes/<remote>/ shows neither.
 			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (if " + rep.remote + " holds this name or a rescue branch: git -C " + shellWord(abs) + " fetch " + shellWord(rep.remote) +
 				", then run again, which picks a free name or names --no-push; otherwise fix what the error below says; or use --no-push): " + shortErr(err)
 			return
