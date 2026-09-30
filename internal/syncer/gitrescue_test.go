@@ -1296,15 +1296,83 @@ func TestPeerGitRescue_RewrittenUpstreamRescuesOnlyLocally(t *testing.T) {
 	}
 }
 
-// One real local commit among the rewritten ones keeps the repo diverged,
-// with its pushed rescue (#216).
-func TestPeerGitClass_RewriteWithRealLocalWorkStaysDiverged(t *testing.T) {
-	f, _, newTip := rewrittenFixture(t)
+// One real local commit on top of the rewritten ones keeps the repo
+// diverged (AC3 is about repos with no twins), but its rescue is still
+// never pushed: the push would send the pre-rewrite commits (#216).
+func TestPeerGitClass_RewriteWithRealLocalWorkRescuesOnlyLocally(t *testing.T) {
+	f, oldTip, newTip := rewrittenFixture(t)
 	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
 	f.deliver(t, newTip) // the other Mac's files, as peer sync leaves them
 	rep := rescueRealign(t, f.ws, RealignOptions{})
-	if rep.Class != GitClassDiverged || !strings.HasSuffix(rep.Suggestion, "dot peer git realign --rescue --apply .") {
-		t.Fatalf("class %q suggestion %q, want diverged with the pushed rescue", rep.Class, rep.Suggestion)
+	if rep.Class != GitClassDiverged || !strings.Contains(rep.Suggestion, "3 of the 4 commit(s) a pushed rescue would send are pre-rewrite versions of commits on origin") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+		t.Fatalf("class %q suggestion %q, want diverged with the --no-push rescue and why", rep.Class, rep.Suggestion)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoNoMatch {
+		t.Fatalf("pushed rescue: %+v, want refused", rep)
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateRun_(t, f.ws, "merge-base", "--is-ancestor", oldTip, "rescue/260928-main") != "" {
+		t.Fatalf("--no-push rescue: %+v", rep)
+	}
+}
+
+// A branch cut from the old default branch would push the pre-rewrite
+// commits too, so its branch-mismatch rescue stays local (#216).
+func TestPeerGitRescue_BranchFromTheOldHistoryRescuesOnlyLocally(t *testing.T) {
+	f, _, newTip := rewrittenFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
+	commitAt(t, f.ws, "feat.txt", "f\n", "feature work", "1700000400 +0900")
+	f.deliver(t, newTip)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.Class != GitClassBranchMismatch || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on origin") || strings.Contains(rep.Suggestion, "realign --rescue --apply") {
+			t.Fatalf("%+v: class %q suggestion %q, want branch-mismatch refusing the push", opts, rep.Class, rep.Suggestion)
+		}
+	}
+	gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept")
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != newTip {
+		t.Fatalf("--no-push rescue: %+v, want HEAD at %s", rep, newTip)
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+}
+
+// log.showSignature adds lines to a signed commit's log entry; the twin
+// check reads without them, so signed pre-rewrite commits still pair with
+// their unsigned rewrites (#216).
+func TestPeerGitRescue_RewriteOfSignedCommits(t *testing.T) {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not available")
+	}
+	key := filepath.Join(t.TempDir(), "key")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.writer, "config", "gpg.format", "ssh")
+	gitStateRun_(t, f.writer, "config", "user.signingkey", key)
+	gitStateRun_(t, f.writer, "config", "commit.gpgsign", "true")
+	dates := []string{"1700000000 +0900", "1700000100 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	gitStateRun_(t, f.writer, "config", "commit.gpgsign", "false")
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	var newTip string
+	for i, date := range dates {
+		newTip = commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	f.deliver(t, newTip)
+	gitStateRun_(t, f.ws, "config", "log.showSignature", "true")
+	if rep := rescueRealign(t, f.ws, RealignOptions{}); rep.Class != GitClassRewrittenUpstream {
+		t.Fatalf("class %q suggestion %q, want rewritten-upstream", rep.Class, rep.Suggestion)
 	}
 }
 

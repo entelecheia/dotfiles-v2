@@ -99,7 +99,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		// A rewritten upstream: the local commits are its pre-rewrite
 		// versions, and pushing them would publish what the rewrite took
 		// out, so a rescue stays local (#216).
-		if r.rewrittenUpstream(ctx, abs) {
+		if twins, total := r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", "@{upstream}"}, []string{"@{upstream}", "--not", "HEAD"}); total > 0 && twins == total {
 			rep.Class = GitClassRewrittenUpstream
 			facts = fmt.Sprintf("%s was rewritten: the %d local-only commit(s) are pre-rewrite versions of commits on it (same author, date and subject); tags it moved stay at the old commits until git -C %s fetch --tags --force", upName, ahead, shellWord(abs))
 		}
@@ -117,34 +117,36 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	}
 }
 
-// rewrittenUpstream reports whether every commit HEAD has and its upstream
-// lacks has a twin on the upstream with the same author, author date and
-// subject: the upstream history was rewritten (git filter-repo keeps them)
-// and the local commits are its pre-rewrite versions (#216).
-// ponytail: a rewrite that also changes authorship or dates is not seen and
-// stays diverged; compare trees or patch ids if such a rewrite shows up.
-func (r *gitStateRun) rewrittenUpstream(ctx context.Context, abs string) bool {
-	keys := func(revs ...string) []string {
-		out, err := r.read(ctx, abs, append([]string{"log", "--format=%an%x1f%ae%x1f%ad%x1f%s", "--date=raw"}, revs...)...)
+// rewriteTwins counts the commits in the rev range revs that have a twin,
+// the same author, author date and subject, among the commits of against,
+// and how many revs lists: a history rewrite (git filter-repo, a rebase)
+// keeps those, so a twin is a pre-rewrite version of a commit (#216).
+// ponytail: a rewrite that also changes authorship or dates is not seen;
+// compare trees or patch ids if such a rewrite shows up.
+func (r *gitStateRun) rewriteTwins(ctx context.Context, abs string, revs, against []string) (twins, total int) {
+	keys := func(revs []string) []string {
+		// --no-show-signature: log.showSignature would add lines to a
+		// signed commit's entry, and a rewrite drops signatures.
+		out, err := r.read(ctx, abs, append([]string{"log", "--no-show-signature", "--format=%an%x1f%ae%x1f%ad%x1f%s", "--date=raw"}, revs...)...)
 		if err != nil || out == "" {
 			return nil
 		}
 		return strings.Split(out, "\n")
 	}
-	local := keys("HEAD", "--not", "@{upstream}")
+	local := keys(revs)
 	if len(local) == 0 {
-		return false
+		return 0, 0
 	}
-	upstream := map[string]bool{}
-	for _, k := range keys("@{upstream}", "--not", "HEAD") {
-		upstream[k] = true
+	other := map[string]bool{}
+	for _, k := range keys(against) {
+		other[k] = true
 	}
 	for _, k := range local {
-		if !upstream[k] {
-			return false
+		if other[k] {
+			twins++
 		}
 	}
-	return true
+	return twins, len(local)
 }
 
 // pushRemote is where git would push branch: branch.<b>.pushRemote, then
@@ -256,10 +258,17 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	// branch named rescue on the push remote, as its remote-tracking refs
 	// show, which blocks every pushed rescue name there (#214).
 	var pushOnly []string
-	if rep.Class == GitClassRewrittenUpstream && rep.remote != "." {
-		pushOnly = append(pushOnly, "a pushed rescue branch would publish the history the rewrite took out")
-	}
 	if rep.remote != "." {
+		// Any commit the push would send that has a twin on the remote is a
+		// pre-rewrite version: pushing it publishes what the rewrite took
+		// out, whatever the class (#216).
+		if twins, total := r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", "--remotes=" + rep.remote}, []string{"--remotes=" + rep.remote, "--not", "HEAD"}); twins > 0 {
+			why := "a pushed rescue branch would publish the history the rewrite took out"
+			if rep.Class != GitClassRewrittenUpstream {
+				why = fmt.Sprintf("%d of the %d commit(s) a pushed rescue would send are pre-rewrite versions of commits on %s (same author, date and subject), so it would publish the history a rewrite took out", twins, total, rep.remote)
+			}
+			pushOnly = append(pushOnly, why)
+		}
 		if why := r.lfsRefusal(ctx, abs); why != "" {
 			pushOnly = append(pushOnly, why)
 		}

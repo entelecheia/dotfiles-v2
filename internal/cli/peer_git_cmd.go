@@ -164,11 +164,14 @@ parent whose own files need the move names in its tie line the children it
 passes.
 
 A rewritten upstream (a history rewrite that kept authors, dates and
-subjects, as git filter-repo does) leaves the Mac that did not rewrite with
-the pre-rewrite commits as local-only work. Pushing them would publish what
-the rewrite took out, so rewritten-upstream repos are rescued only with
---no-push; the old commits stay on the local rescue branch. Tags the rewrite
-moved stay at the old commits until git fetch --tags --force.
+subjects, as git filter-repo does; a rebase or amend counts too) leaves the
+Mac that did not rewrite with the pre-rewrite commits as local-only work.
+Pushing them would publish what the rewrite took out, so rewritten-upstream
+repos are rescued only with --no-push, and so is any repo whose rescue push
+would send a commit with such a twin on the remote (a commit made on top of
+the old history, or a branch cut from it); the old commits stay on the local
+rescue branch. Tags the rewrite moved stay at the old commits until git
+fetch --tags --force.
 
 --candidate-refs <pattern> (repeatable) also takes the commits of refs
 matching a git for-each-ref pattern as candidates, in every repo, for the
