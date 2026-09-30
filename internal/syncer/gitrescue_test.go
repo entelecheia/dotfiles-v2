@@ -1427,6 +1427,52 @@ func TestPeerGitRescue_RewrittenFeatureUpstreamStaysLocal(t *testing.T) {
 	}
 }
 
+// The rewritten history merged into the old one (the classic post-rewrite
+// mistake) puts the twins in HEAD's history; they are still found, since
+// the remote side reads whole histories and counts only different commits
+// (#216).
+func TestPeerGitRescue_RewriteMergedIntoTheOldHistoryStaysLocal(t *testing.T) {
+	f, _, _ := rewrittenFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "--", ".")
+	gitStateRun_(t, f.ws, "merge", "-q", "-X", "theirs", "--no-edit", "origin/main")
+	tip := f.publish(t, "a.txt", "a2\n")
+	f.deliver(t, tip)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.RescuePushed || !strings.Contains(rep.Suggestion, "are pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: %+v, want the push refused", opts, rep)
+		}
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+}
+
+// Some pre-rewrite commits and no upstream commit to realign to: the hand
+// move is still the step, with a warning not to push those (#216).
+func TestPeerGitClass_PartialRewriteWithoutAMatchWarns(t *testing.T) {
+	f, _, _ := rewrittenFixture(t)
+	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
+	gitStateRewriteTracked(t, filepath.Join(f.ws, "a.txt"), "edited here\n")
+	rep := rescueRealign(t, f.ws, RealignOptions{})
+	if rep.Class != GitClassDiverged || rep.RescueTarget != "" || !strings.HasSuffix(rep.Suggestion, "rebase or merge by hand, but 3 of them are pre-rewrite versions of commits on the remote (same author, date and subject): do not push those") {
+		t.Fatalf("class %q target %q suggestion %q, want the hand move with the warning", rep.Class, rep.RescueTarget, rep.Suggestion)
+	}
+}
+
+// A local commit also on another remote branch, the same commit, is not a
+// rewrite: only a different commit with the same metadata is a twin, and
+// the rescue is still pushed (#216 AC3).
+func TestPeerGitClass_ACommitOnAnotherRemoteBranchIsNotARewrite(t *testing.T) {
+	f, _, _ := divergedFixture(t)
+	gitStateRun_(t, f.ws, "push", "-q", "origin", "HEAD:refs/heads/topic")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	rep := rescueRealign(t, f.ws, RealignOptions{})
+	if rep.Class != GitClassDiverged || !strings.HasSuffix(rep.Suggestion, "dot peer git realign --rescue --apply .") {
+		t.Fatalf("class %q suggestion %q, want diverged with the pushed rescue", rep.Class, rep.Suggestion)
+	}
+}
+
 // log.showSignature adds lines to a signed commit's log entry; the twin
 // check reads without them, so signed pre-rewrite commits still pair with
 // their unsigned rewrites (#216).
