@@ -26,6 +26,20 @@ func TestPrintPeerGitRepos_ClassesAndRescue(t *testing.T) {
 
 // `peer git status` prints a no-match repo's tie line, which its reason
 // points at (#189 round 15); an aligned repo's stays in realign and --json.
+// A target a --candidate-refs pattern offered names its ref; others do
+// not (#217).
+func TestPrintPeerGitRepos_NamesACandidateRef(t *testing.T) {
+	res := &syncer.GitStateResult{Root: "/w", Repos: []*syncer.GitRepoReport{
+		{Path: "dev", Status: syncer.GitRepoRealignable, Head: "aaaa", Target: "bbbb", TargetRef: "refs/peer/m3/heads/main"},
+		{Path: "vault", Status: syncer.GitRepoRealignable, Head: "cccc", Target: "dddd"},
+	}}
+	var out bytes.Buffer
+	printPeerGitRepos(&Printer{Out: &out}, res, true)
+	if !strings.Contains(out.String(), "aaaa -> bbbb (from refs/peer/m3/heads/main)") || strings.Count(out.String(), "(from ") != 1 {
+		t.Errorf("output:\n%s", out.String())
+	}
+}
+
 func TestPrintPeerGitRepos_StatusShowsANoMatchTie(t *testing.T) {
 	res := &syncer.GitStateResult{Root: "/w", Repos: []*syncer.GitRepoReport{
 		{Path: "dev", Status: syncer.GitRepoNoMatch, Reason: "HEAD wins the tie with its descendants (see tie)", TieBreak: "HEAD and 1 candidate(s) tie on content; ..."},
@@ -53,8 +67,17 @@ func TestRealignNextKeepsNoPush(t *testing.T) {
 		{1, 0, false, true, true, ""},
 		{0, 0, false, true, true, ""},
 	} {
-		if got := realignNext(tc.realigned, tc.realignable, tc.dryRun, tc.rescue, tc.noPush); got != tc.want {
+		if got := realignNext(tc.realigned, tc.realignable, tc.dryRun, tc.rescue, tc.noPush, nil); got != tc.want {
 			t.Errorf("realignNext(%+v) = %q, want %q", tc, got, tc.want)
 		}
+	}
+}
+
+// The hint keeps --candidate-refs, whose candidates the preview may have
+// moved to (#217).
+func TestRealignNextKeepsCandidateRefs(t *testing.T) {
+	got := realignNext(0, 1, false, false, false, []string{"refs/peer/m3/", "refs/peer/*/heads/x y"})
+	if want := "Run with --candidate-refs refs/peer/m3/ --candidate-refs 'refs/peer/*/heads/x y' --apply to realign."; got != want {
+		t.Errorf("realignNext = %q, want %q", got, want)
 	}
 }

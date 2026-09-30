@@ -13,22 +13,47 @@ next step:
   ahead-unpushed    local-only commits the upstream lacks; push them
   diverged          local-only commits and upstream commits; the files match
                     an upstream commit
+  rewritten-upstream
+                    diverged, but each local-only commit has an upstream twin
+                    with the same author, date and subject: the upstream was
+                    rewritten, and a rescue stays local
   branch-mismatch   HEAD is on another branch, the files match the default
                     branch
 A leftover REBASE_HEAD with no rebase in progress is skipped as
 stale-rebase-head with the command that clears it.
 
---rescue also moves diverged and branch-mismatch repos: HEAD's commits are
-kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
-local; a Git LFS repo, one the check cannot read, or one whose push remote
-has a rescue branch is rescued only with --no-push; a pushed name skips
-those the remote's tracking refs hold), then HEAD and the index move to the
-matching commit, on the default branch for a branch mismatch. No worktree
-file but .gitmodules is written; every move prints its undo command. A
-rescue can still fail (a push), so a parent that can stay does not record a
-commit past where its rescued child may end, and follows on the next run; a
-parent whose own files need the move names in its tie line the children it
-passes.
+--rescue also moves diverged (rewritten-upstream included) and
+branch-mismatch repos: HEAD's commits are kept on rescue/<yymmdd>-<branch>,
+pushed to the remote (--no-push keeps it local; a Git LFS repo, one the
+check cannot read, or one whose push remote has a rescue branch is rescued
+only with --no-push; a pushed name skips those the remote's tracking refs
+hold), then HEAD and the index move to the matching commit, on the default
+branch for a branch mismatch. No worktree file but .gitmodules is written;
+every move prints its undo command. A rescue can still fail (a push), so a
+parent that can stay does not record a commit past where its rescued child
+may end, and follows on the next run; a parent whose own files need the move
+names in its tie line the children it passes.
+
+A rewritten upstream (a history rewrite that kept authors, dates and
+subjects, as git filter-repo does; a rebase or amend counts too) leaves the
+Mac that did not rewrite with the pre-rewrite commits as local-only work.
+Pushing them would publish what the rewrite took out, so rewritten-upstream
+repos are rescued only with --no-push, and so is any repo whose history has
+a commit with such a twin in a remote branch's history (a commit made on top
+of the old history, a branch cut from it, a feature branch whose upstream
+was rewritten, the rewrite merged into the old history) or where that cannot
+be checked; the old commits stay on the local rescue branch. Tags the
+rewrite moved stay at the old commits until git fetch --tags --force.
+
+--candidate-refs <pattern> (repeatable) also takes the commits of refs
+matching a git for-each-ref pattern as candidates, in every repo, for the
+case where the Mac that stopped had commits it never pushed. Fetch its
+branches into a namespace first, for example
+  git -C <repo> fetch <that Mac's repo URL> \
+      '+refs/heads/*:refs/peer/<mac>/heads/*'
+then realign with --candidate-refs refs/peer/<mac>/. Such a commit must be a
+strict descendant of HEAD like every candidate, and a target taken from one
+names its ref. A pattern that matches nothing adds nothing.
 
 Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
 at its upstream tip, a worktree .gitmodules that is missing, or equal to an
@@ -45,17 +70,18 @@ before those candidates are compared, so it is judged with the commit there
 (a lone candidate the parent's own files require is taken without asking).
 
 ```
-dot peer git realign [--apply [--fetch]] [--rescue [--no-push]] [<repo>...] [flags]
+dot peer git realign [--apply [--fetch]] [--rescue [--no-push]] [--candidate-refs <pattern>]... [<repo>...] [flags]
 ```
 
 ### Options
 
 ```
-      --apply     move HEAD and index (default is a dry-run preview)
-      --fetch     with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it, and fetch a child before judging a candidate that records a commit it lacks
-  -h, --help      help for realign
-      --no-push   with --rescue, keep rescue branches local
-      --rescue    also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch
+      --apply                        move HEAD and index (default is a dry-run preview)
+      --candidate-refs stringArray   also take commits of refs matching this for-each-ref pattern as candidates (repeatable), e.g. refs/peer/<mac>/ after fetching that Mac's branches there
+      --fetch                        with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it, and fetch a child before judging a candidate that records a commit it lacks
+  -h, --help                         help for realign
+      --no-push                      with --rescue, keep rescue branches local
+      --rescue                       also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch
 ```
 
 ### Options inherited from parent commands

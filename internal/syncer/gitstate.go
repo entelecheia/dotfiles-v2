@@ -53,7 +53,10 @@ type GitRepoReport struct {
 	// Target is the best candidate commit for a realignable repo.
 	Target      string `json:"target,omitempty"`
 	TargetDiffs int    `json:"targetDiffs,omitempty"`
-	Candidates  int    `json:"candidates,omitempty"`
+	// TargetRef names the ref Target came from when only a --candidate-refs
+	// pattern offered it (#217).
+	TargetRef  string `json:"targetRef,omitempty"`
+	Candidates int    `json:"candidates,omitempty"`
 	// TieBreak says which rule chose Target when several candidates matched
 	// the worktree equally well (#177), and for a move the parent's own
 	// content forces, which children it passes; empty when neither applies.
@@ -104,13 +107,16 @@ type GitRepoReport struct {
 // Classes of no-match and skipped outcomes (#178) and of unresolvable ones
 // (url-moved, gitlink-missing; #179).
 const (
-	GitClassAtTip           = "at-tip"
-	GitClassAheadUnpushed   = "ahead-unpushed"
-	GitClassDiverged        = "diverged"
-	GitClassBranchMismatch  = "branch-mismatch"
-	GitClassStaleRebaseHead = "stale-rebase-head"
-	GitClassURLMoved        = "url-moved"
-	GitClassGitlinkMissing  = "gitlink-missing"
+	GitClassAtTip         = "at-tip"
+	GitClassAheadUnpushed = "ahead-unpushed"
+	GitClassDiverged      = "diverged"
+	// GitClassRewrittenUpstream is a diverged repo whose local-only commits
+	// all have a rewritten twin upstream (#216).
+	GitClassRewrittenUpstream = "rewritten-upstream"
+	GitClassBranchMismatch    = "branch-mismatch"
+	GitClassStaleRebaseHead   = "stale-rebase-head"
+	GitClassURLMoved          = "url-moved"
+	GitClassGitlinkMissing    = "gitlink-missing"
 )
 
 // GitStateResult is one status or realign run over the workspace tree.
@@ -164,6 +170,11 @@ type RealignOptions struct {
 	// fetch a child lacking a commit a candidate of its parent records,
 	// before those candidates are judged (#201).
 	Fetch bool
+	// CandidateRefs adds the commits of refs matching these for-each-ref
+	// patterns to every repo's candidates, strict descendants of HEAD only,
+	// such as the unpushed branches of a Mac that stopped, fetched into a
+	// namespace like refs/peer/<mac>/heads/ (#217).
+	CandidateRefs []string
 	// Now dates rescue branch names; nil means time.Now.
 	Now func() time.Time
 }
@@ -210,6 +221,8 @@ type gitStateRun struct {
 	// rescue score (rescueDiffs, against the HEAD it names).
 	same    map[string]bool
 	rescued map[string]int
+	// The ref each --candidate-refs candidate came from, by repo and commit.
+	candidateRefs map[string]string
 	// noHooks' flags for each repo's configured hooks, by repo.
 	hookNames map[string][]string
 }
@@ -543,6 +556,7 @@ func (r *gitStateRun) classify(ctx context.Context, abs, gitdir, gitlink string,
 	rep.Status = GitRepoRealignable
 	rep.Target = target
 	rep.TargetDiffs = bestDiffs
+	rep.TargetRef = r.candidateRefs[abs+"\x00"+target]
 }
 
 // breakTie picks among candidates whose own content matches the worktree
@@ -620,12 +634,19 @@ func (r *gitStateRun) pickTied(ctx context.Context, abs, gitlink, head string, i
 // newest is the pool member that descends from every other one, so the
 // choice does not depend on list order (a child's own run and its parent's
 // question list its commits differently). Without one, the last in order:
-// the first-parent chain runs nearest HEAD first. One merge-base call
-// answers it: the only independent commit of the pool is that member.
+// the first-parent chain runs nearest HEAD first; a --candidate-refs
+// commit only when nothing else is left, since those only widen the pool
+// (#217). One merge-base call answers it: the only independent commit of
+// the pool is that member.
 func (r *gitStateRun) newest(ctx context.Context, abs string, pool []string) string {
 	out, err := r.read(ctx, abs, append([]string{"merge-base", "--independent"}, pool...)...)
 	if err == nil && slices.Contains(pool, out) {
 		return out
+	}
+	for i := len(pool) - 1; i >= 0; i-- {
+		if r.candidateRefs[abs+"\x00"+pool[i]] == "" {
+			return pool[i]
+		}
 	}
 	return pool[len(pool)-1]
 }
@@ -1134,7 +1155,7 @@ func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string)
 		}
 	}
 	if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "@{upstream}"); err != nil {
-		return out, nil // no upstream configured: gitlink-only
+		return r.withCandidateRefs(ctx, abs, head, out) // no upstream configured
 	}
 	chain, err := r.read(ctx, abs, "rev-list", "--first-parent", "HEAD..@{upstream}")
 	if err != nil {
@@ -1149,6 +1170,46 @@ func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string)
 		if r.strictDescendant(ctx, abs, head, sha) {
 			out = append(out, sha)
 		}
+	}
+	return r.withCandidateRefs(ctx, abs, head, out)
+}
+
+// withCandidateRefs appends the commits the --candidate-refs patterns name
+// (an annotated tag's commit), strict descendants of HEAD that are not
+// candidates already, and remembers the ref each came from (#217). A
+// pattern that matches nothing adds nothing; one git cannot read is an
+// error.
+func (r *gitStateRun) withCandidateRefs(ctx context.Context, abs, head string, out []string) ([]string, error) {
+	if len(r.opts.CandidateRefs) == 0 {
+		return out, nil
+	}
+	list, err := r.read(ctx, abs, append([]string{"for-each-ref", "--format=%(refname)%00%(objectname)%00%(*objectname)", "--"}, r.opts.CandidateRefs...)...)
+	if err != nil {
+		return out, errors.New("cannot read --candidate-refs: " + shortErr(err))
+	}
+	own := len(out) // the gitlink and upstream candidates
+	for _, line := range strings.Split(list, "\n") {
+		f := strings.Split(line, "\x00")
+		if len(f) != 3 {
+			continue
+		}
+		sha := f[1]
+		if f[2] != "" {
+			sha = f[2]
+		}
+		key := abs + "\x00" + sha
+		if slices.Contains(out[:own], sha) {
+			delete(r.candidateRefs, key) // offered by the gitlink or upstream too
+			continue
+		}
+		if slices.Contains(out[own:], sha) || !r.strictDescendant(ctx, abs, head, sha) {
+			continue
+		}
+		out = append(out, sha)
+		if r.candidateRefs == nil {
+			r.candidateRefs = map[string]string{}
+		}
+		r.candidateRefs[key] = f[0]
 	}
 	return out, nil
 }

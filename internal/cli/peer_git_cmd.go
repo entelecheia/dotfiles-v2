@@ -129,8 +129,9 @@ func newPeerGitStatusCmd() *cobra.Command {
 
 func newPeerGitRealignCmd() *cobra.Command {
 	var apply, rescue, noPush, fetch bool
+	var candidateRefs []string
 	cmd := &cobra.Command{
-		Use:   "realign [--apply [--fetch]] [--rescue [--no-push]] [<repo>...]",
+		Use:   "realign [--apply [--fetch]] [--rescue [--no-push]] [--candidate-refs <pattern>]... [<repo>...]",
 		Short: "Move HEAD and index to the descendant commit the files already match",
 		Long: `Move each repo's HEAD and index forward to the descendant commit its files
 already match. The default is a preview; --apply moves.
@@ -141,22 +142,47 @@ next step:
   ahead-unpushed    local-only commits the upstream lacks; push them
   diverged          local-only commits and upstream commits; the files match
                     an upstream commit
+  rewritten-upstream
+                    diverged, but each local-only commit has an upstream twin
+                    with the same author, date and subject: the upstream was
+                    rewritten, and a rescue stays local
   branch-mismatch   HEAD is on another branch, the files match the default
                     branch
 A leftover REBASE_HEAD with no rebase in progress is skipped as
 stale-rebase-head with the command that clears it.
 
---rescue also moves diverged and branch-mismatch repos: HEAD's commits are
-kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
-local; a Git LFS repo, one the check cannot read, or one whose push remote
-has a rescue branch is rescued only with --no-push; a pushed name skips
-those the remote's tracking refs hold), then HEAD and the index move to the
-matching commit, on the default branch for a branch mismatch. No worktree
-file but .gitmodules is written; every move prints its undo command. A
-rescue can still fail (a push), so a parent that can stay does not record a
-commit past where its rescued child may end, and follows on the next run; a
-parent whose own files need the move names in its tie line the children it
-passes.
+--rescue also moves diverged (rewritten-upstream included) and
+branch-mismatch repos: HEAD's commits are kept on rescue/<yymmdd>-<branch>,
+pushed to the remote (--no-push keeps it local; a Git LFS repo, one the
+check cannot read, or one whose push remote has a rescue branch is rescued
+only with --no-push; a pushed name skips those the remote's tracking refs
+hold), then HEAD and the index move to the matching commit, on the default
+branch for a branch mismatch. No worktree file but .gitmodules is written;
+every move prints its undo command. A rescue can still fail (a push), so a
+parent that can stay does not record a commit past where its rescued child
+may end, and follows on the next run; a parent whose own files need the move
+names in its tie line the children it passes.
+
+A rewritten upstream (a history rewrite that kept authors, dates and
+subjects, as git filter-repo does; a rebase or amend counts too) leaves the
+Mac that did not rewrite with the pre-rewrite commits as local-only work.
+Pushing them would publish what the rewrite took out, so rewritten-upstream
+repos are rescued only with --no-push, and so is any repo whose history has
+a commit with such a twin in a remote branch's history (a commit made on top
+of the old history, a branch cut from it, a feature branch whose upstream
+was rewritten, the rewrite merged into the old history) or where that cannot
+be checked; the old commits stay on the local rescue branch. Tags the
+rewrite moved stay at the old commits until git fetch --tags --force.
+
+--candidate-refs <pattern> (repeatable) also takes the commits of refs
+matching a git for-each-ref pattern as candidates, in every repo, for the
+case where the Mac that stopped had commits it never pushed. Fetch its
+branches into a namespace first, for example
+  git -C <repo> fetch <that Mac's repo URL> \
+      '+refs/heads/*:refs/peer/<mac>/heads/*'
+then realign with --candidate-refs refs/peer/<mac>/. Such a commit must be a
+strict descendant of HEAD like every candidate, and a target taken from one
+names its ref. A pattern that matches nothing adds nothing.
 
 Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
 at its upstream tip, a worktree .gitmodules that is missing, or equal to an
@@ -190,10 +216,11 @@ before those candidates are compared, so it is judged with the commit there
 			dryRun, _ := c.Flags().GetBool("dry-run")
 			apply = apply && !dryRun
 			res, err := syncer.PeerGitRealign(c.Context(), root, args, syncer.RealignOptions{
-				Apply:  apply,
-				Rescue: rescue,
-				NoPush: noPush,
-				Fetch:  fetch,
+				Apply:         apply,
+				Rescue:        rescue,
+				NoPush:        noPush,
+				Fetch:         fetch,
+				CandidateRefs: candidateRefs,
 			})
 			if err != nil {
 				return err
@@ -207,7 +234,7 @@ before those candidates are compared, so it is judged with the commit there
 			}
 			p.KV("Workspace", res.Root)
 			printPeerGitRepos(p, res, true)
-			if next := realignNext(summary.Realigned, summary.Realignable, dryRun, rescue, noPush); next != "" {
+			if next := realignNext(summary.Realigned, summary.Realignable, dryRun, rescue, noPush, candidateRefs); next != "" {
 				p.Blank()
 				p.Line("%s", next)
 			}
@@ -217,25 +244,33 @@ before those candidates are compared, so it is judged with the commit there
 	cmd.Flags().BoolVar(&apply, "apply", false, "move HEAD and index (default is a dry-run preview)")
 	cmd.Flags().BoolVar(&rescue, "rescue", false, "also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch")
 	cmd.Flags().BoolVar(&noPush, "no-push", false, "with --rescue, keep rescue branches local")
+	cmd.Flags().StringArrayVar(&candidateRefs, "candidate-refs", nil, "also take commits of refs matching this for-each-ref pattern as candidates (repeatable), e.g. refs/peer/<mac>/ after fetching that Mac's branches there")
 	cmd.Flags().BoolVar(&fetch, "fetch", false, "with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it, and fetch a child before judging a candidate that records a commit it lacks")
 	return cmd
 }
 
 // realignNext is the closing hint of a realign preview: the same command
 // with --apply, keeping --no-push so a rescue shown as staying local does
-// not push when the hint is followed (#204).
-func realignNext(realigned, realignable int, dryRun, rescue, noPush bool) string {
-	switch {
-	case realigned > 0, realignable == 0:
+// not push when the hint is followed (#204), and --candidate-refs, whose
+// candidates the preview may have moved to (#217).
+func realignNext(realigned, realignable int, dryRun, rescue, noPush bool, candidateRefs []string) string {
+	if realigned > 0 || realignable == 0 {
 		return "" // undo lines were printed per repo already, or nothing moves
-	case dryRun:
-		return "--dry-run: nothing changed. Re-run without it to apply."
-	case rescue && noPush:
-		return "Run with --rescue --no-push --apply to realign."
-	case rescue:
-		return "Run with --rescue --apply to realign."
 	}
-	return "Run with --apply to realign."
+	if dryRun {
+		return "--dry-run: nothing changed. Re-run without it to apply."
+	}
+	flags := ""
+	if rescue {
+		flags += " --rescue"
+		if noPush {
+			flags += " --no-push"
+		}
+	}
+	for _, p := range candidateRefs {
+		flags += " --candidate-refs " + syncer.ShellWord(p)
+	}
+	return "Run with" + flags + " --apply to realign."
 }
 
 // printPeerGitRepos renders the per-repo report and the status tally. In a
@@ -249,6 +284,9 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 			line += "  " + shortSHA(rep.Head) + " -> " + shortSHA(rep.Target)
 		case rep.Status == syncer.GitRepoRealigned:
 			line += "  " + shortSHA(rep.PreviousHead) + " -> " + shortSHA(rep.Target)
+		}
+		if rep.TargetRef != "" && (rep.Status == syncer.GitRepoRealignable && withMoves || rep.Status == syncer.GitRepoRealigned) {
+			line += " (from " + rep.TargetRef + ")"
 		}
 		if rep.Reason != "" {
 			line += "  (" + rep.Reason + ")"

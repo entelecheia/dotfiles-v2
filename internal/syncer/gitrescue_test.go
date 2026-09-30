@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1222,6 +1223,393 @@ func TestPeerGitRescue_AvoidsNamesTheRemoteHolds(t *testing.T) {
 		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
 		if rep.Status != GitRepoRealigned || rep.Rescue != "rescue/260928-main-2" || gitStateRun_(t, f.origin, "rev-parse", "refs/heads/rescue/260928-main-2") != local {
 			t.Fatalf("rescue = %+v, want rescue/260928-main-2 pushed", rep)
+		}
+	})
+}
+
+// commitAt commits content with a fixed author date, as a history rewrite
+// keeps it, and returns the new commit.
+func commitAt(t *testing.T, dir, name, content, subject, date string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitStateRun_(t, dir, "add", name)
+	cmd := exec.Command("git", "-C", dir, "commit", "-q", "-m", subject)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=dot-test", "GIT_AUTHOR_EMAIL=dot-test@example.invalid", "GIT_AUTHOR_DATE="+date,
+		"GIT_COMMITTER_NAME=dot-test", "GIT_COMMITTER_EMAIL=dot-test@example.invalid")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit: %v\n%s", err, out)
+	}
+	return gitStateRun_(t, dir, "rev-parse", "HEAD")
+}
+
+// rewrittenFixture: three commits reach both Macs, then the writer rewrites
+// them (one string replaced, authors, dates and subjects kept, as git
+// filter-repo does) and force-pushes; the workspace keeps the old history,
+// with the rewritten files delivered (#216).
+func rewrittenFixture(t *testing.T) (f *rescueFixture, oldTip, newTip string) {
+	f = newRescueFixture(t)
+	dates := []string{"1700000000 +0900", "1700000100 +0900", "1700000200 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	oldTip = gitStateHead(t, f.ws)
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	for i, date := range dates {
+		newTip = commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	f.deliver(t, newTip)
+	return f, oldTip, newTip
+}
+
+// A rewritten upstream is not local-only work: its class says so, and a
+// rescue of it is never pushed, since that would publish what the rewrite
+// took out (#216).
+func TestPeerGitRescue_RewrittenUpstreamRescuesOnlyLocally(t *testing.T) {
+	f, oldTip, newTip := rewrittenFixture(t)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.Status != GitRepoNoMatch || rep.Class != GitClassRewrittenUpstream {
+			t.Fatalf("%+v: status %q class %q, want no-match rewritten-upstream (%s)", opts, rep.Status, rep.Class, rep.Suggestion)
+		}
+		for _, want := range []string{"origin/main was rewritten: the 3 local-only commit(s) are pre-rewrite versions", "fetch --tags --force", "a pushed rescue branch would publish the history the rewrite took out"} {
+			if !strings.Contains(rep.Suggestion, want) {
+				t.Fatalf("%+v: suggestion %q lacks %q", opts, rep.Suggestion, want)
+			}
+		}
+		if !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: suggestion %q, want the --no-push rescue", opts, rep.Suggestion)
+		}
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+	rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true})
+	if rep.Status != GitRepoRealigned || rep.RescuePushed || gitStateHead(t, f.ws) != newTip || gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main") != oldTip {
+		t.Fatalf("--no-push rescue = %+v, want HEAD at %s and the old history kept locally", rep, newTip)
+	}
+}
+
+// One real local commit on top of the rewritten ones keeps the repo
+// diverged (AC3 is about repos with no twins), but its rescue is still
+// never pushed: the push would send the pre-rewrite commits (#216).
+func TestPeerGitClass_RewriteWithRealLocalWorkRescuesOnlyLocally(t *testing.T) {
+	f, oldTip, newTip := rewrittenFixture(t)
+	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
+	f.deliver(t, newTip) // the other Mac's files, as peer sync leaves them
+	rep := rescueRealign(t, f.ws, RealignOptions{})
+	if rep.Class != GitClassDiverged || !strings.Contains(rep.Suggestion, "3 of the 5 commit(s) in HEAD's history are pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+		t.Fatalf("class %q suggestion %q, want diverged with the --no-push rescue and why", rep.Class, rep.Suggestion)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoNoMatch {
+		t.Fatalf("pushed rescue: %+v, want refused", rep)
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateRun_(t, f.ws, "merge-base", "--is-ancestor", oldTip, "rescue/260928-main") != "" {
+		t.Fatalf("--no-push rescue: %+v", rep)
+	}
+}
+
+// A branch cut from the old default branch would push the pre-rewrite
+// commits too, so its branch-mismatch rescue stays local (#216).
+func TestPeerGitRescue_BranchFromTheOldHistoryRescuesOnlyLocally(t *testing.T) {
+	f, _, newTip := rewrittenFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
+	commitAt(t, f.ws, "feat.txt", "f\n", "feature work", "1700000400 +0900")
+	f.deliver(t, newTip)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.Class != GitClassBranchMismatch || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") || strings.Contains(rep.Suggestion, "realign --rescue --apply") {
+			t.Fatalf("%+v: class %q suggestion %q, want branch-mismatch refusing the push", opts, rep.Class, rep.Suggestion)
+		}
+	}
+	gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept")
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != newTip {
+		t.Fatalf("--no-push rescue: %+v, want HEAD at %s", rep, newTip)
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+}
+
+// Tracking refs can hide what a push sends: a branch the remote deleted
+// still at the old tip (fetch without --prune), or a push-only remote with
+// none. The push stays refused, by the class and by the branch the rescue
+// target is on (#216).
+func TestPeerGitRescue_RewriteStaysLocalWhateverTheTrackingRefs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		realWork bool
+		setup    func(t *testing.T, f *rescueFixture, oldTip string)
+	}{
+		{"a stale tracking ref at the old tip", false, func(t *testing.T, f *rescueFixture, oldTip string) {
+			gitStateRun_(t, f.ws, "update-ref", "refs/remotes/origin/keep", oldTip)
+		}},
+		{"a push-only remote", false, func(t *testing.T, f *rescueFixture, oldTip string) {
+			public := filepath.Join(filepath.Dir(f.origin), "public.git") // checked below
+			gitStateRun_(t, filepath.Dir(public), "init", "-q", "--bare", public)
+			gitStateRun_(t, f.ws, "remote", "add", "public", public)
+			gitStateRun_(t, f.ws, "config", "remote.pushDefault", "public")
+		}},
+		{"real work and a stale tracking ref", true, func(t *testing.T, f *rescueFixture, oldTip string) {
+			gitStateRun_(t, f.ws, "update-ref", "refs/remotes/origin/keep", oldTip)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, oldTip, newTip := rewrittenFixture(t)
+			if tc.realWork {
+				commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
+				f.deliver(t, newTip)
+			}
+			tc.setup(t, f, oldTip)
+			for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+				rep := rescueRealign(t, f.ws, opts)
+				if rep.Status != GitRepoNoMatch || rep.RescuePushed || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+					t.Fatalf("%+v: %+v, want the push refused and the --no-push rescue named", opts, rep)
+				}
+			}
+			for _, remote := range []string{f.origin, filepath.Join(filepath.Dir(f.origin), "public.git")} {
+				if _, err := os.Stat(remote); err == nil {
+					if out := gitStateRun_(t, remote, "for-each-ref", "refs/heads/rescue/"); out != "" {
+						t.Fatalf("a rescue branch reached %s: %s", remote, out)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A feature branch whose own upstream was rewritten, rescued as a branch
+// mismatch toward a push-only remote: the twins are on origin/feat, not on
+// the default branch or the push remote, and the push is still refused
+// (#216).
+func TestPeerGitRescue_RewrittenFeatureUpstreamStaysLocal(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.writer, "checkout", "-q", "-b", "feat")
+	dates := []string{"1700000000 +0900", "1700000100 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-u", "origin", "feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "origin/feat")
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "feat")
+	gitStateRun_(t, f.writer, "checkout", "-q", "main")
+	tip := f.publish(t, "a.txt", "a2\n")
+	public := filepath.Join(filepath.Dir(f.origin), "public.git")
+	gitStateRun_(t, filepath.Dir(public), "init", "-q", "--bare", public)
+	gitStateRun_(t, f.ws, "remote", "add", "public", public)
+	gitStateRun_(t, f.ws, "config", "remote.pushDefault", "public")
+	f.deliver(t, tip)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.Class != GitClassBranchMismatch || rep.RescuePushed || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: %+v, want the push refused", opts, rep)
+		}
+	}
+	if out := gitStateRun_(t, public, "for-each-ref", "refs/heads/"); out != "" {
+		t.Fatalf("something reached the push-only remote: %s", out)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("--no-push rescue: %+v, want HEAD at %s", rep, tip)
+	}
+}
+
+// The rewritten history merged into the old one (the classic post-rewrite
+// mistake) puts the twins in HEAD's history; they are still found, since
+// the remote side reads whole histories and counts only different commits
+// (#216).
+func TestPeerGitRescue_RewriteMergedIntoTheOldHistoryStaysLocal(t *testing.T) {
+	f, _, _ := rewrittenFixture(t)
+	gitStateRun_(t, f.ws, "checkout", "-q", "--", ".")
+	gitStateRun_(t, f.ws, "merge", "-q", "-X", "theirs", "--no-edit", "origin/main")
+	tip := f.publish(t, "a.txt", "a2\n")
+	f.deliver(t, tip)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.RescuePushed || !strings.Contains(rep.Suggestion, "are pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: %+v, want the push refused", opts, rep)
+		}
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+}
+
+// Some pre-rewrite commits and no upstream commit to realign to: the hand
+// move is still the step, with a warning not to push those (#216).
+func TestPeerGitClass_PartialRewriteWithoutAMatchWarns(t *testing.T) {
+	f, _, _ := rewrittenFixture(t)
+	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
+	gitStateRewriteTracked(t, filepath.Join(f.ws, "a.txt"), "edited here\n")
+	rep := rescueRealign(t, f.ws, RealignOptions{})
+	if rep.Class != GitClassDiverged || rep.RescueTarget != "" || !strings.HasSuffix(rep.Suggestion, "rebase or merge by hand, but 3 commit(s) in HEAD's history are pre-rewrite versions of commits on the remote (same author, date and subject): do not push them") {
+		t.Fatalf("class %q target %q suggestion %q, want the hand move with the warning", rep.Class, rep.RescueTarget, rep.Suggestion)
+	}
+}
+
+// A local commit also on another remote branch, the same commit, is not a
+// rewrite: only a different commit with the same metadata is a twin, and
+// the rescue is still pushed (#216 AC3).
+func TestPeerGitClass_ACommitOnAnotherRemoteBranchIsNotARewrite(t *testing.T) {
+	f, _, _ := divergedFixture(t)
+	gitStateRun_(t, f.ws, "push", "-q", "origin", "HEAD:refs/heads/topic")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	rep := rescueRealign(t, f.ws, RealignOptions{})
+	if rep.Class != GitClassDiverged || !strings.HasSuffix(rep.Suggestion, "dot peer git realign --rescue --apply .") {
+		t.Fatalf("class %q suggestion %q, want diverged with the pushed rescue", rep.Class, rep.Suggestion)
+	}
+}
+
+// HEAD's own upstream can be the stale ref: a feature branch cut from the
+// old main, dropped when the rewritten repository was recreated, still
+// fetched here. The pre-rewrite commits are then in @{upstream} too, and
+// only a comparison of HEAD's whole history sees them (#216).
+func TestPeerGitRescue_StaleUpstreamOfTheOldHistoryStaysLocal(t *testing.T) {
+	f := newRescueFixture(t)
+	dates := []string{"1700000000 +0900", "1700000100 +0900", "1700000200 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.writer, "checkout", "-q", "-b", "feat")
+	commitAt(t, f.writer, "feat.txt", "f1\n", "feat 1", "1700000300 +0900")
+	gitStateRun_(t, f.writer, "push", "-q", "-u", "origin", "feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "origin/feat")
+	feat2 := commitAt(t, f.writer, "feat.txt", "f2\n", "feat 2", "1700000400 +0900")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000500 +0900")
+	// The rewrite: a redacted main, and feat gone from the remote.
+	gitStateRun_(t, f.writer, "checkout", "-q", "main")
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+	gitStateRun_(t, f.writer, "push", "-q", "origin", ":refs/heads/feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin") // no prune: origin/feat stays
+	f.deliver(t, feat2)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.RescuePushed || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: %+v, want the push refused", opts, rep)
+		}
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+}
+
+// log.showSignature adds lines to a signed commit's log entry; the twin
+// check reads without them, so signed pre-rewrite commits still pair with
+// their unsigned rewrites (#216).
+func TestPeerGitRescue_RewriteOfSignedCommits(t *testing.T) {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not available")
+	}
+	key := filepath.Join(t.TempDir(), "key")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.writer, "config", "gpg.format", "ssh")
+	gitStateRun_(t, f.writer, "config", "user.signingkey", key)
+	gitStateRun_(t, f.writer, "config", "commit.gpgsign", "true")
+	dates := []string{"1700000000 +0900", "1700000100 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	gitStateRun_(t, f.writer, "config", "commit.gpgsign", "false")
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	var newTip string
+	for i, date := range dates {
+		newTip = commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	f.deliver(t, newTip)
+	gitStateRun_(t, f.ws, "config", "log.showSignature", "true")
+	if rep := rescueRealign(t, f.ws, RealignOptions{}); rep.Class != GitClassRewrittenUpstream {
+		t.Fatalf("class %q suggestion %q, want rewritten-upstream", rep.Class, rep.Suggestion)
+	}
+}
+
+// --candidate-refs widens the candidates to refs such as the unpushed
+// branches of a Mac that stopped; a target taken from one names it, and a
+// commit that is not a strict descendant of HEAD is never taken (#217).
+func TestPeerGitRealign_CandidateRefs(t *testing.T) {
+	stopped := func(t *testing.T, f *rescueFixture) string {
+		t.Helper()
+		other := filepath.Join(t.TempDir(), "m3")
+		gitStateRun_(t, filepath.Dir(other), "clone", "-q", f.origin, other)
+		sha := gitStateCommitFile(t, other, "a.txt", "never pushed\n", "unpushed on m3")
+		gitStateRun_(t, f.ws, "fetch", "-q", other, "+refs/heads/*:refs/peer/m3/heads/*")
+		return sha
+	}
+	t.Run("taken only with the flag", func(t *testing.T) {
+		f := newRescueFixture(t)
+		sha := stopped(t, f)
+		f.deliver(t, sha)
+		if rep := rescueRealign(t, f.ws, RealignOptions{}); rep.Status != GitRepoNoMatch {
+			t.Fatalf("without the flag: %+v, want no-match", rep)
+		}
+		rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}})
+		if rep.Status != GitRepoRealignable || rep.Target != sha || rep.TargetRef != "refs/peer/m3/heads/main" {
+			t.Fatalf("with the flag: %+v, want realignable onto %s from refs/peer/m3/heads/main", rep, sha)
+		}
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != sha {
+			t.Fatalf("apply: %+v", rep)
+		}
+	})
+	t.Run("a non-descendant is never taken", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateCommitFile(t, f.ws, "local.txt", "mine\n", "local only") // HEAD moves past the fork point
+		sha := stopped(t, f)
+		f.deliver(t, sha)
+		if rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status == GitRepoRealignable || rep.Target == sha {
+			t.Fatalf("%+v: took a commit that is not a descendant of HEAD", rep)
+		}
+	})
+	// On another line, a candidate-ref commit does not win a content tie
+	// the upstream's commit would have won alone.
+	t.Run("a tie keeps the upstream candidate", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.writer, "commit", "-q", "--allow-empty", "-m", "upstream, empty")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		up := gitStateRun_(t, f.ws, "rev-parse", "origin/main")
+		other := filepath.Join(t.TempDir(), "m3")
+		gitStateRun_(t, filepath.Dir(other), "clone", "-q", f.origin, other)
+		gitStateRun_(t, other, "reset", "-q", "--hard", f.base)
+		gitStateRun_(t, other, "commit", "-q", "--allow-empty", "-m", "m3, empty")
+		gitStateRun_(t, f.ws, "fetch", "-q", other, "+refs/heads/*:refs/peer/m3/heads/*")
+		if rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status != GitRepoRealignable || rep.Target != up || rep.TargetRef != "" {
+			t.Fatalf("%+v, want the upstream commit %s", rep, up)
+		}
+	})
+	t.Run("a commit the upstream offers too is not labeled", func(t *testing.T) {
+		f := newRescueFixture(t)
+		tip := f.publish(t, "a.txt", "a2\n")
+		gitStateRun_(t, f.ws, "fetch", "-q", f.origin, "+refs/heads/*:refs/peer/m3/heads/*")
+		f.deliver(t, tip)
+		if rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status != GitRepoRealignable || rep.Target != tip || rep.TargetRef != "" {
+			t.Fatalf("%+v, want the upstream candidate, unlabeled", rep)
 		}
 	})
 }

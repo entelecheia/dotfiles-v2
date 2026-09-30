@@ -95,17 +95,68 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	case ahead > 0:
 		rep.Class = GitClassDiverged
 		rep.remote = r.pushRemote(ctx, abs, rep.branch)
+		facts := fmt.Sprintf("%d local-only commit(s) vs %d on %s", ahead, behind, upName)
+		// A rewritten upstream: the local commits are its pre-rewrite
+		// versions, and pushing them would publish what the rewrite took
+		// out, so a rescue stays local (#216).
+		if twins, total, err := r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", "@{upstream}"}, []string{"@{upstream}", "--not", "HEAD"}); err == nil && total > 0 && twins == total {
+			rep.Class = GitClassRewrittenUpstream
+			facts = fmt.Sprintf("%s was rewritten: the %d local-only commit(s) are pre-rewrite versions of commits on it (same author, date and subject); tags it moved stay at the old commits until git -C %s fetch --tags --force, which replaces them", upName, ahead, shellWord(abs))
+		}
 		if upOK {
 			rep.RescueTarget = upCand
 			rep.rescueDiffs = upDiffs
 			rep.rescueTie = upTie
-			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s", ahead, behind, upName, matchWords(upDiffs), shortRev(upCand)),
+			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%s, and %s %s", facts, matchWords(upDiffs), shortRev(upCand)),
 				"keep the local commits on a rescue branch and realign")
+		} else if rep.Class == GitClassRewrittenUpstream {
+			rep.Suggestion = facts + "; no upstream commit matches the files better than HEAD: move by hand, and do not push these commits"
+		} else if twins, _, err := r.rewriteTwins(ctx, abs, []string{"HEAD"}, []string{"--remotes"}); err == nil && twins > 0 {
+			rep.Suggestion = fmt.Sprintf("%s, and no upstream commit matches the files better than HEAD; rebase or merge by hand, but %d commit(s) in HEAD's history are pre-rewrite versions of commits on the remote (same author, date and subject): do not push them", facts, twins)
 		} else {
-			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and no upstream commit matches the files better than HEAD; rebase or merge by hand",
-				ahead, behind, upName)
+			rep.Suggestion = facts + ", and no upstream commit matches the files better than HEAD; rebase or merge by hand"
 		}
 	}
+}
+
+// rewriteTwins counts the commits in the rev range revs that have a twin,
+// a different commit with the same author, author date and subject, among
+// the commits of against, and how many revs lists: a history rewrite (git
+// filter-repo, a rebase) keeps those, so a twin is a pre-rewrite version
+// of a commit (#216).
+// ponytail: a rewrite that also changes authorship or dates is not seen;
+// compare trees or patch ids if such a rewrite shows up.
+func (r *gitStateRun) rewriteTwins(ctx context.Context, abs string, revs, against []string) (twins, total int, err error) {
+	// Each line is the commit id, a tab, then the key.
+	lines := func(revs []string) ([]string, error) {
+		// --no-show-signature: log.showSignature would add lines to a
+		// signed commit's entry, and a rewrite drops signatures.
+		out, err := r.read(ctx, abs, append([]string{"log", "--no-show-signature", "--format=%H%x09%an%x1f%ae%x1f%ad%x1f%s", "--date=raw"}, revs...)...)
+		if err != nil || out == "" {
+			return nil, err
+		}
+		return strings.Split(out, "\n"), nil
+	}
+	local, err := lines(revs)
+	if err != nil || len(local) == 0 {
+		return 0, 0, err
+	}
+	theirs, err := lines(against)
+	if err != nil {
+		return 0, 0, err
+	}
+	ids := map[string][]string{} // key -> commit ids
+	for _, l := range theirs {
+		id, key, _ := strings.Cut(l, "\t")
+		ids[key] = append(ids[key], id)
+	}
+	for _, l := range local {
+		id, key, _ := strings.Cut(l, "\t")
+		if slices.ContainsFunc(ids[key], func(other string) bool { return other != id }) {
+			twins++
+		}
+	}
+	return twins, len(local), nil
 }
 
 // pushRemote is where git would push branch: branch.<b>.pushRemote, then
@@ -218,6 +269,23 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	// show, which blocks every pushed rescue name there (#214).
 	var pushOnly []string
 	if rep.remote != "." {
+		// A commit in HEAD's history with a twin in a remote-tracking ref's
+		// history is a pre-rewrite version: pushing a rescue that holds it
+		// publishes what the rewrite took out, whatever the class (#216).
+		// Both sides are whole histories, so no ref hides either: not a
+		// stale tracking ref (HEAD's own upstream included), not a push
+		// remote without tracking refs, not a rewrite merged into the old
+		// history.
+		twins, total, err := r.rewriteTwins(ctx, abs, []string{"HEAD"}, []string{"--remotes"})
+		failed := err != nil
+		switch {
+		case rep.Class == GitClassRewrittenUpstream:
+			pushOnly = append(pushOnly, "a pushed rescue branch would publish the history the rewrite took out")
+		case twins > 0:
+			pushOnly = append(pushOnly, fmt.Sprintf("%d of the %d commit(s) in HEAD's history are pre-rewrite versions of commits on the remote (same author, date and subject), so a pushed rescue would publish the history a rewrite took out", twins, total))
+		case failed:
+			pushOnly = append(pushOnly, "cannot tell whether a pushed rescue would publish history a rewrite took out")
+		}
 		if why := r.lfsRefusal(ctx, abs); why != "" {
 			pushOnly = append(pushOnly, why)
 		}
@@ -286,6 +354,9 @@ func (r *gitStateRun) freeBranchName(ctx context.Context, abs, base string, spac
 		name = base + "-" + strconv.Itoa(i)
 	}
 }
+
+// ShellWord is shellWord for callers outside the package (a command hint).
+func ShellWord(s string) string { return shellWord(s) }
 
 // shellWord quotes s for a suggested command line only when it needs it.
 func shellWord(s string) string {

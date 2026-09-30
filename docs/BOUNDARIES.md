@@ -263,14 +263,19 @@ tool):
 - `<workspace repo>/.git/index` and the repo's `HEAD` ref — moved
   together by `dot peer git realign --apply` through git's lockfile
   protocol (compare-and-swap `update-ref`, fast-forward only onto a
-  strict descendant, the old value recorded in the reflog for undo).
+  strict descendant, the old value recorded in the reflog for undo;
+  `--candidate-refs` only adds candidates, which must be strict
+  descendants too).
   Only `--rescue` moves a branch sideways: HEAD's commits are first kept
   on a new `rescue/<yymmdd>-<branch>` ref (create-only; not while a
   branch named `rescue` blocks it; a pushed one also skips names the
   push remote's remote-tracking refs hold) and pushed where git pushes
   the branch (pushRemote, pushDefault, then its remote) unless
-  `--no-push` (a Git LFS repo, one the check cannot read, or one whose
-  push remote has a `rescue` branch is rescued only with `--no-push`);
+  `--no-push` (a Git LFS repo, one the check cannot read, one whose
+  push remote has a `rescue` branch, or one whose history has a commit
+  with a rewritten twin in a remote branch's history, the history a
+  rewrite took out, or where that cannot be checked, is rescued only
+  with `--no-push`);
   then the branch, or for a branch mismatch the default
   branch (created with `branch.<name>.remote` and `.merge` pointing at
   origin's, or fast-forwarded; never while a linked worktree has it
