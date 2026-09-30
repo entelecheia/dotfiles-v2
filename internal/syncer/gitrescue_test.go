@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1222,6 +1223,134 @@ func TestPeerGitRescue_AvoidsNamesTheRemoteHolds(t *testing.T) {
 		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
 		if rep.Status != GitRepoRealigned || rep.Rescue != "rescue/260928-main-2" || gitStateRun_(t, f.origin, "rev-parse", "refs/heads/rescue/260928-main-2") != local {
 			t.Fatalf("rescue = %+v, want rescue/260928-main-2 pushed", rep)
+		}
+	})
+}
+
+// commitAt commits content with a fixed author date, as a history rewrite
+// keeps it, and returns the new commit.
+func commitAt(t *testing.T, dir, name, content, subject, date string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitStateRun_(t, dir, "add", name)
+	cmd := exec.Command("git", "-C", dir, "commit", "-q", "-m", subject)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=dot-test", "GIT_AUTHOR_EMAIL=dot-test@example.invalid", "GIT_AUTHOR_DATE="+date,
+		"GIT_COMMITTER_NAME=dot-test", "GIT_COMMITTER_EMAIL=dot-test@example.invalid")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit: %v\n%s", err, out)
+	}
+	return gitStateRun_(t, dir, "rev-parse", "HEAD")
+}
+
+// rewrittenFixture: three commits reach both Macs, then the writer rewrites
+// them (one string replaced, authors, dates and subjects kept, as git
+// filter-repo does) and force-pushes; the workspace keeps the old history,
+// with the rewritten files delivered (#216).
+func rewrittenFixture(t *testing.T) (f *rescueFixture, oldTip, newTip string) {
+	f = newRescueFixture(t)
+	dates := []string{"1700000000 +0900", "1700000100 +0900", "1700000200 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+	gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+	oldTip = gitStateHead(t, f.ws)
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	for i, date := range dates {
+		newTip = commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	f.deliver(t, newTip)
+	return f, oldTip, newTip
+}
+
+// A rewritten upstream is not local-only work: its class says so, and a
+// rescue of it is never pushed, since that would publish what the rewrite
+// took out (#216).
+func TestPeerGitRescue_RewrittenUpstreamRescuesOnlyLocally(t *testing.T) {
+	f, oldTip, newTip := rewrittenFixture(t)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.Status != GitRepoNoMatch || rep.Class != GitClassRewrittenUpstream {
+			t.Fatalf("%+v: status %q class %q, want no-match rewritten-upstream (%s)", opts, rep.Status, rep.Class, rep.Suggestion)
+		}
+		for _, want := range []string{"origin/main was rewritten: the 3 local-only commit(s) are pre-rewrite versions", "fetch --tags --force", "a pushed rescue branch would publish the history the rewrite took out"} {
+			if !strings.Contains(rep.Suggestion, want) {
+				t.Fatalf("%+v: suggestion %q lacks %q", opts, rep.Suggestion, want)
+			}
+		}
+		if !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: suggestion %q, want the --no-push rescue", opts, rep.Suggestion)
+		}
+	}
+	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+	rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true})
+	if rep.Status != GitRepoRealigned || rep.RescuePushed || gitStateHead(t, f.ws) != newTip || gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main") != oldTip {
+		t.Fatalf("--no-push rescue = %+v, want HEAD at %s and the old history kept locally", rep, newTip)
+	}
+}
+
+// One real local commit among the rewritten ones keeps the repo diverged,
+// with its pushed rescue (#216).
+func TestPeerGitClass_RewriteWithRealLocalWorkStaysDiverged(t *testing.T) {
+	f, _, newTip := rewrittenFixture(t)
+	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
+	f.deliver(t, newTip) // the other Mac's files, as peer sync leaves them
+	rep := rescueRealign(t, f.ws, RealignOptions{})
+	if rep.Class != GitClassDiverged || !strings.HasSuffix(rep.Suggestion, "dot peer git realign --rescue --apply .") {
+		t.Fatalf("class %q suggestion %q, want diverged with the pushed rescue", rep.Class, rep.Suggestion)
+	}
+}
+
+// --candidate-refs widens the candidates to refs such as the unpushed
+// branches of a Mac that stopped; a target taken from one names it, and a
+// commit that is not a strict descendant of HEAD is never taken (#217).
+func TestPeerGitRealign_CandidateRefs(t *testing.T) {
+	stopped := func(t *testing.T, f *rescueFixture) string {
+		t.Helper()
+		other := filepath.Join(t.TempDir(), "m3")
+		gitStateRun_(t, filepath.Dir(other), "clone", "-q", f.origin, other)
+		sha := gitStateCommitFile(t, other, "a.txt", "never pushed\n", "unpushed on m3")
+		gitStateRun_(t, f.ws, "fetch", "-q", other, "+refs/heads/*:refs/peer/m3/heads/*")
+		return sha
+	}
+	t.Run("taken only with the flag", func(t *testing.T) {
+		f := newRescueFixture(t)
+		sha := stopped(t, f)
+		f.deliver(t, sha)
+		if rep := rescueRealign(t, f.ws, RealignOptions{}); rep.Status != GitRepoNoMatch {
+			t.Fatalf("without the flag: %+v, want no-match", rep)
+		}
+		rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}})
+		if rep.Status != GitRepoRealignable || rep.Target != sha || rep.TargetRef != "refs/peer/m3/heads/main" {
+			t.Fatalf("with the flag: %+v, want realignable onto %s from refs/peer/m3/heads/main", rep, sha)
+		}
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != sha {
+			t.Fatalf("apply: %+v", rep)
+		}
+	})
+	t.Run("a non-descendant is never taken", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateCommitFile(t, f.ws, "local.txt", "mine\n", "local only") // HEAD moves past the fork point
+		sha := stopped(t, f)
+		f.deliver(t, sha)
+		if rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status == GitRepoRealignable || rep.Target == sha {
+			t.Fatalf("%+v: took a commit that is not a descendant of HEAD", rep)
+		}
+	})
+	t.Run("a commit the upstream offers too is not labeled", func(t *testing.T) {
+		f := newRescueFixture(t)
+		tip := f.publish(t, "a.txt", "a2\n")
+		gitStateRun_(t, f.ws, "fetch", "-q", f.origin, "+refs/heads/*:refs/peer/m3/heads/*")
+		f.deliver(t, tip)
+		if rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status != GitRepoRealignable || rep.Target != tip || rep.TargetRef != "" {
+			t.Fatalf("%+v, want the upstream candidate, unlabeled", rep)
 		}
 	})
 }

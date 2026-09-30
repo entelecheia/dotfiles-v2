@@ -129,8 +129,9 @@ func newPeerGitStatusCmd() *cobra.Command {
 
 func newPeerGitRealignCmd() *cobra.Command {
 	var apply, rescue, noPush, fetch bool
+	var candidateRefs []string
 	cmd := &cobra.Command{
-		Use:   "realign [--apply [--fetch]] [--rescue [--no-push]] [<repo>...]",
+		Use:   "realign [--apply [--fetch]] [--rescue [--no-push]] [--candidate-refs <pattern>]... [<repo>...]",
 		Short: "Move HEAD and index to the descendant commit the files already match",
 		Long: `Move each repo's HEAD and index forward to the descendant commit its files
 already match. The default is a preview; --apply moves.
@@ -141,6 +142,10 @@ next step:
   ahead-unpushed    local-only commits the upstream lacks; push them
   diverged          local-only commits and upstream commits; the files match
                     an upstream commit
+  rewritten-upstream
+                    diverged, but each local-only commit has an upstream twin
+                    with the same author, date and subject: the upstream was
+                    rewritten, and a rescue stays local
   branch-mismatch   HEAD is on another branch, the files match the default
                     branch
 A leftover REBASE_HEAD with no rebase in progress is skipped as
@@ -157,6 +162,23 @@ rescue can still fail (a push), so a parent that can stay does not record a
 commit past where its rescued child may end, and follows on the next run; a
 parent whose own files need the move names in its tie line the children it
 passes.
+
+A rewritten upstream (a history rewrite that kept authors, dates and
+subjects, as git filter-repo does) leaves the Mac that did not rewrite with
+the pre-rewrite commits as local-only work. Pushing them would publish what
+the rewrite took out, so rewritten-upstream repos are rescued only with
+--no-push; the old commits stay on the local rescue branch. Tags the rewrite
+moved stay at the old commits until git fetch --tags --force.
+
+--candidate-refs <pattern> (repeatable) also takes the commits of refs
+matching a git for-each-ref pattern as candidates, in every repo, for the
+case where the Mac that stopped had commits it never pushed. Fetch its
+branches into a namespace first, for example
+  git -C <repo> fetch <that Mac's repo URL> \
+      '+refs/heads/*:refs/peer/<mac>/heads/*'
+then realign with --candidate-refs refs/peer/<mac>/. Such a commit must be a
+strict descendant of HEAD like every candidate, and a target taken from one
+names its ref. A pattern that matches nothing adds nothing.
 
 Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
 at its upstream tip, a worktree .gitmodules that is missing, or equal to an
@@ -190,10 +212,11 @@ before those candidates are compared, so it is judged with the commit there
 			dryRun, _ := c.Flags().GetBool("dry-run")
 			apply = apply && !dryRun
 			res, err := syncer.PeerGitRealign(c.Context(), root, args, syncer.RealignOptions{
-				Apply:  apply,
-				Rescue: rescue,
-				NoPush: noPush,
-				Fetch:  fetch,
+				Apply:         apply,
+				Rescue:        rescue,
+				NoPush:        noPush,
+				Fetch:         fetch,
+				CandidateRefs: candidateRefs,
 			})
 			if err != nil {
 				return err
@@ -217,6 +240,7 @@ before those candidates are compared, so it is judged with the commit there
 	cmd.Flags().BoolVar(&apply, "apply", false, "move HEAD and index (default is a dry-run preview)")
 	cmd.Flags().BoolVar(&rescue, "rescue", false, "also move diverged and branch-mismatch repos, keeping HEAD on a pushed rescue/<date>-<branch> branch")
 	cmd.Flags().BoolVar(&noPush, "no-push", false, "with --rescue, keep rescue branches local")
+	cmd.Flags().StringArrayVar(&candidateRefs, "candidate-refs", nil, "also take commits of refs matching this for-each-ref pattern as candidates (repeatable), e.g. refs/peer/<mac>/ after fetching that Mac's branches there")
 	cmd.Flags().BoolVar(&fetch, "fetch", false, "with --apply, fetch a submodule whose gitlink commit is missing (following a moved URL) and retry it, and fetch a child before judging a candidate that records a commit it lacks")
 	return cmd
 }
@@ -249,6 +273,9 @@ func printPeerGitRepos(p *Printer, res *syncer.GitStateResult, withMoves bool) {
 			line += "  " + shortSHA(rep.Head) + " -> " + shortSHA(rep.Target)
 		case rep.Status == syncer.GitRepoRealigned:
 			line += "  " + shortSHA(rep.PreviousHead) + " -> " + shortSHA(rep.Target)
+		}
+		if rep.TargetRef != "" && (rep.Status == syncer.GitRepoRealignable && withMoves || rep.Status == syncer.GitRepoRealigned) {
+			line += " (from " + rep.TargetRef + ")"
 		}
 		if rep.Reason != "" {
 			line += "  (" + rep.Reason + ")"

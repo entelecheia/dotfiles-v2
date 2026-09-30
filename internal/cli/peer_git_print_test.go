@@ -26,6 +26,20 @@ func TestPrintPeerGitRepos_ClassesAndRescue(t *testing.T) {
 
 // `peer git status` prints a no-match repo's tie line, which its reason
 // points at (#189 round 15); an aligned repo's stays in realign and --json.
+// A target a --candidate-refs pattern offered names its ref; others do
+// not (#217).
+func TestPrintPeerGitRepos_NamesACandidateRef(t *testing.T) {
+	res := &syncer.GitStateResult{Root: "/w", Repos: []*syncer.GitRepoReport{
+		{Path: "dev", Status: syncer.GitRepoRealignable, Head: "aaaa", Target: "bbbb", TargetRef: "refs/peer/m3/heads/main"},
+		{Path: "vault", Status: syncer.GitRepoRealignable, Head: "cccc", Target: "dddd"},
+	}}
+	var out bytes.Buffer
+	printPeerGitRepos(&Printer{Out: &out}, res, true)
+	if !strings.Contains(out.String(), "aaaa -> bbbb (from refs/peer/m3/heads/main)") || strings.Count(out.String(), "(from ") != 1 {
+		t.Errorf("output:\n%s", out.String())
+	}
+}
+
 func TestPrintPeerGitRepos_StatusShowsANoMatchTie(t *testing.T) {
 	res := &syncer.GitStateResult{Root: "/w", Repos: []*syncer.GitRepoReport{
 		{Path: "dev", Status: syncer.GitRepoNoMatch, Reason: "HEAD wins the tie with its descendants (see tie)", TieBreak: "HEAD and 1 candidate(s) tie on content; ..."},

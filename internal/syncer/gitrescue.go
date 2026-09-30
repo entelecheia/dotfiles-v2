@@ -95,17 +95,56 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 	case ahead > 0:
 		rep.Class = GitClassDiverged
 		rep.remote = r.pushRemote(ctx, abs, rep.branch)
+		facts := fmt.Sprintf("%d local-only commit(s) vs %d on %s", ahead, behind, upName)
+		// A rewritten upstream: the local commits are its pre-rewrite
+		// versions, and pushing them would publish what the rewrite took
+		// out, so a rescue stays local (#216).
+		if r.rewrittenUpstream(ctx, abs) {
+			rep.Class = GitClassRewrittenUpstream
+			facts = fmt.Sprintf("%s was rewritten: the %d local-only commit(s) are pre-rewrite versions of commits on it (same author, date and subject); tags it moved stay at the old commits until git -C %s fetch --tags --force", upName, ahead, shellWord(abs))
+		}
 		if upOK {
 			rep.RescueTarget = upCand
 			rep.rescueDiffs = upDiffs
 			rep.rescueTie = upTie
-			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%d local-only commit(s) vs %d on %s, and %s %s", ahead, behind, upName, matchWords(upDiffs), shortRev(upCand)),
+			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%s, and %s %s", facts, matchWords(upDiffs), shortRev(upCand)),
 				"keep the local commits on a rescue branch and realign")
+		} else if rep.Class == GitClassRewrittenUpstream {
+			rep.Suggestion = facts + "; no upstream commit matches the files better than HEAD: move by hand, and do not push these commits"
 		} else {
-			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) vs %d on %s, and no upstream commit matches the files better than HEAD; rebase or merge by hand",
-				ahead, behind, upName)
+			rep.Suggestion = facts + ", and no upstream commit matches the files better than HEAD; rebase or merge by hand"
 		}
 	}
+}
+
+// rewrittenUpstream reports whether every commit HEAD has and its upstream
+// lacks has a twin on the upstream with the same author, author date and
+// subject: the upstream history was rewritten (git filter-repo keeps them)
+// and the local commits are its pre-rewrite versions (#216).
+// ponytail: a rewrite that also changes authorship or dates is not seen and
+// stays diverged; compare trees or patch ids if such a rewrite shows up.
+func (r *gitStateRun) rewrittenUpstream(ctx context.Context, abs string) bool {
+	keys := func(revs ...string) []string {
+		out, err := r.read(ctx, abs, append([]string{"log", "--format=%an%x1f%ae%x1f%ad%x1f%s", "--date=raw"}, revs...)...)
+		if err != nil || out == "" {
+			return nil
+		}
+		return strings.Split(out, "\n")
+	}
+	local := keys("HEAD", "--not", "@{upstream}")
+	if len(local) == 0 {
+		return false
+	}
+	upstream := map[string]bool{}
+	for _, k := range keys("@{upstream}", "--not", "HEAD") {
+		upstream[k] = true
+	}
+	for _, k := range local {
+		if !upstream[k] {
+			return false
+		}
+	}
+	return true
 }
 
 // pushRemote is where git would push branch: branch.<b>.pushRemote, then
@@ -217,6 +256,9 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	// branch named rescue on the push remote, as its remote-tracking refs
 	// show, which blocks every pushed rescue name there (#214).
 	var pushOnly []string
+	if rep.Class == GitClassRewrittenUpstream && rep.remote != "." {
+		pushOnly = append(pushOnly, "a pushed rescue branch would publish the history the rewrite took out")
+	}
 	if rep.remote != "." {
 		if why := r.lfsRefusal(ctx, abs); why != "" {
 			pushOnly = append(pushOnly, why)
