@@ -1499,6 +1499,23 @@ func TestPeerGitRealign_CandidateRefs(t *testing.T) {
 			t.Fatalf("%+v: took a commit that is not a descendant of HEAD", rep)
 		}
 	})
+	// On another line, a candidate-ref commit does not win a content tie
+	// the upstream's commit would have won alone.
+	t.Run("a tie keeps the upstream candidate", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.writer, "commit", "-q", "--allow-empty", "-m", "upstream, empty")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		up := gitStateRun_(t, f.ws, "rev-parse", "origin/main")
+		other := filepath.Join(t.TempDir(), "m3")
+		gitStateRun_(t, filepath.Dir(other), "clone", "-q", f.origin, other)
+		gitStateRun_(t, other, "reset", "-q", "--hard", f.base)
+		gitStateRun_(t, other, "commit", "-q", "--allow-empty", "-m", "m3, empty")
+		gitStateRun_(t, f.ws, "fetch", "-q", other, "+refs/heads/*:refs/peer/m3/heads/*")
+		if rep := rescueRealign(t, f.ws, RealignOptions{CandidateRefs: []string{"refs/peer/m3/"}}); rep.Status != GitRepoRealignable || rep.Target != up || rep.TargetRef != "" {
+			t.Fatalf("%+v, want the upstream commit %s", rep, up)
+		}
+	})
 	t.Run("a commit the upstream offers too is not labeled", func(t *testing.T) {
 		f := newRescueFixture(t)
 		tip := f.publish(t, "a.txt", "a2\n")
