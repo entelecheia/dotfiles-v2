@@ -1181,7 +1181,7 @@ func TestPeerGitRescue_AvoidsNamesTheRemoteHolds(t *testing.T) {
 		f, local, tip := divergedFixture(t)
 		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue/260928-main")
 		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
-		if rep.Status != GitRepoUnresolvable || !strings.Contains(rep.Reason, "run again, which picks the next free name; git -C "+shellWord(f.ws)+" fetch origin first shows the names origin holds; or use --no-push") {
+		if rep.Status != GitRepoUnresolvable || !strings.Contains(rep.Reason, "git -C "+shellWord(f.ws)+" fetch origin, then run again: the next run picks a free name, or names --no-push when origin has a rescue branch; or use --no-push") {
 			t.Fatalf("rescue = %+v, want the fetch-and-run-again hint", rep)
 		}
 		if gitStateHead(t, f.ws) != local || gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main") != local {
@@ -1191,6 +1191,32 @@ func TestPeerGitRescue_AvoidsNamesTheRemoteHolds(t *testing.T) {
 		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
 		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
 			t.Fatalf("after the fetch: %+v, want pushed and realigned", rep)
+		}
+	})
+	// A remote rescue branch unseen: the fetch the hint names first turns
+	// the next run into the --no-push refusal, not another failed push.
+	t.Run("a remote rescue branch, not fetched", func(t *testing.T) {
+		f, local, tip := divergedFixture(t)
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoUnresolvable || !strings.Contains(rep.Reason, "fetch origin, then run again") || gitStateHead(t, f.ws) != local {
+			t.Fatalf("rescue = %+v, want the push refused with the fetch first", rep)
+		}
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("after the fetch: suggestion %q, want the --no-push rescue", s)
+		}
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("the --no-push rescue: %+v, want realigned to %s", rep, tip)
+		}
+	})
+	// A remote branch under the name blocks it too (directory/file).
+	t.Run("a remote branch under the name", func(t *testing.T) {
+		f, local, _ := divergedFixture(t)
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue/260928-main/x")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+		if rep.Status != GitRepoRealigned || rep.Rescue != "rescue/260928-main-2" || gitStateRun_(t, f.origin, "rev-parse", "refs/heads/rescue/260928-main-2") != local {
+			t.Fatalf("rescue = %+v, want rescue/260928-main-2 pushed", rep)
 		}
 	})
 }
