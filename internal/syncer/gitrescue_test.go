@@ -1100,7 +1100,7 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue")
 		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
 		for _, s := range suggestions(t, f.ws) {
-			if !strings.Contains(s, "the remote origin has a branch named rescue (as last fetched; git -C "+shellWord(f.ws)+" fetch --prune origin if it was deleted there), which keeps rescue/260928-main from being pushed") || !strings.HasSuffix(s, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			if !strings.Contains(s, "the remote origin has a branch named rescue (as last fetched; if it was deleted there: git -C "+shellWord(f.ws)+" branch -d -r origin/rescue), which keeps rescue/260928-main from being pushed") || !strings.HasSuffix(s, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
 				t.Fatalf("suggestion %q, want the remote's rescue branch and the --no-push rescue", s)
 			}
 		}
@@ -1116,10 +1116,15 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue")
 		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
 		gitStateRun_(t, f.writer, "push", "-q", "origin", ":refs/heads/rescue")
-		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "fetch --prune origin if it was deleted there") {
-			t.Fatalf("suggestion %q, want the prune", s)
+		// Another stale tracking ref the step must not touch.
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/gone")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", ":refs/heads/gone")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "if it was deleted there: git -C "+shellWord(f.ws)+" branch -d -r origin/rescue") {
+			t.Fatalf("suggestion %q, want that one tracking ref removed", s)
 		}
-		gitStateRun_(t, f.ws, "fetch", "-q", "--prune", "origin")
+		gitStateRun_(t, f.ws, "branch", "-d", "-r", "origin/rescue")
+		gitStateRun_(t, f.ws, "rev-parse", "--verify", "-q", "refs/remotes/origin/gone") // left alone
 		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
 			t.Fatalf("after the prune: suggestion %q, want the pushed rescue", s)
 		}
@@ -1181,7 +1186,7 @@ func TestPeerGitRescue_AvoidsNamesTheRemoteHolds(t *testing.T) {
 		f, local, tip := divergedFixture(t)
 		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue/260928-main")
 		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
-		if rep.Status != GitRepoUnresolvable || !strings.Contains(rep.Reason, "git -C "+shellWord(f.ws)+" fetch origin, then run again: the next run picks a free name, or names --no-push when origin has a rescue branch; or use --no-push") {
+		if rep.Status != GitRepoUnresolvable || !strings.Contains(rep.Reason, "if origin holds this name or a rescue branch: git -C "+shellWord(f.ws)+" fetch origin, then run again, which picks a free name or names --no-push; otherwise fix what the error below says; or use --no-push") {
 			t.Fatalf("rescue = %+v, want the fetch-and-run-again hint", rep)
 		}
 		if gitStateHead(t, f.ws) != local || gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main") != local {

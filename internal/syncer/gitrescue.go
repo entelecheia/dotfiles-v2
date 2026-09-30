@@ -222,7 +222,10 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 			pushOnly = append(pushOnly, why)
 		}
 		if base := r.rescueBase(rep); r.freeBranchName(ctx, abs, base, "refs/remotes/"+rep.remote+"/") == "" {
-			pushOnly = append(pushOnly, "the remote "+rep.remote+" has a branch named "+base[:strings.Index(base, "/")]+" (as last fetched; git -C "+shellWord(abs)+" fetch --prune "+shellWord(rep.remote)+" if it was deleted there), which keeps "+base+" from being pushed")
+			// Only that tracking ref is named: fetch --prune would drop
+			// every stale one of the remote, with its reflog.
+			blocker := base[:strings.Index(base, "/")]
+			pushOnly = append(pushOnly, "the remote "+rep.remote+" has a branch named "+blocker+" (as last fetched; if it was deleted there: git -C "+shellWord(abs)+" branch -d -r "+shellWord(rep.remote+"/"+blocker)+"), which keeps "+base+" from being pushed")
 		}
 	}
 	push := strings.Join(pushOnly, "; ")
@@ -464,9 +467,10 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 			rep.Status = GitRepoUnresolvable
 			// The remote may hold the name, or a rescue branch, unseen: a
 			// fetch first shows it, so the next run picks a free name or
-			// names --no-push; a bare rerun would fail the same way.
-			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (git -C " + shellWord(abs) + " fetch " + shellWord(rep.remote) +
-				", then run again: the next run picks a free name, or names --no-push when " + rep.remote + " has a rescue branch; or use --no-push): " + shortErr(err)
+			// names --no-push; a bare rerun would fail the same way. Other
+			// failures (access, a server rule) need their own fix.
+			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (if " + rep.remote + " holds this name or a rescue branch: git -C " + shellWord(abs) + " fetch " + shellWord(rep.remote) +
+				", then run again, which picks a free name or names --no-push; otherwise fix what the error below says; or use --no-push): " + shortErr(err)
 			return
 		}
 		rep.RescuePushed = true
