@@ -273,7 +273,8 @@ tool):
   the branch (pushRemote, pushDefault, then its remote; only after
   `git ls-remote` shows the remote branches the rescue rests on
   unchanged since the last fetch, checked before anything is written;
-  a branch mismatch's upstream deleted there does not count)
+  a branch mismatch's own upstream counts only when it visibly moved,
+  not when it is deleted there, untracked here or unreadable)
   unless
   `--no-push` (a Git LFS repo, one the check cannot read, one whose
   push remote has a `rescue` branch, or one whose history has a commit

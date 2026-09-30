@@ -348,8 +348,8 @@ func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoR
 			branches = append(branches, watched{remote, merge, "@{upstream}", rep.rescueBranch != ""})
 		}
 	}
-	var whys []string
-	gone, unreadable, fetchFrom := false, "", ""
+	var whys, unreadable, fetchFrom []string
+	gone := false
 	for _, b := range branches {
 		name := strings.TrimPrefix(b.branch, "refs/heads/")
 		seen, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", b.tracking)
@@ -359,7 +359,9 @@ func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoR
 		if err != nil {
 			if !b.movedOnly {
 				whys = append(whys, "cannot read "+b.remote+"'s "+name+" to check it: "+shortErr(err))
-				unreadable = b.remote
+				if !slices.Contains(unreadable, b.remote) {
+					unreadable = append(unreadable, b.remote)
+				}
 			}
 			continue
 		}
@@ -373,7 +375,9 @@ func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoR
 		case now == seen:
 		case seen != "" && now != "":
 			whys = append(whys, b.remote+"'s "+name+" is at "+shortRev(now)+" but the last fetch saw "+shortRev(seen))
-			fetchFrom = b.remote
+			if !slices.Contains(fetchFrom, b.remote) {
+				fetchFrom = append(fetchFrom, b.remote)
+			}
 		case b.movedOnly:
 			// Deleted after a squash merge, or never tracked: not a move.
 		case seen == "":
@@ -387,17 +391,29 @@ func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoR
 	if len(whys) == 0 {
 		return "", ""
 	}
-	switch {
-	case gone:
+	if gone {
 		// A fetch would not bring the branch back, so a rerun would
 		// refuse again; only a local rescue gets past it.
-		step = "use --no-push"
-	case unreadable != "":
-		step = "check " + unreadable + " and run again, or use --no-push"
-	default:
-		step = "git -C " + shellWord(abs) + " fetch " + shellWord(fetchFrom) + ", then run again, or use --no-push"
+		return strings.Join(whys, "; "), "use --no-push"
 	}
-	return strings.Join(whys, "; "), step
+	// Every remote that moved is fetched, and every unreadable one checked,
+	// so the rerun meets none of these refusals again.
+	var todo []string
+	if len(unreadable) > 0 {
+		todo = append(todo, "check "+strings.Join(unreadable, " and "))
+	}
+	switch len(fetchFrom) {
+	case 0:
+	case 1:
+		todo = append(todo, "git -C "+shellWord(abs)+" fetch "+shellWord(fetchFrom[0]))
+	default:
+		quoted := make([]string, len(fetchFrom))
+		for i, remote := range fetchFrom {
+			quoted[i] = shellWord(remote)
+		}
+		todo = append(todo, "git -C "+shellWord(abs)+" fetch --multiple "+strings.Join(quoted, " "))
+	}
+	return strings.Join(whys, "; "), strings.Join(todo, ", ") + ", then run again, or use --no-push"
 }
 
 // rescueBase is the rescue branch name before a free-name suffix:

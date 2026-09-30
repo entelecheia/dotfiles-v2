@@ -1614,7 +1614,7 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 	t.Run("a remote that cannot be read", func(t *testing.T) {
 		f, _, _ := divergedFixture(t)
 		gitStateRun_(t, f.ws, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
-		refused(t, f, "cannot read origin's main to check it", "check origin and run again, or use --no-push")
+		refused(t, f, "cannot read origin's main to check it", "check origin, then run again, or use --no-push")
 	})
 	// A branch mismatch's own upstream refuses only a visible move: deleted
 	// on the remote after a squash merge (still fetched here), or not
@@ -1671,6 +1671,31 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 		refused(t, f, "origin's main is at", "fetch origin, then run again, or use --no-push")
 		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); !strings.Contains(rep.Reason, "origin's feat is at") {
 			t.Fatalf("reason %q, want both branches named", rep.Reason)
+		}
+	})
+	// Two remotes moved (the default branch on origin, the feature's own
+	// upstream on fork): the step fetches both, so following it lifts the
+	// refusal in one rerun.
+	t.Run("two remotes moved", func(t *testing.T) {
+		f := newRescueFixture(t)
+		fork := filepath.Join(t.TempDir(), "fork.git")
+		gitStateRun_(t, filepath.Dir(fork), "clone", "-q", "--bare", f.origin, fork)
+		gitStateRun_(t, f.ws, "remote", "add", "fork", fork)
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		gitStateRun_(t, f.ws, "push", "-q", "-u", "fork", "feat")
+		tip := f.publish(t, "a.txt", "a2\n")
+		f.deliver(t, tip)
+		gitStateCommitFile(t, f.writer, "a.txt", "a3\n", "main again") // not fetched here
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		other := filepath.Join(t.TempDir(), "other")
+		gitStateRun_(t, filepath.Dir(other), "clone", "-q", "-b", "feat", fork, other)
+		gitStateCommitFile(t, other, "feat.txt", "f2\n", "f2") // not fetched here
+		gitStateRun_(t, other, "push", "-q", "origin", "feat")
+		refused(t, f, "origin's main is at", "fetch --multiple origin fork, then run again, or use --no-push")
+		gitStateRun_(t, f.ws, "fetch", "-q", "--multiple", "origin", "fork")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); strings.Contains(rep.Reason, "not rescued") {
+			t.Fatalf("after the step: %+v, want no remote refusal", rep)
 		}
 	})
 	// A branch mismatch rests on HEAD's upstream too: a rewrite of it not

@@ -220,7 +220,8 @@ remote check (#220) when it moved the upstream or, for a branch mismatch,
 origin's default branch or HEAD's own upstream (not a separate push
 remote), but an `ahead-unpushed` repo is still told to push. A branch
 mismatch's upstream deleted on the remote is let through, since that is how
-a squash merge ends; a rewrite of it shows once fetched, as twins.
+a squash merge ends; a rewrite of it shows as twins only if this Mac
+fetches it before the remote drops it.
 
 The other side: a twin says two histories share a commit's metadata, not
 which one is the rewrite. A cherry-pick, a rebase-merge whose branch is
