@@ -266,10 +266,12 @@ tool):
   strict descendant, the old value recorded in the reflog for undo).
   Only `--rescue` moves a branch sideways: HEAD's commits are first kept
   on a new `rescue/<yymmdd>-<branch>` ref (create-only; not while a
-  branch named `rescue` blocks it) and pushed where git pushes the
-  branch (pushRemote, pushDefault, then its remote) unless `--no-push`
-  (a Git LFS repo, or one the check cannot read, is rescued only with
-  `--no-push`); then the branch, or for a branch mismatch the default
+  branch named `rescue` blocks it; a pushed one also skips names the
+  push remote's remote-tracking refs hold) and pushed where git pushes
+  the branch (pushRemote, pushDefault, then its remote) unless
+  `--no-push` (a Git LFS repo, one the check cannot read, or one whose
+  push remote has a `rescue` branch is rescued only with `--no-push`);
+  then the branch, or for a branch mismatch the default
   branch (created with `branch.<name>.remote` and `.merge` pointing at
   origin's, or fast-forwarded; never while a linked worktree has it
   checked out, or is rebasing or bisecting it; HEAD re-pointed after

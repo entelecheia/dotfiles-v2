@@ -213,15 +213,24 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 		}
 		steps = append(steps, step+"git -C "+shellWord(abs)+" branch -m "+shellWord(blocker)+" "+shellWord(r.freeBranchName(ctx, abs, blocker+"-kept")))
 	}
-	lfs := ""
+	// Refusals only a push hits, which --no-push lifts: Git LFS, and a
+	// branch named rescue on the push remote, as its remote-tracking refs
+	// show, which blocks every pushed rescue name there (#214).
+	var pushOnly []string
 	if rep.remote != "." {
-		lfs = r.lfsRefusal(ctx, abs)
+		if why := r.lfsRefusal(ctx, abs); why != "" {
+			pushOnly = append(pushOnly, why)
+		}
+		if base := r.rescueBase(rep); r.freeBranchName(ctx, abs, base, "refs/remotes/"+rep.remote+"/") == "" {
+			pushOnly = append(pushOnly, "the remote "+rep.remote+" has a branch named "+base[:strings.Index(base, "/")]+", which keeps "+base+" from being pushed")
+		}
 	}
+	push := strings.Join(pushOnly, "; ")
 	switch {
 	case len(steps) == 0:
-		return lfs, lfs != ""
-	case lfs != "":
-		steps = append(steps, lfs+"; rescue with --no-push after that")
+		return push, push != ""
+	case push != "":
+		steps = append(steps, push+"; rescue with --no-push after that")
 	}
 	if len(steps) == 1 {
 		return steps[0], false
@@ -242,22 +251,33 @@ func (r *gitStateRun) rescueBase(rep *GitRepoReport) string {
 	return "rescue/" + r.opts.Now().Format("060102") + "-" + strings.ReplaceAll(name, "/", "-")
 }
 
-// freeBranchName is base, or base-2, base-3, ..., the first name no branch
-// keeps from being created: git refs are files and directories, so a
-// branch of that name, one under it (for-each-ref matches up to a slash) or
-// one at a parent path blocks it. It is "" when a parent blocks base, since
-// no suffix helps then.
-func (r *gitStateRun) freeBranchName(ctx context.Context, abs, base string) string {
+// freeBranchName is base, or base-2, base-3, ..., the first name no ref
+// keeps from being created in spaces (refs/heads/ when none is given; a
+// pushed rescue adds the push remote's remote-tracking refs): git refs are
+// files and directories, so a ref of that name, one under it (for-each-ref
+// matches up to a slash) or one at a parent path blocks it. It is "" when a
+// parent blocks base, since no suffix helps then.
+func (r *gitStateRun) freeBranchName(ctx context.Context, abs, base string, spaces ...string) string {
+	if len(spaces) == 0 {
+		spaces = []string{"refs/heads/"}
+	}
 	for i := 0; i < len(base); i++ {
-		if base[i] == '/' {
-			if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "refs/heads/"+base[:i]); err == nil {
+		if base[i] != '/' {
+			continue
+		}
+		for _, space := range spaces {
+			if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", space+base[:i]); err == nil {
 				return ""
 			}
 		}
 	}
 	name := base
 	for i := 2; ; i++ {
-		if taken, _ := r.read(ctx, abs, "for-each-ref", "--count=1", "--format=x", "refs/heads/"+name); taken == "" {
+		args := []string{"for-each-ref", "--count=1", "--format=x"}
+		for _, space := range spaces {
+			args = append(args, space+name)
+		}
+		if taken, _ := r.read(ctx, abs, args...); taken == "" {
 			return name
 		}
 		name = base + "-" + strconv.Itoa(i)
@@ -387,7 +407,12 @@ func (r *gitStateRun) planRescue(ctx context.Context, abs string, rep *GitRepoRe
 	if rep.rescueRefused != "" && (!rep.rescueLocalOnly || !r.opts.NoPush) {
 		return
 	}
-	if rep.Rescue = r.freeBranchName(ctx, abs, r.rescueBase(rep)); rep.Rescue == "" {
+	// A pushed rescue also skips names the push remote holds (#214).
+	spaces := []string{"refs/heads/"}
+	if !r.opts.NoPush && rep.remote != "." {
+		spaces = append(spaces, "refs/remotes/"+rep.remote+"/")
+	}
+	if rep.Rescue = r.freeBranchName(ctx, abs, r.rescueBase(rep), spaces...); rep.Rescue == "" {
 		return // blocked; rescueRefusal already refused it
 	}
 	rep.Status = GitRepoRealignable
@@ -437,7 +462,10 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		cancel()
 		if err != nil {
 			rep.Status = GitRepoUnresolvable
-			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (retry, or use --no-push): " + shortErr(err)
+			// The remote may hold the name without this repo knowing it;
+			// a fetch shows it, and the next run picks a free one.
+			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (run again after git -C " + shellWord(abs) + " fetch " + shellWord(rep.remote) +
+				", which also picks a free name if " + rep.remote + " holds this one, or use --no-push): " + shortErr(err)
 			return
 		}
 		rep.RescuePushed = true
