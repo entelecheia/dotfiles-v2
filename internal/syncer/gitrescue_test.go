@@ -1354,7 +1354,7 @@ func TestPeerGitRescue_RewriteStaysLocalWhateverTheTrackingRefs(t *testing.T) {
 			gitStateRun_(t, f.ws, "update-ref", "refs/remotes/origin/keep", oldTip)
 		}},
 		{"a push-only remote", false, func(t *testing.T, f *rescueFixture, oldTip string) {
-			public := filepath.Join(t.TempDir(), "public.git")
+			public := filepath.Join(filepath.Dir(f.origin), "public.git") // checked below
 			gitStateRun_(t, filepath.Dir(public), "init", "-q", "--bare", public)
 			gitStateRun_(t, f.ws, "remote", "add", "public", public)
 			gitStateRun_(t, f.ws, "config", "remote.pushDefault", "public")
@@ -1384,6 +1384,46 @@ func TestPeerGitRescue_RewriteStaysLocalWhateverTheTrackingRefs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A feature branch whose own upstream was rewritten, rescued as a branch
+// mismatch toward a push-only remote: the twins are on origin/feat, not on
+// the default branch or the push remote, and the push is still refused
+// (#216).
+func TestPeerGitRescue_RewrittenFeatureUpstreamStaysLocal(t *testing.T) {
+	f := newRescueFixture(t)
+	gitStateRun_(t, f.writer, "checkout", "-q", "-b", "feat")
+	dates := []string{"1700000000 +0900", "1700000100 +0900"}
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-u", "origin", "feat")
+	gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+	gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "origin/feat")
+	gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+	for i, date := range dates {
+		commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+	}
+	gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "feat")
+	gitStateRun_(t, f.writer, "checkout", "-q", "main")
+	tip := f.publish(t, "a.txt", "a2\n")
+	public := filepath.Join(filepath.Dir(f.origin), "public.git")
+	gitStateRun_(t, filepath.Dir(public), "init", "-q", "--bare", public)
+	gitStateRun_(t, f.ws, "remote", "add", "public", public)
+	gitStateRun_(t, f.ws, "config", "remote.pushDefault", "public")
+	f.deliver(t, tip)
+	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+		rep := rescueRealign(t, f.ws, opts)
+		if rep.Class != GitClassBranchMismatch || rep.RescuePushed || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("%+v: %+v, want the push refused", opts, rep)
+		}
+	}
+	if out := gitStateRun_(t, public, "for-each-ref", "refs/heads/"); out != "" {
+		t.Fatalf("something reached the push-only remote: %s", out)
+	}
+	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+		t.Fatalf("--no-push rescue: %+v, want HEAD at %s", rep, tip)
 	}
 }
 

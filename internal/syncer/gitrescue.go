@@ -264,23 +264,17 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	// show, which blocks every pushed rescue name there (#214).
 	var pushOnly []string
 	if rep.remote != "." {
-		// A local-only commit with a twin on the remote is a pre-rewrite
-		// version: pushing a rescue that holds it publishes what the rewrite
-		// took out, whatever the class (#216). The branch the rescue target
-		// is on shows it even when the push remote's tracking refs are stale
-		// or absent; those show a branch cut from another remote branch.
-		ranges := [][2][]string{{{"HEAD", "--not", "--remotes=" + rep.remote}, {"--remotes=" + rep.remote, "--not", "HEAD"}}}
-		if rep.rescueFrom != "" {
-			ranges = append(ranges, [2][]string{{"HEAD", "--not", rep.rescueFrom}, {rep.rescueFrom, "--not", "HEAD"}})
-		}
+		// A commit HEAD has and the branch the rescue target is on lacks,
+		// with a twin that some remote-tracking ref has and HEAD lacks, is a
+		// pre-rewrite version: pushing a rescue that holds it publishes what
+		// the rewrite took out, whatever the class (#216). Stale tracking
+		// refs cannot hide the local side, and the remote side does not
+		// depend on where the push goes.
 		twins, total, failed := 0, 0, false
-		for _, rg := range ranges {
-			t, n, err := r.rewriteTwins(ctx, abs, rg[0], rg[1])
-			if err != nil {
-				failed = true
-			} else if t > twins {
-				twins, total = t, n
-			}
+		if rep.rescueFrom != "" {
+			var err error
+			twins, total, err = r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", rep.rescueFrom}, []string{"--remotes", "--not", "HEAD"})
+			failed = err != nil
 		}
 		switch {
 		case rep.Class == GitClassRewrittenUpstream:
@@ -358,6 +352,9 @@ func (r *gitStateRun) freeBranchName(ctx context.Context, abs, base string, spac
 		name = base + "-" + strconv.Itoa(i)
 	}
 }
+
+// ShellWord is shellWord for callers outside the package (a command hint).
+func ShellWord(s string) string { return shellWord(s) }
 
 // shellWord quotes s for a suggested command line only when it needs it.
 func shellWord(s string) string {

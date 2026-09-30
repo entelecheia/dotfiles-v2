@@ -22,27 +22,28 @@ next step:
 A leftover REBASE_HEAD with no rebase in progress is skipped as
 stale-rebase-head with the command that clears it.
 
---rescue also moves diverged and branch-mismatch repos: HEAD's commits are
-kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
-local; a Git LFS repo, one the check cannot read, or one whose push remote
-has a rescue branch is rescued only with --no-push; a pushed name skips
-those the remote's tracking refs hold), then HEAD and the index move to the
-matching commit, on the default branch for a branch mismatch. No worktree
-file but .gitmodules is written; every move prints its undo command. A
-rescue can still fail (a push), so a parent that can stay does not record a
-commit past where its rescued child may end, and follows on the next run; a
-parent whose own files need the move names in its tie line the children it
-passes.
+--rescue also moves diverged (rewritten-upstream included) and
+branch-mismatch repos: HEAD's commits are kept on rescue/<yymmdd>-<branch>,
+pushed to the remote (--no-push keeps it local; a Git LFS repo, one the
+check cannot read, or one whose push remote has a rescue branch is rescued
+only with --no-push; a pushed name skips those the remote's tracking refs
+hold), then HEAD and the index move to the matching commit, on the default
+branch for a branch mismatch. No worktree file but .gitmodules is written;
+every move prints its undo command. A rescue can still fail (a push), so a
+parent that can stay does not record a commit past where its rescued child
+may end, and follows on the next run; a parent whose own files need the move
+names in its tie line the children it passes.
 
 A rewritten upstream (a history rewrite that kept authors, dates and
 subjects, as git filter-repo does; a rebase or amend counts too) leaves the
 Mac that did not rewrite with the pre-rewrite commits as local-only work.
 Pushing them would publish what the rewrite took out, so rewritten-upstream
-repos are rescued only with --no-push, and so is any repo whose rescue push
-would send a commit with such a twin on the remote (a commit made on top of
-the old history, or a branch cut from it); the old commits stay on the local
-rescue branch. Tags the rewrite moved stay at the old commits until git
-fetch --tags --force.
+repos are rescued only with --no-push, and so is any repo with a local-only
+commit that has such a twin on a remote branch (a commit made on top of the
+old history, a branch cut from it, a feature branch whose upstream was
+rewritten) or where that cannot be checked; the old commits stay on the
+local rescue branch. Tags the rewrite moved stay at the old commits until
+git fetch --tags --force.
 
 --candidate-refs <pattern> (repeatable) also takes the commits of refs
 matching a git for-each-ref pattern as candidates, in every repo, for the
