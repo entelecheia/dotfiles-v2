@@ -203,7 +203,15 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	// blocks every rescue name under it, suffixed or not (#212).
 	if base := r.rescueBase(rep); r.freeBranchName(ctx, abs, base) == "" {
 		blocker := base[:strings.Index(base, "/")]
-		steps = append(steps, "a branch named "+blocker+" keeps "+base+" from being created; rename it first: git -C "+shellWord(abs)+" branch -m "+shellWord(blocker)+" "+shellWord(r.freeBranchName(ctx, abs, blocker+"-kept")))
+		step := "a branch named " + blocker + " keeps " + base + " from being created; rename it first: "
+		// git refuses to rename a branch a rebase or bisect holds.
+		for _, wt := range r.worktreesOnBranch(ctx, abs, "refs/heads/"+blocker) {
+			if wt.busy != "" {
+				step = "a branch named " + blocker + " keeps " + base + " from being created; finish or abort the " + wt.busy + " holding it in the linked worktree " + wt.path + ", then rename it: "
+				break
+			}
+		}
+		steps = append(steps, step+"git -C "+shellWord(abs)+" branch -m "+shellWord(blocker)+" "+shellWord(r.freeBranchName(ctx, abs, blocker+"-kept")))
 	}
 	lfs := ""
 	if rep.remote != "." {
@@ -505,8 +513,10 @@ func (r *gitStateRun) worktreeAdmins(ctx context.Context, abs string) map[string
 	if err != nil {
 		return admins
 	}
-	dirs, _ := filepath.Glob(filepath.Join(common, "worktrees", "*"))
-	for _, dir := range dirs {
+	// ReadDir, not Glob: the common dir's path is not a pattern.
+	entries, _ := os.ReadDir(filepath.Join(common, "worktrees"))
+	for _, e := range entries {
+		dir := filepath.Join(common, "worktrees", e.Name())
 		b, err := os.ReadFile(filepath.Join(dir, "gitdir"))
 		if err != nil {
 			continue

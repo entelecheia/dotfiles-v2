@@ -956,26 +956,33 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		add      []string // worktree add flags
 		start    func(t *testing.T, wt string)
 		end      []string
+		repo     string // the repo's directory name, when not ws
 	}{
-		{"rebase", "rebase", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}},
-		{"rebase (--relative-paths)", "rebase", []string{"--relative-paths", "main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}},
+		{"rebase", "rebase", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}, ""},
+		{"rebase (--relative-paths)", "rebase", []string{"--relative-paths", "main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}, ""},
+		// A repo path that would be a glob pattern.
+		{"rebase (repo path w[s]*)", "rebase", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}, "w[s]*"},
 		// Another branch rebased with --update-refs over main's commit.
 		{"rebase --update-refs", "rebase", []string{"-b", "topic", "main"}, func(t *testing.T, wt string) {
 			gitStateRun_(t, wt, "commit", "-q", "--allow-empty", "-m", "t1")
 			stopRebase(t, wt, "false", "--update-refs", "--root")
-		}, []string{"rebase", "--abort"}},
+		}, []string{"rebase", "--abort"}, ""},
 		{"bisect", "bisect", []string{"main"}, func(t *testing.T, wt string) {
 			gitStateRun_(t, wt, "bisect", "start")
 			gitStateRun_(t, wt, "checkout", "-q", "--detach")
-		}, []string{"bisect", "reset"}},
+		}, []string{"bisect", "reset"}, ""},
 		// A bisect started on main still holds it from another branch.
 		{"bisect left on another branch", "bisect", []string{"main"}, func(t *testing.T, wt string) {
 			gitStateRun_(t, wt, "bisect", "start")
 			gitStateRun_(t, wt, "switch", "-q", "-c", "other")
-		}, []string{"bisect", "reset"}},
+		}, []string{"bisect", "reset"}, ""},
 	} {
 		t.Run("default branch held by a "+tc.name+" in a linked worktree", func(t *testing.T) {
 			f := newRescueFixture(t)
+			if tc.repo != "" {
+				f.ws = filepath.Join(t.TempDir(), tc.repo)
+				gitStateRun_(t, filepath.Dir(f.ws), "clone", "-q", f.origin, f.ws)
+			}
 			gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
 			gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
 			tip := f.publish(t, "a.txt", "a2\n")
@@ -1066,6 +1073,24 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		}
 		if got := gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main-2"); got != local {
 			t.Fatalf("rescue/260928-main-2 = %s, want %s", got, local)
+		}
+	})
+	// git refuses to rename a branch a rebase holds, so the step for a
+	// blocking rescue branch ends that first.
+	t.Run("a branch named rescue held by a rebase", func(t *testing.T) {
+		f, _, tip := divergedFixture(t)
+		tmp, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wt := filepath.Join(tmp, "wt-rescue")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", "-b", "rescue", wt, f.base)
+		stopRebase(t, wt, "false", "--root")
+		refused(t, f.ws, "a branch named rescue keeps rescue/260928-main from being created; finish or abort the rebase holding it in the linked worktree "+wt+", then rename it: git -C "+shellWord(f.ws)+" branch -m rescue rescue-kept")
+		gitStateRun_(t, wt, "rebase", "--abort")
+		gitStateRun_(t, f.ws, "branch", "-m", "rescue", "rescue-kept")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("after the steps: %+v, want realigned to %s", rep, tip)
 		}
 	})
 	t.Run("local default branch the target lacks", func(t *testing.T) {
