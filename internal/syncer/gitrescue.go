@@ -91,7 +91,19 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		rep.Suggestion = "at " + upName + "; only uncommitted changes differ, nothing to realign"
 	case behind == 0:
 		rep.Class = GitClassAheadUnpushed
-		rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s; push them: git -C %s push", ahead, label, shellWord(abs))
+		// A push after a rewrite can publish what it took out, as a pushed
+		// rescue can (#216): the same whole-history twin check (#219).
+		switch twins, _, err := r.rewriteTwins(ctx, abs, []string{"HEAD"}, []string{"--remotes"}); {
+		case err != nil:
+			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s; cannot tell whether HEAD's history holds commits a rewrite took out (%s), so check before pushing", ahead, label, shortErr(err))
+		case twins > 0:
+			// A twin says the two histories share a commit's metadata, not
+			// which side is the rewrite: a cherry-pick, or a stale tracking
+			// ref of a dropped branch, looks the same.
+			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s, but %d commit(s) in HEAD's history have a twin on a remote branch (a different commit with the same author, date and subject): if the remote was rewritten, they are its pre-rewrite versions, so do not push them and move the work you keep onto the rewritten history by hand; a cherry-pick, or the tracking ref of a branch the remote dropped, also makes a twin, so check which remote branch holds each twin before any push", ahead, label, twins)
+		default:
+			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s; push them: git -C %s push", ahead, label, shellWord(abs))
+		}
 	case ahead > 0:
 		rep.Class = GitClassDiverged
 		rep.remote = r.pushRemote(ctx, abs, rep.branch)
@@ -124,8 +136,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 // the commits of against, and how many revs lists: a history rewrite (git
 // filter-repo, a rebase) keeps those, so a twin is a pre-rewrite version
 // of a commit (#216).
-// ponytail: a rewrite that also changes authorship or dates is not seen;
-// compare trees or patch ids if such a rewrite shows up.
+// ponytail: known ceiling. See docs/CEILINGS.md (rewrite twins by author, date and subject).
 func (r *gitStateRun) rewriteTwins(ctx context.Context, abs string, revs, against []string) (twins, total int, err error) {
 	// Each line is the commit id, a tab, then the key.
 	lines := func(revs []string) ([]string, error) {
@@ -310,6 +321,99 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 		steps[i] = "(" + strconv.Itoa(i+1) + ") " + steps[i]
 	}
 	return strings.Join(steps, "; "), false
+}
+
+// remoteMoved reads, over the network, every remote branch a rescue's
+// history rests on and says how they differ from what the last fetch saw,
+// with the one step that lifts every refusal it saw: a rewrite is seen here
+// only once fetched (#216), so a rescue is not pushed past one this repo
+// has not seen, nor when a remote cannot be read (#220). The branch the
+// rescue moves to refuses when it moved, is gone, is not tracked, or cannot
+// be read; a branch mismatch's own upstream only when it visibly moved, since
+// a feature branch deleted on the remote after a squash merge is the normal
+// case there. "" when nothing refuses.
+func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoReport) (why, step string) {
+	type watched struct {
+		remote, branch, tracking string
+		movedOnly                bool
+	}
+	var branches []watched
+	if rep.rescueBranch != "" {
+		branches = append(branches, watched{"origin", "refs/heads/" + rep.rescueBranch, "refs/remotes/origin/" + rep.rescueBranch, false})
+	}
+	if rep.branch != "" {
+		remote, _ := r.read(ctx, abs, "config", "--get", "branch."+rep.branch+".remote")
+		merge, _ := r.read(ctx, abs, "config", "--get", "branch."+rep.branch+".merge")
+		if remote != "" && remote != "." && merge != "" {
+			branches = append(branches, watched{remote, merge, "@{upstream}", rep.rescueBranch != ""})
+		}
+	}
+	var whys, unreadable, fetchFrom []string
+	gone := false
+	for _, b := range branches {
+		name := strings.TrimPrefix(b.branch, "refs/heads/")
+		seen, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", b.tracking)
+		pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		out, err := r.runOutput(pctx, abs, []string{"GIT_TERMINAL_PROMPT=0"}, true, "ls-remote", b.remote, b.branch)
+		cancel()
+		if err != nil {
+			if !b.movedOnly {
+				whys = append(whys, "cannot read "+b.remote+"'s "+name+" to check it: "+shortErr(err))
+				if !slices.Contains(unreadable, b.remote) {
+					unreadable = append(unreadable, b.remote)
+				}
+			}
+			continue
+		}
+		now := ""
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			if sha, ref, ok := strings.Cut(line, "\t"); ok && ref == b.branch {
+				now = sha
+			}
+		}
+		switch {
+		case now == seen:
+		case seen != "" && now != "":
+			whys = append(whys, b.remote+"'s "+name+" is at "+shortRev(now)+" but the last fetch saw "+shortRev(seen))
+			if !slices.Contains(fetchFrom, b.remote) {
+				fetchFrom = append(fetchFrom, b.remote)
+			}
+		case b.movedOnly:
+			// Deleted after a squash merge, or never tracked: not a move.
+		case seen == "":
+			whys = append(whys, "this repo does not track "+b.remote+"'s "+name+" (its fetch does not bring that branch)")
+			gone = true
+		default:
+			whys = append(whys, b.remote+" no longer has "+name+" (the last fetch saw "+shortRev(seen)+")")
+			gone = true
+		}
+	}
+	if len(whys) == 0 {
+		return "", ""
+	}
+	if gone {
+		// A fetch would not bring the branch back, so a rerun would
+		// refuse again; only a local rescue gets past it.
+		return strings.Join(whys, "; "), "use --no-push"
+	}
+	// Every remote that moved is fetched, and every unreadable one checked,
+	// so the rerun meets none of these refusals again.
+	var todo []string
+	if len(unreadable) > 0 {
+		todo = append(todo, "check "+strings.Join(unreadable, " and "))
+	}
+	switch len(fetchFrom) {
+	case 0:
+	case 1:
+		todo = append(todo, "git -C "+shellWord(abs)+" fetch "+shellWord(fetchFrom[0]))
+	default:
+		quoted := make([]string, len(fetchFrom))
+		for i, remote := range fetchFrom {
+			quoted[i] = shellWord(remote)
+		}
+		todo = append(todo, "git -C "+shellWord(abs)+" fetch --multiple "+strings.Join(quoted, " "))
+	}
+	return strings.Join(whys, "; "), strings.Join(todo, ", ") + ", then run again, or use --no-push"
 }
 
 // rescueBase is the rescue branch name before a free-name suffix:
@@ -522,6 +626,17 @@ func (r *gitStateRun) lfsRefusal(ctx context.Context, abs string) string {
 // default branch for a branch mismatch. The worktree is never written, and a
 // failed push leaves HEAD where it was.
 func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRepoReport) {
+	if rep.RescueRemote != "" {
+		if why, step := r.remoteMoved(ctx, abs, rep); why != "" {
+			rep.Status = GitRepoUnresolvable
+			rep.Reason = "not rescued: " + why + ", and a rewrite shows here only once fetched; HEAD not moved (" + step + ")"
+			// The suggestion named the pushed rescue this run refused; it
+			// names the step instead, with the local rescue it allows.
+			rep.Suggestion = "not rescued: " + why + "; " + strings.TrimSuffix(step, "use --no-push") + "keep it local: " + rescueCommand(rep.Path, true)
+			rep.Rescue, rep.RescueRemote = "", "" // nothing was created or pushed
+			return
+		}
+	}
 	ref := "refs/heads/" + rep.Rescue
 	if _, err := r.runOutput(ctx, abs, nil, false, "update-ref", "-m", "dot peer rescue", ref, rep.Head, ""); err != nil {
 		rep.Status = GitRepoSkipped

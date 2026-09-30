@@ -205,6 +205,37 @@ tip.
 Replace this if a real workspace reports a rescue target further back, by
 raising the cap or bisecting the chain by content.
 
+## Rewrite twins by author, date and subject
+
+`internal/syncer/gitrescue.go` (`rewriteTwins`) recognises a history
+rewrite by twins: a different commit with the same author, author date and
+subject, which `git filter-repo`, a rebase or an amend keep (#216). The
+`rewritten-upstream` class, the refusal of a pushed rescue, and the
+ahead-unpushed warning (#219) rest on it. A rewrite that also changes
+authorship or dates, or one that leaves no twin (a commit dropped on its
+own), is not seen: the repo stays `diverged` or `ahead-unpushed`, and its
+suggestion can name a push. The check runs offline on refs this repo has
+fetched: a rewrite not yet fetched is caught before a rescue push by the
+remote check (#220) when it moved the upstream or, for a branch mismatch,
+origin's default branch or HEAD's own upstream (not a separate push
+remote), but an `ahead-unpushed` repo is still told to push. A branch
+mismatch's upstream deleted on the remote is let through, since that is how
+a squash merge ends; a rewrite of it shows as twins only if this Mac
+fetches it before the remote drops it.
+
+The other side: a twin says two histories share a commit's metadata, not
+which one is the rewrite. A cherry-pick, a rebase-merge whose branch is
+still on the remote, or the tracking ref of a branch the remote dropped
+(fetched without `--prune`) also makes one, so such a repo's rescue is
+refused unless `--no-push`, and an `ahead-unpushed` one is warned instead of
+told to push; the warning names both readings and asks to check which remote
+branch holds each twin before any push. Reading both whole histories
+is the cost, paid for `ahead-unpushed` repos and those a rescue is suggested
+for.
+
+Replace this if a rewrite tool that rewrites dates is used, or a missed
+rewrite is reported: compare trees or patch ids instead of metadata.
+
 ## Replica bootstrap trust
 
 A takeover validates the pushed replica (`<workspace>/.dotfiles/peer/replica/`
