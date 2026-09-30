@@ -1514,6 +1514,103 @@ func TestPeerGitRescue_StaleUpstreamOfTheOldHistoryStaysLocal(t *testing.T) {
 	}
 }
 
+// An ahead-unpushed repo whose history holds pre-rewrite commits is not
+// told to push them (#219): the rewrite merged into the old history with
+// the upstream unchanged, or a branch cut from the old main whose upstream
+// the recreated remote dropped.
+func TestPeerGitClass_AheadUnpushedAfterARewriteIsNotPushed(t *testing.T) {
+	notPushed := func(t *testing.T, ws string) {
+		t.Helper()
+		rep := rescueRealign(t, ws, RealignOptions{})
+		if rep.Class != GitClassAheadUnpushed || strings.Contains(rep.Suggestion, "git -C") || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") {
+			t.Fatalf("class %q suggestion %q, want ahead-unpushed with no push", rep.Class, rep.Suggestion)
+		}
+	}
+	t.Run("the rewrite merged into the old history", func(t *testing.T) {
+		f, _, _ := rewrittenFixture(t)
+		gitStateRun_(t, f.ws, "checkout", "-q", "--", ".")
+		gitStateRun_(t, f.ws, "merge", "-q", "-X", "theirs", "--no-edit", "origin/main")
+		gitStateRewriteTracked(t, filepath.Join(f.ws, "a.txt"), "edited here\n")
+		notPushed(t, f.ws)
+	})
+	t.Run("a branch from the old main with a dropped upstream", func(t *testing.T) {
+		f := newRescueFixture(t)
+		for i, date := range []string{"1700000000 +0900", "1700000100 +0900"} {
+			commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+		}
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main:feat")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "origin/feat")
+		commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000500 +0900")
+		gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+		for i, date := range []string{"1700000000 +0900", "1700000100 +0900"} {
+			commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+		}
+		gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", ":refs/heads/feat")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin") // no prune: origin/feat stays
+		gitStateRewriteTracked(t, filepath.Join(f.ws, "mine.txt"), "edited here\n")
+		notPushed(t, f.ws)
+	})
+}
+
+// A rescue is not pushed past a remote branch that moved since the last
+// fetch, since a rewrite shows here only once fetched, nor when the remote
+// cannot be read; nothing is written (#220).
+func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
+	refused := func(t *testing.T, f *rescueFixture, why string) {
+		t.Helper()
+		head := gitStateHead(t, f.ws)
+		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+		if rep.Status != GitRepoUnresolvable || rep.RescuePushed || !strings.Contains(rep.Reason, why) || !strings.Contains(rep.Reason, "then run again, or use --no-push") {
+			t.Fatalf("rescue = %+v, want %q and the fetch step", rep, why)
+		}
+		if gitStateHead(t, f.ws) != head || gitStateRun_(t, f.ws, "for-each-ref", "refs/heads/rescue/") != "" {
+			t.Fatal("HEAD moved or a rescue branch was written")
+		}
+	}
+	t.Run("a rewrite not yet fetched", func(t *testing.T) {
+		f := newRescueFixture(t)
+		dates := []string{"1700000000 +0900", "1700000100 +0900", "1700000200 +0900"}
+		for i, date := range dates[:2] {
+			commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", i+1), "notes "+strconv.Itoa(i), date)
+		}
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		gitStateRun_(t, f.ws, "pull", "-q", "--ff-only")
+		u3 := commitAt(t, f.writer, "notes.txt", strings.Repeat("secret line\n", 3), "notes 2", dates[2])
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000500 +0900")
+		gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+		for i, date := range dates {
+			commitAt(t, f.writer, "notes.txt", strings.Repeat("redacted line\n", i+1), "notes "+strconv.Itoa(i), date)
+		}
+		gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
+		f.deliver(t, u3) // what this Mac saw last
+		refused(t, f, "origin's main is at")
+		if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+			t.Fatalf("a rescue branch reached the remote: %s", out)
+		}
+		// Following the step: after the fetch the rewrite shows (#216).
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "pre-rewrite versions") || !strings.Contains(s, "--no-push") {
+			t.Fatalf("after the fetch: suggestion %q, want the #216 refusal", s)
+		}
+	})
+	t.Run("an upstream the remote no longer has", func(t *testing.T) {
+		f, _, _ := divergedFixture(t)
+		gitStateRun_(t, f.ws, "update-ref", "refs/remotes/origin/gone", "refs/remotes/origin/main")
+		gitStateRun_(t, f.ws, "branch", "-q", "--set-upstream-to=origin/gone")
+		refused(t, f, "origin no longer has gone")
+	})
+	t.Run("a remote that cannot be read", func(t *testing.T) {
+		f, _, _ := divergedFixture(t)
+		gitStateRun_(t, f.ws, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+		refused(t, f, "cannot read origin's main to check it")
+	})
+}
+
 // log.showSignature adds lines to a signed commit's log entry; the twin
 // check reads without them, so signed pre-rewrite commits still pair with
 // their unsigned rewrites (#216).

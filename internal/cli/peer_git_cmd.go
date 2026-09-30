@@ -172,7 +172,11 @@ a commit with such a twin in a remote branch's history (a commit made on top
 of the old history, a branch cut from it, a feature branch whose upstream
 was rewritten, the rewrite merged into the old history) or where that cannot
 be checked; the old commits stay on the local rescue branch. Tags the
-rewrite moved stay at the old commits until git fetch --tags --force.
+rewrite moved stay at the old commits until git fetch --tags --force. A
+rewrite is seen only once fetched, so before a rescue push realign reads the
+remote branch the rescue target is on (git ls-remote) and does not push when
+it moved since the last fetch or cannot be read. An ahead-unpushed repo
+whose history holds pre-rewrite commits is not told to push.
 
 --candidate-refs <pattern> (repeatable) also takes the commits of refs
 matching a git for-each-ref pattern as candidates, in every repo, for the

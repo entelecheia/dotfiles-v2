@@ -205,6 +205,22 @@ tip.
 Replace this if a real workspace reports a rescue target further back, by
 raising the cap or bisecting the chain by content.
 
+## Rewrite twins by author, date and subject
+
+`internal/syncer/gitrescue.go` (`rewriteTwins`) recognises a history
+rewrite by twins: a different commit with the same author, author date and
+subject, which `git filter-repo`, a rebase or an amend keep (#216). The
+`rewritten-upstream` class, the refusal of a pushed rescue, and the
+ahead-unpushed warning (#219) rest on it. A rewrite that also changes
+authorship or dates, or one that leaves no twin (a commit dropped on its
+own), is not seen: the repo stays `diverged` or `ahead-unpushed`, and its
+suggestion can name a push. The check runs offline on refs this repo has
+fetched; a rewrite not yet fetched is caught before a rescue push by the
+remote check (#220), not here.
+
+Replace this if a rewrite tool that rewrites dates is used, or a missed
+rewrite is reported: compare trees or patch ids instead of metadata.
+
 ## Replica bootstrap trust
 
 A takeover validates the pushed replica (`<workspace>/.dotfiles/peer/replica/`

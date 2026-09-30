@@ -48,6 +48,9 @@ func TestCeilingsDoc(t *testing.T) {
 	if !strings.Contains(doc, "## Rescue reads the newest 50 upstream commits") || !strings.Contains(doc, "internal/syncer/gitrescue.go") {
 		t.Error("rescue chain ceiling (#189) missing from docs/CEILINGS.md")
 	}
+	if !strings.Contains(doc, "## Rewrite twins by author, date and subject") {
+		t.Error("rewrite twin ceiling (#216, #221) missing from docs/CEILINGS.md")
+	}
 	if !strings.Contains(doc, "## Owner aliases outside the coordinator's peer run") {
 		t.Error("owner alias ceiling (#185) missing from docs/CEILINGS.md")
 	}
@@ -83,6 +86,7 @@ func TestCeilingsDoc(t *testing.T) {
 		{"internal/syncer/peer_host_merge.go", "ponytail: known ceiling. See docs/CEILINGS.md (host_merge read-merge-write race)."},
 		{"internal/syncer/sync_store_ops.go", "ponytail: known ceiling. See docs/CEILINGS.md (owner aliases outside the coordinator's peer run)."},
 		{"internal/syncer/local_store.go", "ponytail: known ceiling. See docs/CEILINGS.md (unknown config keys, top level only)."},
+		{"internal/syncer/gitrescue.go", "ponytail: known ceiling. See docs/CEILINGS.md (rewrite twins by author, date and subject)."},
 	} {
 		data, err := os.ReadFile(filepath.Join("..", "..", want.path))
 		if err != nil {
