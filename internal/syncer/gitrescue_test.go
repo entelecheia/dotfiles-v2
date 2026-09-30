@@ -936,6 +936,163 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		gitStateRun_(t, f.ws, "branch", "-m", "main", "main-kept")
 		keptLocal(t, f.ws, tip)
 	})
+	// A worktree rebasing or bisecting the default branch holds it, as git
+	// counts it, though the porcelain lists that worktree as detached
+	// (#211). Ending it leaves the branch checked out there, so the step
+	// also switches the worktree.
+	stopRebase := func(t *testing.T, wt, run string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", wt, "rebase", "--exec", run}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=dot-test", "GIT_AUTHOR_EMAIL=dot-test@example.invalid",
+			"GIT_COMMITTER_NAME=dot-test", "GIT_COMMITTER_EMAIL=dot-test@example.invalid")
+		out, _ := cmd.CombinedOutput()
+		if _, err := os.Stat(gitStateRun_(t, wt, "rev-parse", "--path-format=absolute", "--git-path", "rebase-merge")); err != nil {
+			t.Fatalf("the rebase did not stop in a rebase:\n%s", out)
+		}
+	}
+	for _, tc := range []struct {
+		name, op string
+		add      []string // worktree add flags
+		start    func(t *testing.T, wt string)
+		end      []string
+		repo     string // the repo's directory name, when not ws
+	}{
+		{"rebase", "rebase", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}, ""},
+		{"rebase (--relative-paths)", "rebase", []string{"--relative-paths", "main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}, ""},
+		// A repo path that would be a glob pattern.
+		{"rebase (repo path w[s]*)", "rebase", []string{"main"}, func(t *testing.T, wt string) { stopRebase(t, wt, "false", "--root") }, []string{"rebase", "--abort"}, "w[s]*"},
+		// Another branch rebased with --update-refs over main's commit.
+		{"rebase --update-refs", "rebase", []string{"-b", "topic", "main"}, func(t *testing.T, wt string) {
+			gitStateRun_(t, wt, "commit", "-q", "--allow-empty", "-m", "t1")
+			stopRebase(t, wt, "false", "--update-refs", "--root")
+		}, []string{"rebase", "--abort"}, ""},
+		{"bisect", "bisect", []string{"main"}, func(t *testing.T, wt string) {
+			gitStateRun_(t, wt, "bisect", "start")
+			gitStateRun_(t, wt, "checkout", "-q", "--detach")
+		}, []string{"bisect", "reset"}, ""},
+		// A bisect started on main still holds it from another branch.
+		{"bisect left on another branch", "bisect", []string{"main"}, func(t *testing.T, wt string) {
+			gitStateRun_(t, wt, "bisect", "start")
+			gitStateRun_(t, wt, "switch", "-q", "-c", "other")
+		}, []string{"bisect", "reset"}, ""},
+	} {
+		t.Run("default branch held by a "+tc.name+" in a linked worktree", func(t *testing.T) {
+			f := newRescueFixture(t)
+			if tc.repo != "" {
+				f.ws = filepath.Join(t.TempDir(), tc.repo)
+				gitStateRun_(t, filepath.Dir(f.ws), "clone", "-q", f.origin, f.ws)
+			}
+			gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+			gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+			tip := f.publish(t, "a.txt", "a2\n")
+			f.deliver(t, tip)
+			tmp, err := filepath.EvalSymlinks(t.TempDir()) // the path git lists
+			if err != nil {
+				t.Fatal(err)
+			}
+			wt := filepath.Join(tmp, "wt-main")
+			gitStateRun_(t, f.ws, append([]string{"worktree", "add", "-q", wt}, tc.add...)...)
+			before := gitStateRun_(t, f.ws, "rev-parse", "main")
+			tc.start(t, wt)
+			refused(t, f.ws, "main is held by a "+tc.op+" in the linked worktree "+wt+"; finish or abort it there, and if that leaves main checked out, switch that worktree to another branch")
+			if got := gitStateRun_(t, f.ws, "rev-parse", "main"); got != before {
+				t.Fatalf("main moved to %s under the %s", got, tc.name)
+			}
+			gitStateRun_(t, wt, tc.end...)
+			gitStateRun_(t, wt, "checkout", "-q", "--detach")
+			if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+				t.Fatalf("after the step: %+v, want realigned to %s", rep, tip)
+			}
+		})
+	}
+	// A gone worktree's rebase keeps its state (the commits so far on a
+	// detached HEAD, an autostash) only in the admin dir a remove deletes,
+	// so the step names that dir and what is there, and no command that
+	// drops it; recovering from it first loses nothing.
+	t.Run("a gone worktree mid-rebase", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feature")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		tip := f.publish(t, "a.txt", "a2\n")
+		f.deliver(t, tip)
+		tmp, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wt := filepath.Join(tmp, "wt-main")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", wt, "main")
+		gitStateRewriteTracked(t, filepath.Join(wt, "a.txt"), "uncommitted\n")
+		stopRebase(t, wt, "echo resolved > work.txt && git add work.txt && git commit -q -m 'conflict work' && false", "--autostash", "--root")
+		wip := gitStateRun_(t, wt, "rev-parse", "HEAD")
+		admin := gitStateRun_(t, wt, "rev-parse", "--path-format=absolute", "--git-dir")
+		autostash, err := os.ReadFile(filepath.Join(admin, "rebase-merge", "autostash"))
+		if err != nil {
+			t.Fatalf("no autostash: %v", err)
+		}
+		if err := os.RemoveAll(wt); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, f.ws, "main is held by a rebase in the linked worktree "+wt+", which is missing; its admin dir "+admin+" holds that rebase's state (HEAD "+wip+", any autostash, rewritten refs and the reflog); if the worktree is gone for good, recover what you need from there first, then remove it with git worktree remove")
+		for _, s := range suggestions(t, f.ws) {
+			if strings.Contains(s, "git -C") {
+				t.Fatalf("suggestion %q names a command", s)
+			}
+		}
+		// Recovering first, as the step says, keeps both.
+		gitStateRun_(t, f.ws, "branch", "main-wip", wip)
+		gitStateRun_(t, f.ws, "stash", "store", "-m", "autostash", strings.TrimSpace(string(autostash)))
+		gitStateRun_(t, f.ws, "worktree", "remove", wt)
+		if got := gitStateRun_(t, f.ws, "log", "-1", "--format=%s", "main-wip"); got != "conflict work" {
+			t.Fatalf("main-wip holds %q, want the rebase's commit", got)
+		}
+		if got := gitStateRun_(t, f.ws, "show", "stash@{0}:a.txt"); got != "uncommitted" {
+			t.Fatalf("the stored autostash holds %q", got)
+		}
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("after the steps: %+v, want realigned to %s", rep, tip)
+		}
+	})
+	// A branch named rescue blocks every rescue/<date>-<branch> name, so
+	// no suffix helps; the step renames it (#212).
+	t.Run("a branch named rescue", func(t *testing.T) {
+		f, local, tip := divergedFixture(t)
+		gitStateRun_(t, f.ws, "branch", "rescue", f.base)
+		refused(t, f.ws, "a branch named rescue keeps rescue/260928-main from being created; rename it first: git -C "+shellWord(f.ws)+" branch -m rescue rescue-kept")
+		if out := gitStateRun_(t, f.ws, "for-each-ref", "refs/heads/rescue/"); out != "" {
+			t.Fatalf("a rescue branch was created: %s", out)
+		}
+		gitStateRun_(t, f.ws, "branch", "-m", "rescue", "rescue-kept")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
+			t.Fatalf("after the rename: suggestion %q, want the rescue", s)
+		}
+		// A rescue name already taken still gets a suffix.
+		gitStateRun_(t, f.ws, "branch", "rescue/260928-main", f.base)
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || rep.Rescue != "rescue/260928-main-2" || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("rescue = %+v, want rescue/260928-main-2 and HEAD at %s", rep, tip)
+		}
+		if got := gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main-2"); got != local {
+			t.Fatalf("rescue/260928-main-2 = %s, want %s", got, local)
+		}
+	})
+	// git refuses to rename a branch a rebase holds, so the step for a
+	// blocking rescue branch ends that first.
+	t.Run("a branch named rescue held by a rebase", func(t *testing.T) {
+		f, _, tip := divergedFixture(t)
+		tmp, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wt := filepath.Join(tmp, "wt-rescue")
+		gitStateRun_(t, f.ws, "worktree", "add", "-q", "-b", "rescue", wt, f.base)
+		stopRebase(t, wt, "false", "--root")
+		refused(t, f.ws, "a branch named rescue keeps rescue/260928-main from being created; finish or abort the rebase holding it in the linked worktree "+wt+", then rename it: git -C "+shellWord(f.ws)+" branch -m rescue rescue-kept")
+		gitStateRun_(t, wt, "rebase", "--abort")
+		gitStateRun_(t, f.ws, "branch", "-m", "rescue", "rescue-kept")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("after the steps: %+v, want realigned to %s", rep, tip)
+		}
+	})
 	t.Run("local default branch the target lacks", func(t *testing.T) {
 		f := newRescueFixture(t)
 		gitStateCommitFile(t, f.ws, "mine.txt", "m\n", "unpushed on main")
