@@ -1093,6 +1093,42 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 			t.Fatalf("after the steps: %+v, want realigned to %s", rep, tip)
 		}
 	})
+	// A branch named rescue on the push remote blocks every pushed rescue
+	// name there; --no-push lifts it (#214).
+	t.Run("a branch named rescue on the remote", func(t *testing.T) {
+		f, local, tip := divergedFixture(t)
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		for _, s := range suggestions(t, f.ws) {
+			if !strings.Contains(s, "the remote origin has a branch named rescue (as last fetched; if it was deleted there: git -C "+shellWord(f.ws)+" branch -d -r origin/rescue), which keeps rescue/260928-main from being pushed") || !strings.HasSuffix(s, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+				t.Fatalf("suggestion %q, want the remote's rescue branch and the --no-push rescue", s)
+			}
+		}
+		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true})
+		if rep.Status != GitRepoRealigned || rep.RescuePushed || gitStateHead(t, f.ws) != tip || gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main") != local {
+			t.Fatalf("the suggested command: %+v, want a local rescue and HEAD at %s", rep, tip)
+		}
+	})
+	// Deleted on the remote but still in the tracking refs: the prune the
+	// step names lifts it.
+	t.Run("a stale remote rescue branch", func(t *testing.T) {
+		f, _, _ := divergedFixture(t)
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", ":refs/heads/rescue")
+		// Another stale tracking ref the step must not touch.
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/gone")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", ":refs/heads/gone")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.Contains(s, "if it was deleted there: git -C "+shellWord(f.ws)+" branch -d -r origin/rescue") {
+			t.Fatalf("suggestion %q, want that one tracking ref removed", s)
+		}
+		gitStateRun_(t, f.ws, "branch", "-d", "-r", "origin/rescue")
+		gitStateRun_(t, f.ws, "rev-parse", "--verify", "-q", "refs/remotes/origin/gone") // left alone
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "dot peer git realign --rescue --apply .") {
+			t.Fatalf("after the prune: suggestion %q, want the pushed rescue", s)
+		}
+	})
 	t.Run("local default branch the target lacks", func(t *testing.T) {
 		f := newRescueFixture(t)
 		gitStateCommitFile(t, f.ws, "mine.txt", "m\n", "unpushed on main")
@@ -1116,6 +1152,76 @@ func TestPeerGitRescue_SuggestionNamesACommandTheRunAccepts(t *testing.T) {
 		}
 		if got := gitStateRun_(t, f.ws, "rev-parse", "main-kept-3"); got != mine {
 			t.Fatalf("main-kept-3 = %s, want %s", got, mine)
+		}
+	})
+}
+
+// A pushed rescue skips a name the push remote holds, as its
+// remote-tracking refs show; when the remote holds it unseen, the failed
+// push says to fetch and run again (#214).
+func TestPeerGitRescue_AvoidsNamesTheRemoteHolds(t *testing.T) {
+	t.Run("fetched", func(t *testing.T) {
+		f, local, tip := divergedFixture(t)
+		// The other Mac rescued the same branch today.
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue/260928-main")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		if got := rescueRealign(t, f.ws, RealignOptions{Rescue: true}).Rescue; got != "rescue/260928-main-2" {
+			t.Fatalf("pushed rescue name %q, want rescue/260928-main-2", got)
+		}
+		if got := rescueRealign(t, f.ws, RealignOptions{Rescue: true, NoPush: true}).Rescue; got != "rescue/260928-main" {
+			t.Fatalf("local-only rescue name %q, want rescue/260928-main", got)
+		}
+		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+		if rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("rescue = %+v, want pushed and realigned", rep)
+		}
+		if got := gitStateRun_(t, f.origin, "rev-parse", "refs/heads/rescue/260928-main-2"); got != local {
+			t.Fatalf("origin rescue/260928-main-2 = %s, want %s", got, local)
+		}
+		if got := gitStateRun_(t, f.origin, "rev-parse", "refs/heads/rescue/260928-main"); got == local {
+			t.Fatal("the other Mac's rescue branch was overwritten")
+		}
+	})
+	t.Run("not fetched", func(t *testing.T) {
+		f, local, tip := divergedFixture(t)
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue/260928-main")
+		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+		if rep.Status != GitRepoUnresolvable || !strings.Contains(rep.Reason, "if origin holds this name or a rescue branch: git -C "+shellWord(f.ws)+" fetch origin, then run again, which picks a free name or names --no-push; otherwise fix what the error below says; or use --no-push") {
+			t.Fatalf("rescue = %+v, want the fetch-and-run-again hint", rep)
+		}
+		if gitStateHead(t, f.ws) != local || gitStateRun_(t, f.ws, "rev-parse", "rescue/260928-main") != local {
+			t.Fatal("HEAD moved, or the local rescue branch was not kept")
+		}
+		// Following the hint pushes a free name.
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("after the fetch: %+v, want pushed and realigned", rep)
+		}
+	})
+	// A remote rescue branch unseen: the fetch the hint names first turns
+	// the next run into the --no-push refusal, not another failed push.
+	t.Run("a remote rescue branch, not fetched", func(t *testing.T) {
+		f, local, tip := divergedFixture(t)
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoUnresolvable || !strings.Contains(rep.Reason, "fetch origin, then run again") || gitStateHead(t, f.ws) != local {
+			t.Fatalf("rescue = %+v, want the push refused with the fetch first", rep)
+		}
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		if s := rescueRealign(t, f.ws, RealignOptions{}).Suggestion; !strings.HasSuffix(s, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("after the fetch: suggestion %q, want the --no-push rescue", s)
+		}
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("the --no-push rescue: %+v, want realigned to %s", rep, tip)
+		}
+	})
+	// A remote branch under the name blocks it too (directory/file).
+	t.Run("a remote branch under the name", func(t *testing.T) {
+		f, local, _ := divergedFixture(t)
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "HEAD:refs/heads/rescue/260928-main/x")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
+		if rep.Status != GitRepoRealigned || rep.Rescue != "rescue/260928-main-2" || gitStateRun_(t, f.origin, "rev-parse", "refs/heads/rescue/260928-main-2") != local {
+			t.Fatalf("rescue = %+v, want rescue/260928-main-2 pushed", rep)
 		}
 	})
 }
