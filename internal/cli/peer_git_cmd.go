@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -233,7 +234,7 @@ before those candidates are compared, so it is judged with the commit there
 			}
 			p.KV("Workspace", res.Root)
 			printPeerGitRepos(p, res, true)
-			if next := realignNext(summary.Realigned, summary.Realignable, dryRun, rescue, noPush); next != "" {
+			if next := realignNext(summary.Realigned, summary.Realignable, dryRun, rescue, noPush, candidateRefs); next != "" {
 				p.Blank()
 				p.Line("%s", next)
 			}
@@ -250,19 +251,38 @@ before those candidates are compared, so it is judged with the commit there
 
 // realignNext is the closing hint of a realign preview: the same command
 // with --apply, keeping --no-push so a rescue shown as staying local does
-// not push when the hint is followed (#204).
-func realignNext(realigned, realignable int, dryRun, rescue, noPush bool) string {
-	switch {
-	case realigned > 0, realignable == 0:
+// not push when the hint is followed (#204), and --candidate-refs, whose
+// candidates the preview may have moved to (#217).
+func realignNext(realigned, realignable int, dryRun, rescue, noPush bool, candidateRefs []string) string {
+	if realigned > 0 || realignable == 0 {
 		return "" // undo lines were printed per repo already, or nothing moves
-	case dryRun:
-		return "--dry-run: nothing changed. Re-run without it to apply."
-	case rescue && noPush:
-		return "Run with --rescue --no-push --apply to realign."
-	case rescue:
-		return "Run with --rescue --apply to realign."
 	}
-	return "Run with --apply to realign."
+	if dryRun {
+		return "--dry-run: nothing changed. Re-run without it to apply."
+	}
+	flags := ""
+	if rescue {
+		flags += " --rescue"
+		if noPush {
+			flags += " --no-push"
+		}
+	}
+	for _, p := range candidateRefs {
+		flags += " --candidate-refs " + shellQuoteArg(p)
+	}
+	return "Run with" + flags + " --apply to realign."
+}
+
+// shellQuoteArg quotes a hint's argument only when the shell would split
+// or expand it.
+func shellQuoteArg(s string) string {
+	safe := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_./:@+=,", r)
+	}
+	if s != "" && strings.IndexFunc(s, func(r rune) bool { return !safe(r) }) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // printPeerGitRepos renders the per-repo report and the status tally. In a

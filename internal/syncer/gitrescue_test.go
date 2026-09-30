@@ -1304,7 +1304,7 @@ func TestPeerGitClass_RewriteWithRealLocalWorkRescuesOnlyLocally(t *testing.T) {
 	commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
 	f.deliver(t, newTip) // the other Mac's files, as peer sync leaves them
 	rep := rescueRealign(t, f.ws, RealignOptions{})
-	if rep.Class != GitClassDiverged || !strings.Contains(rep.Suggestion, "3 of the 4 commit(s) a pushed rescue would send are pre-rewrite versions of commits on origin") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+	if rep.Class != GitClassDiverged || !strings.Contains(rep.Suggestion, "3 of the 4 local-only commit(s) are pre-rewrite versions of commits on the remote") || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
 		t.Fatalf("class %q suggestion %q, want diverged with the --no-push rescue and why", rep.Class, rep.Suggestion)
 	}
 	if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoNoMatch {
@@ -1327,7 +1327,7 @@ func TestPeerGitRescue_BranchFromTheOldHistoryRescuesOnlyLocally(t *testing.T) {
 	f.deliver(t, newTip)
 	for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
 		rep := rescueRealign(t, f.ws, opts)
-		if rep.Class != GitClassBranchMismatch || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on origin") || strings.Contains(rep.Suggestion, "realign --rescue --apply") {
+		if rep.Class != GitClassBranchMismatch || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") || strings.Contains(rep.Suggestion, "realign --rescue --apply") {
 			t.Fatalf("%+v: class %q suggestion %q, want branch-mismatch refusing the push", opts, rep.Class, rep.Suggestion)
 		}
 	}
@@ -1337,6 +1337,53 @@ func TestPeerGitRescue_BranchFromTheOldHistoryRescuesOnlyLocally(t *testing.T) {
 	}
 	if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
 		t.Fatalf("a rescue branch reached the remote: %s", out)
+	}
+}
+
+// Tracking refs can hide what a push sends: a branch the remote deleted
+// still at the old tip (fetch without --prune), or a push-only remote with
+// none. The push stays refused, by the class and by the branch the rescue
+// target is on (#216).
+func TestPeerGitRescue_RewriteStaysLocalWhateverTheTrackingRefs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		realWork bool
+		setup    func(t *testing.T, f *rescueFixture, oldTip string)
+	}{
+		{"a stale tracking ref at the old tip", false, func(t *testing.T, f *rescueFixture, oldTip string) {
+			gitStateRun_(t, f.ws, "update-ref", "refs/remotes/origin/keep", oldTip)
+		}},
+		{"a push-only remote", false, func(t *testing.T, f *rescueFixture, oldTip string) {
+			public := filepath.Join(t.TempDir(), "public.git")
+			gitStateRun_(t, filepath.Dir(public), "init", "-q", "--bare", public)
+			gitStateRun_(t, f.ws, "remote", "add", "public", public)
+			gitStateRun_(t, f.ws, "config", "remote.pushDefault", "public")
+		}},
+		{"real work and a stale tracking ref", true, func(t *testing.T, f *rescueFixture, oldTip string) {
+			gitStateRun_(t, f.ws, "update-ref", "refs/remotes/origin/keep", oldTip)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, oldTip, newTip := rewrittenFixture(t)
+			if tc.realWork {
+				commitAt(t, f.ws, "mine.txt", "mine\n", "my own work", "1700000300 +0900")
+				f.deliver(t, newTip)
+			}
+			tc.setup(t, f, oldTip)
+			for _, opts := range []RealignOptions{{}, {Rescue: true}, {Apply: true, Rescue: true}} {
+				rep := rescueRealign(t, f.ws, opts)
+				if rep.Status != GitRepoNoMatch || rep.RescuePushed || !strings.HasSuffix(rep.Suggestion, "keeping it local: dot peer git realign --rescue --no-push --apply .") {
+					t.Fatalf("%+v: %+v, want the push refused and the --no-push rescue named", opts, rep)
+				}
+			}
+			for _, remote := range []string{f.origin, filepath.Join(filepath.Dir(f.origin), "public.git")} {
+				if _, err := os.Stat(remote); err == nil {
+					if out := gitStateRun_(t, remote, "for-each-ref", "refs/heads/rescue/"); out != "" {
+						t.Fatalf("a rescue branch reached %s: %s", remote, out)
+					}
+				}
+			}
+		})
 	}
 }
 

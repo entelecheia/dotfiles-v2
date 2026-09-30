@@ -98,6 +98,7 @@ type GitRepoReport struct {
 	remote       string // remote a rescue branch is pushed to
 	rescueDiffs  int    // worktree differences against RescueTarget
 	rescueTie    string // how RescueTarget won a tie, shown once a rescue moves
+	rescueFrom   string // the branch RescueTarget is on: @{upstream} or the default branch's ref
 	// rescueRefused is why a rescue would be refused (rescueRefusal);
 	// rescueLocalOnly when only a pushed one would be.
 	rescueRefused   string
@@ -1148,7 +1149,7 @@ func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string)
 		}
 	}
 	if _, err := r.read(ctx, abs, "rev-parse", "--verify", "-q", "@{upstream}"); err != nil {
-		return r.withCandidateRefs(ctx, abs, head, out), nil // no upstream configured
+		return r.withCandidateRefs(ctx, abs, head, out) // no upstream configured
 	}
 	chain, err := r.read(ctx, abs, "rev-list", "--first-parent", "HEAD..@{upstream}")
 	if err != nil {
@@ -1164,20 +1165,21 @@ func (r *gitStateRun) candidates(ctx context.Context, abs, head, gitlink string)
 			out = append(out, sha)
 		}
 	}
-	return r.withCandidateRefs(ctx, abs, head, out), nil
+	return r.withCandidateRefs(ctx, abs, head, out)
 }
 
 // withCandidateRefs appends the commits the --candidate-refs patterns name
 // (an annotated tag's commit), strict descendants of HEAD that are not
 // candidates already, and remembers the ref each came from (#217). A
-// pattern that matches nothing adds nothing.
-func (r *gitStateRun) withCandidateRefs(ctx context.Context, abs, head string, out []string) []string {
+// pattern that matches nothing adds nothing; one git cannot read is an
+// error.
+func (r *gitStateRun) withCandidateRefs(ctx context.Context, abs, head string, out []string) ([]string, error) {
 	if len(r.opts.CandidateRefs) == 0 {
-		return out
+		return out, nil
 	}
-	list, err := r.read(ctx, abs, append([]string{"for-each-ref", "--format=%(refname)%00%(objectname)%00%(*objectname)"}, r.opts.CandidateRefs...)...)
+	list, err := r.read(ctx, abs, append([]string{"for-each-ref", "--format=%(refname)%00%(objectname)%00%(*objectname)", "--"}, r.opts.CandidateRefs...)...)
 	if err != nil {
-		return out
+		return out, errors.New("cannot read --candidate-refs: " + shortErr(err))
 	}
 	own := len(out) // the gitlink and upstream candidates
 	for _, line := range strings.Split(list, "\n") {
@@ -1203,7 +1205,7 @@ func (r *gitStateRun) withCandidateRefs(ctx context.Context, abs, head string, o
 		}
 		r.candidateRefs[key] = f[0]
 	}
-	return out
+	return out, nil
 }
 
 // strictDescendant reports whether cand is a descendant of head and not head

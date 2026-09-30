@@ -60,6 +60,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		if cand, diffs, tie, ok := r.bestOnChain(ctx, abs, gitdir, rep.Head, ref, rep.HeadDiffs); ok && (upBest < 0 || diffs < upBest) {
 			rep.Class = GitClassBranchMismatch
 			rep.RescueTarget, rep.rescueBranch, rep.remote = cand, def, r.pushRemote(ctx, abs, rep.branch)
+			rep.rescueFrom = ref
 			rep.rescueDiffs = diffs
 			rep.rescueTie = tie
 			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("on %s, but %s %s at %s", label, matchWords(diffs), def, shortRev(cand)),
@@ -99,12 +100,12 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 		// A rewritten upstream: the local commits are its pre-rewrite
 		// versions, and pushing them would publish what the rewrite took
 		// out, so a rescue stays local (#216).
-		if twins, total := r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", "@{upstream}"}, []string{"@{upstream}", "--not", "HEAD"}); total > 0 && twins == total {
+		if twins, total, err := r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", "@{upstream}"}, []string{"@{upstream}", "--not", "HEAD"}); err == nil && total > 0 && twins == total {
 			rep.Class = GitClassRewrittenUpstream
 			facts = fmt.Sprintf("%s was rewritten: the %d local-only commit(s) are pre-rewrite versions of commits on it (same author, date and subject); tags it moved stay at the old commits until git -C %s fetch --tags --force", upName, ahead, shellWord(abs))
 		}
 		if upOK {
-			rep.RescueTarget = upCand
+			rep.RescueTarget, rep.rescueFrom = upCand, "@{upstream}"
 			rep.rescueDiffs = upDiffs
 			rep.rescueTie = upTie
 			r.suggestRescue(ctx, abs, rep, fmt.Sprintf("%s, and %s %s", facts, matchWords(upDiffs), shortRev(upCand)),
@@ -123,22 +124,26 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 // keeps those, so a twin is a pre-rewrite version of a commit (#216).
 // ponytail: a rewrite that also changes authorship or dates is not seen;
 // compare trees or patch ids if such a rewrite shows up.
-func (r *gitStateRun) rewriteTwins(ctx context.Context, abs string, revs, against []string) (twins, total int) {
-	keys := func(revs []string) []string {
+func (r *gitStateRun) rewriteTwins(ctx context.Context, abs string, revs, against []string) (twins, total int, err error) {
+	keys := func(revs []string) ([]string, error) {
 		// --no-show-signature: log.showSignature would add lines to a
 		// signed commit's entry, and a rewrite drops signatures.
 		out, err := r.read(ctx, abs, append([]string{"log", "--no-show-signature", "--format=%an%x1f%ae%x1f%ad%x1f%s", "--date=raw"}, revs...)...)
 		if err != nil || out == "" {
-			return nil
+			return nil, err
 		}
-		return strings.Split(out, "\n")
+		return strings.Split(out, "\n"), nil
 	}
-	local := keys(revs)
-	if len(local) == 0 {
-		return 0, 0
+	local, err := keys(revs)
+	if err != nil || len(local) == 0 {
+		return 0, 0, err
+	}
+	theirs, err := keys(against)
+	if err != nil {
+		return 0, 0, err
 	}
 	other := map[string]bool{}
-	for _, k := range keys(against) {
+	for _, k := range theirs {
 		other[k] = true
 	}
 	for _, k := range local {
@@ -146,7 +151,7 @@ func (r *gitStateRun) rewriteTwins(ctx context.Context, abs string, revs, agains
 			twins++
 		}
 	}
-	return twins, len(local)
+	return twins, len(local), nil
 }
 
 // pushRemote is where git would push branch: branch.<b>.pushRemote, then
@@ -259,15 +264,31 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	// show, which blocks every pushed rescue name there (#214).
 	var pushOnly []string
 	if rep.remote != "." {
-		// Any commit the push would send that has a twin on the remote is a
-		// pre-rewrite version: pushing it publishes what the rewrite took
-		// out, whatever the class (#216).
-		if twins, total := r.rewriteTwins(ctx, abs, []string{"HEAD", "--not", "--remotes=" + rep.remote}, []string{"--remotes=" + rep.remote, "--not", "HEAD"}); twins > 0 {
-			why := "a pushed rescue branch would publish the history the rewrite took out"
-			if rep.Class != GitClassRewrittenUpstream {
-				why = fmt.Sprintf("%d of the %d commit(s) a pushed rescue would send are pre-rewrite versions of commits on %s (same author, date and subject), so it would publish the history a rewrite took out", twins, total, rep.remote)
+		// A local-only commit with a twin on the remote is a pre-rewrite
+		// version: pushing a rescue that holds it publishes what the rewrite
+		// took out, whatever the class (#216). The branch the rescue target
+		// is on shows it even when the push remote's tracking refs are stale
+		// or absent; those show a branch cut from another remote branch.
+		ranges := [][2][]string{{{"HEAD", "--not", "--remotes=" + rep.remote}, {"--remotes=" + rep.remote, "--not", "HEAD"}}}
+		if rep.rescueFrom != "" {
+			ranges = append(ranges, [2][]string{{"HEAD", "--not", rep.rescueFrom}, {rep.rescueFrom, "--not", "HEAD"}})
+		}
+		twins, total, failed := 0, 0, false
+		for _, rg := range ranges {
+			t, n, err := r.rewriteTwins(ctx, abs, rg[0], rg[1])
+			if err != nil {
+				failed = true
+			} else if t > twins {
+				twins, total = t, n
 			}
-			pushOnly = append(pushOnly, why)
+		}
+		switch {
+		case rep.Class == GitClassRewrittenUpstream:
+			pushOnly = append(pushOnly, "a pushed rescue branch would publish the history the rewrite took out")
+		case twins > 0:
+			pushOnly = append(pushOnly, fmt.Sprintf("%d of the %d local-only commit(s) are pre-rewrite versions of commits on the remote (same author, date and subject), so a pushed rescue would publish the history a rewrite took out", twins, total))
+		case failed:
+			pushOnly = append(pushOnly, "cannot tell whether a pushed rescue would publish history a rewrite took out")
 		}
 		if why := r.lfsRefusal(ctx, abs); why != "" {
 			pushOnly = append(pushOnly, why)

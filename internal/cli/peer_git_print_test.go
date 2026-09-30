@@ -67,8 +67,17 @@ func TestRealignNextKeepsNoPush(t *testing.T) {
 		{1, 0, false, true, true, ""},
 		{0, 0, false, true, true, ""},
 	} {
-		if got := realignNext(tc.realigned, tc.realignable, tc.dryRun, tc.rescue, tc.noPush); got != tc.want {
+		if got := realignNext(tc.realigned, tc.realignable, tc.dryRun, tc.rescue, tc.noPush, nil); got != tc.want {
 			t.Errorf("realignNext(%+v) = %q, want %q", tc, got, tc.want)
 		}
+	}
+}
+
+// The hint keeps --candidate-refs, whose candidates the preview may have
+// moved to (#217).
+func TestRealignNextKeepsCandidateRefs(t *testing.T) {
+	got := realignNext(0, 1, false, false, false, []string{"refs/peer/m3/", "refs/peer/*/heads/x y"})
+	if want := "Run with --candidate-refs refs/peer/m3/ --candidate-refs 'refs/peer/*/heads/x y' --apply to realign."; got != want {
+		t.Errorf("realignNext = %q, want %q", got, want)
 	}
 }
