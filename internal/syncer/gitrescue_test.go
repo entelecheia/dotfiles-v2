@@ -1566,6 +1566,10 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 		if rep.Status != GitRepoUnresolvable || rep.RescuePushed || !strings.Contains(rep.Reason, why) || !strings.Contains(rep.Reason, step) || rep.Rescue != "" || rep.RescueRemote != "" {
 			t.Fatalf("rescue = %+v, want %q, the step %q and no rescue named", rep, why, step)
 		}
+		// The suggestion names the step, never the refused pushed rescue.
+		if strings.Contains(rep.Suggestion, "realign --rescue --apply") || !strings.HasSuffix(rep.Suggestion, "keep it local: dot peer git realign --rescue --no-push --apply .") {
+			t.Fatalf("suggestion %q names the refused command or no local rescue", rep.Suggestion)
+		}
 		if gitStateHead(t, f.ws) != head || gitStateRun_(t, f.ws, "for-each-ref", "refs/heads/rescue/") != "" {
 			t.Fatal("HEAD moved or a rescue branch was written")
 		}
@@ -1612,8 +1616,30 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 		gitStateRun_(t, f.ws, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
 		refused(t, f, "cannot read origin's main to check it", "check origin and run again, or use --no-push")
 	})
-	// No tracking ref for the upstream (a fetch refspec that leaves the
-	// branch out): a fetch would not lift it, so only --no-push is named.
+	// A branch mismatch's own upstream refuses only a visible move: deleted
+	// on the remote after a squash merge (still fetched here), or not
+	// tracked at all, the rescue is pushed (#220 Decision).
+	pushed := func(t *testing.T, f *rescueFixture, tip string) {
+		t.Helper()
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); rep.Status != GitRepoRealigned || !rep.RescuePushed || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("rescue = %+v, want pushed and realigned to %s", rep, tip)
+		}
+	}
+	t.Run("a feature branch deleted after its squash merge", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		gitStateRun_(t, f.ws, "push", "-q", "-u", "origin", "feat")
+		gitStateRun_(t, f.writer, "fetch", "-q", "origin")
+		gitStateRun_(t, f.writer, "merge", "-q", "--squash", "origin/feat")
+		gitStateRun_(t, f.writer, "commit", "-q", "-m", "feat (#1)")
+		gitStateCommitFile(t, f.writer, "a.txt", "a2\n", "after the merge")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main", ":refs/heads/feat")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin") // no prune: origin/feat stays
+		tip := gitStateRun_(t, f.ws, "rev-parse", "origin/main")
+		f.deliver(t, tip)
+		pushed(t, f, tip)
+	})
 	t.Run("an upstream this repo does not track", func(t *testing.T) {
 		f := newRescueFixture(t)
 		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
@@ -1621,8 +1647,31 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 		gitStateRun_(t, f.ws, "push", "-q", "-u", "origin", "feat")
 		gitStateRun_(t, f.ws, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
 		gitStateRun_(t, f.ws, "update-ref", "-d", "refs/remotes/origin/feat")
-		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
-		refused(t, f, "this repo does not track origin's feat", "HEAD not moved (use --no-push)")
+		tip := f.publish(t, "a.txt", "a2\n")
+		f.deliver(t, tip)
+		pushed(t, f, tip)
+	})
+	// Every watched branch is read before the answer, so one step lifts
+	// every refusal the run saw.
+	t.Run("both branches of a branch mismatch moved", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.writer, "checkout", "-q", "-b", "feat")
+		gitStateCommitFile(t, f.writer, "feat.txt", "f1\n", "f1")
+		gitStateRun_(t, f.writer, "push", "-q", "-u", "origin", "feat")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "origin/feat")
+		gitStateRun_(t, f.writer, "checkout", "-q", "main")
+		tip := f.publish(t, "a.txt", "a2\n")
+		gitStateCommitFile(t, f.writer, "a.txt", "a3\n", "main again")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "main")
+		gitStateRun_(t, f.writer, "checkout", "-q", "feat")
+		gitStateCommitFile(t, f.writer, "feat.txt", "f2\n", "f2")
+		gitStateRun_(t, f.writer, "push", "-q", "origin", "feat")
+		f.deliver(t, tip)
+		refused(t, f, "origin's main is at", "fetch origin, then run again, or use --no-push")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true}); !strings.Contains(rep.Reason, "origin's feat is at") {
+			t.Fatalf("reason %q, want both branches named", rep.Reason)
+		}
 	})
 	// A branch mismatch rests on HEAD's upstream too: a rewrite of it not
 	// yet fetched is caught, not only one of the default branch.

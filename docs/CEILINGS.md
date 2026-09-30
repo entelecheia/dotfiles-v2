@@ -216,9 +216,11 @@ authorship or dates, or one that leaves no twin (a commit dropped on its
 own), is not seen: the repo stays `diverged` or `ahead-unpushed`, and its
 suggestion can name a push. The check runs offline on refs this repo has
 fetched: a rewrite not yet fetched is caught before a rescue push by the
-remote check (#220) when it is on the upstream or, for a branch mismatch,
-origin's default branch (not on a separate push remote), but an
-`ahead-unpushed` repo is still told to push.
+remote check (#220) when it moved the upstream or, for a branch mismatch,
+origin's default branch or HEAD's own upstream (not a separate push
+remote), but an `ahead-unpushed` repo is still told to push. A branch
+mismatch's upstream deleted on the remote is let through, since that is how
+a squash merge ends; a rewrite of it shows once fetched, as twins.
 
 The other side: a twin says two histories share a commit's metadata, not
 which one is the rewrite. A cherry-pick, a rebase-merge whose branch is

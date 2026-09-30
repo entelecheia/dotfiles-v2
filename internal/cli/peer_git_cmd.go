@@ -139,7 +139,8 @@ already match. The default is a preview; --apply moves.
 A repo with no such descendant is reported as no-match with a class and the
 next step:
   at-tip            at the upstream tip; only uncommitted changes differ
-  ahead-unpushed    local-only commits the upstream lacks; push them
+  ahead-unpushed    local-only commits the upstream lacks; push them (a
+                    warning instead when HEAD's history has rewrite twins)
   diverged          local-only commits and upstream commits; the files match
                     an upstream commit
   rewritten-upstream
@@ -174,12 +175,13 @@ was rewritten, the rewrite merged into the old history) or where that cannot
 be checked; the old commits stay on the local rescue branch. Tags the
 rewrite moved stay at the old commits until git fetch --tags --force. A
 rewrite is seen only once fetched, so before a rescue push realign reads the
-remote branches the rescue rests on (the upstream, and the default branch
-for a branch mismatch) with git ls-remote, and does not push when one moved
-since the last fetch, is gone, or cannot be read. An ahead-unpushed repo
-whose history has such twins is warned instead of told to push; a rewrite
-not yet fetched is not seen there, and a cherry-pick or a dropped branch's
-tracking ref also makes a twin.
+remote branches the rescue rests on with git ls-remote and stops before
+writing anything (no rescue branch, HEAD not moved) when the branch it moves
+to moved since the last fetch, is gone, is not tracked or cannot be read, or
+when a branch mismatch's own upstream moved (one deleted after a squash
+merge is fine). An ahead-unpushed repo whose history has such twins is
+warned instead of told to push; a rewrite not yet fetched is not seen there,
+and a cherry-pick or a dropped branch's tracking ref also makes a twin.
 
 --candidate-refs <pattern> (repeatable) also takes the commits of refs
 matching a git for-each-ref pattern as candidates, in every repo, for the

@@ -323,26 +323,33 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 	return strings.Join(steps, "; "), false
 }
 
-// remoteMoved reads, over the network, each remote branch a rescue's
-// history rests on (the upstream, and origin's default branch for a branch
-// mismatch) and says how one differs from what the last fetch saw, with the
-// step that lifts it: a rewrite is seen here only once fetched (#216), so a
-// rescue is not pushed past one this repo has not seen, nor when a remote
-// cannot be read (#220). "" when none moved, or there is no remote branch.
+// remoteMoved reads, over the network, every remote branch a rescue's
+// history rests on and says how they differ from what the last fetch saw,
+// with the one step that lifts every refusal it saw: a rewrite is seen here
+// only once fetched (#216), so a rescue is not pushed past one this repo
+// has not seen, nor when a remote cannot be read (#220). The branch the
+// rescue moves to refuses when it moved, is gone, is not tracked, or cannot
+// be read; a branch mismatch's own upstream only when it visibly moved, since
+// a feature branch deleted on the remote after a squash merge is the normal
+// case there. "" when nothing refuses.
 func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoReport) (why, step string) {
-	type watched struct{ remote, branch, tracking string }
+	type watched struct {
+		remote, branch, tracking string
+		movedOnly                bool
+	}
 	var branches []watched
 	if rep.rescueBranch != "" {
-		branches = append(branches, watched{"origin", "refs/heads/" + rep.rescueBranch, "refs/remotes/origin/" + rep.rescueBranch})
+		branches = append(branches, watched{"origin", "refs/heads/" + rep.rescueBranch, "refs/remotes/origin/" + rep.rescueBranch, false})
 	}
 	if rep.branch != "" {
 		remote, _ := r.read(ctx, abs, "config", "--get", "branch."+rep.branch+".remote")
 		merge, _ := r.read(ctx, abs, "config", "--get", "branch."+rep.branch+".merge")
 		if remote != "" && remote != "." && merge != "" {
-			branches = append(branches, watched{remote, merge, "@{upstream}"})
+			branches = append(branches, watched{remote, merge, "@{upstream}", rep.rescueBranch != ""})
 		}
 	}
-	git := "git -C " + shellWord(abs)
+	var whys []string
+	gone, unreadable, fetchFrom := false, "", ""
 	for _, b := range branches {
 		name := strings.TrimPrefix(b.branch, "refs/heads/")
 		seen, _ := r.read(ctx, abs, "rev-parse", "--verify", "-q", b.tracking)
@@ -350,7 +357,11 @@ func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoR
 		out, err := r.runOutput(pctx, abs, []string{"GIT_TERMINAL_PROMPT=0"}, true, "ls-remote", b.remote, b.branch)
 		cancel()
 		if err != nil {
-			return "cannot read " + b.remote + "'s " + name + " to check it: " + shortErr(err), "check " + b.remote + " and run again, or use --no-push"
+			if !b.movedOnly {
+				whys = append(whys, "cannot read "+b.remote+"'s "+name+" to check it: "+shortErr(err))
+				unreadable = b.remote
+			}
+			continue
 		}
 		now := ""
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -360,19 +371,33 @@ func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoR
 		}
 		switch {
 		case now == seen:
-			continue
+		case seen != "" && now != "":
+			whys = append(whys, b.remote+"'s "+name+" is at "+shortRev(now)+" but the last fetch saw "+shortRev(seen))
+			fetchFrom = b.remote
+		case b.movedOnly:
+			// Deleted after a squash merge, or never tracked: not a move.
 		case seen == "":
-			// No tracking ref (a fetch refspec that leaves this branch
-			// out): a fetch would not show it, so only a local rescue.
-			return "this repo does not track " + b.remote + "'s " + name + " (its fetch does not bring that branch)", "use --no-push"
-		case now == "":
-			// A fetch keeps the stale tracking ref, so a rerun would refuse
-			// again; only a local rescue gets past a branch that is gone.
-			return b.remote + " no longer has " + name + " (the last fetch saw " + shortRev(seen) + ")", "use --no-push"
+			whys = append(whys, "this repo does not track "+b.remote+"'s "+name+" (its fetch does not bring that branch)")
+			gone = true
+		default:
+			whys = append(whys, b.remote+" no longer has "+name+" (the last fetch saw "+shortRev(seen)+")")
+			gone = true
 		}
-		return b.remote + "'s " + name + " is at " + shortRev(now) + " but the last fetch saw " + shortRev(seen), git + " fetch " + shellWord(b.remote) + ", then run again, or use --no-push"
 	}
-	return "", ""
+	if len(whys) == 0 {
+		return "", ""
+	}
+	switch {
+	case gone:
+		// A fetch would not bring the branch back, so a rerun would
+		// refuse again; only a local rescue gets past it.
+		step = "use --no-push"
+	case unreadable != "":
+		step = "check " + unreadable + " and run again, or use --no-push"
+	default:
+		step = "git -C " + shellWord(abs) + " fetch " + shellWord(fetchFrom) + ", then run again, or use --no-push"
+	}
+	return strings.Join(whys, "; "), step
 }
 
 // rescueBase is the rescue branch name before a free-name suffix:
@@ -589,6 +614,9 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		if why, step := r.remoteMoved(ctx, abs, rep); why != "" {
 			rep.Status = GitRepoUnresolvable
 			rep.Reason = "not rescued: " + why + ", and a rewrite shows here only once fetched; HEAD not moved (" + step + ")"
+			// The suggestion named the pushed rescue this run refused; it
+			// names the step instead, with the local rescue it allows.
+			rep.Suggestion = "not rescued: " + why + "; " + strings.TrimSuffix(step, "use --no-push") + "keep it local: " + rescueCommand(rep.Path, true)
 			rep.Rescue, rep.RescueRemote = "", "" // nothing was created or pushed
 			return
 		}
