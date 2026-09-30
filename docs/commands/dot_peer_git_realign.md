@@ -45,9 +45,12 @@ was rewritten, the rewrite merged into the old history) or where that cannot
 be checked; the old commits stay on the local rescue branch. Tags the
 rewrite moved stay at the old commits until git fetch --tags --force. A
 rewrite is seen only once fetched, so before a rescue push realign reads the
-remote branch the rescue target is on (git ls-remote) and does not push when
-it moved since the last fetch or cannot be read. An ahead-unpushed repo
-whose history holds pre-rewrite commits is not told to push.
+remote branches the rescue rests on (the upstream, and the default branch
+for a branch mismatch) with git ls-remote, and does not push when one moved
+since the last fetch, is gone, or cannot be read. An ahead-unpushed repo
+whose history has such twins is warned instead of told to push; a rewrite
+not yet fetched is not seen there, and a cherry-pick or a dropped branch's
+tracking ref also makes a twin.
 
 --candidate-refs <pattern> (repeatable) also takes the commits of refs
 matching a git for-each-ref pattern as candidates, in every repo, for the

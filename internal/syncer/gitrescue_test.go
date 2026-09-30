@@ -1522,7 +1522,7 @@ func TestPeerGitClass_AheadUnpushedAfterARewriteIsNotPushed(t *testing.T) {
 	notPushed := func(t *testing.T, ws string) {
 		t.Helper()
 		rep := rescueRealign(t, ws, RealignOptions{})
-		if rep.Class != GitClassAheadUnpushed || strings.Contains(rep.Suggestion, "git -C") || !strings.Contains(rep.Suggestion, "pre-rewrite versions of commits on the remote") {
+		if rep.Class != GitClassAheadUnpushed || strings.Contains(rep.Suggestion, "git -C") || !strings.Contains(rep.Suggestion, "have a twin on a remote branch") || !strings.Contains(rep.Suggestion, "a cherry-pick, or the tracking ref of a branch the remote dropped, also makes a twin") {
 			t.Fatalf("class %q suggestion %q, want ahead-unpushed with no push", rep.Class, rep.Suggestion)
 		}
 	}
@@ -1559,12 +1559,12 @@ func TestPeerGitClass_AheadUnpushedAfterARewriteIsNotPushed(t *testing.T) {
 // fetch, since a rewrite shows here only once fetched, nor when the remote
 // cannot be read; nothing is written (#220).
 func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
-	refused := func(t *testing.T, f *rescueFixture, why string) {
+	refused := func(t *testing.T, f *rescueFixture, why, step string) {
 		t.Helper()
 		head := gitStateHead(t, f.ws)
 		rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true})
-		if rep.Status != GitRepoUnresolvable || rep.RescuePushed || !strings.Contains(rep.Reason, why) || !strings.Contains(rep.Reason, "then run again, or use --no-push") {
-			t.Fatalf("rescue = %+v, want %q and the fetch step", rep, why)
+		if rep.Status != GitRepoUnresolvable || rep.RescuePushed || !strings.Contains(rep.Reason, why) || !strings.Contains(rep.Reason, step) || rep.Rescue != "" || rep.RescueRemote != "" {
+			t.Fatalf("rescue = %+v, want %q, the step %q and no rescue named", rep, why, step)
 		}
 		if gitStateHead(t, f.ws) != head || gitStateRun_(t, f.ws, "for-each-ref", "refs/heads/rescue/") != "" {
 			t.Fatal("HEAD moved or a rescue branch was written")
@@ -1588,7 +1588,7 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 		}
 		gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "main")
 		f.deliver(t, u3) // what this Mac saw last
-		refused(t, f, "origin's main is at")
+		refused(t, f, "origin's main is at", "fetch origin, then run again, or use --no-push")
 		if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
 			t.Fatalf("a rescue branch reached the remote: %s", out)
 		}
@@ -1599,15 +1599,39 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 		}
 	})
 	t.Run("an upstream the remote no longer has", func(t *testing.T) {
-		f, _, _ := divergedFixture(t)
+		f, _, tip := divergedFixture(t)
 		gitStateRun_(t, f.ws, "update-ref", "refs/remotes/origin/gone", "refs/remotes/origin/main")
 		gitStateRun_(t, f.ws, "branch", "-q", "--set-upstream-to=origin/gone")
-		refused(t, f, "origin no longer has gone")
+		refused(t, f, "origin no longer has gone", "HEAD not moved (use --no-push)")
+		if rep := rescueRealign(t, f.ws, RealignOptions{Apply: true, Rescue: true, NoPush: true}); rep.Status != GitRepoRealigned || gitStateHead(t, f.ws) != tip {
+			t.Fatalf("the named step: %+v, want realigned", rep)
+		}
 	})
 	t.Run("a remote that cannot be read", func(t *testing.T) {
 		f, _, _ := divergedFixture(t)
 		gitStateRun_(t, f.ws, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
-		refused(t, f, "cannot read origin's main to check it")
+		refused(t, f, "cannot read origin's main to check it", "check origin and run again, or use --no-push")
+	})
+	// A branch mismatch rests on HEAD's upstream too: a rewrite of it not
+	// yet fetched is caught, not only one of the default branch.
+	t.Run("a branch mismatch whose own upstream was rewritten", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.writer, "checkout", "-q", "-b", "feat")
+		commitAt(t, f.writer, "notes.txt", "secret line\n", "notes 0", "1700000000 +0900")
+		gitStateRun_(t, f.writer, "push", "-q", "-u", "origin", "feat")
+		gitStateRun_(t, f.ws, "fetch", "-q", "origin")
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat", "--track", "origin/feat")
+		gitStateRun_(t, f.writer, "checkout", "-q", "main")
+		tip := f.publish(t, "a.txt", "a2\n")
+		gitStateRun_(t, f.writer, "checkout", "-q", "feat")
+		gitStateRun_(t, f.writer, "reset", "-q", "--hard", f.base)
+		commitAt(t, f.writer, "notes.txt", "redacted line\n", "notes 0", "1700000000 +0900")
+		gitStateRun_(t, f.writer, "push", "-q", "-f", "origin", "feat") // not fetched here
+		f.deliver(t, tip)
+		refused(t, f, "origin's feat is at", "fetch origin, then run again, or use --no-push")
+		if out := gitStateRun_(t, f.origin, "for-each-ref", "refs/heads/rescue/"); out != "" {
+			t.Fatalf("a rescue branch reached the remote: %s", out)
+		}
 	})
 }
 
