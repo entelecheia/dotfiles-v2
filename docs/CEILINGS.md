@@ -216,14 +216,17 @@ authorship or dates, or one that leaves no twin (a commit dropped on its
 own), is not seen: the repo stays `diverged` or `ahead-unpushed`, and its
 suggestion can name a push. The check runs offline on refs this repo has
 fetched: a rewrite not yet fetched is caught before a rescue push by the
-remote check (#220), but an `ahead-unpushed` repo is still told to push.
+remote check (#220) when it is on the upstream or, for a branch mismatch,
+origin's default branch (not on a separate push remote), but an
+`ahead-unpushed` repo is still told to push.
 
 The other side: a twin says two histories share a commit's metadata, not
 which one is the rewrite. A cherry-pick, a rebase-merge whose branch is
 still on the remote, or the tracking ref of a branch the remote dropped
 (fetched without `--prune`) also makes one, so such a repo's rescue is
 refused unless `--no-push`, and an `ahead-unpushed` one is warned instead of
-told to push; the warning names both readings. Reading both whole histories
+told to push; the warning names both readings and asks to check which remote
+branch holds each twin before any push. Reading both whole histories
 is the cost, paid for `ahead-unpushed` repos and those a rescue is suggested
 for.
 

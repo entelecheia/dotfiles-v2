@@ -100,7 +100,7 @@ func (r *gitStateRun) classifyNoMatch(ctx context.Context, abs, gitdir string, r
 			// A twin says the two histories share a commit's metadata, not
 			// which side is the rewrite: a cherry-pick, or a stale tracking
 			// ref of a dropped branch, looks the same.
-			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s, but %d commit(s) in HEAD's history have a twin on a remote branch (a different commit with the same author, date and subject): if the remote was rewritten, they are its pre-rewrite versions, so do not push them and move the work you keep onto the rewritten history by hand; a cherry-pick, or the tracking ref of a branch the remote dropped, also makes a twin, and then pushing is safe", ahead, label, twins)
+			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s, but %d commit(s) in HEAD's history have a twin on a remote branch (a different commit with the same author, date and subject): if the remote was rewritten, they are its pre-rewrite versions, so do not push them and move the work you keep onto the rewritten history by hand; a cherry-pick, or the tracking ref of a branch the remote dropped, also makes a twin, so check which remote branch holds each twin before any push", ahead, label, twins)
 		default:
 			rep.Suggestion = fmt.Sprintf("%d local-only commit(s) on %s; push them: git -C %s push", ahead, label, shellWord(abs))
 		}
@@ -358,10 +358,14 @@ func (r *gitStateRun) remoteMoved(ctx context.Context, abs string, rep *GitRepoR
 				now = sha
 			}
 		}
-		switch now {
-		case seen:
+		switch {
+		case now == seen:
 			continue
-		case "":
+		case seen == "":
+			// No tracking ref (a fetch refspec that leaves this branch
+			// out): a fetch would not show it, so only a local rescue.
+			return "this repo does not track " + b.remote + "'s " + name + " (its fetch does not bring that branch)", "use --no-push"
+		case now == "":
 			// A fetch keeps the stale tracking ref, so a rerun would refuse
 			// again; only a local rescue gets past a branch that is gone.
 			return b.remote + " no longer has " + name + " (the last fetch saw " + shortRev(seen) + ")", "use --no-push"

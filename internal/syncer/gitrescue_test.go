@@ -1522,7 +1522,7 @@ func TestPeerGitClass_AheadUnpushedAfterARewriteIsNotPushed(t *testing.T) {
 	notPushed := func(t *testing.T, ws string) {
 		t.Helper()
 		rep := rescueRealign(t, ws, RealignOptions{})
-		if rep.Class != GitClassAheadUnpushed || strings.Contains(rep.Suggestion, "git -C") || !strings.Contains(rep.Suggestion, "have a twin on a remote branch") || !strings.Contains(rep.Suggestion, "a cherry-pick, or the tracking ref of a branch the remote dropped, also makes a twin") {
+		if rep.Class != GitClassAheadUnpushed || strings.Contains(rep.Suggestion, "git -C") || !strings.Contains(rep.Suggestion, "have a twin on a remote branch") || !strings.Contains(rep.Suggestion, "a cherry-pick, or the tracking ref of a branch the remote dropped, also makes a twin, so check which remote branch holds each twin before any push") || strings.Contains(rep.Suggestion, "safe") {
 			t.Fatalf("class %q suggestion %q, want ahead-unpushed with no push", rep.Class, rep.Suggestion)
 		}
 	}
@@ -1611,6 +1611,18 @@ func TestPeerGitRescue_ChecksTheRemoteBeforeAPush(t *testing.T) {
 		f, _, _ := divergedFixture(t)
 		gitStateRun_(t, f.ws, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
 		refused(t, f, "cannot read origin's main to check it", "check origin and run again, or use --no-push")
+	})
+	// No tracking ref for the upstream (a fetch refspec that leaves the
+	// branch out): a fetch would not lift it, so only --no-push is named.
+	t.Run("an upstream this repo does not track", func(t *testing.T) {
+		f := newRescueFixture(t)
+		gitStateRun_(t, f.ws, "checkout", "-q", "-b", "feat")
+		gitStateCommitFile(t, f.ws, "feat.txt", "f1\n", "f1")
+		gitStateRun_(t, f.ws, "push", "-q", "-u", "origin", "feat")
+		gitStateRun_(t, f.ws, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+		gitStateRun_(t, f.ws, "update-ref", "-d", "refs/remotes/origin/feat")
+		f.deliver(t, f.publish(t, "a.txt", "a2\n"))
+		refused(t, f, "this repo does not track origin's feat", "HEAD not moved (use --no-push)")
 	})
 	// A branch mismatch rests on HEAD's upstream too: a rewrite of it not
 	// yet fetched is caught, not only one of the default branch.
