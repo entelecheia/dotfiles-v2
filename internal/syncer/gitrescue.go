@@ -222,7 +222,7 @@ func (r *gitStateRun) rescueRefusal(ctx context.Context, abs string, rep *GitRep
 			pushOnly = append(pushOnly, why)
 		}
 		if base := r.rescueBase(rep); r.freeBranchName(ctx, abs, base, "refs/remotes/"+rep.remote+"/") == "" {
-			pushOnly = append(pushOnly, "the remote "+rep.remote+" has a branch named "+base[:strings.Index(base, "/")]+", which keeps "+base+" from being pushed")
+			pushOnly = append(pushOnly, "the remote "+rep.remote+" has a branch named "+base[:strings.Index(base, "/")]+" (as last fetched; git -C "+shellWord(abs)+" fetch --prune "+shellWord(rep.remote)+" if it was deleted there), which keeps "+base+" from being pushed")
 		}
 	}
 	push := strings.Join(pushOnly, "; ")
@@ -462,10 +462,10 @@ func (r *gitStateRun) rescue(ctx context.Context, abs, gitdir string, rep *GitRe
 		cancel()
 		if err != nil {
 			rep.Status = GitRepoUnresolvable
-			// The remote may hold the name without this repo knowing it;
-			// a fetch shows it, and the next run picks a free one.
-			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (run again after git -C " + shellWord(abs) + " fetch " + shellWord(rep.remote) +
-				", which also picks a free name if " + rep.remote + " holds this one, or use --no-push): " + shortErr(err)
+			// The rescue branch stays, so the next run picks the next free
+			// name; a fetch first also shows the names the remote holds.
+			rep.Reason = "rescue branch " + rep.Rescue + " kept locally but the push to " + rep.remote + " failed; HEAD not moved (run again, which picks the next free name; git -C " + shellWord(abs) + " fetch " + shellWord(rep.remote) +
+				" first shows the names " + rep.remote + " holds; or use --no-push): " + shortErr(err)
 			return
 		}
 		rep.RescuePushed = true

@@ -20,13 +20,15 @@ stale-rebase-head with the command that clears it.
 
 --rescue also moves diverged and branch-mismatch repos: HEAD's commits are
 kept on rescue/<yymmdd>-<branch>, pushed to the remote (--no-push keeps it
-local; a Git LFS repo, or one the check cannot read, is rescued only with
---no-push), then HEAD and the index move to the matching commit, on the
-default branch for a branch mismatch. No worktree file but .gitmodules is
-written; every move prints its undo command. A rescue can still fail (a
-push), so a parent that can stay does not record a commit past where its
-rescued child may end, and follows on the next run; a parent whose own
-files need the move names in its tie line the children it passes.
+local; a Git LFS repo, one the check cannot read, or one whose push remote
+has a rescue branch is rescued only with --no-push; a pushed name skips
+those the remote's tracking refs hold), then HEAD and the index move to the
+matching commit, on the default branch for a branch mismatch. No worktree
+file but .gitmodules is written; every move prints its undo command. A
+rescue can still fail (a push), so a parent that can stay does not record a
+commit past where its rescued child may end, and follows on the next run; a
+parent whose own files need the move names in its tie line the children it
+passes.
 
 Peer sync never carries .gitmodules. In a repo that is aligned, realigned or
 at its upstream tip, a worktree .gitmodules that is missing, or equal to an
