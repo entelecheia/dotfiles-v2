@@ -339,6 +339,56 @@ func TestPush_CarriesAProvenEntryWhoseLocalCopyVanishedDuringThePush(t *testing.
 	}
 }
 
+// The same sequence end to end: the next clean push deletes both frames and
+// completes (#224).
+func TestPushCommand_DeletesWhatVanishedDuringTheLastPush(t *testing.T) {
+	requireRsync(t)
+	if isOpenrsync() {
+		t.Skip("openrsync deletes nothing with --backup (#227)")
+	}
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	clean := PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}
+	f.writeLocal("notes/keep.md", "keep")
+	f.writeLocal("renders/work-1/frame_0001.jpg", "one")
+	if _, err := PushCommand(context.Background(), clean); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	f.writeLocal("renders/work-1/frame_0002.jpg", "two")
+	f.cfg.RsyncPath = writeRsyncThen(t, `rm -rf "`+filepath.Join(f.local, "renders/work-1")+`"`)
+	if _, err := PushCommand(context.Background(), clean); err != nil {
+		t.Fatalf("push 2: %v", err)
+	}
+	f.cfg.RsyncPath = ""
+	if _, err := PushCommand(context.Background(), clean); err != nil {
+		t.Fatalf("push 3: %v", err)
+	}
+	for _, rel := range []string{"renders/work-1/frame_0001.jpg", "renders/work-1/frame_0002.jpg"} {
+		if _, err := os.Stat(filepath.Join(f.mirror, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s is still in the mirror (err=%v)", rel, err)
+		}
+	}
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); st.LastPush.IsZero() || st.LastPushError != "" {
+		t.Errorf("state after the deleting push: LastPush = %v, LastPushError = %q", st.LastPush, st.LastPushError)
+	}
+}
+
+// A dry run with changes sends nothing and records nothing.
+func TestPushCommand_ADryRunRecordsNothing(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.writeLocal("notes/new.md", "new")
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean, DryRun: true}); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); !st.LastPushAttempt.IsZero() || !st.LastPush.IsZero() || st.LastPushError != "" {
+		t.Errorf("a dry run recorded state: %+v", st)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "notes/new.md")); !os.IsNotExist(err) {
+		t.Errorf("a dry run sent a file (err=%v)", err)
+	}
+}
+
 func TestPushCommand_RecordsARsyncThatDidNotStart(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.writeLocal("notes/new.md", "new")
@@ -566,6 +616,38 @@ func TestPush_ARunKilledBeforeRsyncExitedSkipsTheRefresh(t *testing.T) {
 	}
 	if baseline, _ = LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile); baseline["notes/new.md"].Size == 0 {
 		t.Error("an rsync that caught a signal (exit 20) did not refresh the baseline")
+	}
+}
+
+// A leftover whose move is held back (here by max_delete) keeps its proof, so
+// a pull in between must not restore the old name: that would undo the rename
+// for good. The next push that may move it does (#225).
+func TestPullTracked_LeavesAPendingLeftoverInTheMirror(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("old/c.md", "c")
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	f.cfg.MaxDelete = 0
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err == nil || !strings.Contains(err.Error(), "exceed max_delete") {
+		t.Fatalf("push = %v, want the leftover held back by max_delete", err)
+	}
+	res, err := PullTracked(f.cfg, PullOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(res.Restored, "old./c.md") {
+		t.Errorf("the pull restored a pending leftover: Restored = %v", res.Restored)
+	}
+	if _, err := os.Lstat(filepath.Join(f.local, "old.")); !os.IsNotExist(err) {
+		t.Fatalf("the workspace has the renamed-away name again (err=%v)", err)
+	}
+	f.cfg.MaxDelete = 100
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "old./c.md")); !os.IsNotExist(err) {
+		t.Errorf("the leftover was not moved after the pull (err=%v)", err)
 	}
 }
 
