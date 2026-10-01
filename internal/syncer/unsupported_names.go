@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 )
@@ -114,26 +115,41 @@ func CountUnsupportedNames(cfg *Config) (int, error) {
 // --delete. The backup sits outside the mirror so it does not keep an
 // unstorable name in the provider folder. Leftovers have their own max_delete
 // budget, apart from rsync's deletes (#225).
-func MoveMirrorLeftovers(cfg *Config, rels []string) (string, error) {
+//
+// It runs after the push refreshed the baseline, which keeps a leftover only
+// while its mirror copy still matches and is not a placeholder. A leftover the
+// refresh dropped (edited in the cloud or evicted during the run) stays put.
+// It returns the backup directory and how many leftovers it moved.
+func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
+	if len(rels) > 0 && cfg.LocalPaths != nil {
+		baseline, err := LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
+		if err != nil {
+			return "", 0, fmt.Errorf("loading baseline: %w", err)
+		}
+		rels = slices.DeleteFunc(slices.Clone(rels), func(rel string) bool {
+			_, ok := baseline[rel]
+			return !ok
+		})
+	}
 	if len(rels) == 0 {
-		return "", nil
+		return "", 0, nil
 	}
 	if len(rels) > cfg.MaxDelete {
-		return "", fmt.Errorf("%d mirror leftover(s) exceed max_delete %d; raise max_delete or move them out of %s by hand", len(rels), cfg.MaxDelete, cfg.MirrorPath)
+		return "", 0, fmt.Errorf("%d mirror leftover(s) exceed max_delete %d; raise max_delete or move them out of %s by hand", len(rels), cfg.MaxDelete, cfg.MirrorPath)
 	}
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
 	backup := filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), NewConflictDir().LeftoverBackupRel())
-	for _, rel := range rels {
+	for i, rel := range rels {
 		dst := filepath.Join(backup, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return backup, err
+			return backup, i, err
 		}
 		if err := moveFile(filepath.Join(mirror, rel), dst); err != nil {
-			return backup, fmt.Errorf("moving mirror leftover %s: %w", rel, err)
+			return backup, i, fmt.Errorf("moving mirror leftover %s: %w", rel, err)
 		}
 		pruneUnsupportedDirs(mirror, filepath.Dir(rel))
 	}
-	return backup, nil
+	return backup, len(rels), nil
 }
 
 // moveFile renames src to dst, copying then removing when they are on

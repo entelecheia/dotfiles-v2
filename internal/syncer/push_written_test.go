@@ -37,36 +37,28 @@ func TestWrittenFiles(t *testing.T) {
 	}
 }
 
-// writeRsyncThatRemoves returns an rsync stand-in that runs the real rsync and
-// then deletes victim: a live process removing a file the push just copied,
-// before the baseline refresh runs (#224).
-func writeRsyncThatRemoves(t *testing.T, victim string) string {
+// writeRsyncThen returns an rsync stand-in that runs the real rsync, then the
+// shell command after (a live process acting on the tree before the baseline
+// refresh runs, #224), and exits with rsync's status.
+func writeRsyncThen(t *testing.T, after string) string {
 	t.Helper()
 	real, err := osexec.LookPath("rsync")
 	if err != nil {
 		t.Skip("rsync not installed")
 	}
 	script := filepath.Join(t.TempDir(), "rsync")
-	body := "#!/bin/sh\n\"" + real + "\" \"$@\"\nrc=$?\nrm -f \"" + victim + "\"\nexit $rc\n"
+	body := "#!/bin/sh\n\"" + real + "\" \"$@\"\nrc=$?\n" + after + "\nexit $rc\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return script
 }
 
-// writeRsyncThatRemovesDir is writeRsyncThatRemoves for a whole directory.
-func writeRsyncThatRemovesDir(t *testing.T, dir string) string {
-	t.Helper()
-	real, err := osexec.LookPath("rsync")
-	if err != nil {
-		t.Skip("rsync not installed")
-	}
-	script := filepath.Join(t.TempDir(), "rsync")
-	body := "#!/bin/sh\n\"" + real + "\" \"$@\"\nrc=$?\nrm -rf \"" + dir + "\"\nexit $rc\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return script
+// isOpenrsync reports whether the rsync on PATH is Apple's openrsync, which
+// deletes nothing when --backup is set.
+func isOpenrsync() bool {
+	out, _ := osexec.Command("rsync", "--version").Output()
+	return strings.Contains(string(out), "openrsync")
 }
 
 func TestPush_RecordsAWrittenFileWhoseLocalTwinVanished(t *testing.T) {
@@ -75,7 +67,7 @@ func TestPush_RecordsAWrittenFileWhoseLocalTwinVanished(t *testing.T) {
 	f.cfg.Propagation.Delete = true
 	f.writeLocal("notes/keep.md", "keep")
 	f.writeLocal("renders/work-1/frame_0001.jpg", "frame")
-	f.cfg.RsyncPath = writeRsyncThatRemoves(t, filepath.Join(f.local, "renders/work-1/frame_0001.jpg"))
+	f.cfg.RsyncPath = writeRsyncThen(t, `rm -f "`+filepath.Join(f.local, "renders/work-1/frame_0001.jpg")+`"`)
 
 	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
 		t.Fatalf("Push: %v", err)
@@ -103,13 +95,16 @@ func TestPush_RecordsAWrittenFileWhoseLocalTwinVanished(t *testing.T) {
 		t.Errorf("Conflicts = %+v, want only from-dropbox.md as mirror-origin", plan.Conflicts)
 	}
 
-	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeForce}); err != nil {
-		t.Fatalf("PushCommand: %v", err)
+	_, err = PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeForce})
+	if isOpenrsync() {
+		// openrsync deletes nothing when --backup is set; the run says so.
+		if err == nil || !strings.Contains(err.Error(), "planned deletion(s) left in the mirror") {
+			t.Fatalf("PushCommand under openrsync = %v, want the unapplied deletion", err)
+		}
+		return
 	}
-	if out, _ := osexec.Command("rsync", "--version").Output(); strings.Contains(string(out), "openrsync") {
-		// openrsync deletes nothing when --backup is set: a pre-existing gap
-		// every mirror delete shares (PR #226 review record), outside #224.
-		t.Skip("openrsync ignores --delete-after with --backup")
+	if err != nil {
+		t.Fatalf("PushCommand: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(f.mirror, "renders/work-1/frame_0001.jpg")); !os.IsNotExist(err) {
 		t.Errorf("frame still in the mirror after the next push (err=%v)", err)
@@ -306,7 +301,7 @@ func TestPush_CarriesAProvenEntryWhoseLocalCopyVanishedDuringThePush(t *testing.
 		t.Fatalf("push 1: %v", err)
 	}
 	f.writeLocal("renders/work-1/frame_0002.jpg", "two")
-	f.cfg.RsyncPath = writeRsyncThatRemovesDir(t, filepath.Join(f.local, "renders/work-1"))
+	f.cfg.RsyncPath = writeRsyncThen(t, `rm -rf "`+filepath.Join(f.local, "renders/work-1")+`"`)
 	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
 		t.Fatalf("push 2: %v", err)
 	}
@@ -341,5 +336,111 @@ func TestPushCommand_RecordsARsyncThatDidNotStart(t *testing.T) {
 	st, _ := LoadLocalState(f.cfg.LocalPaths)
 	if !strings.HasPrefix(st.LastPushError, "push failed: ") || !strings.Contains(st.LastPushError, "no such file or directory") {
 		t.Errorf("LastPushError = %q, want the start failure", st.LastPushError)
+	}
+}
+
+// rsync stops at --max-delete with exit 25 only after every transfer
+// (--delete-after), so the files that run wrote are still recorded (#224).
+func TestPushCommand_RecordsWrittenFilesWhenRsyncStopsAtMaxDelete(t *testing.T) {
+	requireRsync(t)
+	if isOpenrsync() {
+		t.Skip("openrsync deletes nothing with --backup, so --max-delete never stops it")
+	}
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/a.md", "a")
+	f.writeLocal("notes/b.md", "b")
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	before, _ := LoadLocalState(f.cfg.LocalPaths)
+	for _, rel := range []string{"notes/a.md", "notes/b.md"} {
+		if err := os.Remove(filepath.Join(f.local, rel)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frame := "renders/work-1/frame_0001.jpg"
+	f.writeLocal(frame, "frame")
+	f.cfg.MaxDelete = 1
+	f.cfg.RsyncPath = writeRsyncThen(t, `rm -f "`+filepath.Join(f.local, frame)+`"`)
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err == nil {
+		t.Fatal("a push past max_delete succeeded")
+	}
+	st, _ := LoadLocalState(f.cfg.LocalPaths)
+	if !strings.HasPrefix(st.LastPushError, "push failed: rsync exit 25") || !st.LastPush.Equal(before.LastPush) {
+		t.Errorf("state after exit 25 = %+v; want the error recorded and last_push unchanged", st)
+	}
+
+	f.cfg.RsyncPath = ""
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Conflicts) != 0 || len(plan.Deletes) != 2 || !slices.Contains(plan.Deletes, frame) {
+		t.Errorf("Deletes = %v, Conflicts = %+v; want the frame and the undeleted note as deletes", plan.Deletes, plan.Conflicts)
+	}
+}
+
+// rsync skips every deletion after an I/O error (exit 23) and openrsync
+// deletes nothing with --backup. A push that leaves a planned deletion in the
+// mirror is recorded as failed, and the next working push deletes it (#224).
+func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/keep.md", "keep")
+	f.writeLocal("notes/gone.md", "gone")
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	if err := os.Remove(filepath.Join(f.local, "notes/gone.md")); err != nil {
+		t.Fatal(err)
+	}
+	real, _ := osexec.LookPath("rsync")
+	f.cfg.RsyncPath = filepath.Join(t.TempDir(), "rsync")
+	dropDeletes := "#!/bin/sh\nfor a do\n  shift\n  [ \"$a\" = --delete-after ] || set -- \"$@\" \"$a\"\ndone\nexec \"" + real + "\" \"$@\"\n"
+	if err := os.WriteFile(f.cfg.RsyncPath, []byte(dropDeletes), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
+	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md") {
+		t.Fatalf("PushCommand = %v, want the unapplied deletion", err)
+	}
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); !strings.Contains(st.LastPushError, "planned deletion(s) left") {
+		t.Errorf("LastPushError = %q", st.LastPushError)
+	}
+
+	if isOpenrsync() {
+		return
+	}
+	f.cfg.RsyncPath = ""
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("next push: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "notes/gone.md")); !os.IsNotExist(err) {
+		t.Errorf("the deletion is still pending after a working push (err=%v)", err)
+	}
+}
+
+// A leftover edited in the cloud while the push ran is no longer proven by the
+// refreshed baseline, so the move leaves it in the mirror (#225).
+func TestPushCommand_LeavesALeftoverEditedDuringThePush(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("old/c.md", "c")
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	leftover := filepath.Join(f.mirror, "old./c.md")
+	f.cfg.RsyncPath = writeRsyncThen(t, `echo "edited in the cloud" >> "`+leftover+`"`)
+	moved := false
+	_, err := PushCommand(context.Background(), PushOptions{
+		Config: f.cfg, Runner: f.runner, Mode: ModeClean,
+		Progress: func(e SyncEvent) { moved = moved || e.Kind == SyncEventLeftoversMoved },
+	})
+	if err != nil {
+		t.Fatalf("PushCommand: %v", err)
+	}
+	if _, err := os.Stat(leftover); err != nil || moved {
+		t.Errorf("the edited leftover left the mirror (moved=%v, err=%v)", moved, err)
 	}
 }

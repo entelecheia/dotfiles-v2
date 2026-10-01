@@ -116,8 +116,8 @@ func (r *Runner) RunAttached(ctx context.Context, name string, args ...string) e
 	return nil
 }
 
-// RunTee is RunAttached that also captures stdout, for a long run whose
-// output the caller parses while the user watches it.
+// RunTee is RunAttached that also captures stdout and stderr, for a long run
+// whose output the caller parses while the user watches it.
 func (r *Runner) RunTee(ctx context.Context, name string, args ...string) (*Result, error) {
 	cmdStr := name + " " + strings.Join(args, " ")
 
@@ -128,17 +128,17 @@ func (r *Runner) RunTee(ctx context.Context, name string, args ...string) (*Resu
 
 	r.Logger.Info("exec (tee)", "cmd", cmdStr)
 	cmd := osexec.CommandContext(ctx, name, args...)
-	var stdout strings.Builder
+	var stdout, stderr strings.Builder
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdout)
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 
 	err := cmd.Run()
-	result := &Result{Command: cmdStr, Stdout: stdout.String()}
+	result := &Result{Command: cmdStr, Stdout: stdout.String(), Stderr: stderr.String()}
 	if cmd.ProcessState != nil {
 		result.ExitCode = cmd.ProcessState.ExitCode()
 	}
 	if err != nil {
-		return result, &CmdError{Cmd: cmdStr, ExitCode: result.ExitCode, Err: err}
+		return result, &CmdError{Cmd: cmdStr, Stderr: result.Stderr, ExitCode: result.ExitCode, Err: err}
 	}
 	return result, nil
 }

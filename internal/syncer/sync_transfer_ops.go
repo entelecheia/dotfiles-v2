@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
@@ -131,12 +132,15 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 		}
 	}
 	pushErr := downgradePartial(opts.Progress, Push(ctx, runner, cfg, false))
+	if pushErr == nil {
+		pushErr = unappliedDeletes(cfg, plan.Deletes)
+	}
 	if pushErr == nil && plan.MoveLeftovers && len(plan.Leftovers) > 0 {
-		dir, moveErr := MoveMirrorLeftovers(cfg, plan.Leftovers)
+		dir, moved, moveErr := MoveMirrorLeftovers(cfg, plan.Leftovers)
 		if moveErr != nil {
 			pushErr = moveErr
-		} else {
-			emitSync(opts.Progress, SyncEvent{Kind: SyncEventLeftoversMoved, Path: dir, Candidates: len(plan.Leftovers)})
+		} else if moved > 0 {
+			emitSync(opts.Progress, SyncEvent{Kind: SyncEventLeftoversMoved, Path: dir, Candidates: moved})
 		}
 	}
 	RecordResult(state, cfg, "push", pushErr, false)
@@ -144,6 +148,29 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 		return nil, fmt.Errorf("push failed: %w", pushErr)
 	}
 	return &PushCommandResult{Outcome: PushComplete}, nil
+}
+
+// unappliedDeletes fails a push that left a planned deletion in the mirror
+// while the workspace still lacks the file. rsync skips every deletion after
+// an I/O error (exit 23, a partial transfer), and openrsync deletes nothing
+// when --backup is set. The baseline keeps such a file proven, so the run must
+// not pass as complete (#224).
+func unappliedDeletes(cfg *Config, deletes []string) error {
+	local := strings.TrimRight(cfg.LocalPath, "/")
+	mirror := strings.TrimRight(cfg.MirrorPath, "/")
+	var left []string
+	for _, rel := range deletes {
+		if _, err := os.Lstat(filepath.Join(local, rel)); err == nil {
+			continue // restored in the workspace since the plan
+		}
+		if _, err := os.Lstat(filepath.Join(mirror, rel)); err == nil {
+			left = append(left, rel)
+		}
+	}
+	if len(left) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s; rsync skips deletions after an I/O error, and openrsync deletes nothing with --backup (install rsync 3.x)", len(left), left[0])
 }
 
 // recordPushAttempt notes how a real push run ended in the profile state: a

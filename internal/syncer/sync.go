@@ -645,9 +645,10 @@ func refuseSharedDriveMirror(cfg *Config) error {
 // staging area (`inbox/gdrive/`) are always excluded so they never bounce back
 // to mirror, regardless of operator excludes.
 //
-// On a successful non-dry-run push, the baseline manifest is refreshed as the
+// After a non-dry-run push, the baseline manifest is refreshed as the
 // Git-shared Drive payload index so other machines can restore accepted
-// artifacts from the mirror.
+// artifacts from the mirror. A local target refreshes after any rsync exit
+// status, since even a failed run may have written files.
 func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("push refused: %w", err)
@@ -680,27 +681,22 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	conflict := NewConflictDir()
 	args := pushArgs(cfg, conflict, rf, dryRun)
 	fmt.Fprintf(cfg.out(), "  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
-	// A partial transfer must still finalize. Returning here would leave the
-	// baseline stale, so every file that DID transfer comes back on the next
-	// run as "mirror-only file is not in baseline", and the conflict set grows
-	// until a clean push refuses outright - the exact failure this avoids.
+	// A run that exited with a status must still finalize: a partial transfer
+	// (23/24) moved most files, and a --max-delete stop (25) comes after every
+	// transfer. Returning here would leave the baseline stale, so every file
+	// that DID transfer comes back on the next run as "mirror-only file is not
+	// in baseline", and the conflict set grows until a clean push refuses
+	// outright - the exact failure this avoids (#224).
 	//
 	// Finalizing is safe for a local target because RefreshBaseline walks the
 	// MIRROR: a file that failed to transfer is absent there and gets retried.
-	// An SSH baseline instead walks the local tree, so refreshing after a partial
+	// An SSH baseline instead walks the local tree, so refreshing after a failed
 	// push would falsely record unsent paths as peer-seen and could later turn a
 	// local delete into deletion of independent peer work. Keep that baseline
-	// unchanged on partial SSH pushes.
-	var partial error
-	out, err := runRsyncOutput(ctx, runner, cfg, args)
-	if err != nil {
-		if !IsPartialTransfer(err) {
-			return err
-		}
-		partial = err
-	}
-	if partial != nil && cfg.Target.IsSSH() {
-		return partial
+	// unchanged on any failed SSH push.
+	out, rsyncErr := runRsyncOutput(ctx, runner, cfg, args)
+	if rsyncErr != nil && (cfg.Target.IsSSH() || !rsyncExited(rsyncErr)) {
+		return rsyncErr
 	}
 	if !dryRun && cfg.LocalPaths != nil {
 		// Fast (stat-only) fingerprints: a strict pass would read every
@@ -721,13 +717,15 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 				}
 			}
 		}
-		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
-			s.LastPush = time.Now().UTC()
-		}); err != nil {
-			return fmt.Errorf("state update: %w", err)
+		if rsyncErr == nil || IsPartialTransfer(rsyncErr) {
+			if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
+				s.LastPush = time.Now().UTC()
+			}); err != nil {
+				return fmt.Errorf("state update: %w", err)
+			}
 		}
 	}
-	return partial
+	return rsyncErr
 }
 
 // Sync is now a thin alias for Push — the historical bidirectional Pull
@@ -961,6 +959,14 @@ func unescapeRsyncName(name string) string {
 		}
 		return string([]byte{byte(v)})
 	})
+}
+
+// rsyncExited reports whether rsync ran and exited with a status, so it may
+// have written files. A run that never started or was killed by a signal did
+// not reach that point.
+func rsyncExited(err error) bool {
+	var ee *osexec.ExitError
+	return errors.As(err, &ee) && ee.ExitCode() > 0
 }
 
 // PartialTransferError reports an rsync run that moved data but not all of it.
