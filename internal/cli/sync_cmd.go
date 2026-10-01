@@ -222,7 +222,7 @@ func renderSyncEvent(p *Printer, r syncRender) func(syncer.SyncEvent) {
 		case syncer.SyncEventFetchMissing:
 			p.Warn("not on target, skipped: %s", e.Path)
 		case syncer.SyncEventFetchExcluded:
-			p.Warn("kept out by a sync filter (shared, secrets or excludes), skipped: %s", e.Path)
+			p.Warn("kept out by a sync filter (submodules, .git, secrets, excludes or shared folders), skipped: %s", e.Path)
 		case syncer.SyncEventPartialTransfer:
 			_ = reportPushPartial(p, e.Err)
 		case syncer.SyncEventLeftoversMoved:

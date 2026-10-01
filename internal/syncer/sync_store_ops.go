@@ -309,13 +309,25 @@ func SharedCount(cfg *Config) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	seen := map[string]bool{}
-	for _, e := range localCfg.SharedExcludes {
-		if rel := treeRel(strings.TrimSpace(e)); rel != "" {
-			seen[rel] = true
+	return len(StoredSharedEntries(localCfg.SharedExcludes)), nil
+}
+
+// StoredSharedEntries returns every stored shared entry once, in the form
+// `shared list` shows it: cleaned (treeRel) where the cleaning keeps it, the
+// stored text where it drops it (#231).
+func StoredSharedEntries(manual []string) []string {
+	var out []string
+	for _, e := range manual {
+		e = strings.TrimSpace(e)
+		if rel := treeRel(e); rel != "" {
+			e = rel
+		}
+		if !slices.Contains(out, e) {
+			out = append(out, e)
 		}
 	}
-	return len(seen) + len(DroppedSharedEntries(localCfg.SharedExcludes)), nil
+	sort.Strings(out)
+	return out
 }
 
 // DroppedSharedEntries returns the stored shared entries that name no path

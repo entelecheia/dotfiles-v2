@@ -624,8 +624,8 @@ func TestReleaseHookRunsTheSizeCheck(t *testing.T) {
 	}
 	name := runtime.FuncForPC(reflect.ValueOf(TestReleaseBinaryFitsArchiveLimits).Pointer()).Name()
 	name = name[strings.LastIndex(name, ".")+1:]
-	if !strings.Contains(string(body), "-run ^"+name+"$") {
-		t.Errorf(".goreleaser.yaml does not run %s on the built binaries", name)
+	if !strings.Contains(string(body), "-run ^"+name+"$") || !strings.Contains(string(body), "DOT_RELEASE_BINARY={{ .Path }}") {
+		t.Errorf(".goreleaser.yaml does not run %s on each built binary (DOT_RELEASE_BINARY={{ .Path }})", name)
 	}
 }
 

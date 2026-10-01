@@ -233,8 +233,12 @@ func TestWorkspaceBackupWritersRefuseASymlinkedConflictsDir(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(f.mirror, "notes/a.md"), future, future); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PullTracked(f.cfg, PullOptions{}); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
-		t.Errorf("PullTracked = %v, want a refusal", err)
+	if _, err := PullTracked(f.cfg, PullOptions{Force: true}); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
+		t.Errorf("PullTracked --force = %v, want a refusal", err)
+	}
+	// Without --force a tracked pull backs nothing up, so it is not refused.
+	if _, err := PullTracked(f.cfg, PullOptions{}); err != nil {
+		t.Errorf("PullTracked = %v, want no refusal", err)
 	}
 	if err := PullDirect(context.Background(), f.runner, f.cfg, false); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
 		t.Errorf("PullDirect = %v, want a refusal", err)

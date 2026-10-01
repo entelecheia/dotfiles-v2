@@ -49,6 +49,7 @@ type Status struct {
 	SchedulerState       SchedulerState // push unit
 	IntakeSchedulerState SchedulerState // pull unit (if installed)
 	Conflicts            []ConflictEntry
+	ConflictsError       string // a tree whose backups could not be listed (a symlinked .sync-conflicts)
 	Shared               []SharedEntry
 }
 
@@ -132,10 +133,14 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 	// `conflicts list`/`prune`.
 	if confs, err := ListConflicts(s.LocalPath); err == nil {
 		s.Conflicts = confs
+	} else {
+		s.ConflictsError = err.Error()
 	}
 	if s.MirrorPath != "" && !cfg.Target.IsSSH() && filepath.Clean(s.MirrorPath) != filepath.Clean(s.LocalPath) {
 		if confs, err := ListConflicts(s.MirrorPath); err == nil {
 			s.Conflicts = append(s.Conflicts, confs...)
+		} else if s.ConflictsError == "" {
+			s.ConflictsError = err.Error()
 		}
 	}
 

@@ -70,8 +70,13 @@ func runSyncSharedList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("scanning shared entries: %w", err)
 	}
-	dropped := syncer.DroppedSharedEntries(cfg.SharedExcludes)
 	p := printerFrom(cmd)
+	if cfg.Target.IsSSH() {
+		// Shared excludes name folders shared out of a local cloud mirror;
+		// an SSH target has none, so the stored entries do nothing here.
+		return printInactiveShared(p, cfg.SharedExcludes, cfg.Target.RsyncDest())
+	}
+	dropped := syncer.DroppedSharedEntries(cfg.SharedExcludes)
 	if len(entries) == 0 && len(dropped) == 0 {
 		p.Line("No manual shared excludes configured.")
 		p.Line("Add owned-but-shared-out folders with: dot sync shared add <path>")
@@ -162,5 +167,21 @@ func runSyncSharedClear(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p.Line("✓ Cleared %d manual entries.", n)
+	return nil
+}
+
+// printInactiveShared lists the stored shared entries of an SSH-target
+// profile, which apply to a local mirror only, so the list agrees with the
+// count `shared clear` uses (#231).
+func printInactiveShared(p *Printer, stored []string, target string) error {
+	entries := syncer.StoredSharedEntries(stored)
+	if len(entries) == 0 {
+		p.Line("No manual shared excludes configured.")
+		return nil
+	}
+	p.Line("Shared excludes apply to a local mirror target only; these stored entries are inactive for %s:", target)
+	for _, e := range entries {
+		p.Line("  %q", e)
+	}
 	return nil
 }

@@ -477,7 +477,9 @@ func TestPeerFilterArgs_UsesMaterializedTrackedIncludes(t *testing.T) {
 }
 
 // The remote inventory probe keeps out what the Go inventory and the transfer
-// keep out: a submodule working tree and a shared folder (#231).
+// keep out: a submodule working tree. Shared excludes apply to a local mirror
+// only, and on an SSH target (MirrorPath empty, as ResolveConfig leaves it)
+// both sides keep the folder alike (#231).
 func TestPeerFilterArgs_MatchesTheGoFilterForSharedAndSubmodules(t *testing.T) {
 	if _, err := exec.LookPath("rsync"); err != nil {
 		t.Skip("rsync not installed")
@@ -485,6 +487,7 @@ func TestPeerFilterArgs_MatchesTheGoFilterForSharedAndSubmodules(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := newPeerWorktreeTestConfig(t, workspace)
 	cfg.IncludeSubmodules = false
+	cfg.MirrorPath = ""
 	cfg.SharedExcludes = []string{"team/ops"}
 	for rel, body := range map[string]string{
 		".gitmodules":     "[submodule \"lib\"]\n\tpath = vendor/lib\n\turl = https://example.invalid/lib.git\n",
@@ -543,10 +546,8 @@ func TestPeerFilterArgs_MatchesTheGoFilterForSharedAndSubmodules(t *testing.T) {
 	if !slices.Equal(rsyncKept, goKept) {
 		t.Errorf("remote probe keeps %v, Go inventory keeps %v", rsyncKept, goKept)
 	}
-	for _, rel := range []string{"vendor/lib/a.go", "team/ops/a.pdf"} {
-		if slices.Contains(rsyncKept, rel) {
-			t.Errorf("the remote probe lists %s", rel)
-		}
+	if slices.Contains(rsyncKept, "vendor/lib/a.go") || !slices.Contains(rsyncKept, "team/ops/a.pdf") {
+		t.Errorf("remote probe keeps %v; want the submodule tree out and the (inactive) shared folder in", rsyncKept)
 	}
 }
 

@@ -15,8 +15,8 @@ without running a full pull. Other tools can shell out to it:
 Safety: newer local files are never overwritten (--update), overwrites are
 backed up under .sync-conflicts/, nothing is deleted, and the exclude layers
 still apply — .git and non-allowed secrets can never be imported. Paths
-missing on the target, and paths a sync filter keeps out (shared folders,
-secrets, excludes), are reported and skipped. An absolute path is accepted
+missing on the target, and paths a sync filter keeps out (submodules, .git,
+secrets, excludes, shared folders), are reported and skipped. An absolute path is accepted
 when it lies under the workspace.
 
 ```

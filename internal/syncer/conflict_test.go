@@ -1,11 +1,14 @@
 package syncer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
 
 func TestConflictDir_FilesystemSafeTimestamp(t *testing.T) {
@@ -243,5 +246,25 @@ func TestPruneConflicts_RefusesASymlinkedRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, "photos")); err != nil {
 		t.Errorf("the prune deleted a directory outside the tree: %v", err)
+	}
+}
+
+// Status reports a .sync-conflicts it refuses to list instead of showing no
+// backups (#231).
+func TestStatus_ReportsARefusedConflictsDir(t *testing.T) {
+	f := newIntakeFixture(t)
+	conflicts := filepath.Join(f.local, conflictsDirName)
+	if err := os.RemoveAll(conflicts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), conflicts); err != nil {
+		t.Fatal(err)
+	}
+	st, err := GetStatus(context.Background(), f.runner, f.cfg, &config.UserState{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.ConflictsError, "unsafe backup directory") {
+		t.Errorf("ConflictsError = %q, want the refusal", st.ConflictsError)
 	}
 }

@@ -738,7 +738,7 @@ func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 type FetchResult struct {
 	Fetched  []string // relpaths handed to rsync
 	Missing  []string // relpaths absent on the target (local targets only)
-	Excluded []string // relpaths a filter layer keeps out (shared, secrets, excludes)
+	Excluded []string // relpaths a filter layer keeps out (submodules, .git, secrets, excludes, shared)
 }
 
 // Fetch restores specific files or directories from the target into the

@@ -116,6 +116,9 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Last intake dir", st.LastIntakeTSDir)
 	}
 
+	if st.ConflictsError != "" {
+		p.Warn("conflict backups not listed: %s", st.ConflictsError)
+	}
 	if len(st.Conflicts) > 0 {
 		p.Section(fmt.Sprintf("Conflicts: %d backup directories", len(st.Conflicts)))
 		now := time.Now()

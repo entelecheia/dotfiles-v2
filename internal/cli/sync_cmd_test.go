@@ -323,3 +323,22 @@ func TestConfirmSync_CtrlCDeclinesBothPushPrompts(t *testing.T) {
 		}
 	}
 }
+
+// On an SSH target the stored shared entries are listed as inactive, in the
+// form and number SharedCount uses, so the list agrees with `shared clear`.
+func TestPrintInactiveShared_ListsStoredEntriesOnce(t *testing.T) {
+	var out bytes.Buffer
+	stored := []string{"team//ops", "team/ops", "/x", "  "}
+	if err := printInactiveShared(&Printer{Out: &out, Err: &out}, stored, "peer:/work/"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"inactive for peer:/work/", `"team/ops"`, `"/x"`, `""`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %s:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "\n  \""); n != len(syncer.StoredSharedEntries(stored)) {
+		t.Errorf("listed %d entries, want %d:\n%s", n, len(syncer.StoredSharedEntries(stored)), got)
+	}
+}
