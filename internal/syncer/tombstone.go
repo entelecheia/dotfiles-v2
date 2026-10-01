@@ -238,12 +238,12 @@ func prepareTombstoneSource(dir string, rels []string) (string, error) {
 
 func validateTombstoneRel(rel string) error {
 	if rel == "" || strings.ContainsRune(rel, 0) || filepath.IsAbs(rel) {
-		return fmt.Errorf("unsafe tombstone path %q", rel)
+		return fmt.Errorf("unsafe path %q", rel)
 	}
 	clean := filepath.Clean(filepath.FromSlash(rel))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) ||
 		filepath.ToSlash(clean) != filepath.ToSlash(rel) {
-		return fmt.Errorf("unsafe tombstone path %q", rel)
+		return fmt.Errorf("unsafe path %q (not a clean workspace-relative path)", rel)
 	}
 	return nil
 }
@@ -299,6 +299,17 @@ func literalRsyncPattern(rel string) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+// literalRsyncPrefix is literalRsyncPattern for a path a pattern extends with
+// a wildcard (rel + "/**"). The whole pattern is then wildcard-matched, so
+// every backslash in rel is an escape and is doubled, wildcards or not.
+func literalRsyncPrefix(rel string) (string, error) {
+	pattern, err := literalRsyncPattern(rel)
+	if err != nil || strings.ContainsAny(rel, "*?[") {
+		return pattern, err
+	}
+	return strings.ReplaceAll(pattern, `\`, `\\`), nil
 }
 
 // deletePassArgs builds the rsync argv that removes exactly the listed paths

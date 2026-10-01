@@ -120,10 +120,13 @@ func TestFetch_DryRunWritesNothing(t *testing.T) {
 func TestFetchScopeArgs(t *testing.T) {
 	// Known file + known dir: parents traversable, dir gets /** expansion,
 	// catch-all last. Order matters (first-match-wins in rsync).
-	args := fetchScopeArgs([]fetchEntry{
+	args, err := fetchScopeArgs([]fetchEntry{
 		{rel: "a/b/report.pdf", isDir: false, known: true},
 		{rel: "a/deck", isDir: true, known: true},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
 		"--include=/a/",
 		"--include=/a/b/",
@@ -137,11 +140,30 @@ func TestFetchScopeArgs(t *testing.T) {
 	}
 
 	// Unknown shape (ssh): both dir and file forms emitted.
-	sshArgs := fetchScopeArgs([]fetchEntry{{rel: "x/y", known: false}})
+	sshArgs, _ := fetchScopeArgs([]fetchEntry{{rel: "x/y", known: false}})
 	joined := strings.Join(sshArgs, " ")
 	for _, w := range []string{"--include=/x/", "--include=/x/y/", "--include=/x/y/**", "--include=/x/y", "--exclude=*"} {
 		if !strings.Contains(joined, w) {
 			t.Fatalf("ssh scope args missing %q: %v", w, sshArgs)
 		}
+	}
+
+	// Escaped (#228): a wildcard name matches itself, a backslash under a
+	// "/**" is doubled, and a path that cannot be a rule is refused.
+	esc, err := fetchScopeArgs([]fetchEntry{
+		{rel: "notes/[x] a.pdf", known: true},
+		{rel: `back\slash`, isDir: true, known: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(esc, "\n")
+	for _, w := range []string{"--include=/notes/\\[x] a.pdf", `--include=/back\slash/`, `--include=/back\\slash/**`} {
+		if !strings.Contains(joined, w) {
+			t.Errorf("escaped scope args missing %q:\n%s", w, joined)
+		}
+	}
+	if _, err := fetchScopeArgs([]fetchEntry{{rel: "../outside", known: true}}); err == nil {
+		t.Error("a path outside the workspace became a fetch rule")
 	}
 }

@@ -126,6 +126,7 @@ func TestMaterializeRuntimeExcludesFile_IncludesSharedEntries(t *testing.T) {
 	for _, want := range []string{
 		"/projects/koica-shared\n",
 		"/projects/koica-shared/\n",
+		"/projects/koica-shared/**\n",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("runtime excludes file missing %q\n--- got ---\n%s", want, body)

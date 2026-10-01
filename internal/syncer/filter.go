@@ -11,6 +11,7 @@ type syncFilter struct {
 	mode            FilterMode
 	submodules      []string         // sorted relpaths — excluded wholesale, synced via Git
 	worktrees       []string         // linked-worktree roots (peer profile only, sticky)
+	shared          []string         // shared-exclude paths, literal (dot sync shared add)
 	allowPatterns   []excludePattern // allow.txt + env-template builtins — win over every exclude
 	allowDirs       map[string]bool  // literal parent dirs of anchored allow patterns
 	secretPatterns  []excludePattern // deny-by-default secrets layer
@@ -92,6 +93,14 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 				}
 			}
 		}
+		// The include layer leaves out a name that cannot be one filter line
+		// (MaterializeTrackedIncludesFile), so the plan does not admit it
+		// through this layer either (#228).
+		for rel := range f.tracked {
+			if _, err := literalRsyncPattern(normalizeRel(rel)); err != nil {
+				delete(f.tracked, rel)
+			}
+		}
 	}
 
 	shared, err := ScanShared(strings.TrimRight(cfg.MirrorPath, "/"), cfg.SharedExcludes)
@@ -99,14 +108,9 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 		return nil, err
 	}
 	for _, e := range shared {
-		rel := normalizeRel(e.RelPath)
-		if rel == "" {
-			continue
+		if rel := normalizeRel(e.RelPath); rel != "" {
+			f.shared = append(f.shared, rel)
 		}
-		f.excludePatterns = append(f.excludePatterns,
-			excludePattern{raw: "/" + rel},
-			excludePattern{raw: "/" + rel + "/"},
-		)
 	}
 	return f, nil
 }
@@ -177,6 +181,14 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 	}
 	for _, p := range f.excludePatterns {
 		if p.matches(rel, isDir) {
+			return true
+		}
+	}
+	// Shared entries are literal paths, matched the way rsync reads their
+	// escaped `/path`, `/path/` and `/path/**` lines (#228). The last keeps
+	// descendants out where an allow re-include above opened the folder.
+	for _, s := range f.shared {
+		if rel == s || strings.HasPrefix(rel, s+"/") {
 			return true
 		}
 	}

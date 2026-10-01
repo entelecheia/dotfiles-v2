@@ -160,8 +160,8 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 // prints an openrsync banner, and openrsync deletes nothing with --backup.
 // Otherwise it lists what makes rsync 3.x keep a file without picking one: an
 // exit code does not say which (exit 23 also follows receiver errors that leave
-// the deletions applied), and a filter can protect a name the plan matched
-// literally (rsync reads [, * and ? as wildcards).
+// the deletions applied), and a filter can protect a name (an exclude.txt
+// pattern; the generated layers escape literal paths, #228).
 func unappliedDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, deletes []string) error {
 	local := strings.TrimRight(cfg.LocalPath, "/")
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
@@ -177,7 +177,7 @@ func unappliedDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, del
 	if len(left) == 0 {
 		return nil
 	}
-	why := "rsync kept them: it skips deletions after an I/O error (see its output), and a filter can protect a name (rsync reads [, * and ? as wildcards)"
+	why := "rsync kept them: it skips deletions after an I/O error (see its output), and a filter can protect a name"
 	if res, err := runner.RunQuery(ctx, cfg.rsyncBin(), "--version"); err == nil && strings.Contains(res.Stdout, "openrsync") {
 		why = "openrsync deletes nothing with --backup; install rsync 3.x (#227)"
 	}
