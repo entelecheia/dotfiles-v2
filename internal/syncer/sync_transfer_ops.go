@@ -95,6 +95,13 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 			}
 		}
 		raw := Push(ctx, runner, cfg, opts.DryRun)
+		if ctxErr := ctx.Err(); ctxErr != nil && (raw == nil || IsPartialTransfer(raw)) {
+			// The same interrupt rule as the local branch below: dot was
+			// interrupted, so Push may have skipped the refresh (rsyncExited)
+			// and the run is not complete; a canceled SSH push whose rsync
+			// exited 24 must not stamp last_push (#233).
+			raw = fmt.Errorf("push interrupted: %w", ctxErr)
+		}
 		partial = skippedFiles(raw)
 		pushErr := downgradePartial(opts.Progress, raw)
 		RecordResult(state, cfg, "push", pushErr, opts.DryRun)

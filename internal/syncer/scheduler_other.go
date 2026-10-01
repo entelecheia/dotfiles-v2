@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// InspectKind reports the timer state; launchd exit codes do not apply here.
+func (s *Scheduler) InspectKind(ctx context.Context, kind SchedulerKind) SchedulerSnapshot {
+	return SchedulerSnapshot{State: s.StateKind(ctx, kind)}
+}
+
 // InstallKind renders the systemd user service + timer for the kind
 // and enables them. Idempotent — daemon-reload is safe on every
 // invocation, and `enable --now` accepts an already-enabled unit.

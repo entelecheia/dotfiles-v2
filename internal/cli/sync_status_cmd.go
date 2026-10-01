@@ -91,14 +91,20 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	if st.Interval > 0 {
 		p.KV("Push interval", formatInterval(st.Interval))
 		p.KV("Push mode", st.PushMode.String())
-		p.KV("Push scheduler", st.SchedulerState.String())
+		p.KV("Push scheduler", st.SchedulerState.StringForProfile(cfg.Profile))
+		if st.SchedulerLastExitCode != nil {
+			p.KV("Push last exit", fmt.Sprintf("%d", *st.SchedulerLastExitCode))
+		}
 	} else {
 		p.KV("Push scheduler", "(off — `dot sync setup --push-interval=DUR` to enable)")
 	}
 	if st.PullInterval > 0 {
 		p.KV("Pull interval", formatInterval(st.PullInterval))
 		p.KV("Pull mode", st.PullMode.String())
-		p.KV("Pull scheduler", st.IntakeSchedulerState.String())
+		p.KV("Pull scheduler", st.IntakeSchedulerState.StringForProfile(cfg.Profile))
+		if st.IntakeSchedulerLastExitCode != nil {
+			p.KV("Pull last exit", fmt.Sprintf("%d", *st.IntakeSchedulerLastExitCode))
+		}
 	} else {
 		p.KV("Pull scheduler", "(off — `dot sync setup --pull-interval=DUR` to enable)")
 	}

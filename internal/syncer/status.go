@@ -51,6 +51,9 @@ type Status struct {
 	Conflicts            []ConflictEntry
 	ConflictsError       string // a tree whose backups could not be listed (a symlinked .sync-conflicts)
 	Shared               []SharedEntry
+
+	SchedulerLastExitCode       *int
+	IntakeSchedulerLastExitCode *int
 }
 
 // GetStatus collects current sync state from cfg + state + filesystem.
@@ -114,8 +117,9 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		PullMode:           cfg.PullMode,
 	}
 	if sched != nil {
-		s.SchedulerState = sched.StateKind(ctx, SchedulerKindPush)
-		s.IntakeSchedulerState = sched.StateKind(ctx, SchedulerKindIntake)
+		push, intake := sched.InspectKind(ctx, SchedulerKindPush), sched.InspectKind(ctx, SchedulerKindIntake)
+		s.SchedulerState, s.SchedulerLastExitCode = push.State, push.LastExitCode
+		s.IntakeSchedulerState, s.IntakeSchedulerLastExitCode = intake.State, intake.LastExitCode
 	}
 
 	if runner.CommandExists("rsync") {

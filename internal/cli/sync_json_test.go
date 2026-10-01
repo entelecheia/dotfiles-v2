@@ -77,6 +77,27 @@ func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
 	}
 }
 
+// v6: a refused .sync-conflicts (a symlinked backups dir) reaches the JSON
+// document, not only the text renderer (#233).
+func TestBuildSyncStatusJSONCarriesTheConflictsError(t *testing.T) {
+	cfg := &syncer.Config{Profile: syncer.DefaultProfile, LocalPath: t.TempDir(), Target: syncer.Target{Kind: syncer.TargetLocal, Path: t.TempDir()}, Propagation: syncer.DefaultPropagationPolicy()}
+	scheduler := &syncer.Scheduler{Paths: &syncer.Paths{LaunchdPlist: filepath.Join(t.TempDir(), "com.dotfiles.sync.plist")}}
+
+	clean := buildSyncStatusJSON(cfg, &syncer.Status{LocalPath: cfg.LocalPath, Target: cfg.Target}, scheduler)
+	if clean.SchemaVersion != 6 {
+		t.Fatalf("schemaVersion = %d, want 6", clean.SchemaVersion)
+	}
+	if clean.ConflictsError != "" {
+		t.Fatalf("clean document conflictsError = %q, want empty", clean.ConflictsError)
+	}
+
+	status := &syncer.Status{LocalPath: cfg.LocalPath, Target: cfg.Target, ConflictsError: "unsafe backup directory: .sync-conflicts is a symlink"}
+	document := buildSyncStatusJSON(cfg, status, scheduler)
+	if document.ConflictsError != status.ConflictsError || document.ConflictCount != 0 {
+		t.Fatalf("conflicts fields = %q, %d; want the refusal carried with count 0", document.ConflictsError, document.ConflictCount)
+	}
+}
+
 func TestSyncStatusJSONSensitiveOverridesZeroOneMany(t *testing.T) {
 	cfg := &syncer.Config{Profile: syncer.DefaultProfile, LocalPath: t.TempDir(), Target: syncer.Target{Kind: syncer.TargetLocal, Path: t.TempDir()}, Propagation: syncer.DefaultPropagationPolicy()}
 	scheduler := &syncer.Scheduler{Paths: &syncer.Paths{LaunchdPlist: filepath.Join(t.TempDir(), "com.dotfiles.sync.plist")}}

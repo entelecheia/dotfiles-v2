@@ -15,8 +15,9 @@ import (
 // syncStatusSchemaVersion advances whenever the status document gains,
 // drops, or renames a field, so a strict consumer can reject a document
 // shape it does not know. v3 adds unsupportedNameCount, v4 ownerAliases,
-// v5 lastPushAttemptAt, lastPushError and lastPushErrorSince.
-const syncStatusSchemaVersion = 5
+// v5 lastPushAttemptAt, lastPushError and lastPushErrorSince, v6
+// conflictsError and optional job lastExitCode.
+const syncStatusSchemaVersion = 6
 
 type syncTargetJSON struct {
 	Kind string `json:"kind"`
@@ -44,6 +45,7 @@ type syncJobJSON struct {
 	Mode            string  `json:"mode"`
 	State           string  `json:"state"`
 	LastRunAt       *string `json:"lastRunAt"`
+	LastExitCode    *int    `json:"lastExitCode,omitempty"`
 }
 
 type syncStatusJSON struct {
@@ -76,6 +78,7 @@ type syncStatusJSON struct {
 	LastPushErrorSince   *string                     `json:"lastPushErrorSince"`
 	LastIntakeAt         *string                     `json:"lastIntakeAt"`
 	ConflictCount        int                         `json:"conflictCount"`
+	ConflictsError       string                      `json:"conflictsError,omitempty"`
 	UnsupportedNameCount int                         `json:"unsupportedNameCount"`
 	LogPath              string                      `json:"logPath"`
 	IncludePath          string                      `json:"includePath"`
@@ -118,8 +121,9 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 			Label:           schedulerLabel(sched.Paths.PlistFor(syncer.SchedulerKindPush)),
 			IntervalSeconds: st.Interval,
 			Mode:            st.PushMode.String(),
-			State:           st.SchedulerState.String(),
+			State:           st.SchedulerState.StringForProfile(cfg.Profile),
 			LastRunAt:       timeJSON(st.LastPush),
+			LastExitCode:    st.SchedulerLastExitCode,
 		},
 		{
 			ID:              "mirror-pull",
@@ -127,8 +131,9 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 			Label:           schedulerLabel(sched.Paths.PlistFor(syncer.SchedulerKindIntake)),
 			IntervalSeconds: st.PullInterval,
 			Mode:            st.PullMode.String(),
-			State:           st.IntakeSchedulerState.String(),
+			State:           st.IntakeSchedulerState.StringForProfile(cfg.Profile),
 			LastRunAt:       timeJSON(st.LastPull),
+			LastExitCode:    st.IntakeSchedulerLastExitCode,
 		},
 	}
 	overrides := make([]syncSensitiveOverrideJSON, len(st.SensitiveOverrides))
@@ -172,6 +177,7 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 		LastPushErrorSince:   timeJSON(st.LastPushErrorSince),
 		LastIntakeAt:         timeJSON(st.LastIntake),
 		ConflictCount:        len(st.Conflicts),
+		ConflictsError:       st.ConflictsError,
 		UnsupportedNameCount: st.UnsupportedNames,
 		LogPath:              cfg.LogFile,
 		IncludePath:          st.IncludeFile,

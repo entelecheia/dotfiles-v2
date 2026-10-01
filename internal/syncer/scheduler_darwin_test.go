@@ -26,6 +26,47 @@ func TestLaunchdPrintTarget(t *testing.T) {
 	}
 }
 
+// StateKind must read the recorded spawn-failed dump as SchedulerSpawnFailed,
+// not SchedulerRunning: launchd still answers print with exit 0 for the loaded
+// job (#233).
+func TestSchedulerStateKind_SpawnFailedIsNotRunning(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dump := filepath.Join(root, "print.out")
+	if err := os.WriteFile(dump, []byte(recordedLaunchdSpawnFailedPrint), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\n/bin/cat \"$DOTFILES_TEST_LAUNCHCTL_DUMP\"\nexit 0\n")
+	t.Setenv("PATH", binDir)
+	t.Setenv("DOTFILES_TEST_LAUNCHCTL_DUMP", dump)
+
+	paths := pathsFor(root, filepath.Join(root, "cache"))
+	plist := paths.PlistFor(SchedulerKindPush)
+	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plist, []byte("persisted plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler := NewScheduler(
+		exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		paths,
+		&Config{},
+		template.NewEngine(),
+	)
+	if got := scheduler.StateKind(context.Background(), SchedulerKindPush); got != SchedulerSpawnFailed {
+		t.Fatalf("StateKind = %s, want spawn failed", got)
+	}
+	snapshot := scheduler.InspectKind(context.Background(), SchedulerKindPush)
+	if snapshot.LastExitCode == nil || *snapshot.LastExitCode != 78 {
+		t.Fatalf("last exit code = %v, want 78", snapshot.LastExitCode)
+	}
+}
+
 func TestLaunchdStateFromPrintStatus(t *testing.T) {
 	cases := []struct {
 		name        string
