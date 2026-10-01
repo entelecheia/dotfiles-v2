@@ -54,6 +54,21 @@ func writeRsyncThatRemoves(t *testing.T, victim string) string {
 	return script
 }
 
+// writeRsyncThatRemovesDir is writeRsyncThatRemoves for a whole directory.
+func writeRsyncThatRemovesDir(t *testing.T, dir string) string {
+	t.Helper()
+	real, err := osexec.LookPath("rsync")
+	if err != nil {
+		t.Skip("rsync not installed")
+	}
+	script := filepath.Join(t.TempDir(), "rsync")
+	body := "#!/bin/sh\n\"" + real + "\" \"$@\"\nrc=$?\nrm -rf \"" + dir + "\"\nexit $rc\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
 func TestPush_RecordsAWrittenFileWhoseLocalTwinVanished(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
@@ -92,8 +107,8 @@ func TestPush_RecordsAWrittenFileWhoseLocalTwinVanished(t *testing.T) {
 		t.Fatalf("PushCommand: %v", err)
 	}
 	if out, _ := osexec.Command("rsync", "--version").Output(); strings.Contains(string(out), "openrsync") {
-		// openrsync deletes nothing when --backup is set; a pre-existing gap
-		// every mirror delete shares, tracked apart from #224.
+		// openrsync deletes nothing when --backup is set: a pre-existing gap
+		// every mirror delete shares (PR #226 review record), outside #224.
 		t.Skip("openrsync ignores --delete-after with --backup")
 	}
 	if _, err := os.Stat(filepath.Join(f.mirror, "renders/work-1/frame_0001.jpg")); !os.IsNotExist(err) {
@@ -178,57 +193,16 @@ func TestStatus_PushStalled(t *testing.T) {
 	}
 }
 
-// mirrorAt moves the fixture's mirror to root/<rel>, so a test can place it
-// where a provider's folder would be.
-func (f *intakeFixture) mirrorAt(rel string) {
-	f.t.Helper()
-	f.mirror = filepath.Join(f.root, rel)
-	if err := os.MkdirAll(f.mirror, 0o755); err != nil {
-		f.t.Fatal(err)
-	}
-	f.cfg.MirrorPath = f.mirror + "/"
-	f.cfg.Target = Target{Kind: TargetLocal, Path: f.mirror + "/"}
-}
-
-func TestMirrorUnderDropbox(t *testing.T) {
-	root := t.TempDir()
-	for rel, want := range map[string]bool{
-		"Library/CloudStorage/Dropbox/work":                 true,
-		"Library/CloudStorage/Dropbox-Personal/work":        true,
-		"Users/me/Dropbox/work":                             true,
-		"home/me/Dropbox (Team)/work":                       true,
-		"Library/CloudStorage/GoogleDrive-me/My Drive/work": false,
-		"Library/CloudStorage/GoogleDrive-me/Dropbox/work":  false, // a folder named Dropbox inside Drive
-		"gdrive-workspace/work":                             false,
-	} {
-		dir := filepath.Join(root, rel)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if got := mirrorUnderDropbox(dir); got != want {
-			t.Errorf("mirrorUnderDropbox(%s) = %v, want %v", rel, got, want)
-		}
-	}
-	link := filepath.Join(root, "Dropbox-link")
-	if err := os.Symlink(filepath.Join(root, "Library/CloudStorage/Dropbox"), link); err != nil {
-		t.Fatal(err)
-	}
-	if !mirrorUnderDropbox(filepath.Join(link, "work")) {
-		t.Error("a symlink into CloudStorage/Dropbox is not resolved")
-	}
-}
-
 func TestPushCommand_MovesMirrorLeftoversOutOfTheMirror(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
-	f.mirrorAt("Library/CloudStorage/Dropbox/work")
 	f.cfg.Propagation.Delete = true
 	// The workspace renamed "notice./" to "notice/"; the mirror still has the
-	// old copy from before the name filter.
+	// old copy, which the baseline recorded while both sides had it.
 	f.writeLocal("spoc/notice/a.pdf", "a")
-	f.writeMirror("spoc/notice./a.pdf", "a")
+	f.seedBaseline("spoc/notice./a.pdf", "a", f.writeMirror("spoc/notice./a.pdf", "a"))
 	f.writeMirror("spoc/notice./.DS_Store", "finder")
-	f.writeMirror("old./sub/c.md", "c")
+	f.seedBaseline("old./sub/c.md", "c", f.writeMirror("old./sub/c.md", "c"))
 	// A workspace name Dropbox cannot store stays excluded and its mirror
 	// copy is not touched.
 	f.writeLocal("keep./b.md", "b")
@@ -273,34 +247,99 @@ func TestPushCommand_MovesMirrorLeftoversOutOfTheMirror(t *testing.T) {
 	}
 
 	f.cfg.MaxDelete = 0
-	f.writeMirror("old./c.md", "c")
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
 	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err == nil ||
 		!strings.Contains(err.Error(), "exceed max_delete") {
 		t.Errorf("leftovers over max_delete: err = %v", err)
 	}
 }
 
-// Google Drive stores names ending in a period, so on a non-Dropbox mirror a
-// mirror-only "Acme Inc./" can be a collaborator's file: listed, never moved.
-func TestPushCommand_LeavesUnsupportedNamesOnANonDropboxMirror(t *testing.T) {
+// A mirror-only unsupported name without baseline proof may be a cloud file
+// (Google Drive stores "Acme Inc.", Dropbox likely does too): listed, never
+// moved. So is a proven name whose copy changed, or an online-only stub.
+func TestPushCommand_ListsUnprovenMirrorOnlyUnsupportedNames(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
-	f.mirrorAt("Library/CloudStorage/GoogleDrive-me/My Drive/work")
 	f.cfg.Propagation.Delete = true
 	f.writeLocal("notes/keep.md", "keep")
 	f.writeMirror("clients/Acme Inc./contract.pdf", "signed")
+	f.seedBaseline("edited./x.pdf", "old", f.writeMirror("edited./x.pdf", "edited in the cloud"))
 
 	plan, err := PlanPush(f.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.MoveLeftovers || !slices.Equal(plan.Leftovers, []string{"clients/Acme Inc./contract.pdf"}) {
-		t.Fatalf("MoveLeftovers = %v, Leftovers = %v", plan.MoveLeftovers, plan.Leftovers)
+	want := []string{"clients/Acme Inc./contract.pdf", "edited./x.pdf"}
+	if len(plan.Leftovers) != 0 || !slices.Equal(plan.MirrorUnsupported, want) {
+		t.Fatalf("Leftovers = %v, MirrorUnsupported = %v", plan.Leftovers, plan.MirrorUnsupported)
 	}
 	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
 		t.Fatalf("PushCommand: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(f.mirror, "clients/Acme Inc./contract.pdf")); err != nil {
-		t.Errorf("a cloud file with a period-ending folder left the mirror: %v", err)
+	for _, rel := range want {
+		if _, err := os.Stat(filepath.Join(f.mirror, rel)); err != nil {
+			t.Errorf("%s left the mirror: %v", rel, err)
+		}
+	}
+
+	stub := filepath.Join(f.mirror, "stub./y.pdf")
+	makePlaceholder(t, stub)
+	f.seedBaseline("stub./y.pdf", "", time.Time{})
+	if plan, err = PlanPush(f.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(plan.Leftovers, "stub./y.pdf") || !slices.Contains(plan.MirrorUnsupported, "stub./y.pdf") {
+		t.Errorf("an online-only stub was classed as a leftover: %v / %v", plan.Leftovers, plan.MirrorUnsupported)
+	}
+}
+
+// A file an earlier push wrote is unchanged in this run, so rsync does not
+// list it; when its local copy vanishes during this run, the baseline keeps
+// the proof and the next push deletes it instead of refusing it (#224).
+func TestPush_CarriesAProvenEntryWhoseLocalCopyVanishedDuringThePush(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/keep.md", "keep")
+	f.writeLocal("renders/work-1/frame_0001.jpg", "one")
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	f.writeLocal("renders/work-1/frame_0002.jpg", "two")
+	f.cfg.RsyncPath = writeRsyncThatRemovesDir(t, filepath.Join(f.local, "renders/work-1"))
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("push 2: %v", err)
+	}
+	f.cfg.RsyncPath = ""
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(plan.Deletes, []string{"renders/work-1/frame_0001.jpg", "renders/work-1/frame_0002.jpg"}) || len(plan.Conflicts) != 0 {
+		t.Errorf("Deletes = %v, Conflicts = %+v; want both frames deleted, no conflict", plan.Deletes, plan.Conflicts)
+	}
+
+	// With delete propagation off the entry is not carried: a pull must not
+	// restore a file the workspace deleted long ago.
+	f.cfg.Propagation.Delete = false
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("push 3: %v", err)
+	}
+	baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if _, ok := baseline["renders/work-1/frame_0001.jpg"]; ok {
+		t.Error("a vanished file's entry was carried with delete propagation off")
+	}
+}
+
+func TestPushCommand_RecordsARsyncThatDidNotStart(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.writeLocal("notes/new.md", "new")
+	f.cfg.RsyncPath = filepath.Join(t.TempDir(), "no-such-rsync")
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeForce}); err == nil {
+		t.Fatal("PushCommand succeeded without an rsync")
+	}
+	st, _ := LoadLocalState(f.cfg.LocalPaths)
+	if !strings.HasPrefix(st.LastPushError, "push failed: ") || !strings.Contains(st.LastPushError, "no such file or directory") {
+		t.Errorf("LastPushError = %q, want the start failure", st.LastPushError)
 	}
 }

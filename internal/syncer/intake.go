@@ -431,6 +431,14 @@ func refreshBaseline(cfg *Config, mode FingerprintMode, written map[string]bool)
 		if requireLocalTwin && !written[rel] {
 			localAbs := filepath.Join(local, rel)
 			localInfo, err := os.Lstat(localAbs)
+			if os.IsNotExist(err) && cfg.Propagation.Delete {
+				// The workspace removed a file the baseline proves it put here,
+				// and the mirror copy is unchanged: keep the proof, so the next
+				// push deletes it instead of refusing it as mirror-origin (a
+				// file an earlier push wrote can vanish during this one, #224).
+				carryProvenEntry(entries, previous, rel, absPath)
+				return nil
+			}
 			if err != nil || localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {
 				return nil
 			}
@@ -462,4 +470,22 @@ func refreshBaseline(cfg *Config, mode FingerprintMode, written map[string]bool)
 		return err
 	}
 	return SaveBaselineManifest(cfg.LocalPaths.BaselineFile, entries)
+}
+
+// carryProvenEntry keeps previous[rel] when the mirror copy at absPath still
+// matches it. A cloud placeholder or a changed copy is not carried: it drops
+// out and is classified as mirror-origin, as before.
+func carryProvenEntry(entries, previous map[string]Fingerprint, rel, absPath string) {
+	prev, ok := previous[rel]
+	if !ok {
+		return
+	}
+	info, err := os.Lstat(absPath)
+	if err != nil || dehydratedFile(absPath, info) {
+		return
+	}
+	fp, err := FingerprintFile(absPath, FingerprintFast)
+	if err == nil && FingerprintsCompatible(prev, fp, absPath) {
+		entries[rel] = prev
+	}
 }

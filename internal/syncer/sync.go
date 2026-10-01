@@ -925,9 +925,9 @@ func runRsyncOutput(ctx context.Context, runner *exec.Runner, cfg *Config, args 
 const writtenOutFormat = "@@written %i %n"
 
 // writtenFiles returns the relative paths of the regular files a push with
-// writtenOutFormat received (itemized ">f"). rsync prints a name through its
-// \#ooo escapes (openrsync, and rsync 3.x outside a UTF-8 locale, escape every
-// non-ASCII byte), so each is decoded. A line that does not parse is skipped:
+// writtenOutFormat received (itemized ">f"). rsync may print a name through
+// its \#ooo escapes (openrsync escapes non-ASCII bytes, all of them outside a
+// UTF-8 locale), so each is decoded. A line that does not parse is skipped:
 // that file only misses the written-path rule and is classified as before.
 func writtenFiles(stdout string) map[string]bool {
 	written := map[string]bool{}

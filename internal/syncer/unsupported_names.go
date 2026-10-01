@@ -107,10 +107,11 @@ func CountUnsupportedNames(cfg *Config) (int, error) {
 }
 
 // MoveMirrorLeftovers moves plan leftovers (mirror-only paths with a name
-// Dropbox cannot store) into the workspace's .sync-conflicts/<ts>/from-mirror/
-// and returns that directory. Callers gate it on PushPlan.MoveLeftovers: in
-// Dropbox no cloud copy of these names can exist, and the workspace no longer
-// has them. The backup sits outside the mirror so it does not keep an
+// Dropbox/Windows cannot store, which the baseline proves the workspace put
+// there) into the workspace's .sync-conflicts/<ts>/from-mirror/ and returns
+// that directory. The workspace no longer has them, so this is a workspace
+// deletion that rsync cannot carry out: its exclude shields the name from
+// --delete. The backup sits outside the mirror so it does not keep an
 // unstorable name in the provider folder. Leftovers have their own max_delete
 // budget, apart from rsync's deletes (#225).
 func MoveMirrorLeftovers(cfg *Config, rels []string) (string, error) {
@@ -168,26 +169,4 @@ func pruneUnsupportedDirs(mirror, rel string) {
 		}
 		rel = filepath.Dir(rel)
 	}
-}
-
-// mirrorUnderDropbox reports whether the mirror resolves inside a Dropbox
-// root: a Dropbox* folder in Library/CloudStorage, or directly in a home
-// directory (/Users/<name>, /home/<name>), the roots dot's cloud detection
-// offers. A Dropbox folder anywhere else is not recognized, which leaves its
-// leftovers listed rather than moved.
-func mirrorUnderDropbox(mirror string) bool {
-	p, err := filepath.EvalSymlinks(strings.TrimRight(mirror, "/"))
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(filepath.ToSlash(p), "/")
-	for i := 1; i < len(parts); i++ {
-		if !strings.HasPrefix(parts[i], "Dropbox") {
-			continue
-		}
-		if parts[i-1] == "CloudStorage" || (i >= 2 && (parts[i-2] == "Users" || parts[i-2] == "home")) {
-			return true
-		}
-	}
-	return false
 }

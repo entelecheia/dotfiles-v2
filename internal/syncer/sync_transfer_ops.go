@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -177,6 +178,10 @@ func pushErrorSummary(err error) string {
 	var ce *exec.CmdError
 	if !errors.As(err, &ce) {
 		return firstLine(err.Error())
+	}
+	var ee *osexec.ExitError
+	if !errors.As(ce.Err, &ee) {
+		return "push failed: " + firstLine(ce.Err.Error()) // it never started
 	}
 	name := "command"
 	if f := strings.Fields(ce.Cmd); len(f) > 0 {

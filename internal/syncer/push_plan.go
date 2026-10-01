@@ -30,14 +30,19 @@ type PushPlan struct {
 	// mirror-only conflicts. `dot sync names trim` renames the
 	// trailing-whitespace ones.
 	Unsupported []string
-	// Leftovers are such paths that exist only in the mirror: on Dropbox,
-	// copies pushed before the name filter or before a workspace rename. The
-	// rsync exclude also shields them from --delete.
+	// Leftovers are such paths that exist only in the mirror and that the
+	// baseline proves the workspace put there, with the mirror copy unchanged:
+	// copies pushed before the name filter, left behind by a workspace
+	// rename. The rsync exclude also shields them from --delete, so a push
+	// with delete propagation moves them out itself (MoveLeftovers, #225).
 	Leftovers []string
-	// MoveLeftovers says the push moves Leftovers out itself
-	// (MoveMirrorLeftovers, #225): delete propagation is on and the mirror is
-	// in Dropbox, which cannot hold these names. Elsewhere (Google Drive
-	// stores them) a leftover can be a cloud file, so it is only listed.
+	// MirrorUnsupported are the other mirror-only unsupported paths: no
+	// baseline proof, a changed copy, or an online-only stub. The provider
+	// may hold these names (Google Drive does, Dropbox likely does for a
+	// trailing period), so they may be cloud files and are only listed.
+	MirrorUnsupported []string
+	// MoveLeftovers says the push moves Leftovers out of the mirror: delete
+	// propagation is on.
 	MoveLeftovers bool
 	Propagation   PropagationPolicy
 	// Placeholders counts mirror files whose content lives only in the
@@ -102,7 +107,7 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	plan := &PushPlan{
 		Propagation:   cfg.Propagation,
 		Placeholders:  len(mirrorInv.dehydrated),
-		MoveLeftovers: cfg.Propagation.Delete && mirrorUnderDropbox(mirror),
+		MoveLeftovers: cfg.Propagation.Delete,
 	}
 	rels := unionKeys(localInv.files, mirrorInv.files)
 	for _, rel := range rels {
@@ -112,8 +117,11 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			// provider's renamed twin) is not on the table.
 			if _, local := localInv.files[rel]; local {
 				plan.Unsupported = append(plan.Unsupported, rel)
-			} else {
+			} else if base, ok := baseline[rel]; ok && !mirrorInv.dehydrated[rel] &&
+				FingerprintsCompatible(base, mirrorInv.files[rel], filepath.Join(mirror, rel)) {
 				plan.Leftovers = append(plan.Leftovers, rel)
+			} else {
+				plan.MirrorUnsupported = append(plan.MirrorUnsupported, rel)
 			}
 			continue
 		}
@@ -265,6 +273,7 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	sort.Strings(plan.SkippedPolicy)
 	sort.Strings(plan.Unsupported)
 	sort.Strings(plan.Leftovers)
+	sort.Strings(plan.MirrorUnsupported)
 	sort.Slice(plan.Conflicts, func(i, j int) bool { return plan.Conflicts[i].RelPath < plan.Conflicts[j].RelPath })
 	return plan, nil
 }

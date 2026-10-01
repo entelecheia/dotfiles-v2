@@ -75,8 +75,8 @@ func TestPlanPush_TrailingSpaceFolderGoesToUnsupported(t *testing.T) {
 	if !slices.Equal(plan.Unsupported, []string{"docs /report.md"}) {
 		t.Errorf("Unsupported = %v, want the workspace name only", plan.Unsupported)
 	}
-	if !slices.Equal(plan.Leftovers, []string{"old /twin.md"}) {
-		t.Errorf("Leftovers = %v, want the mirror-only name", plan.Leftovers)
+	if !slices.Equal(plan.MirrorUnsupported, []string{"old /twin.md"}) || len(plan.Leftovers) != 0 {
+		t.Errorf("MirrorUnsupported = %v, Leftovers = %v; want the unproven mirror-only name listed only", plan.MirrorUnsupported, plan.Leftovers)
 	}
 	if len(plan.Conflicts) != 0 {
 		t.Errorf("Conflicts = %+v, want none", plan.Conflicts)
