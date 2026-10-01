@@ -422,8 +422,12 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 	}
 	f.cfg.RsyncPath = dropDeletes("0")
 	_, err = PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
-	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md: openrsync deletes nothing") {
-		t.Fatalf("PushCommand = %v, want the unapplied deletion", err)
+	cause := "rsync kept them; a filter may protect the name"
+	if isOpenrsync() {
+		cause = "openrsync deletes nothing with --backup"
+	}
+	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md: "+cause) {
+		t.Fatalf("PushCommand = %v, want the unapplied deletion with %q", err, cause)
 	}
 	if st, _ := LoadLocalState(f.cfg.LocalPaths); !strings.Contains(st.LastPushError, "planned deletion(s) left") || !st.LastPush.Equal(before.LastPush) {
 		t.Errorf("state after the failed run = %+v; want the error recorded and last_push unchanged", st)
@@ -473,7 +477,16 @@ func TestPushCommand_APartialTransferIsNotACompletedPush(t *testing.T) {
 	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
 		t.Fatalf("push 1: %v", err)
 	}
+	first, _ := LoadLocalState(f.cfg.LocalPaths)
+	// A run with nothing to send is a completed push too.
+	time.Sleep(10 * time.Millisecond)
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("push with no changes: %v", err)
+	}
 	before, _ := LoadLocalState(f.cfg.LocalPaths)
+	if !before.LastPush.After(first.LastPush) {
+		t.Fatalf("a run with no changes did not stamp last_push: %+v", before)
+	}
 	if err := UpdateLocalState(f.cfg.LocalPaths, func(s *LocalState) { s.LastPushError = "push refused: earlier" }); err != nil {
 		t.Fatal(err)
 	}
@@ -598,5 +611,22 @@ func TestRecordPushRefusal_SkipsWhilePausedOrLocked(t *testing.T) {
 	_ = RecordPushRefusal(f.cfg, errors.New("push refused: now"))
 	if st, _ := LoadLocalState(f.cfg.LocalPaths); st.LastPushError != "push refused: now" {
 		t.Errorf("LastPushError = %q, want the refusal", st.LastPushError)
+	}
+}
+
+// A --verbose push tees rsync's output to the terminal and still records the
+// files it wrote (#224).
+func TestPush_VerboseRecordsAWrittenFile(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Verbose = true
+	frame := "renders/work-1/frame_0001.jpg"
+	f.writeLocal(frame, "frame")
+	f.cfg.RsyncPath = writeRsyncThen(t, `rm -f "`+filepath.Join(f.local, frame)+`"`)
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile); baseline[frame].Size == 0 {
+		t.Errorf("a verbose push did not record the frame it wrote: %v", baseline)
 	}
 }

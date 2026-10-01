@@ -895,11 +895,17 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 }
 
 func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
-	_, err := runRsyncOutput(ctx, runner, cfg, args)
-	return err
+	var err error
+	if cfg.Verbose {
+		err = runner.RunAttached(ctx, cfg.rsyncBin(), args...)
+	} else {
+		_, err = runner.Run(ctx, cfg.rsyncBin(), args...)
+	}
+	return classifyRsyncError(err)
 }
 
-// runRsyncOutput is runRsync that also returns rsync's stdout.
+// runRsyncOutput is runRsync that also returns rsync's stdout, for the mirror
+// push that parses it (#224); a --verbose run tees it to the terminal.
 func runRsyncOutput(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) (string, error) {
 	var res *exec.Result
 	var err error
