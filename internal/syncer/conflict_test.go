@@ -1,11 +1,14 @@
 package syncer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
 
 func TestConflictDir_FilesystemSafeTimestamp(t *testing.T) {
@@ -220,5 +223,48 @@ func TestPruneConflicts_StrayFileSurvivesAndBlocksRootRemoval(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tree, conflictsDirName)); err != nil {
 		t.Errorf("root with strays must survive: %v", err)
+	}
+}
+
+// A symlinked .sync-conflicts would make a prune delete directories outside
+// the tree; listing and pruning refuse it and delete nothing (#231).
+func TestPruneConflicts_RefusesASymlinkedRoot(t *testing.T) {
+	tree := t.TempDir()
+	outside := t.TempDir()
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	if err := os.MkdirAll(filepath.Join(outside, "photos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(outside, "photos"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(tree, conflictsDirName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PruneConflicts(tree, time.Now(), false); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
+		t.Errorf("PruneConflicts = %v, want a refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "photos")); err != nil {
+		t.Errorf("the prune deleted a directory outside the tree: %v", err)
+	}
+}
+
+// Status reports a .sync-conflicts it refuses to list instead of showing no
+// backups (#231).
+func TestStatus_ReportsARefusedConflictsDir(t *testing.T) {
+	f := newIntakeFixture(t)
+	conflicts := filepath.Join(f.local, conflictsDirName)
+	if err := os.RemoveAll(conflicts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), conflicts); err != nil {
+		t.Fatal(err)
+	}
+	st, err := GetStatus(context.Background(), f.runner, f.cfg, &config.UserState{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.ConflictsError, "unsafe backup directory") {
+		t.Errorf("ConflictsError = %q, want the refusal", st.ConflictsError)
 	}
 }

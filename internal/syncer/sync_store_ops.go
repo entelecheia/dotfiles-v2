@@ -301,19 +301,48 @@ func InboxManifestCounts(cfg *Config) (int, int, error) {
 }
 
 // SharedCount reports how many manual shared-exclude entries are configured,
-// counted in the form `shared list` shows (treeRel), so the two agree.
+// counted in the form `shared list` shows (treeRel), so the two agree. An
+// entry the cleaning drops counts by its stored text, as the list shows it
+// (#231).
 func SharedCount(cfg *Config) (int, error) {
 	localCfg, err := EditableLocalConfig(cfg)
 	if err != nil {
 		return 0, err
 	}
-	seen := map[string]bool{}
-	for _, e := range localCfg.SharedExcludes {
-		if rel := treeRel(strings.TrimSpace(e)); rel != "" {
-			seen[rel] = true
+	return len(StoredSharedEntries(localCfg.SharedExcludes)), nil
+}
+
+// StoredSharedEntries returns every stored shared entry once, in the form
+// `shared list` shows it: cleaned (treeRel) where the cleaning keeps it, the
+// stored text where it drops it (#231).
+func StoredSharedEntries(manual []string) []string {
+	var out []string
+	for _, e := range manual {
+		e = strings.TrimSpace(e)
+		if rel := treeRel(e); rel != "" {
+			e = rel
+		}
+		if !slices.Contains(out, e) {
+			out = append(out, e)
 		}
 	}
-	return len(seen), nil
+	sort.Strings(out)
+	return out
+}
+
+// DroppedSharedEntries returns the stored shared entries that name no path
+// under the workspace (blank, an absolute path, one outside the tree), which
+// ScanShared and both filter sides ignore. `shared list` shows them so they
+// can be removed by their stored text (#231).
+func DroppedSharedEntries(manual []string) []string {
+	var out []string
+	for _, e := range manual {
+		if e = strings.TrimSpace(e); treeRel(e) == "" && !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SharedAdd appends the given paths to the manual shared-excludes list,
@@ -359,6 +388,13 @@ func SharedRemove(cfg *Config, args []string) ([]string, error) {
 	current := append([]string(nil), localCfg.SharedExcludes...)
 
 	for _, raw := range args {
+		// An entry the cleaning drops is removed by the stored text `shared
+		// list` shows for it.
+		if dropped := strings.TrimSpace(raw); slices.Contains(DroppedSharedEntries(current), dropped) {
+			current = slices.DeleteFunc(current, func(e string) bool { return strings.TrimSpace(e) == dropped })
+			removed = append(removed, dropped)
+			continue
+		}
 		rel, err := RelativizeForMirror(raw, mirror)
 		if err != nil {
 			return nil, err

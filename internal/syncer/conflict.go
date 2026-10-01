@@ -1,10 +1,13 @@
 package syncer
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -53,6 +56,29 @@ func (c *ConflictDir) PushBackupRel() string {
 // leftovers move into.
 func (c *ConflictDir) LeftoverBackupRel() string {
 	return filepath.Join(conflictsDirName, c.Timestamp, backupSubFromMirror)
+}
+
+// refuseUnsafeBackupDir checks the components of a workspace backup directory
+// that already exist. rsync's --backup-dir and the Go backup copy both follow a
+// symlinked .sync-conflicts, which would carry the backup out of the workspace
+// (#231). A component that does not exist yet is left for the writer to
+// create, so a run that backs nothing up leaves no empty directory.
+func refuseUnsafeBackupDir(root, rel string) error {
+	dir := root
+	for _, part := range strings.Split(filepath.Clean(rel), string(filepath.Separator)) {
+		dir = filepath.Join(dir, part)
+		info, err := os.Lstat(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("unsafe backup directory %s: not a plain directory", dir)
+		}
+	}
+	return nil
 }
 
 // PullLocalBackupRel returns the backup path for a pull that overwrites a
@@ -144,9 +170,13 @@ func conflictDirSize(dir string) int64 {
 
 // ListConflicts enumerates timestamped backup directories under
 // <treeRoot>/.sync-conflicts/, sorted oldest-first. Returns an empty
-// slice (not error) if the conflicts root doesn't exist.
+// slice (not error) if the conflicts root doesn't exist. A symlinked root is
+// refused, so a prune never deletes directories outside the tree (#231).
 func ListConflicts(treeRoot string) ([]ConflictEntry, error) {
 	root := filepath.Join(treeRoot, conflictsDirName)
+	if err := refuseUnsafeBackupDir(treeRoot, conflictsDirName); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {

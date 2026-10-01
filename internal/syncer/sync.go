@@ -8,6 +8,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -735,8 +736,9 @@ func Sync(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 
 // FetchResult reports what Fetch did per requested path.
 type FetchResult struct {
-	Fetched []string // relpaths handed to rsync
-	Missing []string // relpaths absent on the target (local targets only)
+	Fetched  []string // relpaths handed to rsync
+	Missing  []string // relpaths absent on the target (local targets only)
+	Excluded []string // relpaths a filter layer keeps out (submodules, .git, secrets, excludes, shared)
 }
 
 // Fetch restores specific files or directories from the target into the
@@ -755,7 +757,10 @@ type FetchResult struct {
 //
 // Paths missing on a local target are reported in Missing and skipped
 // rather than failing the run. SSH targets cannot be pre-checked; rsync
-// reports missing sources itself.
+// reports missing sources itself. A path a filter layer keeps out is
+// reported in Excluded, not Fetched, by the Go twin of the layers above
+// (#231). An absolute path is read relative to the workspace when it lies
+// under it.
 func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string, dryRun bool) (*FetchResult, error) {
 	if !dryRun {
 		if err := ensureLogDir(cfg.LogFile); err != nil {
@@ -769,11 +774,27 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 	}
 	res := &FetchResult{}
 	mirrorRoot := strings.TrimRight(cfg.MirrorPath, "/")
+	localRoot := strings.TrimRight(cfg.LocalPath, "/")
+	// The rsync chain below has no include-mode layers or peer worktree
+	// layer, so its Go twin is the exclude-mode filter.
+	fcfg := *cfg
+	fcfg.FilterMode = FilterModeExclude
+	fcfg.WorktreeExcludes = nil
+	filter, err := newSyncFilter(&fcfg, mirrorRoot)
+	if err != nil {
+		return res, fmt.Errorf("fetch: loading filters: %w", err)
+	}
 	var entries []fetchEntry
 	for _, rel := range rels {
 		// The canonical form both filter sides use (#228): "notes//a.pdf"
 		// fetches notes/a.pdf; a path outside the workspace is refused.
-		norm := treeRel(rel)
+		path := rel
+		if filepath.IsAbs(path) {
+			if r, err := filepath.Rel(localRoot, path); err == nil {
+				path = r
+			}
+		}
+		norm := treeRel(filepath.ToSlash(path))
 		if norm == "" {
 			if normalizeRel(rel) != "" {
 				return res, fmt.Errorf("fetch: %q is not a path below the workspace root (give it relative to the root)", rel)
@@ -790,6 +811,10 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 			e.isDir = info.IsDir()
 			e.known = true
 		}
+		if fetchEntryExcluded(filter, e) {
+			res.Excluded = append(res.Excluded, norm)
+			continue
+		}
 		entries = append(entries, e)
 		res.Fetched = append(res.Fetched, norm)
 	}
@@ -798,6 +823,9 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 	}
 
 	conflict := NewConflictDir()
+	if err := refuseUnsafeBackupDir(strings.TrimRight(cfg.LocalPath, "/"), conflict.PullBackupRel()); err != nil {
+		return res, fmt.Errorf("fetch: %w", err)
+	}
 	args := []string{
 		"-a",
 		"--human-readable",
@@ -832,6 +860,30 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 		return res, err
 	}
 	return res, nil
+}
+
+// fetchEntryExcluded reports whether a filter layer keeps a requested path out
+// of a fetch. An SSH path of unknown shape goes to rsync in both its directory
+// and its file form (fetchScopeArgs), so it is excluded only when both forms
+// are: an allow parent-dir include opens a directory, not a file.
+func fetchEntryExcluded(f *syncFilter, e fetchEntry) bool {
+	if !e.known {
+		return fetchExcluded(f, e.rel, false) && fetchExcluded(f, e.rel, true)
+	}
+	return fetchExcluded(f, e.rel, e.isDir)
+}
+
+// fetchExcluded reports whether a filter layer keeps rel out of a fetch. rsync
+// never visits a path below a directory a layer excludes, so the parents are
+// checked first, as its traversal does.
+func fetchExcluded(f *syncFilter, rel string, isDir bool) bool {
+	parts := strings.Split(rel, "/")
+	for i := 1; i < len(parts); i++ {
+		if f.shouldSkip("", strings.Join(parts[:i], "/"), true) {
+			return true
+		}
+	}
+	return f.shouldSkip("", rel, isDir)
 }
 
 // fetchEntry is one requested fetch path with its target-side shape.
@@ -903,6 +955,11 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 	}
 	conflict := NewConflictDir()
 	args := pullArgs(cfg, conflict, rf, dryRun)
+	if slices.Contains(args, "--backup") {
+		if err := refuseUnsafeBackupDir(strings.TrimRight(cfg.LocalPath, "/"), conflict.PullBackupRel()); err != nil {
+			return fmt.Errorf("pull: %w", err)
+		}
+	}
 	fmt.Fprintf(cfg.out(), "  Pull: %s → %s\n", cfg.Target.RsyncDest(), cfg.LocalPath)
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
 		return err

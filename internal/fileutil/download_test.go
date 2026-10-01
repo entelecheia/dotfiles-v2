@@ -16,6 +16,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -484,8 +486,8 @@ func TestExtractTarGz_ArchiveLimits(t *testing.T) {
 		max  int64
 		want bool
 	}{
-		{"entry exact", 16777216, DefaultArchiveLimits.MaxEntryBytes, true},
-		{"entry boundary plus one", 16777217, DefaultArchiveLimits.MaxEntryBytes, false},
+		{"entry exact", 67108864, DefaultArchiveLimits.MaxEntryBytes, true},
+		{"entry boundary plus one", 67108865, DefaultArchiveLimits.MaxEntryBytes, false},
 		{"total exact", 402653184, DefaultArchiveLimits.MaxTotalExtractedBytes, true},
 		{"total boundary plus one", 402653185, DefaultArchiveLimits.MaxTotalExtractedBytes, false},
 		{"ratio exact", 8, DefaultArchiveLimits.MaxExpansionRatio, true},
@@ -534,7 +536,7 @@ func TestExtractTarGz_ArchiveLimits(t *testing.T) {
 }
 
 func TestExtractZip_ArchiveLimits(t *testing.T) {
-	if DefaultArchiveLimits.MaxEntries != 4096 || DefaultArchiveLimits.MaxCompressedBytes != 201326592 || DefaultArchiveLimits.MaxEntryBytes != 16777216 {
+	if DefaultArchiveLimits.MaxEntries != 4096 || DefaultArchiveLimits.MaxCompressedBytes != 201326592 || DefaultArchiveLimits.MaxEntryBytes != 67108864 {
 		t.Fatalf("unexpected production limits: %+v", DefaultArchiveLimits)
 	}
 	limits := DefaultArchiveLimits
@@ -571,14 +573,18 @@ func TestDownloadArchive_CompressedLimit(t *testing.T) {
 
 func TestArchiveLimits_MeasuredSupportedArtifacts(t *testing.T) {
 	artifacts := map[string]struct{ compressed, extracted, largestEntry, entries int64 }{
-		"FiraCode":                 {compressed: 28602426, extracted: 164000000, entries: 500},
-		"JetBrainsMono":            {compressed: 133975870, extracted: 243185440, entries: 98},
-		"Hack":                     {compressed: 18694868, extracted: 145000000, entries: 700},
-		"dot-darwin-amd64-v2.69.2": {compressed: 5766495, extracted: 14817700, largestEntry: 14734288, entries: 3},
-		"dot-darwin-arm64-v2.69.2": {compressed: 5355772, extracted: 13822278, largestEntry: 13738866, entries: 3},
-		"dot-linux-amd64-v2.69.2":  {compressed: 5646768, extracted: 14448268, largestEntry: 14364856, entries: 3},
-		"dot-linux-arm64-v2.69.2":  {compressed: 5135535, extracted: 13452940, largestEntry: 13369528, entries: 3},
-		"oh-my-zsh-146461f":        {compressed: 3340957, extracted: 7126554, entries: 1492},
+		"FiraCode":                  {compressed: 28602426, extracted: 164000000, entries: 500},
+		"JetBrainsMono":             {compressed: 133975870, extracted: 243185440, entries: 98},
+		"Hack":                      {compressed: 18694868, extracted: 145000000, entries: 700},
+		"dot-darwin-amd64-v2.69.2":  {compressed: 5766495, extracted: 14817700, largestEntry: 14734288, entries: 3},
+		"dot-darwin-arm64-v2.69.2":  {compressed: 5355772, extracted: 13822278, largestEntry: 13738866, entries: 3},
+		"dot-linux-amd64-v2.69.2":   {compressed: 5646768, extracted: 14448268, largestEntry: 14364856, entries: 3},
+		"dot-linux-arm64-v2.69.2":   {compressed: 5135535, extracted: 13452940, largestEntry: 13369528, entries: 3},
+		"dot-darwin-amd64-v2.70.29": {compressed: 8517776, extracted: 21268555, largestEntry: 21228656, entries: 3},
+		"dot-darwin-arm64-v2.70.29": {compressed: 8035139, extracted: 20067421, largestEntry: 20027522, entries: 3},
+		"dot-linux-amd64-v2.70.29":  {compressed: 8410888, extracted: 20860051, largestEntry: 20820152, entries: 3},
+		"dot-linux-arm64-v2.70.29":  {compressed: 7773002, extracted: 19569811, largestEntry: 19529912, entries: 3},
+		"oh-my-zsh-146461f":         {compressed: 3340957, extracted: 7126554, entries: 1492},
 	}
 	for name, artifact := range artifacts {
 		t.Run(name, func(t *testing.T) {
@@ -589,6 +595,37 @@ func TestArchiveLimits_MeasuredSupportedArtifacts(t *testing.T) {
 				t.Fatalf("largest entry %d exceeds per-entry limit %d", artifact.largestEntry, DefaultArchiveLimits.MaxEntryBytes)
 			}
 		})
+	}
+}
+
+// The release build runs this on every binary it built (.goreleaser.yaml post
+// hook): a binary the updater could not extract fails the release before
+// anything is published (#231).
+func TestReleaseBinaryFitsArchiveLimits(t *testing.T) {
+	path := os.Getenv("DOT_RELEASE_BINARY")
+	if path == "" {
+		t.Skip("DOT_RELEASE_BINARY is set by the release build")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > DefaultArchiveLimits.MaxEntryBytes {
+		t.Fatalf("%s is %d bytes; dot update extracts at most %d per entry (raise DefaultArchiveLimits.MaxEntryBytes)", path, info.Size(), DefaultArchiveLimits.MaxEntryBytes)
+	}
+}
+
+// The release hook names the size check by function name; a rename that left
+// the hook behind would make go test run nothing and pass (#231).
+func TestReleaseHookRunsTheSizeCheck(t *testing.T) {
+	body, err := os.ReadFile("../../.goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := runtime.FuncForPC(reflect.ValueOf(TestReleaseBinaryFitsArchiveLimits).Pointer()).Name()
+	name = name[strings.LastIndex(name, ".")+1:]
+	if !strings.Contains(string(body), "-run ^"+name+"$") || !strings.Contains(string(body), "DOT_RELEASE_BINARY={{ .Path }}") {
+		t.Errorf(".goreleaser.yaml does not run %s on each built binary (DOT_RELEASE_BINARY={{ .Path }})", name)
 	}
 }
 

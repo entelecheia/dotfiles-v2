@@ -40,6 +40,8 @@ Use this when Homebrew isn't available or you want the bootstrap to install it f
 - **Linux**: Installs Linuxbrew for consistent package management
 - Downloads the `dot` binary and configures PATH
 
+Updating from v2.70.29 or earlier: `dot update` in those versions refuses a release binary over 16 MiB, which every current release is (#231). Run the curl installer above once; from then on `dot update` works again. A Homebrew install upgrades with `brew upgrade dotfiles` and is unaffected.
+
 ### Setup
 
 ```bash

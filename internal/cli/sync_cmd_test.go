@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"charm.land/huh/v2"
+	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
@@ -305,5 +306,39 @@ func TestDeclinedOnAbort(t *testing.T) {
 	}
 	if ok, err := declinedOnAbort(true, nil); !ok || err != nil {
 		t.Errorf("a yes = %v, %v", ok, err)
+	}
+}
+
+// Ctrl-C at either push prompt is a decline, not a failed push (#224, #231).
+func TestConfirmSync_CtrlCDeclinesBothPushPrompts(t *testing.T) {
+	prev := syncPrompt
+	t.Cleanup(func() { syncPrompt = prev })
+	syncPrompt = func(string, bool) (bool, error) { return false, huh.ErrUserAborted }
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("yes", false, "")
+	confirm := confirmSync(cmd)
+	for _, kind := range []syncer.ConfirmKind{syncer.ConfirmPushSSH, syncer.ConfirmPushPlan} {
+		if ok, err := confirm(syncer.ConfirmRequest{Kind: kind}); ok || err != nil {
+			t.Errorf("Ctrl-C at push prompt %d = %v, %v; want a decline", kind, ok, err)
+		}
+	}
+}
+
+// On an SSH target the stored shared entries are listed as inactive, in the
+// form and number SharedCount uses, so the list agrees with `shared clear`.
+func TestPrintInactiveShared_ListsStoredEntriesOnce(t *testing.T) {
+	var out bytes.Buffer
+	stored := []string{"team//ops", "team/ops", "/x", "  "}
+	if err := printInactiveShared(&Printer{Out: &out, Err: &out}, stored, "peer:/work/"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"inactive for peer:/work/", `"team/ops"`, `"/x"`, `""`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %s:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "\n  \""); n != len(syncer.StoredSharedEntries(stored)) {
+		t.Errorf("listed %d entries, want %d:\n%s", n, len(syncer.StoredSharedEntries(stored)), got)
 	}
 }

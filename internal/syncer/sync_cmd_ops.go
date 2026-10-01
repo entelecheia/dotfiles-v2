@@ -31,6 +31,7 @@ const (
 	SyncEventPartialTransfer                      // rsync moved some but not all; Err carries it
 	SyncEventPruneSummary                         // Candidates/Reclaimed carry the prune totals
 	SyncEventLeftoversMoved                       // Candidates mirror leftovers moved into Path
+	SyncEventFetchExcluded                        // Path: a requested path a filter layer keeps out
 )
 
 // SyncEvent is one step outcome. Only the fields its kind documents are set.

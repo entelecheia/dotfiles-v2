@@ -111,6 +111,41 @@ func TestRefuseSharedDriveMirror_AllowsMyDrive(t *testing.T) {
 	}
 }
 
+// A stored entry that cannot be one filter line fails the run closed instead
+// of injecting a second rule, and the error names the way out (#228, #231).
+func TestMaterializeRuntimeExcludesFile_RefusesALineSeparator(t *testing.T) {
+	_, err := MaterializeRuntimeExcludesFile(t.TempDir(), []SharedEntry{{RelPath: "team\nops", Reason: SharedManual}})
+	if err == nil || !strings.Contains(err.Error(), "line separator") || !strings.Contains(err.Error(), "dot sync shared clear") {
+		t.Errorf("MaterializeRuntimeExcludesFile = %v, want a refusal naming the way out", err)
+	}
+}
+
+// RelativizeForMirror refuses what cannot be a shared entry and stores the
+// cleaned form of the rest.
+func TestRelativizeForMirror_Refusals(t *testing.T) {
+	mirror := t.TempDir()
+	for raw, want := range map[string]string{
+		"":        "empty path",
+		".":       "mirror root",
+		"./":      "mirror root",
+		"a/..":    "mirror root",
+		mirror:    "mirror root",
+		"../x":    "escapes mirror root",
+		"a/../..": "escapes mirror root",
+		"/etc":    "escapes mirror root",
+		"a\nb":    "cannot be a shared exclude",
+	} {
+		if _, err := RelativizeForMirror(raw, mirror); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("RelativizeForMirror(%q) = %v, want %q", raw, err, want)
+		}
+	}
+	for raw, want := range map[string]string{"a/../b": "b", "team//ops": "team/ops", filepath.Join(mirror, "team/ops"): "team/ops"} {
+		if got, err := RelativizeForMirror(raw, mirror); err != nil || got != want {
+			t.Errorf("RelativizeForMirror(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+}
+
 func TestMaterializeRuntimeExcludesFile_IncludesSharedEntries(t *testing.T) {
 	tmp := t.TempDir()
 	path, err := MaterializeRuntimeExcludesFile(tmp, []SharedEntry{

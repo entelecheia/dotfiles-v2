@@ -392,18 +392,23 @@ func ValidatePeerBaselineLocalTypes(cfg *Config, baseline map[string]Fingerprint
 //
 // The include layer names the materialized runtime file, never the canonical
 // store path: under a preview that file lives in a temp directory and the
-// store path may not exist at all.
+// store path may not exist at all. The submodule and shared layers sit where
+// commonArgs puts them, so the remote listing agrees with the Go inventory
+// and the transfer (#231).
 func PeerFilterArgs(cfg *Config, rf runtimeFilters) []string {
 	if cfg == nil {
 		return nil
 	}
 	args := append([]string{}, alwaysExcludeArgs()...)
+	if rf.SubmodulesDyn != "" {
+		args = append(args, "--exclude-from="+rf.SubmodulesDyn)
+	}
 	args = append(args, peerVolatileExcludeArgs(cfg)...)
 	if rf.WorktreesDyn != "" {
 		args = append(args, "--exclude-from="+rf.WorktreesDyn)
 	}
 	args = append(args, secretsFilterArgs(cfg.AllowPatterns)...)
-	for _, f := range []string{cfg.ExcludesFile, cfg.IgnoreFile} {
+	for _, f := range []string{cfg.ExcludesFile, cfg.IgnoreFile, rf.SharedDyn} {
 		if f != "" {
 			args = append(args, "--exclude-from="+f)
 		}
