@@ -132,7 +132,8 @@ func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
 	rels = slices.DeleteFunc(slices.Clone(rels), func(rel string) bool {
 		// The workspace has it now: a rename undone during the push, or the
 		// same name in another Unicode form the plan's byte match missed.
-		if _, err := os.Lstat(filepath.Join(local, rel)); err == nil {
+		// Only a path proven absent moves; an unreadable one stays.
+		if _, err := os.Lstat(filepath.Join(local, rel)); !errors.Is(err, fs.ErrNotExist) {
 			return true
 		}
 		_, ok := baseline[rel]
@@ -185,7 +186,7 @@ func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
 			delete(baseline, rel)
 		}
 		if err := SaveBaselineManifest(cfg.LocalPaths.BaselineFile, baseline); err != nil && moveErr == nil {
-			moveErr = fmt.Errorf("saving baseline: %w", err)
+			moveErr = fmt.Errorf("saving baseline after moving %d mirror leftover(s) into %s: %w", moved, backup, err)
 		}
 	}
 	return backup, moved, moveErr

@@ -438,7 +438,9 @@ func refreshBaseline(cfg *Config, mode FingerprintMode, written map[string]bool)
 			// its copy must match the entry too. Without delete propagation an
 			// entry whose local twin is gone drops, as for any other file.
 			localAbs := filepath.Join(local, rel)
-			if _, err := os.Lstat(localAbs); err == nil {
+			if _, err := os.Lstat(localAbs); !os.IsNotExist(err) {
+				// Present, or unreadable: carried only if its copy matches
+				// too, so an unreadable twin drops the entry, never reads as gone.
 				carryProvenEntry(entries, previous, rel, absPath, localAbs)
 			} else if cfg.Propagation.Delete {
 				carryProvenEntry(entries, previous, rel, absPath)

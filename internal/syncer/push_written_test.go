@@ -690,6 +690,107 @@ func TestMoveMirrorLeftovers_RefusesASymlinkedBackupDir(t *testing.T) {
 	}
 }
 
+// Only a workspace path proven absent counts as gone: an unreadable twin keeps
+// its leftover in the mirror, and the refresh drops its entry rather than
+// carrying it as the proof of a rename (#225).
+func TestMoveMirrorLeftovers_LeavesAnUnreadableWorkspaceTwin(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 directory")
+	}
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("x./f.md", "f")
+	f.seedBaseline("x./f.md", "f", f.writeMirror("x./f.md", "f"))
+	dir := filepath.Join(f.local, "x.")
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, moved, err := MoveMirrorLeftovers(f.cfg, []string{"x./f.md"}); err != nil || moved != 0 {
+		t.Fatalf("MoveMirrorLeftovers = %d, %v; want nothing moved", moved, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "x./f.md")); err != nil {
+		t.Errorf("the leftover of an unreadable workspace twin left the mirror: %v", err)
+	}
+	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
+		t.Fatalf("RefreshBaseline: %v", err)
+	}
+	if baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile); baseline["x./f.md"] != (Fingerprint{}) {
+		t.Errorf("the refresh carried an unreadable twin's entry: %+v", baseline["x./f.md"])
+	}
+}
+
+// Exactly max_delete leftovers move; one more stops the move before it starts.
+func TestMoveMirrorLeftovers_MovesUpToMaxDelete(t *testing.T) {
+	f := newIntakeFixture(t)
+	for _, rel := range []string{"a./1.md", "a./2.md"} {
+		f.seedBaseline(rel, "x", f.writeMirror(rel, "x"))
+	}
+	f.cfg.MaxDelete = 1
+	if _, moved, err := MoveMirrorLeftovers(f.cfg, []string{"a./1.md", "a./2.md"}); err == nil || moved != 0 {
+		t.Fatalf("two leftovers over max_delete 1: moved %d, err %v", moved, err)
+	}
+	if _, moved, err := MoveMirrorLeftovers(f.cfg, []string{"a./1.md"}); err != nil || moved != 1 {
+		t.Fatalf("one leftover at max_delete 1: moved %d, err %v", moved, err)
+	}
+}
+
+// A baseline save that fails after the move still names where the moved
+// leftovers went.
+func TestMoveMirrorLeftovers_ASaveFailureNamesTheBackup(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	f := newIntakeFixture(t)
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	store := filepath.Dir(f.cfg.LocalPaths.BaselineFile)
+	if err := os.Chmod(f.cfg.LocalPaths.BaselineFile, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(store, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(store, 0o755)
+		_ = os.Chmod(f.cfg.LocalPaths.BaselineFile, 0o644)
+	})
+	dir, moved, err := MoveMirrorLeftovers(f.cfg, []string{"old./c.md"})
+	if err == nil || moved != 1 || !strings.Contains(err.Error(), dir) {
+		t.Fatalf("MoveMirrorLeftovers = %q, %d, %v; want one moved and an error naming the backup", dir, moved, err)
+	}
+}
+
+// A planned deletion the workspace restored before rsync built its list is
+// sent, not deleted, and the push still completes (#224).
+func TestPushCommand_ADeletionRestoredBeforeTheRunIsNotUnapplied(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/keep.md", "keep")
+	f.writeLocal("notes/back.md", "back")
+	clean := PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}
+	if _, err := PushCommand(context.Background(), clean); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	restored := filepath.Join(f.local, "notes/back.md")
+	if err := os.Remove(restored); err != nil {
+		t.Fatal(err)
+	}
+	real, _ := osexec.LookPath("rsync")
+	script := filepath.Join(t.TempDir(), "rsync")
+	body := "#!/bin/sh\n[ \"$1\" = --version ] || printf back > \"" + restored + "\"\nexec \"" + real + "\" \"$@\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.RsyncPath = script
+	if _, err := PushCommand(context.Background(), clean); err != nil {
+		t.Fatalf("push 2: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "notes/back.md")); err != nil {
+		t.Errorf("the restored file is not in the mirror: %v", err)
+	}
+}
+
 // Two leftovers one filesystem folds together would map to one backup path;
 // the move stops instead of replacing the first backup.
 func TestMoveMirrorLeftovers_NeverReplacesABackup(t *testing.T) {
