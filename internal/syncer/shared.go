@@ -118,12 +118,18 @@ func MaterializeRuntimeExcludesFile(configDir string, entries []SharedEntry) (st
 		// Trailing slash makes it match a directory specifically. An entry
 		// names a literal path (`dot sync shared add <path>`), so it is
 		// escaped, and the Go filter matches it literally too (#228).
+		// `/path/**` excludes everything below even when an earlier allow
+		// parent-dir include lets rsync descend into the folder, as the Go
+		// filter's prefix match does.
 		pattern, err := literalRsyncPattern(rel)
 		if err != nil {
-			return "", fmt.Errorf("shared exclude %q: %w", e.RelPath, err)
+			// `shared remove` refuses such a path too, so name the way out.
+			return "", fmt.Errorf("shared exclude %q: %w (drop it from shared_excludes in the sync config, or run `dot sync shared clear`)", e.RelPath, err)
 		}
+		prefix, _ := literalRsyncPrefix(rel) // fails only where literalRsyncPattern did
 		fmt.Fprintf(&b, "/%s\n", pattern)
 		fmt.Fprintf(&b, "/%s/\n", pattern)
+		fmt.Fprintf(&b, "/%s/**\n", prefix)
 	}
 	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
 		return "", fmt.Errorf("writing shared excludes %q: %w", path, err)

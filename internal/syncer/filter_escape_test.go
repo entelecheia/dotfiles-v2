@@ -178,6 +178,58 @@ func TestPush_HandEditedSharedEntriesAreCleaned(t *testing.T) {
 	}
 }
 
+// Real rsync, the whole filter chain: the push writes exactly the plan's
+// creates and moves nothing. A shared folder stays out even where an allow
+// re-include lets rsync descend into it, through a parent dir (team/ops) or
+// the folder itself (lab), and only the allowed file goes in (#228).
+func TestPush_PlanMatchesRsyncThroughTheFilterChain(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.cfg.SharedExcludes = []string{"team/ops", "lab", "team [x]"}
+	f.cfg.AllowPatterns = []string{"/team/ops/.env", "/lab/"}
+	for _, rel := range []string{
+		"team/ops/.env", "team/ops/w.pdf", "team/ops/sub/d.pdf",
+		"lab/w.pdf", "team [x]/w.pdf", "team x/k.pdf",
+		"[x] a.md", "a*b.md", "what?.md", `back\slash.md`, "keep.md",
+	} {
+		f.writeLocal(rel, "ours")
+	}
+	for _, rel := range []string{"team/ops/m.pdf", "lab/m.pdf", "team [x]/m.pdf"} {
+		f.writeMirror(rel, "theirs")
+	}
+	mirrorFiles := func() []string {
+		var out []string
+		_ = filepath.WalkDir(f.mirror, func(path string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				rel, _ := filepath.Rel(f.mirror, path)
+				out = append(out, filepath.ToSlash(rel))
+			}
+			return err
+		})
+		slices.Sort(out)
+		return out
+	}
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Updates)+len(plan.Deletes)+len(plan.Conflicts) > 0 {
+		t.Errorf("the plan touches the mirror's own files: Updates=%v Deletes=%v Conflicts=%v", plan.Updates, plan.Deletes, plan.Conflicts)
+	}
+	before := mirrorFiles()
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	want := slices.Sorted(slices.Values(append(slices.Clone(before), plan.Creates...)))
+	if got := mirrorFiles(); !slices.Equal(got, want) {
+		t.Errorf("mirror after push = %v\nwant mirror before + plan creates = %v", got, want)
+	}
+	if !slices.Contains(plan.Creates, "team/ops/.env") || slices.Contains(plan.Creates, "team/ops/w.pdf") || slices.Contains(plan.Creates, "lab/w.pdf") {
+		t.Errorf("Creates = %v, want team/ops/.env and nothing else under a shared entry", plan.Creates)
+	}
+}
+
 // A tracked name that cannot be one filter line is left out of both sides,
 // so the plan never lists a create rsync will not send (#228).
 func TestPlanPush_TrackedNameWithALineSeparatorIsNotPlanned(t *testing.T) {
@@ -229,7 +281,7 @@ func TestFetch_RequestedNamesWithRsyncWildcardsAreLiteral(t *testing.T) {
 	// A path outside the workspace is refused, and the result still names
 	// what the run had resolved before it.
 	res, err = Fetch(context.Background(), f.runner, f.cfg, []string{"notes/gone.pdf", "../outside"}, false)
-	if err == nil || !strings.Contains(err.Error(), `"../outside" is not under the workspace`) || res == nil || !slices.Equal(res.Missing, []string{"notes/gone.pdf"}) {
+	if err == nil || !strings.Contains(err.Error(), `"../outside" is not a path below the workspace root`) || res == nil || !slices.Equal(res.Missing, []string{"notes/gone.pdf"}) {
 		t.Errorf("Fetch outside the workspace = %+v, %v", res, err)
 	}
 }

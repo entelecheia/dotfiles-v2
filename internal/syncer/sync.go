@@ -776,7 +776,7 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 		norm := treeRel(rel)
 		if norm == "" {
 			if normalizeRel(rel) != "" {
-				return res, fmt.Errorf("fetch: %q is not under the workspace", rel)
+				return res, fmt.Errorf("fetch: %q is not a path below the workspace root (give it relative to the root)", rel)
 			}
 			continue
 		}
