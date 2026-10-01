@@ -462,3 +462,32 @@ func TestSyncTargetOnThePeerProfileKeepsOwnerAndEpoch(t *testing.T) {
 		t.Fatalf("store = %+v", got)
 	}
 }
+
+// A refusal before the engine runs (here a missing mirror) is recorded like a
+// refused plan, so `dot sync status` shows it; a dry-run records nothing.
+func TestSyncPushCLI_RecordsAPreflightRefusal(t *testing.T) {
+	if _, err := osexec.LookPath("rsync"); err != nil {
+		t.Skip("rsync not installed; gsync preflight would refuse to run")
+	}
+	f := newSyncCLIFixture(t)
+	if err := os.RemoveAll(f.mirror); err != nil {
+		t.Fatal(err)
+	}
+	paths := syncer.ResolveLocalPaths(f.local + "/")
+	if _, errOut, err := runDotForTest("gsync", "push", "--mode=clean", "--dry-run"); err != nil {
+		t.Fatalf("push --dry-run: %v\nstderr=%s", err, errOut)
+	}
+	if st, _ := syncer.LoadLocalState(paths); st != nil && st.LastPushError != "" {
+		t.Fatalf("a dry-run recorded %q", st.LastPushError)
+	}
+	if _, errOut, err := runDotForTest("gsync", "push", "--mode=clean"); err != nil {
+		t.Fatalf("push: %v\nstderr=%s", err, errOut)
+	}
+	st, err := syncer.LoadLocalState(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "push refused: Mirror path missing: "; !strings.HasPrefix(st.LastPushError, want) {
+		t.Errorf("LastPushError = %q, want prefix %q", st.LastPushError, want)
+	}
+}

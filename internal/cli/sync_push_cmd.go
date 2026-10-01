@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -70,9 +71,12 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 	p := printerFrom(cmd)
 
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
 	// Refuse before touching anything: a second writer on one target is the
 	// failure this guard exists for, and it is cheap to detect up front.
 	if err := syncer.CheckOwner(cfg); err != nil {
+		recordPushRefusal(cfg, err, dryRun)
 		return err
 	}
 
@@ -85,10 +89,12 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 		cfg.Propagation = policy
 	}
 
-	if !syncPreflight(p, cfg, bs.Runner) {
+	if block := syncPreflight(p, cfg, bs.Runner); block != nil {
+		if block.Kind != syncer.PreflightPaused { // paused is meant to stop pushes
+			recordPushRefusal(cfg, errors.New(block.Reason()), dryRun)
+		}
 		return nil
 	}
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	mode, err := gdriveSyncModeFrom(cmd)
 	if err != nil {
 		return err
@@ -122,6 +128,14 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	case syncer.PushPlanned:
 	}
 	return nil
+}
+
+// recordPushRefusal stores a refusal that stopped a real push before the
+// engine ran, so `dot sync status` shows it like a refused plan (#224).
+func recordPushRefusal(cfg *syncer.Config, why error, dryRun bool) {
+	if !dryRun {
+		_ = syncer.RecordPushRefusal(cfg, fmt.Errorf("push refused: %w", why))
+	}
 }
 
 func printPushPlan(p *Printer, plan *syncer.PushPlan) {

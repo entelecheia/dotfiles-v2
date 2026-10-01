@@ -103,6 +103,23 @@ type PreflightBlock struct {
 	Err  error
 }
 
+// Reason is the line a command prints for the block.
+func (b *PreflightBlock) Reason() string {
+	switch b.Kind {
+	case PreflightRsyncMissing:
+		return "rsync not installed. Install via: brew install rsync"
+	case PreflightLocalMissing:
+		return "Local path missing: " + b.Path
+	case PreflightSSHUnreachable:
+		return fmt.Sprintf("SSH target unreachable: %v", b.Err)
+	case PreflightMirrorMissing:
+		return "Mirror path missing: " + b.Path
+	case PreflightPaused:
+		return "sync is paused. Run `dot sync resume` to activate."
+	}
+	return "preflight refused"
+}
+
 // Preflight validates that sync can proceed. A nil return means it can.
 //
 // The caller decides where this sits relative to its other guards: the order

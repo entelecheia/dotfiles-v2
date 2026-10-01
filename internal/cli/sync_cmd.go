@@ -168,24 +168,12 @@ func syncBootstrapOptions(cmd *cobra.Command, readOnly bool) syncer.BootstrapOpt
 // refusal when it may not. Where this sits among each handler's other guards
 // is what fixes that command's error precedence, so the call stays in cli even
 // though syncer.Preflight does the classifying.
-func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) bool {
+func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) *syncer.PreflightBlock {
 	block := syncer.Preflight(runner, cfg)
-	if block == nil {
-		return true
+	if block != nil {
+		p.Line("%s", block.Reason())
 	}
-	switch block.Kind {
-	case syncer.PreflightRsyncMissing:
-		p.Line("rsync not installed. Install via: brew install rsync")
-	case syncer.PreflightLocalMissing:
-		p.Line("Local path missing: %s", block.Path)
-	case syncer.PreflightSSHUnreachable:
-		p.Line("SSH target unreachable: %v", block.Err)
-	case syncer.PreflightMirrorMissing:
-		p.Line("Mirror path missing: %s", block.Path)
-	case syncer.PreflightPaused:
-		p.Line("sync is paused. Run `dot sync resume` to activate.")
-	}
-	return false
+	return block
 }
 
 // syncRender carries what the shared event renderer needs from the invoking

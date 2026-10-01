@@ -43,7 +43,7 @@ func runSyncPull(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	p := printerFrom(cmd)
-	if !syncPreflight(p, cfg, bs.Runner) {
+	if syncPreflight(p, cfg, bs.Runner) != nil {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -108,7 +108,7 @@ func runSyncIntake(cmd *cobra.Command, _ []string) error {
 	}
 	cfg := bs.Config
 	p := printerFrom(cmd)
-	if !syncPreflight(p, cfg, bs.Runner) {
+	if syncPreflight(p, cfg, bs.Runner) != nil {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -238,7 +238,7 @@ func runSyncFetch(cmd *cobra.Command, args []string) error {
 	}
 	cfg := bs.Config
 	p := printerFrom(cmd)
-	if !syncPreflight(p, cfg, bs.Runner) {
+	if syncPreflight(p, cfg, bs.Runner) != nil {
 		return nil
 	}
 	dryRun, _ := cmd.Flags().GetBool("dry-run")

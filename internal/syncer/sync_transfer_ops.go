@@ -55,12 +55,17 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 		return &PushCommandResult{Outcome: PushLockBusy, LockErr: lockErr}, nil
 	}
 	defer release()
+	// Whether this run completed is decided here, once, from how it returned.
+	partial := false
 	if !opts.DryRun {
 		defer func() {
-			if res != nil && res.Outcome == PushAborted {
-				return
+			switch {
+			case res != nil && res.Outcome == PushAborted:
+				return // an operator decline is not an attempt
+			case res == nil && err == nil:
+				return // a panic: the run neither completed nor failed
 			}
-			if recErr := recordPushAttempt(cfg, err); recErr != nil && err == nil {
+			if recErr := recordPushAttempt(cfg, err, partial); recErr != nil && err == nil {
 				err = fmt.Errorf("state update: %w", recErr)
 			}
 		}()
@@ -89,7 +94,9 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 				return &PushCommandResult{Outcome: PushAborted}, nil
 			}
 		}
-		pushErr := downgradePartial(opts.Progress, Push(ctx, runner, cfg, opts.DryRun))
+		raw := Push(ctx, runner, cfg, opts.DryRun)
+		partial = IsPartialTransfer(raw)
+		pushErr := downgradePartial(opts.Progress, raw)
 		RecordResult(state, cfg, "push", pushErr, opts.DryRun)
 		if pushErr != nil {
 			return nil, fmt.Errorf("push failed: %w", pushErr)
@@ -124,7 +131,9 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 			return &PushCommandResult{Outcome: PushAborted}, nil
 		}
 	}
-	pushErr := downgradePartial(opts.Progress, Push(ctx, runner, cfg, false))
+	raw := Push(ctx, runner, cfg, false)
+	partial = IsPartialTransfer(raw)
+	pushErr := downgradePartial(opts.Progress, raw)
 	if pushErr == nil {
 		pushErr = unappliedDeletes(cfg, plan.Deletes)
 	}
@@ -166,11 +175,19 @@ func unappliedDeletes(cfg *Config, deletes []string) error {
 	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s; rsync 3.x skips deletions after an I/O error, and openrsync deletes nothing with --backup (replace it with rsync 3.x)", len(left), left[0])
 }
 
-// recordPushAttempt notes how a real push run ended in the profile state: a
-// completed run stamps last_push and clears the error, a refused or failed one
-// keeps its first line and the time the failing streak began. last_push is set
-// here, after the post-push checks, so a run they fail never counts as a push.
-func recordPushAttempt(cfg *Config, runErr error) error {
+// RecordPushRefusal records a push the CLI refused before PushCommand ran (an
+// owner mismatch, a preflight block), so status shows it like any refusal.
+func RecordPushRefusal(cfg *Config, why error) error {
+	return recordPushAttempt(cfg, why, false)
+}
+
+// recordPushAttempt notes how a real push run ended in the profile state. A
+// refused or failed run keeps its first line and the time the failing streak
+// began. Any other run clears the error, and only a run that transferred
+// everything stamps last_push: a partial transfer skipped files, so a push that
+// keeps skipping them goes stale in status (#224). It runs after the post-push
+// checks, so a run they fail never counts as a push.
+func recordPushAttempt(cfg *Config, runErr error, partial bool) error {
 	if cfg.LocalPaths == nil {
 		return nil
 	}
@@ -178,7 +195,9 @@ func recordPushAttempt(cfg *Config, runErr error) error {
 	return UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
 		s.LastPushAttempt = now
 		if runErr == nil {
-			s.LastPush = now
+			if !partial {
+				s.LastPush = now
+			}
 			s.LastPushError, s.LastPushErrorSince = "", time.Time{}
 			return
 		}

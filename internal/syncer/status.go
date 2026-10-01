@@ -154,15 +154,24 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 
 // PushStalled reports why pushes look stuck, or "" when they do not: the last
 // push run failed, or the push scheduler is on and no push completed within
-// three intervals (#224). The stale check is skipped while paused (pushes are
-// meant to stop) or while a run holds the lock (a long push is still going).
+// three intervals, or none ever did although runs were attempted (#224). The
+// stale check is skipped while paused (pushes are meant to stop) or while a
+// run holds the lock (a long push is still going).
 func (s *Status) PushStalled(now time.Time) string {
 	if s.LastPushError != "" {
 		return fmt.Sprintf("pushes failing since %s: %s",
 			s.LastPushErrorSince.Local().Format("2006-01-02 15:04"), s.LastPushError)
 	}
-	if s.Interval > 0 && s.SchedulerState == SchedulerRunning && !s.Paused && !s.LockHeld && !s.LastPush.IsZero() &&
-		now.Sub(s.LastPush) > 3*time.Duration(s.Interval)*time.Second {
+	if s.Interval <= 0 || s.SchedulerState != SchedulerRunning || s.Paused || s.LockHeld {
+		return ""
+	}
+	if s.LastPush.IsZero() {
+		if !s.LastPushAttempt.IsZero() {
+			return "no push has completed yet; the runs so far skipped files"
+		}
+		return ""
+	}
+	if now.Sub(s.LastPush) > 3*time.Duration(s.Interval)*time.Second {
 		return fmt.Sprintf("no push completed for %s (interval %s)",
 			now.Sub(s.LastPush).Truncate(time.Minute), time.Duration(s.Interval)*time.Second)
 	}

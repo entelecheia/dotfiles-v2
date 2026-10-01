@@ -180,6 +180,8 @@ func TestStatus_PushStalled(t *testing.T) {
 		{"stale but scheduler off", Status{Interval: 300, SchedulerState: SchedulerNotInstalled, LastPush: now.Add(-49 * time.Hour)}, ""},
 		{"stale but paused", Status{Interval: 300, SchedulerState: SchedulerRunning, Paused: true, LastPush: now.Add(-49 * time.Hour)}, ""},
 		{"stale while a run holds the lock", Status{Interval: 300, SchedulerState: SchedulerRunning, LockHeld: true, LastPush: now.Add(-49 * time.Hour)}, ""},
+		{"never completed", Status{Interval: 300, SchedulerState: SchedulerRunning, LastPushAttempt: now.Add(-time.Minute)}, "no push has completed yet"},
+		{"never attempted", Status{Interval: 300, SchedulerState: SchedulerRunning}, ""},
 	} {
 		got := tc.st.PushStalled(now)
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
@@ -446,5 +448,84 @@ func TestPushCommand_LeavesALeftoverEditedDuringThePush(t *testing.T) {
 	}
 	if _, err := os.Stat(leftover); err != nil || moved {
 		t.Errorf("the edited leftover left the mirror (moved=%v, err=%v)", moved, err)
+	}
+}
+
+// A partial transfer skipped files: the run clears the error but is not a
+// completed push, so a push that keeps skipping files goes stale (#224).
+func TestPushCommand_APartialTransferIsNotACompletedPush(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.writeLocal("notes/keep.md", "keep")
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("push 1: %v", err)
+	}
+	before, _ := LoadLocalState(f.cfg.LocalPaths)
+	if err := UpdateLocalState(f.cfg.LocalPaths, func(s *LocalState) { s.LastPushError = "push refused: earlier" }); err != nil {
+		t.Fatal(err)
+	}
+	f.writeLocal("notes/new.md", "new")
+	f.cfg.RsyncPath = writeRsyncThen(t, "exit 23")
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("partial push: %v", err)
+	}
+	st, _ := LoadLocalState(f.cfg.LocalPaths)
+	if !st.LastPush.Equal(before.LastPush) || st.LastPushError != "" || !st.LastPushAttempt.After(before.LastPush) {
+		t.Errorf("state after a partial transfer = %+v; want last_push kept, the error cleared, the attempt stamped", st)
+	}
+}
+
+// A panic inside the run (a renderer, the plan code) neither completes nor
+// fails the push, so the recorder leaves the state alone.
+func TestPushCommand_APanicRecordsNothing(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.writeLocal("notes/new.md", "new")
+	if err := UpdateLocalState(f.cfg.LocalPaths, func(s *LocalState) { s.LastPushError = "push refused: earlier" }); err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = PushCommand(context.Background(), PushOptions{
+			Config: f.cfg, Runner: f.runner, Mode: ModeClean,
+			Progress: func(e SyncEvent) {
+				if e.Kind == SyncEventPushPlanReady {
+					panic("renderer")
+				}
+			},
+		})
+	}()
+	st, _ := LoadLocalState(f.cfg.LocalPaths)
+	if st.LastPushError != "push refused: earlier" || !st.LastPush.IsZero() || !st.LastPushAttempt.IsZero() {
+		t.Errorf("state after a panic = %+v; want it untouched", st)
+	}
+}
+
+// rsync killed by a signal before it could exit has no status, so the
+// refresh is skipped; rsync that catches a signal exits 20 and is finalized.
+func TestPush_ARunKilledBeforeRsyncExitedSkipsTheRefresh(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.writeLocal("notes/new.md", "new")
+	f.cfg.RsyncPath = writeRsyncThen(t, "kill -9 $$")
+	if err := Push(context.Background(), f.runner, f.cfg, false); err == nil {
+		t.Fatal("Push succeeded although rsync was killed")
+	}
+	baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if _, ok := baseline["notes/new.md"]; ok {
+		t.Error("a killed run refreshed the baseline")
+	}
+}
+
+// Two leftovers one filesystem folds together would map to one backup path;
+// the move stops instead of replacing the first backup.
+func TestMoveMirrorLeftovers_NeverReplacesABackup(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	dir, moved, err := MoveMirrorLeftovers(f.cfg, []string{"old./c.md", "old./c.md"})
+	if err == nil || !strings.Contains(err.Error(), "already holds a backup") || moved != 1 {
+		t.Fatalf("MoveMirrorLeftovers = %q, %d, %v; want one moved and a refusal", dir, moved, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(dir, "old./c.md")); err != nil || string(body) != "c" {
+		t.Errorf("first backup = %q, %v", body, err)
 	}
 }
