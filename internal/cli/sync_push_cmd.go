@@ -90,7 +90,7 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 
 	if block := syncPreflight(p, cfg, bs.Runner); block != nil {
-		if block.Kind != syncer.PreflightPaused { // paused is meant to stop pushes
+		if !cfg.Paused { // a pause is meant to stop pushes, whatever else blocks them
 			recordPushRefusal(cfg, errors.New(block.Reason()), dryRun)
 		}
 		return nil

@@ -22,11 +22,12 @@ func TestWrittenFiles(t *testing.T) {
 		"*deleting old.txt",
 		"@@written >f+++++++ \\#355\\#225\\#234\\#352\\#270\\#200.txt", // openrsync escapes non-ASCII
 		"@@written >f+++++++++ lit\\#134#123.md",                       // a literal \#123 in the name
+		"@@written >f+++++++++ raw/\xed\\#225\\#234\xea\xb8\\#200.txt", // openrsync under UTF-8 escapes some bytes
 		"Number of files: 3 (reg: 2, dir: 1)",
 		"",
 	}, "\n")
 	got := writtenFiles(out)
-	want := []string{"notes/new.md", "notes/changed file.md", "한글.txt", `lit\#123.md`}
+	want := []string{"notes/new.md", "notes/changed file.md", "한글.txt", `lit\#123.md`, "raw/한글.txt"}
 	if len(got) != len(want) {
 		t.Errorf("writtenFiles = %v, want %v", got, want)
 	}
@@ -451,8 +452,8 @@ func TestPushCommand_LeavesALeftoverEditedDuringThePush(t *testing.T) {
 	}
 }
 
-// A partial transfer skipped files: the run clears the error but is not a
-// completed push, so a push that keeps skipping files goes stale (#224).
+// A run that skipped files (exit 23) clears the error but is not a completed
+// push, so a push that keeps skipping files goes stale (#224).
 func TestPushCommand_APartialTransferIsNotACompletedPush(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
@@ -472,6 +473,16 @@ func TestPushCommand_APartialTransferIsNotACompletedPush(t *testing.T) {
 	st, _ := LoadLocalState(f.cfg.LocalPaths)
 	if !st.LastPush.Equal(before.LastPush) || st.LastPushError != "" || !st.LastPushAttempt.After(before.LastPush) {
 		t.Errorf("state after a partial transfer = %+v; want last_push kept, the error cleared, the attempt stamped", st)
+	}
+
+	// Exit 24 only means files vanished before transfer: the run is complete.
+	f.writeLocal("notes/newer.md", "newer")
+	f.cfg.RsyncPath = writeRsyncThen(t, "exit 24")
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("push with vanished files: %v", err)
+	}
+	if st, _ = LoadLocalState(f.cfg.LocalPaths); !st.LastPush.After(before.LastPush) {
+		t.Errorf("an exit-24 run did not stamp last_push: %+v", st)
 	}
 }
 
@@ -514,6 +525,14 @@ func TestPush_ARunKilledBeforeRsyncExitedSkipsTheRefresh(t *testing.T) {
 	if _, ok := baseline["notes/new.md"]; ok {
 		t.Error("a killed run refreshed the baseline")
 	}
+
+	f.cfg.RsyncPath = writeRsyncThen(t, "exit 20")
+	if err := Push(context.Background(), f.runner, f.cfg, false); err == nil {
+		t.Fatal("Push succeeded although rsync exited 20")
+	}
+	if baseline, _ = LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile); baseline["notes/new.md"].Size == 0 {
+		t.Error("an rsync that caught a signal (exit 20) did not refresh the baseline")
+	}
 }
 
 // Two leftovers one filesystem folds together would map to one backup path;
@@ -527,5 +546,23 @@ func TestMoveMirrorLeftovers_NeverReplacesABackup(t *testing.T) {
 	}
 	if body, err := os.ReadFile(filepath.Join(dir, "old./c.md")); err != nil || string(body) != "c" {
 		t.Errorf("first backup = %q, %v", body, err)
+	}
+}
+
+// A failed rsync stays the recorded reason when the refresh after it fails too
+// (here the mirror vanished mid-run).
+func TestPushCommand_AFailedRunKeepsItsReasonWhenTheRefreshFails(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.writeLocal("notes/new.md", "new")
+	f.cfg.RsyncPath = filepath.Join(t.TempDir(), "rsync")
+	script := "#!/bin/sh\nrm -rf \"" + f.mirror + "\"\necho 'rsync: connection unexpectedly closed' >&2\nexit 12\n"
+	if err := os.WriteFile(f.cfg.RsyncPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeForce}); err == nil {
+		t.Fatal("PushCommand succeeded with a failing rsync")
+	}
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); st.LastPushError != "push failed: rsync exit 12: rsync: connection unexpectedly closed" {
+		t.Errorf("LastPushError = %q, want the rsync failure", st.LastPushError)
 	}
 }

@@ -490,4 +490,17 @@ func TestSyncPushCLI_RecordsAPreflightRefusal(t *testing.T) {
 	if want := "push refused: Mirror path missing: "; !strings.HasPrefix(st.LastPushError, want) {
 		t.Errorf("LastPushError = %q, want prefix %q", st.LastPushError, want)
 	}
+	// A paused profile records nothing, whatever else blocks the push.
+	if err := syncer.UpdateLocalState(paths, func(s *syncer.LocalState) { s.LastPushError = "" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, err := runDotForTest("gsync", "pause"); err != nil {
+		t.Fatalf("pause: %v\nstderr=%s", err, errOut)
+	}
+	if _, errOut, err := runDotForTest("gsync", "push", "--mode=clean"); err != nil {
+		t.Fatalf("paused push: %v\nstderr=%s", err, errOut)
+	}
+	if st, _ = syncer.LoadLocalState(paths); st.LastPushError != "" {
+		t.Errorf("a paused profile recorded %q", st.LastPushError)
+	}
 }

@@ -709,6 +709,10 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 		partialPeerPolicy := cfg.Target.IsSSH() && cfg.Profile == PeerProfile && !fullPeerPush
 		if !partialPeerPolicy {
 			if err := refreshBaseline(cfg, FingerprintFast, writtenFiles(out)); err != nil {
+				if rsyncErr != nil && !IsPartialTransfer(rsyncErr) {
+					// The failed run is the reason to report, not its aftermath.
+					return fmt.Errorf("%w; baseline refresh: %v", rsyncErr, err)
+				}
 				return fmt.Errorf("baseline refresh: %w", err)
 			}
 			if fullPeerPush {

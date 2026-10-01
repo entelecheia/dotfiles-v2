@@ -95,7 +95,7 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 			}
 		}
 		raw := Push(ctx, runner, cfg, opts.DryRun)
-		partial = IsPartialTransfer(raw)
+		partial = skippedFiles(raw)
 		pushErr := downgradePartial(opts.Progress, raw)
 		RecordResult(state, cfg, "push", pushErr, opts.DryRun)
 		if pushErr != nil {
@@ -132,7 +132,7 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 		}
 	}
 	raw := Push(ctx, runner, cfg, false)
-	partial = IsPartialTransfer(raw)
+	partial = skippedFiles(raw)
 	pushErr := downgradePartial(opts.Progress, raw)
 	if pushErr == nil {
 		pushErr = unappliedDeletes(cfg, plan.Deletes)
@@ -175,6 +175,14 @@ func unappliedDeletes(cfg *Config, deletes []string) error {
 	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s; rsync 3.x skips deletions after an I/O error, and openrsync deletes nothing with --backup (replace it with rsync 3.x)", len(left), left[0])
 }
 
+// skippedFiles reports an rsync run that left files out because of an error
+// (exit 23). Exit 24 only means files vanished before transfer: every file
+// still in the workspace was sent, so that run is complete.
+func skippedFiles(err error) bool {
+	var p *PartialTransferError
+	return errors.As(err, &p) && p.Code == 23
+}
+
 // RecordPushRefusal records a push the CLI refused before PushCommand ran (an
 // owner mismatch, a preflight block), so status shows it like any refusal.
 func RecordPushRefusal(cfg *Config, why error) error {
@@ -183,10 +191,10 @@ func RecordPushRefusal(cfg *Config, why error) error {
 
 // recordPushAttempt notes how a real push run ended in the profile state. A
 // refused or failed run keeps its first line and the time the failing streak
-// began. Any other run clears the error, and only a run that transferred
-// everything stamps last_push: a partial transfer skipped files, so a push that
-// keeps skipping them goes stale in status (#224). It runs after the post-push
-// checks, so a run they fail never counts as a push.
+// began. Any other run clears the error, and only a run that sent every file
+// still in the workspace stamps last_push: one that skipped files (exit 23)
+// does not, so a push that keeps skipping them goes stale in status (#224). It
+// runs after the post-push checks, so a run they fail never counts as a push.
 func recordPushAttempt(cfg *Config, runErr error, partial bool) error {
 	if cfg.LocalPaths == nil {
 		return nil
