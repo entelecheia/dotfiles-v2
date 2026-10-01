@@ -197,7 +197,7 @@ func TestUpgradeHomebrewBranches(t *testing.T) {
 		t.Skip("the Homebrew path refuses root")
 	}
 	t.Setenv("HOME", t.TempDir()) // no LaunchAgents to reload
-	h := homebrewDot{prefix: "/opt/homebrew", formula: "dotfiles"}
+	h := homebrewDot{prefix: t.TempDir(), formula: "dotfiles"}
 	const done = "dot version 2.0.0 (abc)\n"
 	for _, tc := range []struct {
 		name     string
@@ -293,7 +293,7 @@ func TestUpgradeHomebrewSignalDoesNotKillBrew(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var out bytes.Buffer
-	if err := upgradeHomebrew(ctx, &Printer{Out: &out, Err: &out}, homebrewDot{prefix: "/opt/homebrew", formula: "dotfiles"}, "1.0.0", "2.0.0", false); err != nil {
+	if err := upgradeHomebrew(ctx, &Printer{Out: &out, Err: &out}, homebrewDot{prefix: t.TempDir(), formula: "dotfiles"}, "1.0.0", "2.0.0", false); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range f.canceled {
@@ -370,11 +370,22 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 	kegDot := filepath.Join(h.prefix, "Cellar", "dotfiles", "2.0.0", "bin", "dot")
 	newKeg := filepath.Join(h.prefix, "Cellar", "dotfiles", "2.1.0", "bin", "dot")
 	linked := filepath.Join(h.prefix, "bin", "dot")
+	opt := filepath.Join(h.prefix, "opt", "dotfiles")
 	other := filepath.Join(root, "other", "dot")
-	link := func(target string) {
-		_ = os.Remove(linked)
-		if err := os.Symlink(target, linked); err != nil {
-			t.Fatal(err)
+	// link points bin/dot at the keg's binary and opt/dotfiles at the keg, as
+	// brew does; binOwner, when set, owns bin/dot instead (graphviz).
+	link := func(keg, binOwner string) {
+		for _, l := range []struct{ path, target string }{{linked, keg}, {opt, filepath.Dir(filepath.Dir(keg))}} {
+			if l.path == linked && binOwner != "" {
+				l.target = binOwner
+			}
+			_ = os.Remove(l.path)
+			if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(l.target, l.path); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	for _, f := range []string{kegDot, newKeg, other} {
@@ -384,9 +395,6 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 		if err := os.WriteFile(f, nil, 0o755); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := os.MkdirAll(filepath.Dir(linked), 0o755); err != nil {
-		t.Fatal(err)
 	}
 	home := filepath.Join(root, "home")
 	agents := filepath.Join(home, "Library", "LaunchAgents")
@@ -407,6 +415,7 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 		run           func(ctx context.Context, p *Printer) error
 		cancel        bool
 		relink        bool // brew upgrade links a new keg
+		binTaken      bool // another formula owns bin/dot; jobs run opt/dotfiles/bin/dot
 		upgradeFail   bool
 		bootstrapFail bool
 		stuck         bool // the job never leaves the domain after bootout
@@ -447,6 +456,18 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 			wantLine:    "Reloaded com.dotfiles.sync",
 		},
 		{
+			// bin/dot belongs to graphviz, so only the opt link moves.
+			name: "when another formula owns bin/dot",
+			run: func(ctx context.Context, p *Printer) error {
+				return upgradeHomebrew(ctx, p, h, "1.0.0", "2.0.0", false)
+			},
+			relink:   true,
+			binTaken: true,
+			attempts: 1,
+			wantErr:  "not 2.0.0 or newer",
+			wantLine: "Reloaded com.dotfiles.sync",
+		},
+		{
 			// A brew upgrade that failed without relinking changed nothing,
 			// so the healthy jobs keep running.
 			name: "after a failed brew upgrade that kept the link",
@@ -458,9 +479,13 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			link(kegDot)
+			binOwner, syncProgram := "", linked
+			if tc.binTaken {
+				binOwner, syncProgram = other, filepath.Join(opt, "bin", "dot")
+			}
+			link(kegDot, binOwner)
 			loaded := map[string]string{
-				"com.dotfiles.sync":   linked,
+				"com.dotfiles.sync":   syncProgram,
 				"com.dotfiles.broken": kegDot,
 				"com.dotfiles.other":  other,
 				// com.dotfiles.peer is not loaded, like a paused job
@@ -490,7 +515,7 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 				f.upgradeErr = errors.New("exit status 1")
 			}
 			if tc.relink {
-				f.onUpgrade = func() { link(newKeg) }
+				f.onUpgrade = func() { link(newKeg, binOwner) }
 			}
 			f.install(t)
 			ctx, cancel := context.WithCancel(context.Background())

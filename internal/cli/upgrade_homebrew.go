@@ -36,6 +36,11 @@ func homebrewDotFor(execPath string) (homebrewDot, bool) {
 
 func (h homebrewDot) brew() string { return filepath.Join(h.prefix, "bin", "brew") }
 
+// optDot is the formula's own link to its current keg. Unlike prefix/bin/dot,
+// which another formula (graphviz) can own, brew always points it at the
+// keg it installed.
+func (h homebrewDot) optDot() string { return filepath.Join(h.prefix, "opt", h.formula, "bin", "dot") }
+
 // upgradeRun runs a command for the Homebrew update path and returns its
 // stdout; show also streams the output to the terminal. Tests replace it and
 // upgradeAcquire to script brew and launchctl.
@@ -114,8 +119,7 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 			}
 		}
 	}
-	linked := filepath.Join(h.prefix, "bin", "dot")
-	before, _ := filepath.EvalSymlinks(linked)
+	before, _ := filepath.EvalSymlinks(h.optDot())
 	upgradeErr := brew("upgrade", info.FullName)
 	if upgradeErr == nil && !dryRun {
 		var installed string
@@ -123,20 +127,20 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 			p.Line("Upgraded: %s → %s (Homebrew)", current, installed)
 		}
 	}
-	// brew links each version from its own keg. Reload whenever the link
+	// brew installs each version in its own keg. Reload whenever the opt link
 	// moved, even when brew or the check failed afterwards, since the jobs then
 	// fail their next spawn; an unchanged link leaves healthy jobs running.
-	if after, _ := filepath.EvalSymlinks(linked); !dryRun && after == before {
+	if after, _ := filepath.EvalSymlinks(h.optDot()); !dryRun && after == before {
 		return upgradeErr
 	}
 	return errors.Join(upgradeErr, reloadDotLaunchAgents(work, p, h, dryRun))
 }
 
-// upgradedVersion reads `<prefix>/bin/dot --version` ("dot version X (commit)")
+// upgradedVersion reads `<prefix>/opt/<formula>/bin/dot --version` ("dot version X (commit)")
 // and accepts X at or above latest: a newer release can reach the tap between
 // the GitHub check and brew update.
 func upgradedVersion(ctx context.Context, h homebrewDot, latest string) (string, error) {
-	dot := filepath.Join(h.prefix, "bin", "dot")
+	dot := h.optDot()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out, err := upgradeRun(ctx, false, dot, "--version")
