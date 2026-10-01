@@ -110,10 +110,12 @@ func TestPush_SharedEntryWithRsyncWildcardsIsLiteral(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
 	f.cfg.Propagation.Delete = true
-	f.cfg.SharedExcludes = []string{"team [ops]"}
+	f.cfg.SharedExcludes = []string{"team [ops]", "x*y"}
 	f.writeLocal("team [ops]/w.pdf", "workspace")
 	f.writeMirror("team [ops]/m.pdf", "theirs")
 	f.writeLocal("team o/x.pdf", "ours")
+	f.writeLocal("x*y/in.pdf", "shared")
+	f.writeLocal("xZy/in.pdf", "ours")
 	plan, err := PlanPush(f.cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -123,8 +125,8 @@ func TestPush_SharedEntryWithRsyncWildcardsIsLiteral(t *testing.T) {
 			t.Errorf("the plan lists %s inside a shared folder", rel)
 		}
 	}
-	if !slices.Contains(plan.Creates, "team o/x.pdf") {
-		t.Errorf("the plan excludes a folder the wildcard would match: Creates = %v", plan.Creates)
+	if !slices.Contains(plan.Creates, "team o/x.pdf") || !slices.Contains(plan.Creates, "xZy/in.pdf") || slices.Contains(plan.Creates, "x*y/in.pdf") {
+		t.Errorf("the plan does not treat shared entries literally: Creates = %v", plan.Creates)
 	}
 	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
 		t.Fatalf("Push: %v", err)
@@ -135,8 +137,62 @@ func TestPush_SharedEntryWithRsyncWildcardsIsLiteral(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.mirror, "team [ops]/m.pdf")); err != nil {
 		t.Errorf("the push moved the shared folder's content: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(f.mirror, "team o/x.pdf")); err != nil {
-		t.Errorf("a folder the wildcard would match was excluded: %v", err)
+	for _, rel := range []string{"team o/x.pdf", "xZy/in.pdf"} {
+		if _, err := os.Stat(filepath.Join(f.mirror, rel)); err != nil {
+			t.Errorf("%s, which a wildcard would match, was excluded: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "x*y/in.pdf")); !os.IsNotExist(err) {
+		t.Errorf("the push wrote into the shared x*y folder (err=%v)", err)
+	}
+}
+
+// A hand-edited shared entry is cleaned where both sides read it, and one
+// that names nothing under the workspace is dropped, so no run fails on it.
+func TestPush_HandEditedSharedEntriesAreCleaned(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.SharedExcludes = []string{"team//ops", "/abs", "../outside", "./tools/x"}
+	f.writeLocal("team/ops/w.pdf", "shared")
+	f.writeLocal("tools/x/t.pdf", "shared")
+	f.writeLocal("notes/n.pdf", "ours")
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(plan.Creates, "notes/n.pdf") || slices.Contains(plan.Creates, "team/ops/w.pdf") || slices.Contains(plan.Creates, "tools/x/t.pdf") {
+		t.Errorf("Creates = %v, want notes/n.pdf and nothing under a shared entry", plan.Creates)
+	}
+	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	for _, rel := range []string{"team/ops/w.pdf", "tools/x/t.pdf"} {
+		if _, err := os.Stat(filepath.Join(f.mirror, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s was pushed past its shared entry (err=%v)", rel, err)
+		}
+	}
+}
+
+// A tracked name that cannot be one filter line is left out of both sides,
+// so the plan never lists a create rsync will not send (#228).
+func TestPlanPush_TrackedNameWithALineSeparatorIsNotPlanned(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.FilterMode = FilterModeInclude
+	f.cfg.IncludePatterns = []string{"*.pdf"}
+	if err := osexec.Command("git", "-C", f.local, "init", "-q").Run(); err != nil {
+		t.Skipf("git init unavailable: %v", err)
+	}
+	f.writeLocal("notes/a\nb.md", "x")
+	f.writeLocal("notes/ok.md", "x")
+	if err := osexec.Command("git", "-C", f.local, "add", "--", "notes/a\nb.md", "notes/ok.md").Run(); err != nil {
+		t.Skipf("git add unavailable: %v", err)
+	}
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(plan.Creates, []string{"notes/ok.md"}) {
+		t.Errorf("Creates = %q, want only notes/ok.md", plan.Creates)
 	}
 }
 
@@ -145,23 +201,25 @@ func TestPush_SharedEntryWithRsyncWildcardsIsLiteral(t *testing.T) {
 func TestFetch_RequestedNamesWithRsyncWildcardsAreLiteral(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
-	for _, rel := range []string{"notes/[x] a.pdf", "notes/a*b.pdf", "notes/aXb.pdf", `back\slash/in.pdf`} {
+	for _, rel := range []string{"notes/[x] a.pdf", "notes/a*b.pdf", "notes/aXb.pdf", "notes/what?.pdf", "notes/whatX.pdf", `back\slash/in.pdf`, "d[1]/in.pdf", "d1/in.pdf"} {
 		f.writeMirror(rel, rel)
 	}
-	res, err := Fetch(context.Background(), f.runner, f.cfg, []string{"notes/[x] a.pdf", "notes/a*b.pdf", `back\slash`}, false)
+	res, err := Fetch(context.Background(), f.runner, f.cfg, []string{"notes/[x] a.pdf", "notes/a*b.pdf", "notes/what?.pdf", `back\slash`, "d[1]"}, false)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
 	if len(res.Missing) != 0 {
 		t.Fatalf("Missing = %v", res.Missing)
 	}
-	for _, rel := range []string{"notes/[x] a.pdf", "notes/a*b.pdf", `back\slash/in.pdf`} {
+	for _, rel := range []string{"notes/[x] a.pdf", "notes/a*b.pdf", "notes/what?.pdf", `back\slash/in.pdf`, "d[1]/in.pdf"} {
 		if _, err := os.Stat(filepath.Join(f.local, rel)); err != nil {
 			t.Errorf("%s was not fetched: %v", rel, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(f.local, "notes/aXb.pdf")); !os.IsNotExist(err) {
-		t.Errorf("an unrequested name came through a wildcard (err=%v)", err)
+	for _, rel := range []string{"notes/aXb.pdf", "notes/whatX.pdf", "d1/in.pdf"} {
+		if _, err := os.Stat(filepath.Join(f.local, rel)); !os.IsNotExist(err) {
+			t.Errorf("unrequested %s came through a wildcard (err=%v)", rel, err)
+		}
 	}
 }
 
@@ -173,7 +231,7 @@ func TestGitSubmodulePathsCleansHandEditedPaths(t *testing.T) {
 		t.Skip("git not installed")
 	}
 	root := t.TempDir()
-	gitmodules := "[submodule \"a\"]\n\tpath = vendor//lib\n[submodule \"b\"]\n\tpath = ../outside\n[submodule \"c\"]\n\tpath = ./tools/x\n"
+	gitmodules := "[submodule \"a\"]\n\tpath = vendor//lib\n[submodule \"b\"]\n\tpath = ../outside\n[submodule \"c\"]\n\tpath = ./tools/x\n[submodule \"d\"]\n\tpath = /abs/lib\n"
 	if err := os.WriteFile(filepath.Join(root, ".gitmodules"), []byte(gitmodules), 0o644); err != nil {
 		t.Fatal(err)
 	}

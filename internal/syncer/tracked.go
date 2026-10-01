@@ -34,11 +34,8 @@ func gitSubmodulePaths(root string) []string {
 		if len(fields) < 2 {
 			continue
 		}
-		// git accepts a hand-edited path such as "vendor//lib"; both filter
-		// sides read the cleaned form, and a path outside the tree has
-		// nothing under the transfer root to exclude.
-		rel := normalizeRel(path.Clean(strings.Join(fields[1:], " ")))
-		if rel == "" || rel == ".." || strings.HasPrefix(rel, "../") || seen[rel] {
+		rel := treeRel(strings.Join(fields[1:], " "))
+		if rel == "" || seen[rel] {
 			continue
 		}
 		seen[rel] = true
@@ -46,6 +43,21 @@ func gitSubmodulePaths(root string) []string {
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+// treeRel cleans a configured path to the form both filter sides read: git
+// and `dot sync shared add` accept a hand-edited "vendor//lib" or "./tools/x".
+// It returns "" for a path that names nothing under the workspace root
+// (absolute, or outside it), which then has nothing to exclude (#228).
+func treeRel(raw string) string {
+	if path.IsAbs(raw) {
+		return ""
+	}
+	rel := normalizeRel(path.Clean(raw))
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return rel
 }
 
 // gitTrackedForSync returns the root repo's tracked relpaths, excluding

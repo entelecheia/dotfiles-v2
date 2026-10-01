@@ -93,6 +93,14 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 				}
 			}
 		}
+		// The include layer leaves out a name that cannot be one filter line
+		// (MaterializeTrackedIncludesFile), so the plan does not admit it
+		// through this layer either (#228).
+		for rel := range f.tracked {
+			if _, err := literalRsyncPattern(normalizeRel(rel)); err != nil {
+				delete(f.tracked, rel)
+			}
+		}
 	}
 
 	shared, err := ScanShared(strings.TrimRight(cfg.MirrorPath, "/"), cfg.SharedExcludes)

@@ -63,8 +63,10 @@ func ScanShared(root string, manual []string) ([]SharedEntry, error) {
 
 	entries := make(map[string]SharedEntry)
 
-	for _, rel := range manual {
-		rel = strings.TrimSpace(rel)
+	for _, raw := range manual {
+		// Both filter sides read the entries from here, so a hand-edited
+		// "team//ops" is cleaned once for both (#228).
+		rel := treeRel(strings.TrimSpace(raw))
 		if rel == "" {
 			continue
 		}
