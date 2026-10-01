@@ -771,8 +771,13 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 	mirrorRoot := strings.TrimRight(cfg.MirrorPath, "/")
 	var entries []fetchEntry
 	for _, rel := range rels {
-		norm := normalizeRel(rel)
+		// The canonical form both filter sides use (#228): "notes//a.pdf"
+		// fetches notes/a.pdf; a path outside the workspace is refused.
+		norm := treeRel(rel)
 		if norm == "" {
+			if normalizeRel(rel) != "" {
+				return res, fmt.Errorf("fetch: %q is not under the workspace", rel)
+			}
 			continue
 		}
 		e := fetchEntry{rel: norm}
@@ -814,7 +819,7 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 	}
 	scope, err := fetchScopeArgs(entries)
 	if err != nil {
-		return nil, fmt.Errorf("fetch: %w", err)
+		return res, fmt.Errorf("fetch: %w", err)
 	}
 	args = append(args, scope...)
 	if dryRun {
@@ -848,6 +853,10 @@ func fetchScopeArgs(entries []fetchEntry) ([]string, error) {
 	var args []string
 	seenDirs := map[string]bool{}
 	for _, e := range entries {
+		pattern, err := literalRsyncPattern(e.rel)
+		if err != nil {
+			return nil, fmt.Errorf("%q cannot be fetched: %w", e.rel, err)
+		}
 		segs := strings.Split(e.rel, "/")
 		for i := 1; i < len(segs); i++ {
 			dir := strings.Join(segs[:i], "/")
@@ -855,15 +864,11 @@ func fetchScopeArgs(entries []fetchEntry) ([]string, error) {
 				continue
 			}
 			seenDirs[dir] = true
-			pattern, err := literalRsyncPattern(dir)
+			dirPattern, err := literalRsyncPattern(dir)
 			if err != nil {
 				return nil, err
 			}
-			args = append(args, "--include=/"+pattern+"/")
-		}
-		pattern, err := literalRsyncPattern(e.rel)
-		if err != nil {
-			return nil, err
+			args = append(args, "--include=/"+dirPattern+"/")
 		}
 		if e.isDir || !e.known {
 			prefix, err := literalRsyncPrefix(e.rel)

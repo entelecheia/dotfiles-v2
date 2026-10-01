@@ -238,12 +238,12 @@ func prepareTombstoneSource(dir string, rels []string) (string, error) {
 
 func validateTombstoneRel(rel string) error {
 	if rel == "" || strings.ContainsRune(rel, 0) || filepath.IsAbs(rel) {
-		return fmt.Errorf("unsafe tombstone path %q", rel)
+		return fmt.Errorf("unsafe path %q", rel)
 	}
 	clean := filepath.Clean(filepath.FromSlash(rel))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) ||
 		filepath.ToSlash(clean) != filepath.ToSlash(rel) {
-		return fmt.Errorf("unsafe tombstone path %q", rel)
+		return fmt.Errorf("unsafe path %q (not a clean workspace-relative path)", rel)
 	}
 	return nil
 }

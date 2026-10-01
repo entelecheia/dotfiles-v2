@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -299,13 +300,20 @@ func InboxManifestCounts(cfg *Config) (int, int, error) {
 	return len(imports), len(tomb), nil
 }
 
-// SharedCount reports how many manual shared-exclude entries are configured.
+// SharedCount reports how many manual shared-exclude entries are configured,
+// counted in the form `shared list` shows (treeRel), so the two agree.
 func SharedCount(cfg *Config) (int, error) {
 	localCfg, err := EditableLocalConfig(cfg)
 	if err != nil {
 		return 0, err
 	}
-	return len(localCfg.SharedExcludes), nil
+	seen := map[string]bool{}
+	for _, e := range localCfg.SharedExcludes {
+		if rel := treeRel(strings.TrimSpace(e)); rel != "" {
+			seen[rel] = true
+		}
+	}
+	return len(seen), nil
 }
 
 // SharedAdd appends the given paths to the manual shared-excludes list,
@@ -358,7 +366,9 @@ func SharedRemove(cfg *Config, args []string) ([]string, error) {
 		next := current[:0]
 		gone := false
 		for _, e := range current {
-			if e == rel {
+			// A hand-edited entry ("team//ops") is removed by the form
+			// `shared list` shows for it.
+			if treeRel(strings.TrimSpace(e)) == rel {
 				gone = true
 				continue
 			}
@@ -393,9 +403,11 @@ func SharedClear(cfg *Config) error {
 }
 
 // RelativizeForMirror normalizes a user-supplied path so it lives under
-// mirror as a relative path. Absolute paths must be inside mirror.
-// Trailing slashes and "./" prefixes are stripped. Empty results,
-// "..", and parent escapes are rejected.
+// mirror as a relative path. Absolute paths must be inside mirror. The
+// result is the canonical form every shared-entry operation and both filter
+// sides use (treeRel: "team//ops" becomes "team/ops"). Empty results, the
+// mirror root, parent escapes and a path that cannot be one filter line are
+// rejected (#228).
 func RelativizeForMirror(raw, mirror string) (string, error) {
 	cleaned := strings.TrimSpace(raw)
 	if cleaned == "" {
@@ -412,17 +424,17 @@ func RelativizeForMirror(raw, mirror string) (string, error) {
 		}
 		cleaned = rel
 	}
-	cleaned = strings.TrimPrefix(cleaned, "./")
-	cleaned = strings.TrimSuffix(cleaned, "/")
-	if cleaned == "" || cleaned == "." {
-		return "", fmt.Errorf("path resolves to mirror root, refusing to exclude everything")
-	}
-	for _, seg := range strings.Split(cleaned, "/") {
-		if seg == ".." {
-			return "", fmt.Errorf("path %q escapes mirror root", raw)
+	rel := treeRel(filepath.ToSlash(cleaned))
+	if rel == "" {
+		if normalizeRel(path.Clean(filepath.ToSlash(cleaned))) == "" {
+			return "", fmt.Errorf("path resolves to mirror root, refusing to exclude everything")
 		}
+		return "", fmt.Errorf("path %q escapes mirror root", raw)
 	}
-	return cleaned, nil
+	if _, err := literalRsyncPattern(rel); err != nil {
+		return "", fmt.Errorf("path %q cannot be a shared exclude: %w", raw, err)
+	}
+	return rel, nil
 }
 
 // dedupSortedStrings returns a stable, sorted copy of in with duplicates
@@ -448,7 +460,7 @@ func dedupSortedStrings(in []string) []string {
 // this relative path.
 func containsSharedPath(haystack []string, needle string) bool {
 	for _, s := range haystack {
-		if s == needle {
+		if treeRel(strings.TrimSpace(s)) == needle {
 			return true
 		}
 	}

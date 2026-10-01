@@ -110,12 +110,15 @@ func TestPush_SharedEntryWithRsyncWildcardsIsLiteral(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
 	f.cfg.Propagation.Delete = true
-	f.cfg.SharedExcludes = []string{"team [ops]", "x*y"}
+	f.cfg.SharedExcludes = []string{"team [ops]", "x*y", "what?", `back\slash`}
 	f.writeLocal("team [ops]/w.pdf", "workspace")
 	f.writeMirror("team [ops]/m.pdf", "theirs")
 	f.writeLocal("team o/x.pdf", "ours")
 	f.writeLocal("x*y/in.pdf", "shared")
 	f.writeLocal("xZy/in.pdf", "ours")
+	f.writeLocal("what?/in.pdf", "shared")
+	f.writeLocal("whatX/in.pdf", "ours")
+	f.writeLocal(`back\slash/in.pdf`, "shared")
 	plan, err := PlanPush(f.cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -137,13 +140,15 @@ func TestPush_SharedEntryWithRsyncWildcardsIsLiteral(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.mirror, "team [ops]/m.pdf")); err != nil {
 		t.Errorf("the push moved the shared folder's content: %v", err)
 	}
-	for _, rel := range []string{"team o/x.pdf", "xZy/in.pdf"} {
+	for _, rel := range []string{"team o/x.pdf", "xZy/in.pdf", "whatX/in.pdf"} {
 		if _, err := os.Stat(filepath.Join(f.mirror, rel)); err != nil {
 			t.Errorf("%s, which a wildcard would match, was excluded: %v", rel, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(f.mirror, "x*y/in.pdf")); !os.IsNotExist(err) {
-		t.Errorf("the push wrote into the shared x*y folder (err=%v)", err)
+	for _, rel := range []string{"x*y/in.pdf", "what?/in.pdf", `back\slash/in.pdf`} {
+		if _, err := os.Stat(filepath.Join(f.mirror, rel)); !os.IsNotExist(err) {
+			t.Errorf("the push wrote %s into a shared folder (err=%v)", rel, err)
+		}
 	}
 }
 
@@ -204,7 +209,7 @@ func TestFetch_RequestedNamesWithRsyncWildcardsAreLiteral(t *testing.T) {
 	for _, rel := range []string{"notes/[x] a.pdf", "notes/a*b.pdf", "notes/aXb.pdf", "notes/what?.pdf", "notes/whatX.pdf", `back\slash/in.pdf`, "d[1]/in.pdf", "d1/in.pdf"} {
 		f.writeMirror(rel, rel)
 	}
-	res, err := Fetch(context.Background(), f.runner, f.cfg, []string{"notes/[x] a.pdf", "notes/a*b.pdf", "notes/what?.pdf", `back\slash`, "d[1]"}, false)
+	res, err := Fetch(context.Background(), f.runner, f.cfg, []string{"notes//[x] a.pdf", "notes/a*b.pdf", "notes/what?.pdf", `back\slash`, "./d[1]"}, false)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -220,6 +225,12 @@ func TestFetch_RequestedNamesWithRsyncWildcardsAreLiteral(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(f.local, rel)); !os.IsNotExist(err) {
 			t.Errorf("unrequested %s came through a wildcard (err=%v)", rel, err)
 		}
+	}
+	// A path outside the workspace is refused, and the result still names
+	// what the run had resolved before it.
+	res, err = Fetch(context.Background(), f.runner, f.cfg, []string{"notes/gone.pdf", "../outside"}, false)
+	if err == nil || !strings.Contains(err.Error(), `"../outside" is not under the workspace`) || res == nil || !slices.Equal(res.Missing, []string{"notes/gone.pdf"}) {
+		t.Errorf("Fetch outside the workspace = %+v, %v", res, err)
 	}
 }
 
@@ -241,5 +252,40 @@ func TestGitSubmodulePathsCleansHandEditedPaths(t *testing.T) {
 	}
 	if _, err := MaterializeSubmodulesDynFile(t.TempDir(), got); err != nil {
 		t.Fatalf("cleaned submodule paths were refused: %v", err)
+	}
+}
+
+// A shared entry has one form everywhere: add, remove, count, list and both
+// filter sides all use the cleaned path, so a hand-edited "team//ops" is
+// listed, counted and removed as "team/ops", and an entry that cannot be one
+// filter line is refused when it is added (#228).
+func TestSharedEntriesHaveOneFormEverywhere(t *testing.T) {
+	f := newIntakeFixture(t)
+	if err := SaveLocalConfig(f.cfg.LocalPaths, &LocalConfig{
+		Propagation:    DefaultPropagationPolicy(),
+		SharedExcludes: []string{"team//ops", "./team/ops"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := ScanShared(f.mirror, []string{"team//ops", "./team/ops"})
+	if len(entries) != 1 || entries[0].RelPath != "team/ops" {
+		t.Fatalf("ScanShared = %+v, want team/ops", entries)
+	}
+	added, err := SharedAdd(f.cfg, []string{"team/ops", ".//x"})
+	if err != nil || !slices.Equal(added, []string{"x"}) {
+		t.Fatalf("SharedAdd = %v, %v; want only x added", added, err)
+	}
+	if n, _ := SharedCount(f.cfg); n != 2 {
+		t.Errorf("SharedCount = %d, want 2", n)
+	}
+	removed, err := SharedRemove(f.cfg, []string{"team/ops"})
+	if err != nil || !slices.Equal(removed, []string{"team/ops"}) {
+		t.Fatalf("SharedRemove = %v, %v", removed, err)
+	}
+	if stored, _, _ := LoadLocalConfig(f.cfg.LocalPaths); !slices.Equal(stored.SharedExcludes, []string{"x"}) {
+		t.Errorf("stored entries = %q, want [x]", stored.SharedExcludes)
+	}
+	if _, err := SharedAdd(f.cfg, []string{"team\nops"}); err == nil || !strings.Contains(err.Error(), "cannot be a shared exclude") {
+		t.Errorf("SharedAdd with a line separator = %v, want a refusal", err)
 	}
 }
