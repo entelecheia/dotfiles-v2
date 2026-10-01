@@ -28,7 +28,12 @@ func newUpgradeCmd(currentVersion string) *cobra.Command {
 		Use:     "update",
 		Aliases: []string{"upgrade"},
 		Short:   "Update dot binary to latest version",
-		Long:    "Download and install the latest dot release from GitHub.",
+		Long: `Download and install the latest dot release from GitHub.
+
+A Homebrew install is upgraded through the brew that owns it instead: dot runs
+brew update when the tap lags the release, then brew upgrade, checks the new
+version and reloads the dot LaunchAgents that run it. A pinned formula is left
+alone. --check only reports the latest version.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpgrade(cmd, currentVersion)
 		},
@@ -43,19 +48,22 @@ type githubRelease struct {
 }
 
 func runUpgrade(cmd *cobra.Command, currentVersion string) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 	checkOnly, _ := cmd.Flags().GetBool("check")
 	p := printerFrom(cmd)
 
 	p.Line("Current version: %s", currentVersion)
 
 	var execPath string
+	var brew homebrewDot
+	var viaBrew bool
 	if !checkOnly {
 		// Resolve the install target before downloading anything: a binary inside
 		// a package manager's tree is not dot's to replace. On a Homebrew install
 		// EvalSymlinks resolves ~/.local/bin/dot → /opt/homebrew/bin/dot →
 		// Cellar/dotfiles/<ver>/bin/dot, and renaming over that file leaves the
-		// recorded brew version disagreeing with the bytes on disk (#233).
+		// recorded brew version disagreeing with the bytes on disk (#233), so
+		// brew upgrades it instead (#235).
 		var err error
 		execPath, err = os.Executable()
 		if err != nil {
@@ -65,9 +73,7 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		if err != nil {
 			return fmt.Errorf("resolving executable path: %w", err)
 		}
-		if manager, command := packageManagerUpgradeHint(execPath); manager != "" {
-			return fmt.Errorf("%s manages this dot binary (%s); upgrade it with `%s`; dot update changes nothing here", manager, execPath, command)
-		}
+		brew, viaBrew = homebrewDotFor(execPath)
 	}
 
 	latest, err := fetchLatestRelease(ctx)
@@ -98,6 +104,11 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		p.Line("\nUpdate available: %s → %s", currentClean, latestVersion)
 		p.Line("Run 'dot update' to install.")
 		return nil
+	}
+
+	if viaBrew {
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		return upgradeHomebrew(ctx, p, brew, currentClean, latestVersion, dryRun)
 	}
 
 	osName := runtime.GOOS
@@ -172,18 +183,6 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	p.Line("Upgraded: %s → %s", currentClean, latestVersion)
 	p.Line("Binary: %s", execPath)
 	return nil
-}
-
-// packageManagerUpgradeHint names the package manager that owns the resolved
-// executable and its upgrade command, or "" when the binary is a plain file
-// dot may replace itself. Homebrew always links prefix/bin/dot into the
-// Cellar, so the resolved path carries /Cellar/ on every prefix layout
-// (/opt/homebrew, /usr/local, linuxbrew) (#233).
-func packageManagerUpgradeHint(execPath string) (manager, command string) {
-	if strings.Contains(filepath.ToSlash(execPath), "/Cellar/") {
-		return "Homebrew", "brew upgrade dotfiles"
-	}
-	return "", ""
 }
 
 // downloadVerifiedArchive downloads the release archive and the release's
