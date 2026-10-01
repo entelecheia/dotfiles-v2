@@ -428,6 +428,18 @@ func refreshBaseline(cfg *Config, mode FingerprintMode, written map[string]bool)
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
+		if !remoteBaseline && UnsupportedPathName(rel) {
+			// A mirror push never sends these names (#131), so the mirror copy
+			// proves nothing about the workspace: keep only an entry an earlier
+			// push recorded, while the copy still matches it, and never
+			// fingerprint the copy anew, or a cloud edit would become the proof
+			// that moves it out as a leftover (#225). Without delete propagation
+			// an entry whose local twin is gone drops, as for any other file.
+			if _, err := os.Lstat(filepath.Join(local, rel)); err == nil || cfg.Propagation.Delete {
+				carryProvenEntry(entries, previous, rel, absPath)
+			}
+			return nil
+		}
 		if requireLocalTwin && !written[rel] {
 			localAbs := filepath.Join(local, rel)
 			localInfo, err := os.Lstat(localAbs)

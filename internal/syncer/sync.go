@@ -967,7 +967,8 @@ func unescapeRsyncName(name string) string {
 // rsyncExited reports whether rsync ran and exited with a status, so it may
 // have written files. A run that never started, or that a signal killed before
 // rsync could exit, has no status; rsync that catches SIGINT or SIGTERM exits
-// 20 and is finalized like any other exit.
+// 20 and is finalized like any other exit. When dot itself is interrupted it
+// cancels its context, which kills rsync, so that run skips the refresh.
 func rsyncExited(err error) bool {
 	var ee *osexec.ExitError
 	return errors.As(err, &ee) && ee.ExitCode() > 0

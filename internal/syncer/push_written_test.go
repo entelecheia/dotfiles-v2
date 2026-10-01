@@ -630,3 +630,81 @@ func TestPush_VerboseRecordsAWrittenFile(t *testing.T) {
 		t.Errorf("a verbose push did not record the frame it wrote: %v", baseline)
 	}
 }
+
+// A mirror push never sends an unsupported name, so the refresh must not take
+// a cloud edit of its mirror copy as proof: after the workspace renames the
+// folder, the edited copy is listed, not moved; an unchanged sibling the
+// baseline proves is still moved (#225).
+func TestPushCommand_ACloudEditOfAnUnsupportedNameIsNeverALeftover(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	for _, rel := range []string{"a./f.md", "a./g.md"} {
+		f.writeLocal(rel, "v1")
+		f.seedBaseline(rel, "v1", f.writeMirror(rel, "v1"))
+	}
+	f.writeMirror("a./f.md", "edited in the cloud, longer")
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("push with the cloud edit: %v", err)
+	}
+	baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	if fp, ok := baseline["a./f.md"]; ok {
+		t.Fatalf("the refresh recorded the cloud-edited copy as proof: %+v", fp)
+	}
+
+	// The workspace renames a./ to a/.
+	if err := os.Rename(filepath.Join(f.local, "a."), filepath.Join(f.local, "a")); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(plan.Leftovers, []string{"a./g.md"}) || !slices.Equal(plan.MirrorUnsupported, []string{"a./f.md"}) {
+		t.Fatalf("Leftovers = %v, MirrorUnsupported = %v", plan.Leftovers, plan.MirrorUnsupported)
+	}
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("push after the rename: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(f.mirror, "a./f.md")); err != nil || string(body) != "edited in the cloud, longer" {
+		t.Errorf("the cloud-edited copy left the mirror: %q, %v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "a./g.md")); !os.IsNotExist(err) {
+		t.Errorf("the proven leftover was not moved (err=%v)", err)
+	}
+}
+
+// Without delete propagation a leftover is listed, never moved, and an
+// operator decline records nothing (#225, #224).
+func TestPushCommand_LeftoversNeedDeletePropagationAndADeclineRecordsNothing(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = false
+	f.writeLocal("notes/keep.md", "keep")
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(plan.Leftovers, []string{"old./c.md"}) || plan.MoveLeftovers {
+		t.Fatalf("Leftovers = %v, MoveLeftovers = %v; want listed only", plan.Leftovers, plan.MoveLeftovers)
+	}
+
+	declined, err := PushCommand(context.Background(), PushOptions{
+		Config: f.cfg, Runner: f.runner, Mode: ModeManual,
+		Confirm: func(ConfirmRequest) (bool, error) { return false, nil },
+	})
+	if err != nil || declined.Outcome != PushAborted {
+		t.Fatalf("declined push = %+v, %v", declined, err)
+	}
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); !st.LastPushAttempt.IsZero() || !st.LastPush.IsZero() {
+		t.Errorf("an operator decline recorded state: %+v", st)
+	}
+
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("PushCommand: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "old./c.md")); err != nil {
+		t.Errorf("a leftover moved without delete propagation: %v", err)
+	}
+}
