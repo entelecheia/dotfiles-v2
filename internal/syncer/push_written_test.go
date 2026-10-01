@@ -168,6 +168,8 @@ func TestStatus_PushStalled(t *testing.T) {
 		{"failing", Status{LastPushError: "push refused: 719 conflict(s)", LastPushErrorSince: now.Add(-49 * time.Hour)}, "pushes failing since"},
 		{"stale", Status{Interval: 300, SchedulerState: SchedulerRunning, LastPush: now.Add(-16 * time.Minute)}, "no push completed for 16m0s"},
 		{"stale but scheduler off", Status{Interval: 300, SchedulerState: SchedulerNotInstalled, LastPush: now.Add(-49 * time.Hour)}, ""},
+		{"stale but paused", Status{Interval: 300, SchedulerState: SchedulerRunning, Paused: true, LastPush: now.Add(-49 * time.Hour)}, ""},
+		{"stale while a run holds the lock", Status{Interval: 300, SchedulerState: SchedulerRunning, LockHeld: true, LastPush: now.Add(-49 * time.Hour)}, ""},
 	} {
 		got := tc.st.PushStalled(now)
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
@@ -176,15 +178,57 @@ func TestStatus_PushStalled(t *testing.T) {
 	}
 }
 
+// mirrorAt moves the fixture's mirror to root/<rel>, so a test can place it
+// where a provider's folder would be.
+func (f *intakeFixture) mirrorAt(rel string) {
+	f.t.Helper()
+	f.mirror = filepath.Join(f.root, rel)
+	if err := os.MkdirAll(f.mirror, 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	f.cfg.MirrorPath = f.mirror + "/"
+	f.cfg.Target = Target{Kind: TargetLocal, Path: f.mirror + "/"}
+}
+
+func TestMirrorUnderDropbox(t *testing.T) {
+	root := t.TempDir()
+	for rel, want := range map[string]bool{
+		"Library/CloudStorage/Dropbox/work":                 true,
+		"Library/CloudStorage/Dropbox-Personal/work":        true,
+		"Users/me/Dropbox/work":                             true,
+		"home/me/Dropbox (Team)/work":                       true,
+		"Library/CloudStorage/GoogleDrive-me/My Drive/work": false,
+		"Library/CloudStorage/GoogleDrive-me/Dropbox/work":  false, // a folder named Dropbox inside Drive
+		"gdrive-workspace/work":                             false,
+	} {
+		dir := filepath.Join(root, rel)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := mirrorUnderDropbox(dir); got != want {
+			t.Errorf("mirrorUnderDropbox(%s) = %v, want %v", rel, got, want)
+		}
+	}
+	link := filepath.Join(root, "Dropbox-link")
+	if err := os.Symlink(filepath.Join(root, "Library/CloudStorage/Dropbox"), link); err != nil {
+		t.Fatal(err)
+	}
+	if !mirrorUnderDropbox(filepath.Join(link, "work")) {
+		t.Error("a symlink into CloudStorage/Dropbox is not resolved")
+	}
+}
+
 func TestPushCommand_MovesMirrorLeftoversOutOfTheMirror(t *testing.T) {
 	requireRsync(t)
 	f := newIntakeFixture(t)
+	f.mirrorAt("Library/CloudStorage/Dropbox/work")
 	f.cfg.Propagation.Delete = true
 	// The workspace renamed "notice./" to "notice/"; the mirror still has the
 	// old copy from before the name filter.
 	f.writeLocal("spoc/notice/a.pdf", "a")
 	f.writeMirror("spoc/notice./a.pdf", "a")
 	f.writeMirror("spoc/notice./.DS_Store", "finder")
+	f.writeMirror("old./sub/c.md", "c")
 	// A workspace name Dropbox cannot store stays excluded and its mirror
 	// copy is not touched.
 	f.writeLocal("keep./b.md", "b")
@@ -194,8 +238,8 @@ func TestPushCommand_MovesMirrorLeftoversOutOfTheMirror(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(plan.Leftovers, []string{"spoc/notice./a.pdf"}) || !slices.Equal(plan.Unsupported, []string{"keep./b.md"}) {
-		t.Fatalf("Leftovers = %v, Unsupported = %v", plan.Leftovers, plan.Unsupported)
+	if !slices.Equal(plan.Leftovers, []string{"old./sub/c.md", "spoc/notice./a.pdf"}) || !slices.Equal(plan.Unsupported, []string{"keep./b.md"}) || !plan.MoveLeftovers {
+		t.Fatalf("Leftovers = %v, Unsupported = %v, MoveLeftovers = %v", plan.Leftovers, plan.Unsupported, plan.MoveLeftovers)
 	}
 
 	var moved SyncEvent
@@ -210,13 +254,15 @@ func TestPushCommand_MovesMirrorLeftoversOutOfTheMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PushCommand: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(f.mirror, "spoc/notice.")); !os.IsNotExist(err) {
-		t.Errorf("old folder still in the mirror (err=%v)", err)
+	for _, gone := range []string{"spoc/notice.", "old."} {
+		if _, err := os.Stat(filepath.Join(f.mirror, gone)); !os.IsNotExist(err) {
+			t.Errorf("old folder %s still in the mirror (err=%v)", gone, err)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(f.mirror, "spoc/notice/a.pdf")); err != nil {
 		t.Errorf("renamed copy missing from the mirror: %v", err)
 	}
-	if moved.Candidates != 1 || !strings.HasPrefix(moved.Path, filepath.Join(f.local, ".sync-conflicts")) {
+	if moved.Candidates != 2 || !strings.HasPrefix(moved.Path, filepath.Join(f.local, ".sync-conflicts")) {
 		t.Fatalf("moved event = %+v", moved)
 	}
 	if body, err := os.ReadFile(filepath.Join(moved.Path, "spoc/notice./a.pdf")); err != nil || string(body) != "a" {
@@ -231,5 +277,30 @@ func TestPushCommand_MovesMirrorLeftoversOutOfTheMirror(t *testing.T) {
 	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err == nil ||
 		!strings.Contains(err.Error(), "exceed max_delete") {
 		t.Errorf("leftovers over max_delete: err = %v", err)
+	}
+}
+
+// Google Drive stores names ending in a period, so on a non-Dropbox mirror a
+// mirror-only "Acme Inc./" can be a collaborator's file: listed, never moved.
+func TestPushCommand_LeavesUnsupportedNamesOnANonDropboxMirror(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.mirrorAt("Library/CloudStorage/GoogleDrive-me/My Drive/work")
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/keep.md", "keep")
+	f.writeMirror("clients/Acme Inc./contract.pdf", "signed")
+
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.MoveLeftovers || !slices.Equal(plan.Leftovers, []string{"clients/Acme Inc./contract.pdf"}) {
+		t.Fatalf("MoveLeftovers = %v, Leftovers = %v", plan.MoveLeftovers, plan.Leftovers)
+	}
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("PushCommand: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "clients/Acme Inc./contract.pdf")); err != nil {
+		t.Errorf("a cloud file with a period-ending folder left the mirror: %v", err)
 	}
 }

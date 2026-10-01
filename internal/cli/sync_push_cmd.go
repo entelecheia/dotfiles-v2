@@ -156,13 +156,16 @@ func printPushPlan(p *Printer, plan *syncer.PushPlan) {
 		p.Line("  Run `dot sync names trim` to rename trailing-whitespace names; rename a name ending in a period by hand.")
 	}
 	if len(plan.Leftovers) > 0 {
-		p.Section(fmt.Sprintf("Mirror leftovers: %d", len(plan.Leftovers)))
+		p.Section(fmt.Sprintf("Mirror-only unsupported names: %d", len(plan.Leftovers)))
 		printPathList(p, plan.Leftovers)
-		p.Line("  Names Dropbox cannot store that exist only in the mirror (pushed before a rename or before the name filter).")
-		if plan.Propagation.Delete {
-			p.Line("  The push moves them into the workspace's .sync-conflicts/<ts>/from-mirror/.")
-		} else {
-			p.Line("  Delete propagation is off, so they stay; a push with delete moves them into .sync-conflicts/<ts>/from-mirror/.")
+		switch {
+		case plan.MoveLeftovers:
+			p.Line("  Dropbox cannot store these names, so they are leftovers (pushed before a rename or before the name filter).")
+			p.Line("  The push moves them into the workspace's .sync-conflicts/<ts>/from-mirror/; more than max_delete fails the run instead.")
+		case !plan.Propagation.Delete:
+			p.Line("  Delete propagation is off, so they are listed only.")
+		default:
+			p.Line("  The mirror is not in a Dropbox folder; its provider can store these names, so they may be cloud files and are listed only.")
 		}
 	}
 	if plan.Placeholders > 0 {

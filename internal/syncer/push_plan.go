@@ -30,12 +30,16 @@ type PushPlan struct {
 	// mirror-only conflicts. `dot sync names trim` renames the
 	// trailing-whitespace ones.
 	Unsupported []string
-	// Leftovers are such paths that exist only in the mirror: copies pushed
-	// before the name filter, or before a workspace rename. The rsync
-	// exclude also shields them from --delete, so a push with delete
-	// propagation moves them out itself (MoveMirrorLeftovers, #225).
-	Leftovers   []string
-	Propagation PropagationPolicy
+	// Leftovers are such paths that exist only in the mirror: on Dropbox,
+	// copies pushed before the name filter or before a workspace rename. The
+	// rsync exclude also shields them from --delete.
+	Leftovers []string
+	// MoveLeftovers says the push moves Leftovers out itself
+	// (MoveMirrorLeftovers, #225): delete propagation is on and the mirror is
+	// in Dropbox, which cannot hold these names. Elsewhere (Google Drive
+	// stores them) a leftover can be a cloud file, so it is only listed.
+	MoveLeftovers bool
+	Propagation   PropagationPolicy
 	// Placeholders counts mirror files whose content lives only in the
 	// provider's cloud. They are reported because a mirror that is mostly
 	// placeholders explains conflicts an operator cannot otherwise see.
@@ -47,7 +51,7 @@ func (p *PushPlan) HasChanges() bool {
 		return false
 	}
 	return len(p.Creates) > 0 || len(p.Updates) > 0 || len(p.Deletes) > 0 ||
-		(p.Propagation.Delete && len(p.Leftovers) > 0)
+		(p.MoveLeftovers && len(p.Leftovers) > 0)
 }
 
 func (p *PushPlan) HasConflicts() bool {
@@ -95,7 +99,11 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 		return nil, fmt.Errorf("scanning mirror: %w", err)
 	}
 
-	plan := &PushPlan{Propagation: cfg.Propagation, Placeholders: len(mirrorInv.dehydrated)}
+	plan := &PushPlan{
+		Propagation:   cfg.Propagation,
+		Placeholders:  len(mirrorInv.dehydrated),
+		MoveLeftovers: cfg.Propagation.Delete && mirrorUnderDropbox(mirror),
+	}
 	rels := unionKeys(localInv.files, mirrorInv.files)
 	for _, rel := range rels {
 		if UnsupportedPathName(rel) {

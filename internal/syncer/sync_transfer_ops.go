@@ -130,7 +130,7 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 		}
 	}
 	pushErr := downgradePartial(opts.Progress, Push(ctx, runner, cfg, false))
-	if pushErr == nil && cfg.Propagation.Delete && len(plan.Leftovers) > 0 {
+	if pushErr == nil && plan.MoveLeftovers && len(plan.Leftovers) > 0 {
 		dir, moveErr := MoveMirrorLeftovers(cfg, plan.Leftovers)
 		if moveErr != nil {
 			pushErr = moveErr
