@@ -37,12 +37,16 @@ func formulaJSON(stable string, pinned bool) string {
 // fakeUpgrade scripts upgradeRun and upgradeAcquire and records each call as
 // "<base name> <args>".
 type fakeUpgrade struct {
-	calls    []string
-	infos    []string // successive brew info outputs; the last one repeats
-	version  string   // dot --version output
-	acquired int
-	deferErr error
-	launchd  func(args []string) (string, error)
+	calls      []string
+	infos      []string // successive brew info outputs; the last one repeats
+	version    string   // dot --version output
+	acquired   int
+	deferErr   error
+	launchd    func(args []string) (string, error)
+	upgradeErr error // returned by brew upgrade
+	// canceled lists calls made with a canceled context: brew and the
+	// reload must not be killed by a signal (#235 review).
+	canceled []string
 }
 
 func (f *fakeUpgrade) install(t *testing.T) {
@@ -57,8 +61,12 @@ func (f *fakeUpgrade) install(t *testing.T) {
 		f.acquired++
 		return func() {}, nil
 	}
-	upgradeRun = func(_ context.Context, _ bool, name string, args ...string) (string, error) {
-		f.calls = append(f.calls, strings.TrimSpace(filepath.Base(name)+" "+strings.Join(args, " ")))
+	upgradeRun = func(ctx context.Context, _ bool, name string, args ...string) (string, error) {
+		call := strings.TrimSpace(filepath.Base(name) + " " + strings.Join(args, " "))
+		f.calls = append(f.calls, call)
+		if ctx.Err() != nil {
+			f.canceled = append(f.canceled, call)
+		}
 		switch {
 		case filepath.Base(name) == "launchctl":
 			if f.launchd == nil {
@@ -73,6 +81,8 @@ func (f *fakeUpgrade) install(t *testing.T) {
 			return out, nil
 		case len(args) > 0 && args[0] == "--version":
 			return f.version, nil
+		case len(args) > 0 && args[0] == "upgrade":
+			return "", f.upgradeErr
 		}
 		return "", nil
 	}
@@ -92,6 +102,9 @@ func (f *fakeUpgrade) brewCalls() []string {
 // brew scripted: it upgrades through brew, never downloads or writes the
 // Cellar binary, and runs no brew command when already current (#235).
 func TestRunUpgradeHomebrew(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the Homebrew path refuses root")
+	}
 	if mode := os.Getenv("DOTFILES_TEST_UPGRADE_CHILD"); mode != "" {
 		transport := &upgradeReleaseTransport{}
 		http.DefaultTransport = transport
@@ -121,8 +134,12 @@ func TestRunUpgradeHomebrew(t *testing.T) {
 		if got := f.brewCalls(); !slices.Equal(got, want) {
 			t.Fatalf("%s: brew calls %q, want %q", mode, got, want)
 		}
-		if mode == "update" && f.acquired != 1 {
-			t.Fatalf("maintenance slot acquired %d times", f.acquired)
+		wantAcquired := 0
+		if mode == "update" {
+			wantAcquired = 1
+		}
+		if f.acquired != wantAcquired {
+			t.Fatalf("%s: maintenance slot acquired %d times, want %d", mode, f.acquired, wantAcquired)
 		}
 		if transport.requests != 1 {
 			t.Fatalf("made %d HTTP requests, want 1", transport.requests)
@@ -216,8 +233,20 @@ func TestUpgradeHomebrewBranches(t *testing.T) {
 		{
 			name:    "version not reached",
 			f:       fakeUpgrade{infos: []string{formulaJSON("2.0.0", false)}, version: "dot version 1.0.0 (abc)\n"},
-			wantErr: "not 2.0.0",
+			wantErr: "not 2.0.0 or newer",
 			want:    []string{"brew info --json=v2 --formula dotfiles", "brew upgrade entelecheia/tap/dotfiles", "dot --version"},
+		},
+		{
+			name:    "brew info lists no formula",
+			f:       fakeUpgrade{infos: []string{`{"formulae":[]}`}},
+			wantErr: "returned 0 formulae",
+			want:    []string{"brew info --json=v2 --formula dotfiles"},
+		},
+		{
+			name:     "a newer release reached the tap",
+			f:        fakeUpgrade{infos: []string{formulaJSON("2.1.0", false)}, version: "dot version 2.1.0 (abc)\n"},
+			want:     []string{"brew info --json=v2 --formula dotfiles", "brew upgrade entelecheia/tap/dotfiles", "dot --version"},
+			wantLine: "Upgraded: 1.0.0 → 2.1.0 (Homebrew)",
 		},
 		{
 			name:     "dry run",
@@ -248,12 +277,86 @@ func TestUpgradeHomebrewBranches(t *testing.T) {
 	}
 }
 
+// A signal cancels dot's context, but brew must finish instead of being
+// SIGKILLed mid-link; it gets the terminal's SIGINT itself (#235 review).
+func TestUpgradeHomebrewSignalDoesNotKillBrew(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the Homebrew path refuses root")
+	}
+	t.Setenv("HOME", t.TempDir())
+	f := &fakeUpgrade{infos: []string{formulaJSON("1.0.0", false), formulaJSON("2.0.0", false)}, version: "dot version 2.0.0 (abc)\n"}
+	f.install(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	if err := upgradeHomebrew(ctx, &Printer{Out: &out, Err: &out}, homebrewDot{prefix: "/opt/homebrew", formula: "dotfiles"}, "1.0.0", "2.0.0", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.canceled {
+		if !strings.HasPrefix(c, "brew info") {
+			t.Errorf("%q ran with a canceled context", c)
+		}
+	}
+}
+
+// recordedSyncPrint is `launchctl print gui/501/com.dotfiles.sync` from a work
+// Mac (2026-10-02, dot 2.70.31), home path shortened; <PROGRAM> marks the
+// top-level program line the reload matches.
+const recordedSyncPrint = `gui/501/com.dotfiles.sync = {
+	active count = 0
+	path = /Users/u/Library/LaunchAgents/com.dotfiles.sync.plist
+	type = LaunchAgent
+	state = not running
+
+	program = <PROGRAM>
+	arguments = {
+		<PROGRAM>
+		sync
+		push
+		--mode=clean
+	}
+
+	stdout path = /Users/u/workspace/work/.dotfiles/sync/log/sync.log
+	stderr path = /Users/u/workspace/work/.dotfiles/sync/log/sync.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.xFraF380bi/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		PATH => /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+		XPC_SERVICE_NAME => com.dotfiles.sync
+	}
+
+	domain = gui/501 [100021]
+	asid = 100021
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 86
+	last exit code = 0
+
+	spawn type = daemon (3)
+	run interval = 300 seconds
+	job state = exited
+	sanitizer flags = 0x0
+
+	properties = runatload | inferred program
+}
+`
+
 // After the upgrade, a loaded job running the Cellar binary is booted out and
 // bootstrapped; an unloaded job (a paused sync) and a job running another
 // binary are left alone (#235).
 func TestReloadDotLaunchAgents(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("launchd only")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("the Homebrew path refuses root")
 	}
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -289,14 +392,49 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	domain := guiTarget()
+	reloaded := []string{"com.dotfiles.broken", "com.dotfiles.sync"}
 
 	for _, tc := range []struct {
 		name          string
+		run           func(ctx context.Context, p *Printer) error
+		cancel        bool
+		upgradeFail   bool
 		bootstrapFail bool
+		stuck         bool // the job never leaves the domain after bootout
 		wantErr       string
+		wantLine      string
+		attempts      int // bootstraps per reloaded job; 0 means none, nor any bootout
 	}{
-		{name: "reloads"},
-		{name: "bootstrap fails", bootstrapFail: true, wantErr: "could not reload com.dotfiles.broken, com.dotfiles.sync"},
+		{name: "reloads", attempts: 1, wantLine: "Reloaded com.dotfiles.sync"},
+		{name: "a signal does not cut the reload short", cancel: true, attempts: 1, wantLine: "Reloaded com.dotfiles.sync"},
+		{name: "bootstrap fails", bootstrapFail: true, attempts: 3, wantErr: "could not reload com.dotfiles.broken, com.dotfiles.sync"},
+		{name: "still loaded after bootout", stuck: true, wantErr: "could not reload com.dotfiles.broken, com.dotfiles.sync", wantLine: "still loaded after bootout"},
+		{
+			name:     "dry run",
+			run:      func(ctx context.Context, p *Printer) error { return reloadDotLaunchAgents(ctx, p, h, true) },
+			wantLine: "[dry-run] would reload com.dotfiles.sync",
+		},
+		{
+			// The reload also follows a failed post-upgrade check: brew may
+			// already have replaced the binary.
+			name: "after a failed version check",
+			run: func(ctx context.Context, p *Printer) error {
+				return upgradeHomebrew(ctx, p, h, "1.0.0", "2.0.0", false)
+			},
+			attempts: 1,
+			wantErr:  "not 2.0.0 or newer",
+			wantLine: "Reloaded com.dotfiles.sync",
+		},
+		{
+			name: "after a failed brew upgrade",
+			run: func(ctx context.Context, p *Printer) error {
+				return upgradeHomebrew(ctx, p, h, "1.0.0", "2.0.0", false)
+			},
+			upgradeFail: true,
+			attempts:    1,
+			wantErr:     "brew upgrade entelecheia/tap/dotfiles: exit status 1",
+			wantLine:    "Reloaded com.dotfiles.sync",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			loaded := map[string]string{
@@ -305,16 +443,18 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 				"com.dotfiles.other":  other,
 				// com.dotfiles.peer is not loaded, like a paused job
 			}
-			f := &fakeUpgrade{launchd: func(args []string) (string, error) {
+			f := &fakeUpgrade{infos: []string{formulaJSON("2.0.0", false)}, version: "dot version 1.0.0 (abc)\n", launchd: func(args []string) (string, error) {
 				label := strings.TrimPrefix(args[len(args)-1], domain+"/")
 				switch args[0] {
 				case "print":
 					if program, ok := loaded[label]; ok {
-						return "com.dotfiles.x = {\n\tactive count = 0\n\tprogram = " + program + "\n\tinherited environment = {\n\t\tprogram = /nested\n\t}\n}\n", nil
+						return strings.ReplaceAll(recordedSyncPrint, "<PROGRAM>", program), nil
 					}
 					return "", errors.New("Could not find service")
 				case "bootout":
-					delete(loaded, label)
+					if !tc.stuck {
+						delete(loaded, label)
+					}
 					return "", nil
 				case "bootstrap":
 					if tc.bootstrapFail {
@@ -324,9 +464,22 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 				}
 				return "", fmt.Errorf("unexpected launchctl %v", args)
 			}}
+			if tc.upgradeFail {
+				f.upgradeErr = errors.New("exit status 1")
+			}
 			f.install(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				cancel()
+			}
 			var out bytes.Buffer
-			err := reloadDotLaunchAgents(context.Background(), &Printer{Out: &out, Err: &out}, h, false)
+			p := &Printer{Out: &out, Err: &out}
+			run := tc.run
+			if run == nil {
+				run = func(ctx context.Context, p *Printer) error { return reloadDotLaunchAgents(ctx, p, h, false) }
+			}
+			err := run(ctx, p)
 			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
 				t.Fatalf("err = %v, want %q\n%s", err, tc.wantErr, out.String())
 			}
@@ -336,30 +489,31 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 					mutations = append(mutations, c)
 				}
 			}
-			attempts := 1
-			if tc.bootstrapFail {
-				attempts = 3
-			}
 			var want []string
-			for _, label := range []string{"com.dotfiles.broken", "com.dotfiles.sync"} {
+			for _, label := range reloaded {
+				if tc.attempts == 0 && !tc.stuck {
+					break
+				}
 				want = append(want, "launchctl bootout "+domain+"/"+label)
-				for range attempts {
+				for range tc.attempts {
 					want = append(want, "launchctl bootstrap "+domain+" "+filepath.Join(agents, label+".plist"))
 				}
 			}
 			if !slices.Equal(mutations, want) {
 				t.Fatalf("launchctl mutations %q, want %q", mutations, want)
 			}
-			if tc.wantErr == "" && !strings.Contains(out.String(), "Reloaded com.dotfiles.sync") {
-				t.Fatalf("output %q", out.String())
+			if !strings.Contains(out.String(), tc.wantLine) {
+				t.Fatalf("output %q, want %q", out.String(), tc.wantLine)
+			}
+			if len(f.canceled) > 0 {
+				t.Fatalf("ran with a canceled context: %q", f.canceled)
 			}
 		})
 	}
 }
 
 func TestLaunchdProgram(t *testing.T) {
-	dump := "gui/501/com.dotfiles.sync = {\n\tactive count = 0\n\tpath = /x.plist\n\tprogram = /opt/homebrew/bin/dot\n\tspawn = {\n\t\tprogram = /nested\n\t}\n}\n"
-	if got := launchdProgram(dump); got != "/opt/homebrew/bin/dot" {
+	if got := launchdProgram(strings.ReplaceAll(recordedSyncPrint, "<PROGRAM>", "/opt/homebrew/bin/dot")); got != "/opt/homebrew/bin/dot" {
 		t.Fatalf("launchdProgram = %q", got)
 	}
 	if got := launchdProgram("\t\tprogram = /nested\n"); got != "" {

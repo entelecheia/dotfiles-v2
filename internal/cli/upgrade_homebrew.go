@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -75,6 +76,9 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 		}
 		defer release()
 	}
+	// A signal must not SIGKILL brew mid-link: brew gets the terminal's SIGINT
+	// itself and cleans up, while dot waits for it.
+	work := context.WithoutCancel(ctx)
 	brew := func(args ...string) error {
 		line := "brew " + strings.Join(args, " ")
 		if dryRun {
@@ -82,7 +86,7 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 			return nil
 		}
 		p.Line("\nRunning %s...", line)
-		if _, err := upgradeRun(ctx, true, h.brew(), args...); err != nil {
+		if _, err := upgradeRun(work, true, h.brew(), args...); err != nil {
 			return fmt.Errorf("%s: %w", line, err)
 		}
 		return nil
@@ -110,21 +114,34 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 			}
 		}
 	}
-	if err := brew("upgrade", info.FullName); err != nil {
-		return err
-	}
-	if !dryRun {
-		dot := filepath.Join(h.prefix, "bin", "dot")
-		out, err := upgradeRun(ctx, false, dot, "--version")
-		if err != nil {
-			return fmt.Errorf("checking %s after brew upgrade: %w", dot, err)
+	upgradeErr := brew("upgrade", info.FullName)
+	if upgradeErr == nil && !dryRun {
+		var installed string
+		if installed, upgradeErr = upgradedVersion(work, h, latest); upgradeErr == nil {
+			p.Line("Upgraded: %s → %s (Homebrew)", current, installed)
 		}
-		if !strings.Contains(out, "dot version "+latest) {
-			return fmt.Errorf("brew upgrade returned, but %s reports %q, not %s", dot, strings.TrimSpace(out), latest)
-		}
-		p.Line("Upgraded: %s → %s (Homebrew)", current, latest)
 	}
-	return reloadDotLaunchAgents(ctx, p, h, dryRun)
+	// brew may have replaced the binary even when it or the check failed, and
+	// the jobs then fail their next spawn, so the reload always runs.
+	return errors.Join(upgradeErr, reloadDotLaunchAgents(work, p, h, dryRun))
+}
+
+// upgradedVersion reads `<prefix>/bin/dot --version` ("dot version X (commit)")
+// and accepts X at or above latest: a newer release can reach the tap between
+// the GitHub check and brew update.
+func upgradedVersion(ctx context.Context, h homebrewDot, latest string) (string, error) {
+	dot := filepath.Join(h.prefix, "bin", "dot")
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := upgradeRun(ctx, false, dot, "--version")
+	if err != nil {
+		return "", fmt.Errorf("checking %s after brew upgrade: %w", dot, err)
+	}
+	f := strings.Fields(out)
+	if len(f) < 3 || f[0] != "dot" || f[1] != "version" || compareSemver(strings.TrimPrefix(f[2], "v"), latest) < 0 {
+		return "", fmt.Errorf("brew upgrade returned, but %s reports %q, not %s or newer", dot, strings.TrimSpace(out), latest)
+	}
+	return strings.TrimPrefix(f[2], "v"), nil
 }
 
 func brewFormulaInfo(ctx context.Context, h homebrewDot) (brewFormula, error) {
@@ -135,8 +152,11 @@ func brewFormulaInfo(ctx context.Context, h homebrewDot) (brewFormula, error) {
 	var info struct {
 		Formulae []brewFormula `json:"formulae"`
 	}
-	if err := json.Unmarshal([]byte(out), &info); err != nil || len(info.Formulae) != 1 || info.Formulae[0].FullName == "" {
-		return brewFormula{}, fmt.Errorf("parsing Homebrew metadata for %s: %v", h.formula, err)
+	if err := json.Unmarshal([]byte(out), &info); err != nil {
+		return brewFormula{}, fmt.Errorf("parsing Homebrew metadata for %s: %w", h.formula, err)
+	}
+	if len(info.Formulae) != 1 || info.Formulae[0].FullName == "" {
+		return brewFormula{}, fmt.Errorf("brew info --formula %s returned %d formulae, want 1", h.formula, len(info.Formulae))
 	}
 	return info.Formulae[0], nil
 }
@@ -147,11 +167,13 @@ func brewFormulaInfo(ctx context.Context, h homebrewDot) (brewFormula, error) {
 // update`) until it is loaded again (#233, #235). A job that is not loaded,
 // such as a paused sync, stays unloaded, and the sync pause gate is not
 // touched. bootout stops a run in progress with SIGTERM, which dot handles as
-// an interrupt; RunAtLoad jobs then run once at once.
+// an interrupt; RunAtLoad jobs then run once at once. A signal does not cut a
+// reload short: a job booted out is always bootstrapped again.
 func reloadDotLaunchAgents(ctx context.Context, p *Printer, h homebrewDot, dryRun bool) error {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
+	ctx = context.WithoutCancel(ctx)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("finding LaunchAgents: %w", err)
@@ -215,11 +237,7 @@ func reloadLaunchAgent(ctx context.Context, domain, label, plist string) error {
 			gone = true
 			break
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(upgradePoll):
-		}
+		time.Sleep(upgradePoll)
 	}
 	if !gone {
 		return fmt.Errorf("still loaded after bootout")
@@ -232,11 +250,7 @@ func reloadLaunchAgent(ctx context.Context, domain, label, plist string) error {
 		if _, printErr := upgradeRun(ctx, false, "launchctl", "print", target); printErr == nil {
 			return nil // loaded despite the reported error
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(upgradePoll):
-		}
+		time.Sleep(upgradePoll)
 	}
 	return err
 }
