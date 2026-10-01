@@ -40,9 +40,11 @@ Use this when Homebrew isn't available or you want the bootstrap to install it f
 - **Linux**: Installs Linuxbrew for consistent package management
 - Downloads the `dot` binary and configures PATH
 
-Updating from v2.70.29 or earlier: `dot update` in those versions refuses a release binary over 16 MiB, which every current release is (#231). Run the curl installer above once; from then on `dot update` works again. A Homebrew install upgrades with `brew upgrade dotfiles` and is unaffected. `dot update` refuses a Homebrew-managed binary (the resolved executable sits in the Cellar, so replacing it would desync brew's recorded version) and names `brew upgrade dotfiles` instead; `dot update --check` still reports the latest version (#233).
+Updating from v2.70.29 or earlier: `dot update` in those versions refuses a release binary over 16 MiB, which every current release is (#231). Run the curl installer above once; from then on `dot update` works again. A Homebrew install is unaffected.
 
-After a Homebrew upgrade, launchd can keep a scheduled sync job in `spawn failed` (its managed launch constraint did not follow the replaced binary). `dot sync status` and `dot peer status` name that state with the reload command: `dot sync pause && dot sync resume` for `com.dotfiles.sync*`, `dot peer setup` for `com.dotfiles.peer` (#233).
+On a Homebrew install (the resolved executable sits in the Cellar), `dot update` upgrades through the brew that owns it and never writes the Cellar itself (#235). It holds the host-wide maintenance slot, runs `brew update` only when the tap lags the GitHub release, runs `brew upgrade <tap>/dotfiles`, and checks the new version. A pinned formula is left alone with a `brew unpin` hint; `--dry-run` prints the brew commands; `--check` only reports the latest version.
+
+After a Homebrew upgrade, launchd fails the next spawn of a dot LaunchAgent (`spawn failed`, `needs LWCR update`): its managed launch constraint did not follow the replaced binary. `dot update` therefore reloads (bootout, then bootstrap) every loaded `com.dotfiles.*` agent that runs the upgraded binary; an unloaded one, such as a paused sync, stays unloaded. After a manual `brew upgrade`, `dot sync status` and `dot peer status` name that state with the reload command: `dot sync pause && dot sync resume` for `com.dotfiles.sync*`, `dot peer setup` for `com.dotfiles.peer` (#233).
 
 ### Setup
 
