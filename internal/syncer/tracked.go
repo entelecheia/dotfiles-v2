@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -33,8 +34,11 @@ func gitSubmodulePaths(root string) []string {
 		if len(fields) < 2 {
 			continue
 		}
-		rel := normalizeRel(strings.Join(fields[1:], " "))
-		if rel == "" || seen[rel] {
+		// git accepts a hand-edited path such as "vendor//lib"; both filter
+		// sides read the cleaned form, and a path outside the tree has
+		// nothing under the transfer root to exclude.
+		rel := normalizeRel(path.Clean(strings.Join(fields[1:], " ")))
+		if rel == "" || rel == ".." || strings.HasPrefix(rel, "../") || seen[rel] {
 			continue
 		}
 		seen[rel] = true

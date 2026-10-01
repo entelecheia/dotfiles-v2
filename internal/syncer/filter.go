@@ -11,6 +11,7 @@ type syncFilter struct {
 	mode            FilterMode
 	submodules      []string         // sorted relpaths — excluded wholesale, synced via Git
 	worktrees       []string         // linked-worktree roots (peer profile only, sticky)
+	shared          []string         // shared-exclude paths, literal (dot sync shared add)
 	allowPatterns   []excludePattern // allow.txt + env-template builtins — win over every exclude
 	allowDirs       map[string]bool  // literal parent dirs of anchored allow patterns
 	secretPatterns  []excludePattern // deny-by-default secrets layer
@@ -99,14 +100,9 @@ func newSyncFilter(cfg *Config, _ string) (*syncFilter, error) {
 		return nil, err
 	}
 	for _, e := range shared {
-		rel := normalizeRel(e.RelPath)
-		if rel == "" {
-			continue
+		if rel := normalizeRel(e.RelPath); rel != "" {
+			f.shared = append(f.shared, rel)
 		}
-		f.excludePatterns = append(f.excludePatterns,
-			excludePattern{raw: "/" + rel},
-			excludePattern{raw: "/" + rel + "/"},
-		)
 	}
 	return f, nil
 }
@@ -177,6 +173,13 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 	}
 	for _, p := range f.excludePatterns {
 		if p.matches(rel, isDir) {
+			return true
+		}
+	}
+	// Shared entries are literal paths, matched the way rsync reads their
+	// escaped `/path` and `/path/` lines (#228).
+	for _, s := range f.shared {
+		if rel == s || strings.HasPrefix(rel, s+"/") {
 			return true
 		}
 	}

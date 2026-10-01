@@ -812,7 +812,11 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 			args = append(args, "--exclude-from="+f)
 		}
 	}
-	args = append(args, fetchScopeArgs(entries)...)
+	scope, err := fetchScopeArgs(entries)
+	if err != nil {
+		return nil, fmt.Errorf("fetch: %w", err)
+	}
+	args = append(args, scope...)
 	if dryRun {
 		args = append(args, "--dry-run")
 	}
@@ -837,29 +841,43 @@ type fetchEntry struct {
 // parent dirs, then drop everything else. Anchored at the transfer root so
 // the anchored exclude layers stay aligned; no `--relative`, which Apple's
 // openrsync does not honor. For unknown shapes (ssh) both dir and file
-// forms are emitted.
-func fetchScopeArgs(entries []fetchEntry) []string {
+// forms are emitted. Every path is escaped, so a requested name with [, * or
+// ? fetches itself and nothing else (#228); a path that cannot be a filter
+// rule (not clean, or a line separator) is refused.
+func fetchScopeArgs(entries []fetchEntry) ([]string, error) {
 	var args []string
 	seenDirs := map[string]bool{}
 	for _, e := range entries {
 		segs := strings.Split(e.rel, "/")
-		prefix := ""
-		for _, seg := range segs[:len(segs)-1] {
-			prefix += "/" + seg
-			if !seenDirs[prefix] {
-				seenDirs[prefix] = true
-				args = append(args, "--include="+prefix+"/")
+		for i := 1; i < len(segs); i++ {
+			dir := strings.Join(segs[:i], "/")
+			if seenDirs[dir] {
+				continue
 			}
+			seenDirs[dir] = true
+			pattern, err := literalRsyncPattern(dir)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, "--include=/"+pattern+"/")
+		}
+		pattern, err := literalRsyncPattern(e.rel)
+		if err != nil {
+			return nil, err
 		}
 		if e.isDir || !e.known {
-			args = append(args, "--include=/"+e.rel+"/", "--include=/"+e.rel+"/**")
+			prefix, err := literalRsyncPrefix(e.rel)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, "--include=/"+pattern+"/", "--include=/"+prefix+"/**")
 		}
 		if !e.isDir || !e.known {
-			args = append(args, "--include=/"+e.rel)
+			args = append(args, "--include=/"+pattern)
 		}
 	}
 	args = append(args, "--exclude=*")
-	return args
+	return args, nil
 }
 
 // PullDirect runs a plain rsync pull (target → workspace, --update, with

@@ -301,6 +301,17 @@ func literalRsyncPattern(rel string) (string, error) {
 	return b.String(), nil
 }
 
+// literalRsyncPrefix is literalRsyncPattern for a path a pattern extends with
+// a wildcard (rel + "/**"). The whole pattern is then wildcard-matched, so
+// every backslash in rel is an escape and is doubled, wildcards or not.
+func literalRsyncPrefix(rel string) (string, error) {
+	pattern, err := literalRsyncPattern(rel)
+	if err != nil || strings.ContainsAny(rel, "*?[") {
+		return pattern, err
+	}
+	return strings.ReplaceAll(pattern, `\`, `\\`), nil
+}
+
 // deletePassArgs builds the rsync argv that removes exactly the listed paths
 // from the target and quarantines them.
 //
