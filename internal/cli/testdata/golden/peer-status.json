@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "peer",
   "profile": {
-    "schemaVersion": 5,
+    "schemaVersion": 6,
     "kind": "peer-profile",
     "profile": "peer",
     "configured": true,

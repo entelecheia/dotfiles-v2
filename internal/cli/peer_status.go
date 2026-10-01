@@ -112,6 +112,7 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 		Mode:            "safe-bidirectional",
 		State:           snapshot.State,
 		LastRunAt:       newestTimeJSON(st.LastPull, st.LastPush),
+		LastExitCode:    snapshot.LastExitCode,
 	}
 	jsonOutput, _ := cmd.Flags().GetBool("json")
 	if jsonOutput {
@@ -212,6 +213,9 @@ func runPeerStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Held transitions", held)
 	}
 	p.KV("Conflicts", strconv.Itoa(len(st.Conflicts)))
+	if st.ConflictsError != "" {
+		p.Warn("conflict backups not listed: %s", st.ConflictsError)
+	}
 	return nil
 }
 
@@ -261,13 +265,15 @@ func inspectPeerScheduler(ctx context.Context, runner *exec.Runner, home string,
 		return snapshot
 	}
 	snapshot.State = syncer.SchedulerRunning.String()
+	if syncer.LaunchdSpawnFailed(result.Stdout) {
+		// launchd holds the job but cannot spawn it (seen after a Homebrew
+		// upgrade replaced the binary, #233); `dot peer setup` bootouts and
+		// re-bootstraps com.dotfiles.peer, which clears the state.
+		snapshot.State = "spawn failed; reload the job with `dot peer setup`"
+	}
+	snapshot.LastExitCode = syncer.LaunchdLastExitCode(result.Stdout)
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		line = strings.TrimSpace(line)
-		if raw, ok := strings.CutPrefix(line, "last exit code ="); ok {
-			if value, parseErr := strconv.Atoi(strings.TrimSpace(raw)); parseErr == nil {
-				snapshot.LastExitCode = &value
-			}
-		}
 		if raw, ok := strings.CutPrefix(line, "runs ="); ok {
 			if value, parseErr := strconv.Atoi(strings.TrimSpace(raw)); parseErr == nil {
 				snapshot.RunCount = &value

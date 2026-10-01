@@ -26,6 +26,79 @@ func TestLaunchdPrintTarget(t *testing.T) {
 	}
 }
 
+// StateKind must read the recorded spawn-failed dump as SchedulerSpawnFailed,
+// not SchedulerRunning: launchd still answers print with exit 0 for the loaded
+// job (#233).
+func TestSchedulerStateKind_SpawnFailedIsNotRunning(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dump := filepath.Join(root, "print.out")
+	if err := os.WriteFile(dump, []byte(recordedLaunchdSpawnFailedPrint), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, filepath.Join(binDir, "launchctl"), "#!/bin/sh\n/bin/cat \"$DOTFILES_TEST_LAUNCHCTL_DUMP\"\nexit 0\n")
+	t.Setenv("PATH", binDir)
+	t.Setenv("DOTFILES_TEST_LAUNCHCTL_DUMP", dump)
+
+	paths := pathsFor(root, filepath.Join(root, "cache"))
+	plist := paths.PlistFor(SchedulerKindPush)
+	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plist, []byte("persisted plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler := NewScheduler(
+		exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		paths,
+		&Config{},
+		template.NewEngine(),
+	)
+	if got := scheduler.StateKind(context.Background(), SchedulerKindPush); got != SchedulerSpawnFailed {
+		t.Fatalf("StateKind = %s, want spawn failed", got)
+	}
+	snapshot := scheduler.InspectKind(context.Background(), SchedulerKindPush)
+	if snapshot.LastExitCode == nil || *snapshot.LastExitCode != 78 {
+		t.Fatalf("last exit code = %v, want 78", snapshot.LastExitCode)
+	}
+}
+
+func TestSyncPauseResumeReloadsSpawnFailedJobs(t *testing.T) {
+	cfg, record, paths := schedulerLifecycleConfig(t, true, true, "pause", false)
+	stub := `#!/bin/sh
+printf '%s\n' "$*" >> "$DOTFILES_TEST_SCHEDULER_ARGS"
+case "$1" in
+  print)
+    label="${2##*/}"
+    [ ! -f "$HOME/Library/LaunchAgents/$label.plist.unloaded" ] || exit 1
+    printf 'state = spawn failed\nlast exit code = 78: EX_CONFIG\n'
+    ;;
+  unload) : > "$2.unloaded" ;;
+  load) [ -f "$2.unloaded" ] || exit 42 ;;
+  *) exit 99 ;;
+esac
+`
+	writeStub(t, filepath.Join(os.Getenv("PATH"), "launchctl"), stub)
+	runner := exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	paused, err := SyncPause(context.Background(), cfg, runner)
+	if err != nil || paused.SchedulerErr != nil || !paused.SchedulerStopped {
+		t.Fatalf("pause did not unload failed jobs: %+v, %v", paused, err)
+	}
+	resumed, err := SyncResume(context.Background(), cfg, runner)
+	if err != nil || resumed.SchedulerErr != nil || !resumed.SchedulerResumed {
+		t.Fatalf("resume did not reload failed jobs: %+v, %v", resumed, err)
+	}
+	want := append(schedulerLifecycleCommands(paths, true, true, "pause", false), schedulerLifecycleCommands(paths, true, true, "resume", false)...)
+	got := readSchedulerLifecycleCommands(t, record)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("service-manager commands = %q, want unload before load: %q", got, want)
+	}
+}
+
 func TestLaunchdStateFromPrintStatus(t *testing.T) {
 	cases := []struct {
 		name        string

@@ -681,6 +681,31 @@ func TestPushCommand_AnInterruptedRunDoesNotFinalize(t *testing.T) {
 	}
 }
 
+// An interrupted SSH push whose rsync exited 24 records a failure and leaves
+// last_push unchanged: the SSH branch of PushCommand applies the same
+// ctx.Err() stop as the local branch (#233).
+func TestPushCommand_AnInterruptedSSHPushDoesNotStampLastPush(t *testing.T) {
+	f := newIntakeFixture(t)
+	lastPush := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	if err := SaveLocalState(f.cfg.LocalPaths, &LocalState{LastPush: lastPush}); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.Target = Target{Kind: TargetSSH, Host: "user@peer", Path: "/remote/work"}
+	// A stub, not writeRsyncThen: the real rsync would dial the fake peer.
+	stub := filepath.Join(t.TempDir(), "rsync")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 24\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.RsyncPath = stub
+	_, err := PushCommand(errOnlyCtx{context.Background()}, PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
+	if err == nil || !strings.Contains(err.Error(), "push interrupted") {
+		t.Fatalf("PushCommand = %v, want an interrupted failure", err)
+	}
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); !st.LastPush.Equal(lastPush) || !strings.Contains(st.LastPushError, "interrupted") {
+		t.Errorf("state: LastPush = %v, LastPushError = %q", st.LastPush, st.LastPushError)
+	}
+}
+
 // A run during which dot was interrupted skips the refresh even when rsync,
 // which a terminal Ctrl-C reaches too, exited 20 before it was killed.
 func TestRsyncExited_AnInterruptedDotDoesNotFinalize(t *testing.T) {

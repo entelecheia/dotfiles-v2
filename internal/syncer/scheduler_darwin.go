@@ -106,18 +106,33 @@ func (s *Scheduler) ResumeKind(ctx context.Context, kind SchedulerKind) error {
 }
 
 // StateKind queries launchctl to report the unit's runtime status for
-// the given kind.
+// the given kind. A loaded job whose print output shows state = spawn
+// failed reports SchedulerSpawnFailed, not SchedulerRunning: launchd holds
+// it but never spawns it again until a reload (#233).
 func (s *Scheduler) StateKind(ctx context.Context, kind SchedulerKind) SchedulerState {
+	return s.InspectKind(ctx, kind).State
+}
+
+// InspectKind reads launchd without loading, unloading or rewriting its job.
+func (s *Scheduler) InspectKind(ctx context.Context, kind SchedulerKind) SchedulerSnapshot {
 	plist := s.Paths.PlistFor(kind)
 	if !s.Runner.FileExists(plist) {
-		return SchedulerNotInstalled
+		return SchedulerSnapshot{State: SchedulerNotInstalled}
 	}
 	if s.requiresTargetUserServiceDomain() {
-		return SchedulerTargetUserActionRequired
+		return SchedulerSnapshot{State: SchedulerTargetUserActionRequired}
 	}
 	target := launchdPrintTarget(os.Getuid(), s.Paths.LaunchdLabelFor(kind))
 	result, err := s.Runner.RunQuery(ctx, "launchctl", "print", target)
-	return launchdStateFromPrintStatus(true, err == nil && result != nil && result.ExitCode == 0)
+	printOK := err == nil && result != nil && result.ExitCode == 0
+	snapshot := SchedulerSnapshot{State: launchdStateFromPrintStatus(true, printOK)}
+	if printOK {
+		snapshot.LastExitCode = LaunchdLastExitCode(result.Stdout)
+	}
+	if printOK && LaunchdSpawnFailed(result.Stdout) {
+		snapshot.State = SchedulerSpawnFailed
+	}
+	return snapshot
 }
 
 // legacyLaunchdLabels are unit names superseded by com.dotfiles.sync*.

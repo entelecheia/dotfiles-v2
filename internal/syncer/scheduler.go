@@ -87,7 +87,20 @@ const (
 	SchedulerRunning
 	SchedulerStopped
 	SchedulerTargetUserActionRequired
+	// SchedulerSpawnFailed means launchd holds the job but cannot spawn it
+	// (state = spawn failed in `launchctl print`), seen after a Homebrew
+	// upgrade replaced the binary under launchd's managed launch constraint
+	// (#233). The job never runs again until it is reloaded, so it is its
+	// own state, not "running".
+	SchedulerSpawnFailed
 )
+
+// SchedulerSnapshot holds the state and last process exit reported by the
+// service manager. An absent exit code means no value was reported.
+type SchedulerSnapshot struct {
+	State        SchedulerState
+	LastExitCode *int
+}
 
 func (s SchedulerState) String() string {
 	switch s {
@@ -97,9 +110,52 @@ func (s SchedulerState) String() string {
 		return "stopped"
 	case SchedulerTargetUserActionRequired:
 		return "target user action required: " + SchedulerTargetUserInstruction()
+	case SchedulerSpawnFailed:
+		return "spawn failed; reload the job with `dot sync pause && dot sync resume`"
 	default:
 		return "not installed"
 	}
+}
+
+// StringForProfile keeps recovery guidance aimed at the job being inspected.
+func (s SchedulerState) StringForProfile(profile string) string {
+	if s != SchedulerSpawnFailed || profile == "" || profile == DefaultProfile {
+		return s.String()
+	}
+	command := "dot sync --profile=" + shellQuote(profile)
+	return "spawn failed; reload the job with `" + command + " pause && " + command + " resume`"
+}
+
+// LaunchdSpawnFailed reports whether a `launchctl print` dump shows a job
+// launchd cannot spawn. The recorded output names it "state = spawn failed"
+// alongside the last exit code (78: EX_CONFIG for a launch-constraint
+// mismatch); the job stays loaded, so an exit-0 print alone is not "running".
+func LaunchdSpawnFailed(printOutput string) bool {
+	for _, line := range strings.Split(printOutput, "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range []string{"state =", "job state ="} {
+			if value, ok := strings.CutPrefix(line, prefix); ok && strings.TrimSpace(value) == "spawn failed" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// LaunchdLastExitCode accepts both the numeric print form and launchd's
+// annotated form, for example "last exit code = 78: EX_CONFIG".
+func LaunchdLastExitCode(printOutput string) *int {
+	for _, line := range strings.Split(printOutput, "\n") {
+		raw, ok := strings.CutPrefix(strings.TrimSpace(line), "last exit code =")
+		if !ok {
+			continue
+		}
+		number, _, _ := strings.Cut(strings.TrimSpace(raw), ":")
+		if value, err := strconv.Atoi(strings.TrimSpace(number)); err == nil {
+			return &value
+		}
+	}
+	return nil
 }
 
 // SchedulerTargetUserActionRequiredError means that scheduler artifacts were

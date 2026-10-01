@@ -290,8 +290,24 @@ func (p excludePattern) matches(rel string, isDir bool) bool {
 			return true
 		}
 	}
+	// rsync matches an unanchored pattern holding a slash against the end of
+	// the path, wildcards included: foo/*.log excludes a/foo/x.log too. The
+	// candidate loop above covers the whole subRel only, so test every
+	// component-aligned suffix here (#233).
 	if !anchored && strings.Contains(raw, "/") {
-		return strings.HasSuffix(subRel, "/"+raw)
+		for candidate := subRel; ; {
+			if candidate == raw {
+				return true
+			}
+			if ok, _ := filepath.Match(raw, candidate); ok {
+				return true
+			}
+			slash := strings.IndexByte(candidate, '/')
+			if slash < 0 {
+				return false
+			}
+			candidate = candidate[slash+1:]
+		}
 	}
 	return false
 }

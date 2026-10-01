@@ -40,7 +40,9 @@ Use this when Homebrew isn't available or you want the bootstrap to install it f
 - **Linux**: Installs Linuxbrew for consistent package management
 - Downloads the `dot` binary and configures PATH
 
-Updating from v2.70.29 or earlier: `dot update` in those versions refuses a release binary over 16 MiB, which every current release is (#231). Run the curl installer above once; from then on `dot update` works again. A Homebrew install upgrades with `brew upgrade dotfiles` and is unaffected.
+Updating from v2.70.29 or earlier: `dot update` in those versions refuses a release binary over 16 MiB, which every current release is (#231). Run the curl installer above once; from then on `dot update` works again. A Homebrew install upgrades with `brew upgrade dotfiles` and is unaffected. `dot update` refuses a Homebrew-managed binary (the resolved executable sits in the Cellar, so replacing it would desync brew's recorded version) and names `brew upgrade dotfiles` instead; `dot update --check` still reports the latest version (#233).
+
+After a Homebrew upgrade, launchd can keep a scheduled sync job in `spawn failed` (its managed launch constraint did not follow the replaced binary). `dot sync status` and `dot peer status` name that state with the reload command: `dot sync pause && dot sync resume` for `com.dotfiles.sync*`, `dot peer setup` for `com.dotfiles.peer` (#233).
 
 ### Setup
 
