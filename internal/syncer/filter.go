@@ -185,7 +185,8 @@ func (f *syncFilter) shouldSkip(_ string, rel string, isDir bool) bool {
 		}
 	}
 	// Shared entries are literal paths, matched the way rsync reads their
-	// escaped `/path` and `/path/` lines (#228).
+	// escaped `/path`, `/path/` and `/path/**` lines (#228). The last keeps
+	// descendants out where an allow re-include above opened the folder.
 	for _, s := range f.shared {
 		if rel == s || strings.HasPrefix(rel, s+"/") {
 			return true

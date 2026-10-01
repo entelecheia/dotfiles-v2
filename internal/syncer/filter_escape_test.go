@@ -56,8 +56,10 @@ func TestPush_TrackedNamesWithRsyncWildcardsMatchOnlyThemselves(t *testing.T) {
 	for _, rel := range names {
 		f.writeLocal(rel, rel)
 	}
-	if err := osexec.Command("git", append([]string{"-C", f.local, "add", "--"}, names...)...).Run(); err != nil {
-		t.Skipf("git add unavailable: %v", err)
+	// git reads *, ?, [ and \ in a pathspec as globs; a name that stops
+	// matching must fail the test, not skip it.
+	if out, err := osexec.Command("git", append([]string{"-C", f.local, "--literal-pathspecs", "add", "--"}, names...)...).CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
 	}
 	// Untracked and not a payload extension: a wildcard in an unescaped line
 	// ("a*b.md", "what?.md") would admit it.
@@ -241,8 +243,8 @@ func TestPlanPush_TrackedNameWithALineSeparatorIsNotPlanned(t *testing.T) {
 	}
 	f.writeLocal("notes/a\nb.md", "x")
 	f.writeLocal("notes/ok.md", "x")
-	if err := osexec.Command("git", "-C", f.local, "add", "--", "notes/a\nb.md", "notes/ok.md").Run(); err != nil {
-		t.Skipf("git add unavailable: %v", err)
+	if out, err := osexec.Command("git", "-C", f.local, "--literal-pathspecs", "add", "--", "notes/a\nb.md", "notes/ok.md").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
 	}
 	plan, err := PlanPush(f.cfg)
 	if err != nil {
