@@ -81,6 +81,9 @@ func (f *fakeUpgrade) install(t *testing.T) {
 			}
 			return out, nil
 		case len(args) > 0 && args[0] == "--version":
+			if !strings.HasSuffix(filepath.ToSlash(name), "/opt/dotfiles/bin/dot") {
+				return "dot - graphviz version 12.2.1\n", nil // the version check must read the opt link
+			}
 			return f.version, nil
 		case len(args) > 0 && args[0] == "upgrade":
 			if f.onUpgrade != nil {
