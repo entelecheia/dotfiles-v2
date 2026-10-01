@@ -2,7 +2,10 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
@@ -159,12 +162,31 @@ func recordPushAttempt(cfg *Config, runErr error) error {
 		if s.LastPushError == "" {
 			s.LastPushErrorSince = now
 		}
-		msg := []rune(firstLine(runErr.Error()))
+		msg := []rune(pushErrorSummary(runErr))
 		if len(msg) > 300 {
 			msg = append(msg[:300], []rune("...")...)
 		}
 		s.LastPushError = string(msg)
 	})
+}
+
+// pushErrorSummary names a push error in one line. A failed command's error
+// text leads with its whole argv, which says nothing, so it becomes the
+// program's name, its exit status and the first line of what it printed.
+func pushErrorSummary(err error) string {
+	var ce *exec.CmdError
+	if !errors.As(err, &ce) {
+		return firstLine(err.Error())
+	}
+	name := "command"
+	if f := strings.Fields(ce.Cmd); len(f) > 0 {
+		name = filepath.Base(f[0])
+	}
+	msg := fmt.Sprintf("push failed: %s exit %d", name, ce.ExitCode)
+	if line := firstLine(strings.TrimSpace(ce.Stderr)); line != "" {
+		msg += ": " + line
+	}
+	return msg
 }
 
 // downgradePartial turns an rsync partial transfer (exit 23/24) into a
