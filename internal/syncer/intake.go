@@ -433,9 +433,14 @@ func refreshBaseline(cfg *Config, mode FingerprintMode, written map[string]bool)
 			// proves nothing about the workspace: keep only an entry an earlier
 			// push recorded, while the copy still matches it, and never
 			// fingerprint the copy anew, or a cloud edit would become the proof
-			// that moves it out as a leftover (#225). Without delete propagation
-			// an entry whose local twin is gone drops, as for any other file.
-			if _, err := os.Lstat(filepath.Join(local, rel)); err == nil || cfg.Propagation.Delete {
+			// that moves it out as a leftover (#225). A refresh before #225 did
+			// fingerprint the mirror copy, so while the workspace has the name
+			// its copy must match the entry too. Without delete propagation an
+			// entry whose local twin is gone drops, as for any other file.
+			localAbs := filepath.Join(local, rel)
+			if _, err := os.Lstat(localAbs); err == nil {
+				carryProvenEntry(entries, previous, rel, absPath, localAbs)
+			} else if cfg.Propagation.Delete {
 				carryProvenEntry(entries, previous, rel, absPath)
 			}
 			return nil
@@ -484,20 +489,23 @@ func refreshBaseline(cfg *Config, mode FingerprintMode, written map[string]bool)
 	return SaveBaselineManifest(cfg.LocalPaths.BaselineFile, entries)
 }
 
-// carryProvenEntry keeps previous[rel] when the mirror copy at absPath still
-// matches it. A cloud placeholder or a changed copy is not carried: it drops
-// out and is classified as mirror-origin, as before.
-func carryProvenEntry(entries, previous map[string]Fingerprint, rel, absPath string) {
+// carryProvenEntry keeps previous[rel] when every copy in copies (the mirror
+// copy first) still matches it. A cloud placeholder or a changed copy is not
+// carried: it drops out and is classified as mirror-origin, as before.
+func carryProvenEntry(entries, previous map[string]Fingerprint, rel string, copies ...string) {
 	prev, ok := previous[rel]
 	if !ok {
 		return
 	}
-	info, err := os.Lstat(absPath)
-	if err != nil || dehydratedFile(absPath, info) {
-		return
+	for _, absPath := range copies {
+		info, err := os.Lstat(absPath)
+		if err != nil || dehydratedFile(absPath, info) {
+			return
+		}
+		fp, err := FingerprintFile(absPath, FingerprintFast)
+		if err != nil || !FingerprintsCompatible(prev, fp, absPath) {
+			return
+		}
 	}
-	fp, err := FingerprintFile(absPath, FingerprintFast)
-	if err == nil && FingerprintsCompatible(prev, fp, absPath) {
-		entries[rel] = prev
-	}
+	entries[rel] = prev
 }

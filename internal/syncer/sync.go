@@ -695,7 +695,7 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	// local delete into deletion of independent peer work. Keep that baseline
 	// unchanged on any failed SSH push.
 	out, rsyncErr := runRsyncOutput(ctx, runner, cfg, args)
-	if rsyncErr != nil && (cfg.Target.IsSSH() || !rsyncExited(rsyncErr)) {
+	if rsyncErr != nil && (cfg.Target.IsSSH() || !rsyncExited(ctx, rsyncErr)) {
 		return rsyncErr
 	}
 	if !dryRun && cfg.LocalPaths != nil {
@@ -970,11 +970,13 @@ func unescapeRsyncName(name string) string {
 // rsyncExited reports whether rsync ran and exited with a status, so it may
 // have written files. A run that never started, or that a signal killed before
 // rsync could exit, has no status; rsync that catches SIGINT or SIGTERM exits
-// 20 and is finalized like any other exit. When dot itself is interrupted it
-// cancels its context, which kills rsync, so that run skips the refresh.
-func rsyncExited(err error) bool {
+// 20 and is finalized like any other exit. A run during which dot itself was
+// interrupted is not: a terminal Ctrl-C reaches rsync too, which can exit 20
+// before the cancellation kills it, and the refresh would then walk the whole
+// mirror after the user asked to stop.
+func rsyncExited(ctx context.Context, err error) bool {
 	var ee *osexec.ExitError
-	return errors.As(err, &ee) && ee.ExitCode() > 0
+	return ctx.Err() == nil && errors.As(err, &ee) && ee.ExitCode() > 0
 }
 
 // PartialTransferError reports an rsync run that moved data but not all of it.

@@ -145,13 +145,24 @@ func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
 		return "", 0, fmt.Errorf("%d mirror leftover(s) exceed max_delete %d; raise max_delete or move them out of %s by hand", len(rels), cfg.MaxDelete, cfg.MirrorPath)
 	}
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
-	backup := filepath.Join(local, NewConflictDir().LeftoverBackupRel())
+	backupRel := NewConflictDir().LeftoverBackupRel()
+	backup := filepath.Join(local, backupRel)
 	moved := 0
 	var moveErr error
 	for _, rel := range rels {
 		dst := filepath.Join(backup, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			moveErr = fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+		// Each directory is created and checked in turn, as for the peer
+		// quarantine: a symlinked .sync-conflicts must not carry the backup
+		// out of the workspace, or back into the provider folder.
+		dir := local
+		for _, part := range strings.Split(filepath.Join(backupRel, filepath.Dir(rel)), string(filepath.Separator)) {
+			dir = filepath.Join(dir, part)
+			if err := ensurePeerLocalDirectory(dir); err != nil {
+				moveErr = fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+				break
+			}
+		}
+		if moveErr != nil {
 			break
 		}
 		if _, err := os.Lstat(dst); err == nil {

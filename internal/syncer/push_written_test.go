@@ -569,6 +569,45 @@ func TestPush_ARunKilledBeforeRsyncExitedSkipsTheRefresh(t *testing.T) {
 	}
 }
 
+// A run during which dot was interrupted skips the refresh even when rsync,
+// which a terminal Ctrl-C reaches too, exited 20 before it was killed.
+func TestRsyncExited_AnInterruptedDotDoesNotFinalize(t *testing.T) {
+	exit20 := osexec.Command("sh", "-c", "exit 20").Run()
+	if !rsyncExited(context.Background(), exit20) {
+		t.Fatalf("exit 20 (%v) is not finalized", exit20)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if rsyncExited(ctx, exit20) {
+		t.Error("an interrupted dot finalizes rsync's exit 20")
+	}
+}
+
+// The backup path is checked component by component: a symlinked
+// .sync-conflicts would carry the backup out of the workspace (here back
+// into the mirror), so the move refuses and the leftover stays.
+func TestMoveMirrorLeftovers_RefusesASymlinkedBackupDir(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	conflicts := filepath.Join(f.local, conflictsDirName)
+	if err := os.RemoveAll(conflicts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(f.mirror, conflicts); err != nil {
+		t.Fatal(err)
+	}
+	_, moved, err := MoveMirrorLeftovers(f.cfg, []string{"old./c.md"})
+	if err == nil || moved != 0 {
+		t.Fatalf("MoveMirrorLeftovers = %d, %v; want a refusal", moved, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "old./c.md")); err != nil {
+		t.Errorf("the leftover left the mirror: %v", err)
+	}
+	if entries, _ := os.ReadDir(f.mirror); len(entries) != 1 {
+		t.Errorf("the move wrote through the symlink into the mirror: %v", entries)
+	}
+}
+
 // Two leftovers one filesystem folds together would map to one backup path;
 // the move stops instead of replacing the first backup.
 func TestMoveMirrorLeftovers_NeverReplacesABackup(t *testing.T) {
@@ -653,12 +692,17 @@ func TestPushCommand_ACloudEditOfAnUnsupportedNameIsNeverALeftover(t *testing.T)
 		f.seedBaseline(rel, "v1", f.writeMirror(rel, "v1"))
 	}
 	f.writeMirror("a./f.md", "edited in the cloud, longer")
+	// A refresh before #225 fingerprinted the mirror copy, which no push sent.
+	f.writeLocal("a./h.md", "workspace v1")
+	f.seedBaseline("a./h.md", "cloud copy, recorded", f.writeMirror("a./h.md", "cloud copy, recorded"))
 	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
 		t.Fatalf("push with the cloud edit: %v", err)
 	}
 	baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
-	if fp, ok := baseline["a./f.md"]; ok {
-		t.Fatalf("the refresh recorded the cloud-edited copy as proof: %+v", fp)
+	for _, rel := range []string{"a./f.md", "a./h.md"} {
+		if fp, ok := baseline[rel]; ok {
+			t.Fatalf("the refresh kept %s's cloud copy as proof: %+v", rel, fp)
+		}
 	}
 
 	// The workspace renames a./ to a/.
@@ -669,7 +713,7 @@ func TestPushCommand_ACloudEditOfAnUnsupportedNameIsNeverALeftover(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(plan.Leftovers, []string{"a./g.md"}) || !slices.Equal(plan.MirrorUnsupported, []string{"a./f.md"}) {
+	if !slices.Equal(plan.Leftovers, []string{"a./g.md"}) || !slices.Equal(plan.MirrorUnsupported, []string{"a./f.md", "a./h.md"}) {
 		t.Fatalf("Leftovers = %v, MirrorUnsupported = %v", plan.Leftovers, plan.MirrorUnsupported)
 	}
 	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
@@ -677,6 +721,9 @@ func TestPushCommand_ACloudEditOfAnUnsupportedNameIsNeverALeftover(t *testing.T)
 	}
 	if body, err := os.ReadFile(filepath.Join(f.mirror, "a./f.md")); err != nil || string(body) != "edited in the cloud, longer" {
 		t.Errorf("the cloud-edited copy left the mirror: %q, %v", body, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(f.mirror, "a./h.md")); err != nil || string(body) != "cloud copy, recorded" {
+		t.Errorf("the cloud copy an old refresh recorded left the mirror: %q, %v", body, err)
 	}
 	if _, err := os.Stat(filepath.Join(f.mirror, "a./g.md")); !os.IsNotExist(err) {
 		t.Errorf("the proven leftover was not moved (err=%v)", err)
@@ -715,6 +762,11 @@ func TestPushCommand_LeftoversNeedDeletePropagationAndADeclineRecordsNothing(t *
 	}
 	if _, err := os.Stat(filepath.Join(f.mirror, "old./c.md")); err != nil {
 		t.Errorf("a leftover moved without delete propagation: %v", err)
+	}
+	// Its local twin is gone and deletes do not propagate, so its proof drops,
+	// as for any other file: a later pull must not restore a long-deleted name.
+	if baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile); baseline["old./c.md"] != (Fingerprint{}) {
+		t.Errorf("the refresh kept the entry of an unsupported name the workspace deleted: %+v", baseline["old./c.md"])
 	}
 }
 
