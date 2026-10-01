@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
@@ -239,14 +241,23 @@ func strictLabel(strict bool) string {
 
 // confirmSync answers the engine's confirmation requests. The engine names the
 // decision; cli owns both the wording and the `--yes` policy (D-09).
+// declinedOnAbort reads Ctrl-C at a push prompt as a decline: the operator
+// stopped the run, which is not a failed push (#224).
+func declinedOnAbort(ok bool, err error) (bool, error) {
+	if errors.Is(err, huh.ErrUserAborted) {
+		return false, nil
+	}
+	return ok, err
+}
+
 func confirmSync(cmd *cobra.Command) syncer.ConfirmFunc {
 	return func(req syncer.ConfirmRequest) (bool, error) {
 		yes, _ := cmd.Flags().GetBool("yes")
 		switch req.Kind {
 		case syncer.ConfirmPushSSH:
-			return ui.Confirm("Push to SSH target?", yes)
+			return declinedOnAbort(ui.Confirm("Push to SSH target?", yes))
 		case syncer.ConfirmPushPlan:
-			return ui.Confirm("Apply this push plan?", yes)
+			return declinedOnAbort(ui.Confirm("Apply this push plan?", yes))
 		case syncer.ConfirmPullPlan:
 			return ui.Confirm("Apply this pull plan?", yes)
 		case syncer.ConfirmPruneConflicts:

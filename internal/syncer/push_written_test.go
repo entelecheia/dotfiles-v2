@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 func TestWrittenFiles(t *testing.T) {
@@ -788,6 +790,28 @@ func TestPushCommand_ADeletionRestoredBeforeTheRunIsNotUnapplied(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.mirror, "notes/back.md")); err != nil {
 		t.Errorf("the restored file is not in the mirror: %v", err)
+	}
+}
+
+// On a filesystem that finds a name in either Unicode form (APFS), a mirror
+// leftover whose name the workspace holds in NFD is not planned: the move would
+// skip it, so a plan that listed it would force a push every interval (#225).
+func TestPlanPush_ALeftoverTheWorkspaceHasInAnotherUnicodeFormIsNotPlanned(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	nfc := norm.NFC.String("café./f.md")
+	nfd := norm.NFD.String(nfc)
+	f.writeLocal(nfd, "f")
+	if _, err := os.Lstat(filepath.Join(f.local, nfc)); err != nil {
+		t.Skip("this filesystem tells NFC and NFD names apart")
+	}
+	f.seedBaseline(nfc, "f", f.writeMirror(nfc, "f"))
+	plan, err := PlanPush(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Leftovers) != 0 || !slices.Equal(plan.Unsupported, []string{nfd}) {
+		t.Errorf("Leftovers = %q, Unsupported = %q; want no leftover and the workspace name", plan.Leftovers, plan.Unsupported)
 	}
 }
 

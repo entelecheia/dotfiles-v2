@@ -220,8 +220,8 @@ func TestRefreshBaselineKeepsPlaceholderStubsOut(t *testing.T) {
 
 // A proven entry is carried while its local copy is gone only if the mirror
 // copy is real content. A placeholder of an empty file keeps its size and
-// mtime, so only the marker tells the two apart, for a file a push wrote
-// (#224) and for an unsupported name (#225) alike.
+// mtime, so only the marker tells the two apart, for a file an earlier push
+// wrote (#224) and for an unsupported name (#225) alike.
 func TestRefreshBaselineCarriesNoProofForAnEvictedCopy(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.cfg.Propagation.Delete = true

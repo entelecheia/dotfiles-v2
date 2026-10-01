@@ -115,11 +115,16 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			// Never classify as create/update/delete/conflict: the transfer
 			// layer excludes the name too, so uploading it (or deleting the
 			// provider's renamed twin) is not on the table.
-			if _, local := localInv.files[rel]; local {
+			if _, inWorkspace := localInv.files[rel]; inWorkspace {
 				plan.Unsupported = append(plan.Unsupported, rel)
 			} else if base, ok := baseline[rel]; ok && !mirrorInv.dehydrated[rel] &&
 				FingerprintsCompatible(base, mirrorInv.files[rel], filepath.Join(mirror, rel)) {
-				plan.Leftovers = append(plan.Leftovers, rel)
+				// The move skips a path the workspace has (APFS finds an NFD
+				// twin under its NFC name, listed as Unsupported above), so
+				// the plan promises only what it moves.
+				if _, err := os.Lstat(filepath.Join(local, rel)); errors.Is(err, fs.ErrNotExist) {
+					plan.Leftovers = append(plan.Leftovers, rel)
+				}
 			} else {
 				plan.MirrorUnsupported = append(plan.MirrorUnsupported, rel)
 			}
