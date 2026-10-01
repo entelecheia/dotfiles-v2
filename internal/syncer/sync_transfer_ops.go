@@ -135,7 +135,7 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 	partial = skippedFiles(raw)
 	pushErr := downgradePartial(opts.Progress, raw)
 	if pushErr == nil {
-		pushErr = unappliedDeletes(ctx, runner, cfg, plan.Deletes, partial)
+		pushErr = unappliedDeletes(ctx, runner, cfg, plan.Deletes)
 	}
 	if pushErr == nil && plan.MoveLeftovers && len(plan.Leftovers) > 0 {
 		dir, moved, moveErr := MoveMirrorLeftovers(cfg, plan.Leftovers)
@@ -154,12 +154,15 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 
 // unappliedDeletes fails a push that left a planned deletion in the mirror
 // while the workspace still lacks the file. The baseline keeps such a file
-// proven, so the run must not pass as complete (#224). The cause is named only
-// from what the run shows: rsync skips every deletion after an I/O error (exit
-// 23, skipped set), and openrsync, by its version banner, deletes nothing when
-// --backup is set. Otherwise rsync's filters kept the file, which the plan's
-// literal match does not see (a name with an rsync wildcard such as "[").
-func unappliedDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, deletes []string, skipped bool) error {
+// proven, so the run must not pass as complete (#224).
+//
+// It names a cause only when the evidence is certain: the rsync this run used
+// prints an openrsync banner, and openrsync deletes nothing with --backup.
+// Otherwise it lists what makes rsync 3.x keep a file without picking one: an
+// exit code does not say which (exit 23 also follows receiver errors that leave
+// the deletions applied), and a filter can protect a name the plan matched
+// literally (rsync reads [, * and ? as wildcards).
+func unappliedDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, deletes []string) error {
 	local := strings.TrimRight(cfg.LocalPath, "/")
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
 	var left []string
@@ -174,10 +177,8 @@ func unappliedDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, del
 	if len(left) == 0 {
 		return nil
 	}
-	why := "rsync kept them; a filter may protect the name (rsync reads [, * and ? as wildcards)"
-	if skipped {
-		why = "rsync skipped every deletion after an I/O error (exit 23); fix the error it printed"
-	} else if res, err := runner.RunQuery(ctx, cfg.rsyncBin(), "--version"); err == nil && strings.Contains(res.Stdout, "openrsync") {
+	why := "rsync kept them: it skips deletions after an I/O error (see its output), and a filter can protect a name (rsync reads [, * and ? as wildcards)"
+	if res, err := runner.RunQuery(ctx, cfg.rsyncBin(), "--version"); err == nil && strings.Contains(res.Stdout, "openrsync") {
 		why = "openrsync deletes nothing with --backup; install rsync 3.x (#227)"
 	}
 	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s: %s", len(left), left[0], why)

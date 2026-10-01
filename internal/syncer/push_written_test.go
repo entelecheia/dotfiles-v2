@@ -406,28 +406,28 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 	}
 	real, _ := osexec.LookPath("rsync")
 	// dropDeletes runs the real rsync without --delete-after, then exits with
-	// status rc: deletions skipped silently (0) or after an I/O error (23).
+	// status rc: deletions skipped silently (0) or after an I/O error (23). A
+	// version query reaches the real rsync, so its banner stays the evidence.
 	dropDeletes := func(rc string) string {
 		script := filepath.Join(t.TempDir(), "rsync")
-		body := "#!/bin/sh\nfor a do\n  shift\n  [ \"$a\" = --delete-after ] || set -- \"$@\" \"$a\"\ndone\n\"" + real + "\" \"$@\" || exit\nexit " + rc + "\n"
+		body := "#!/bin/sh\n[ \"$1\" = --version ] && exec \"" + real + "\" --version\nfor a do\n  shift\n  [ \"$a\" = --delete-after ] || set -- \"$@\" \"$a\"\ndone\n\"" + real + "\" \"$@\" || exit\nexit " + rc + "\n"
 		if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		return script
 	}
-	f.cfg.RsyncPath = dropDeletes("23")
-	_, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
-	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md: rsync skipped every deletion after an I/O error") {
-		t.Fatalf("PushCommand after exit 23 = %v, want the unapplied deletion and its cause", err)
-	}
-	f.cfg.RsyncPath = dropDeletes("0")
-	_, err = PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
-	cause := "rsync kept them; a filter may protect the name"
+	// The exit code does not pick the cause (exit 23 also follows receiver
+	// errors that leave the deletions applied); only an openrsync banner does.
+	cause := "rsync kept them: it skips deletions after an I/O error"
 	if isOpenrsync() {
 		cause = "openrsync deletes nothing with --backup"
 	}
-	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md: "+cause) {
-		t.Fatalf("PushCommand = %v, want the unapplied deletion with %q", err, cause)
+	for _, rc := range []string{"23", "0"} {
+		f.cfg.RsyncPath = dropDeletes(rc)
+		_, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
+		if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md: "+cause) {
+			t.Fatalf("PushCommand with rsync exit %s = %v, want the unapplied deletion with %q", rc, err, cause)
+		}
 	}
 	if st, _ := LoadLocalState(f.cfg.LocalPaths); !strings.Contains(st.LastPushError, "planned deletion(s) left") || !st.LastPush.Equal(before.LastPush) {
 		t.Errorf("state after the failed run = %+v; want the error recorded and last_push unchanged", st)
