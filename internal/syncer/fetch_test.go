@@ -5,6 +5,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -165,5 +166,82 @@ func TestFetchScopeArgs(t *testing.T) {
 	}
 	if _, err := fetchScopeArgs([]fetchEntry{{rel: "../outside", known: true}}); err == nil {
 		t.Error("a path outside the workspace became a fetch rule")
+	}
+}
+
+// A requested path a filter layer keeps out (a shared folder an allow
+// re-include opens, an unallowed secret) is reported as excluded, not
+// fetched, and is not transferred (#231).
+func TestFetch_ReportsAFilteredPathAsExcluded(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.SharedExcludes = []string{"team/ops"}
+	f.cfg.AllowPatterns = []string{"/team/ops/.env"}
+	f.writeMirror("team/ops/r.pdf", "shared")
+	f.writeMirror("proj/.env", "TOKEN=leak")
+	f.writeMirror("notes/a.pdf", "fine")
+	res, err := Fetch(context.Background(), f.runner, f.cfg, []string{"team/ops/r.pdf", "proj/.env", "notes/a.pdf"}, false)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if !slices.Equal(res.Fetched, []string{"notes/a.pdf"}) || !slices.Equal(res.Excluded, []string{"team/ops/r.pdf", "proj/.env"}) {
+		t.Errorf("Fetched = %v, Excluded = %v", res.Fetched, res.Excluded)
+	}
+	for rel, want := range map[string]bool{"notes/a.pdf": true, "team/ops/r.pdf": false, "proj/.env": false} {
+		if _, err := os.Stat(filepath.Join(f.local, rel)); (err == nil) != want {
+			t.Errorf("%s in the workspace = %v, want %v", rel, err == nil, want)
+		}
+	}
+}
+
+// An absolute path under the workspace is read relative to it; any other
+// absolute path stays refused (#231).
+func TestFetch_AnAbsolutePathUnderTheWorkspace(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.writeMirror("notes/a.pdf", "fine")
+	res, err := Fetch(context.Background(), f.runner, f.cfg, []string{filepath.Join(f.local, "notes/a.pdf")}, false)
+	if err != nil || !slices.Equal(res.Fetched, []string{"notes/a.pdf"}) {
+		t.Fatalf("Fetch(absolute under the workspace) = %+v, %v", res, err)
+	}
+	if _, err := Fetch(context.Background(), f.runner, f.cfg, []string{"/notes/a.pdf"}, false); err == nil || !strings.Contains(err.Error(), "not a path below the workspace root") {
+		t.Errorf("Fetch(/notes/a.pdf) = %v, want a refusal", err)
+	}
+}
+
+// A symlinked .sync-conflicts would carry a backup out of the workspace, so
+// every workspace-side backup writer refuses the run and writes nothing
+// through it (#231).
+func TestWorkspaceBackupWritersRefuseASymlinkedConflictsDir(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	outside := t.TempDir()
+	conflicts := filepath.Join(f.local, conflictsDirName)
+	if err := os.RemoveAll(conflicts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, conflicts); err != nil {
+		t.Fatal(err)
+	}
+	f.writeLocal("notes/a.md", "old")
+	f.writeMirror("notes/a.md", "newer in the mirror")
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(f.mirror, "notes/a.md"), future, future); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PullTracked(f.cfg, PullOptions{}); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
+		t.Errorf("PullTracked = %v, want a refusal", err)
+	}
+	if err := PullDirect(context.Background(), f.runner, f.cfg, false); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
+		t.Errorf("PullDirect = %v, want a refusal", err)
+	}
+	if _, err := Fetch(context.Background(), f.runner, f.cfg, []string{"notes/a.md"}, false); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
+		t.Errorf("Fetch = %v, want a refusal", err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Errorf("a backup was written through the symlink: %v", entries)
+	}
+	if body, _ := os.ReadFile(filepath.Join(f.local, "notes/a.md")); string(body) != "old" {
+		t.Errorf("the workspace copy changed: %q", body)
 	}
 }

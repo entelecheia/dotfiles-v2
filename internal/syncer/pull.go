@@ -79,6 +79,9 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 
 	now := time.Now().UTC()
 	conflict := NewConflictDir()
+	if err := refuseUnsafeBackupDir(local, conflict.PullLocalBackupRel()); err != nil {
+		return nil, fmt.Errorf("pull: %w", err)
+	}
 	result := &PullResult{DryRun: opts.DryRun}
 	nextBaseline := make(map[string]Fingerprint, len(baseline))
 	for rel, fp := range baseline {

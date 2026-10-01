@@ -653,6 +653,34 @@ func TestPullTracked_LeavesAPendingLeftoverInTheMirror(t *testing.T) {
 	}
 }
 
+// errOnlyCtx reports cancellation without closing Done, so rsync is not
+// killed: the window between rsync's exit and dot reading its status.
+type errOnlyCtx struct{ context.Context }
+
+func (errOnlyCtx) Err() error { return context.Canceled }
+
+// A push during which dot was interrupted, whose rsync then exited 24, records
+// a failure, leaves last_push unchanged and moves no leftover: the refresh did
+// not run, so the post-push steps have no current baseline (#231).
+func TestPushCommand_AnInterruptedRunDoesNotFinalize(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/keep.md", "keep")
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	f.cfg.RsyncPath = writeRsyncThen(t, "exit 24")
+	_, err := PushCommand(errOnlyCtx{context.Background()}, PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
+	if err == nil || !strings.Contains(err.Error(), "push interrupted") {
+		t.Fatalf("PushCommand = %v, want an interrupted failure", err)
+	}
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); !st.LastPush.IsZero() || !strings.Contains(st.LastPushError, "interrupted") {
+		t.Errorf("state: LastPush = %v, LastPushError = %q", st.LastPush, st.LastPushError)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "old./c.md")); err != nil {
+		t.Errorf("an interrupted run moved a leftover: %v", err)
+	}
+}
+
 // A run during which dot was interrupted skips the refresh even when rsync,
 // which a terminal Ctrl-C reaches too, exited 20 before it was killed.
 func TestRsyncExited_AnInterruptedDotDoesNotFinalize(t *testing.T) {

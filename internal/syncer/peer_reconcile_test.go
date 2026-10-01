@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -471,6 +472,80 @@ func TestPeerFilterArgs_UsesMaterializedTrackedIncludes(t *testing.T) {
 	for _, arg := range args {
 		if strings.Contains(arg, cfg.LocalPaths.TrackedDynFile) {
 			t.Errorf("peer filter args still reference the canonical store path: %v", args)
+		}
+	}
+}
+
+// The remote inventory probe keeps out what the Go inventory and the transfer
+// keep out: a submodule working tree and a shared folder (#231).
+func TestPeerFilterArgs_MatchesTheGoFilterForSharedAndSubmodules(t *testing.T) {
+	if _, err := exec.LookPath("rsync"); err != nil {
+		t.Skip("rsync not installed")
+	}
+	workspace := t.TempDir()
+	cfg := newPeerWorktreeTestConfig(t, workspace)
+	cfg.IncludeSubmodules = false
+	cfg.SharedExcludes = []string{"team/ops"}
+	for rel, body := range map[string]string{
+		".gitmodules":     "[submodule \"lib\"]\n\tpath = vendor/lib\n\turl = https://example.invalid/lib.git\n",
+		"vendor/lib/a.go": "package lib",
+		"team/ops/a.pdf":  "shared",
+		"team/x.pdf":      "ours",
+		"keep.md":         "ours",
+	} {
+		path := filepath.Join(workspace, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rf, err := PreparePeerPlanFilters(cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rf.Cleanup()
+	args := append([]string{"-r", "--dry-run", "--out-format=%n"}, PeerFilterArgs(cfg, rf)...)
+	out, err := exec.Command("rsync", append(args, workspace+"/", t.TempDir()+"/")...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("rsync: %v\n%s", err, out)
+	}
+	var rsyncKept []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" && !strings.HasSuffix(line, "/") {
+			rsyncKept = append(rsyncKept, line)
+		}
+	}
+	filter, err := newSyncFilter(cfg, strings.TrimRight(cfg.MirrorPath, "/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goKept []string
+	_ = filepath.WalkDir(workspace, func(path string, d os.DirEntry, err error) error {
+		if err != nil || path == workspace {
+			return err
+		}
+		rel, _ := filepath.Rel(workspace, path)
+		if filter.shouldSkip(path, filepath.ToSlash(rel), d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.IsDir() {
+			goKept = append(goKept, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	slices.Sort(rsyncKept)
+	slices.Sort(goKept)
+	if !slices.Equal(rsyncKept, goKept) {
+		t.Errorf("remote probe keeps %v, Go inventory keeps %v", rsyncKept, goKept)
+	}
+	for _, rel := range []string{"vendor/lib/a.go", "team/ops/a.pdf"} {
+		if slices.Contains(rsyncKept, rel) {
+			t.Errorf("the remote probe lists %s", rel)
 		}
 	}
 }

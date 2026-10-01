@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"charm.land/huh/v2"
+	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
@@ -305,5 +306,20 @@ func TestDeclinedOnAbort(t *testing.T) {
 	}
 	if ok, err := declinedOnAbort(true, nil); !ok || err != nil {
 		t.Errorf("a yes = %v, %v", ok, err)
+	}
+}
+
+// Ctrl-C at either push prompt is a decline, not a failed push (#224, #231).
+func TestConfirmSync_CtrlCDeclinesBothPushPrompts(t *testing.T) {
+	prev := syncPrompt
+	t.Cleanup(func() { syncPrompt = prev })
+	syncPrompt = func(string, bool) (bool, error) { return false, huh.ErrUserAborted }
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("yes", false, "")
+	confirm := confirmSync(cmd)
+	for _, kind := range []syncer.ConfirmKind{syncer.ConfirmPushSSH, syncer.ConfirmPushPlan} {
+		if ok, err := confirm(syncer.ConfirmRequest{Kind: kind}); ok || err != nil {
+			t.Errorf("Ctrl-C at push prompt %d = %v, %v; want a decline", kind, ok, err)
+		}
 	}
 }

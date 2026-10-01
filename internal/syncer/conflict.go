@@ -1,10 +1,13 @@
 package syncer
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -53,6 +56,29 @@ func (c *ConflictDir) PushBackupRel() string {
 // leftovers move into.
 func (c *ConflictDir) LeftoverBackupRel() string {
 	return filepath.Join(conflictsDirName, c.Timestamp, backupSubFromMirror)
+}
+
+// refuseUnsafeBackupDir checks the components of a workspace backup directory
+// that already exist. rsync's --backup-dir and the Go backup copy both follow a
+// symlinked .sync-conflicts, which would carry the backup out of the workspace
+// (#231). A component that does not exist yet is left for the writer to
+// create, so a run that backs nothing up leaves no empty directory.
+func refuseUnsafeBackupDir(root, rel string) error {
+	dir := root
+	for _, part := range strings.Split(filepath.Clean(rel), string(filepath.Separator)) {
+		dir = filepath.Join(dir, part)
+		info, err := os.Lstat(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("unsafe backup directory %s: not a plain directory", dir)
+		}
+	}
+	return nil
 }
 
 // PullLocalBackupRel returns the backup path for a pull that overwrites a

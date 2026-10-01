@@ -42,10 +42,14 @@ type ArchiveLimits struct {
 }
 
 // DefaultArchiveLimits is deliberately sized around the project's known
-// release assets while leaving no unbounded extraction surface.
+// release assets while leaving no unbounded extraction surface. The dot binary
+// outgrew a 16 MiB entry limit at about v2.70.28 (20 MB), which stopped every
+// self-update; the release build checks each binary against MaxEntryBytes
+// (TestReleaseBinaryFitsArchiveLimits), so the next growth fails the release
+// instead of the updater (#231).
 var DefaultArchiveLimits = ArchiveLimits{
 	MaxCompressedBytes:     201326592,
-	MaxEntryBytes:          16777216,
+	MaxEntryBytes:          67108864,
 	MaxTotalExtractedBytes: 402653184,
 	MaxEntries:             4096,
 	MaxExpansionRatio:      8,

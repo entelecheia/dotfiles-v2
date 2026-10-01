@@ -301,7 +301,9 @@ func InboxManifestCounts(cfg *Config) (int, int, error) {
 }
 
 // SharedCount reports how many manual shared-exclude entries are configured,
-// counted in the form `shared list` shows (treeRel), so the two agree.
+// counted in the form `shared list` shows (treeRel), so the two agree. An
+// entry the cleaning drops counts by its stored text, as the list shows it
+// (#231).
 func SharedCount(cfg *Config) (int, error) {
 	localCfg, err := EditableLocalConfig(cfg)
 	if err != nil {
@@ -313,7 +315,22 @@ func SharedCount(cfg *Config) (int, error) {
 			seen[rel] = true
 		}
 	}
-	return len(seen), nil
+	return len(seen) + len(DroppedSharedEntries(localCfg.SharedExcludes)), nil
+}
+
+// DroppedSharedEntries returns the stored shared entries that name no path
+// under the workspace (an absolute path, one outside the tree), which
+// ScanShared and both filter sides ignore. `shared list` shows them so they
+// can be removed by their stored text (#231).
+func DroppedSharedEntries(manual []string) []string {
+	var out []string
+	for _, e := range manual {
+		if e = strings.TrimSpace(e); e != "" && treeRel(e) == "" && !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SharedAdd appends the given paths to the manual shared-excludes list,
@@ -359,6 +376,13 @@ func SharedRemove(cfg *Config, args []string) ([]string, error) {
 	current := append([]string(nil), localCfg.SharedExcludes...)
 
 	for _, raw := range args {
+		// An entry the cleaning drops is removed by the stored text `shared
+		// list` shows for it.
+		if dropped := strings.TrimSpace(raw); slices.Contains(DroppedSharedEntries(current), dropped) {
+			current = slices.DeleteFunc(current, func(e string) bool { return strings.TrimSpace(e) == dropped })
+			removed = append(removed, dropped)
+			continue
+		}
 		rel, err := RelativizeForMirror(raw, mirror)
 		if err != nil {
 			return nil, err

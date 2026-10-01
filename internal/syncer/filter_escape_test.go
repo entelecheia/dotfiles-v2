@@ -343,3 +343,35 @@ func TestSharedEntriesHaveOneFormEverywhere(t *testing.T) {
 		t.Errorf("SharedAdd with a line separator = %v, want a refusal", err)
 	}
 }
+
+// A stored entry the cleaning drops (an absolute path, one outside the tree)
+// is listed, counted, removed by its stored text and cleared, so the CLI can
+// see and remove every stored entry (#231).
+func TestSharedEntriesTheCleaningDropsStayVisible(t *testing.T) {
+	f := newIntakeFixture(t)
+	if err := SaveLocalConfig(f.cfg.LocalPaths, &LocalConfig{
+		Propagation:    DefaultPropagationPolicy(),
+		SharedExcludes: []string{"team/ops", "/team/ops", " ../x "},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if dropped := DroppedSharedEntries([]string{"team/ops", "/team/ops", " ../x ", "../x"}); !slices.Equal(dropped, []string{"../x", "/team/ops"}) {
+		t.Errorf("DroppedSharedEntries = %q", dropped)
+	}
+	if n, _ := SharedCount(f.cfg); n != 3 {
+		t.Errorf("SharedCount = %d, want 3 (team/ops and two dropped entries)", n)
+	}
+	removed, err := SharedRemove(f.cfg, []string{"/team/ops"})
+	if err != nil || !slices.Equal(removed, []string{"/team/ops"}) {
+		t.Fatalf("SharedRemove(/team/ops) = %v, %v", removed, err)
+	}
+	if stored, _, _ := LoadLocalConfig(f.cfg.LocalPaths); !slices.Equal(stored.SharedExcludes, []string{"team/ops", " ../x "}) {
+		t.Errorf("stored entries = %q", stored.SharedExcludes)
+	}
+	if err := SharedClear(f.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := SharedCount(f.cfg); n != 0 {
+		t.Errorf("SharedCount after clear = %d", n)
+	}
+}

@@ -221,6 +221,8 @@ func renderSyncEvent(p *Printer, r syncRender) func(syncer.SyncEvent) {
 			p.Line("Intaking %s → %s/inbox/gdrive/<ts>/ (%s mode)", cfg.MirrorPath, stripTrailingSlash(cfg.LocalPath), strictLabel(r.strict))
 		case syncer.SyncEventFetchMissing:
 			p.Warn("not on target, skipped: %s", e.Path)
+		case syncer.SyncEventFetchExcluded:
+			p.Warn("kept out by a sync filter (shared, secrets or excludes), skipped: %s", e.Path)
 		case syncer.SyncEventPartialTransfer:
 			_ = reportPushPartial(p, e.Err)
 		case syncer.SyncEventLeftoversMoved:
@@ -239,8 +241,31 @@ func strictLabel(strict bool) string {
 	return "fast"
 }
 
+// syncPrompt asks a yes/no question; tests replace it to answer without a
+// terminal.
+var syncPrompt = ui.Confirm
+
 // confirmSync answers the engine's confirmation requests. The engine names the
 // decision; cli owns both the wording and the `--yes` policy (D-09).
+func confirmSync(cmd *cobra.Command) syncer.ConfirmFunc {
+	return func(req syncer.ConfirmRequest) (bool, error) {
+		yes, _ := cmd.Flags().GetBool("yes")
+		switch req.Kind {
+		case syncer.ConfirmPushSSH:
+			return declinedOnAbort(syncPrompt("Push to SSH target?", yes))
+		case syncer.ConfirmPushPlan:
+			return declinedOnAbort(syncPrompt("Apply this push plan?", yes))
+		case syncer.ConfirmPullPlan:
+			return syncPrompt("Apply this pull plan?", yes)
+		case syncer.ConfirmPruneConflicts:
+			return syncPrompt(fmt.Sprintf("Remove %d backup dir(s), reclaiming %s?", req.Candidates, ws.FormatSize(req.Reclaimed)), yes)
+		case syncer.ConfirmInstallRsync:
+			return syncPrompt("rsync not found. Install it?", yes)
+		}
+		return false, fmt.Errorf("unknown confirmation request %d", req.Kind)
+	}
+}
+
 // declinedOnAbort reads Ctrl-C at a push prompt as a decline: the operator
 // stopped the run, which is not a failed push (#224).
 func declinedOnAbort(ok bool, err error) (bool, error) {
@@ -248,23 +273,4 @@ func declinedOnAbort(ok bool, err error) (bool, error) {
 		return false, nil
 	}
 	return ok, err
-}
-
-func confirmSync(cmd *cobra.Command) syncer.ConfirmFunc {
-	return func(req syncer.ConfirmRequest) (bool, error) {
-		yes, _ := cmd.Flags().GetBool("yes")
-		switch req.Kind {
-		case syncer.ConfirmPushSSH:
-			return declinedOnAbort(ui.Confirm("Push to SSH target?", yes))
-		case syncer.ConfirmPushPlan:
-			return declinedOnAbort(ui.Confirm("Apply this push plan?", yes))
-		case syncer.ConfirmPullPlan:
-			return ui.Confirm("Apply this pull plan?", yes)
-		case syncer.ConfirmPruneConflicts:
-			return ui.Confirm(fmt.Sprintf("Remove %d backup dir(s), reclaiming %s?", req.Candidates, ws.FormatSize(req.Reclaimed)), yes)
-		case syncer.ConfirmInstallRsync:
-			return ui.Confirm("rsync not found. Install it?", yes)
-		}
-		return false, fmt.Errorf("unknown confirmation request %d", req.Kind)
-	}
 }

@@ -70,8 +70,9 @@ func runSyncSharedList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("scanning shared entries: %w", err)
 	}
+	dropped := syncer.DroppedSharedEntries(cfg.SharedExcludes)
 	p := printerFrom(cmd)
-	if len(entries) == 0 {
+	if len(entries) == 0 && len(dropped) == 0 {
 		p.Line("No manual shared excludes configured.")
 		p.Line("Add owned-but-shared-out folders with: dot sync shared add <path>")
 		return nil
@@ -83,6 +84,9 @@ func runSyncSharedList(cmd *cobra.Command, _ []string) error {
 			detail = "—"
 		}
 		p.Line("  %-8s  %-40s  %s", e.Reason.String(), e.RelPath, detail)
+	}
+	for _, raw := range dropped {
+		p.Line("  %-8s  %-40s  %s", "ignored", raw, "(not a path under the workspace; dot sync shared remove it)")
 	}
 	p.Blank()
 	p.Line("auto entries are detected from filesystem properties; manual entries are operator-curated.")

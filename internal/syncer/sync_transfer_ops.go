@@ -132,6 +132,12 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 		}
 	}
 	raw := Push(ctx, runner, cfg, false)
+	if ctxErr := ctx.Err(); ctxErr != nil && (raw == nil || IsPartialTransfer(raw)) {
+		// dot was interrupted, so Push may have skipped the refresh
+		// (rsyncExited): neither the post-push checks nor the leftover move
+		// may act on that baseline, and the run is not complete (#231).
+		raw = fmt.Errorf("push interrupted: %w", ctxErr)
+	}
 	partial = skippedFiles(raw)
 	pushErr := downgradePartial(opts.Progress, raw)
 	if pushErr == nil {
@@ -460,6 +466,9 @@ func FetchCommand(ctx context.Context, opts FetchOptions) (*FetchCommandResult, 
 	if res != nil {
 		for _, rel := range res.Missing {
 			emitSync(opts.Progress, SyncEvent{Kind: SyncEventFetchMissing, Path: rel})
+		}
+		for _, rel := range res.Excluded {
+			emitSync(opts.Progress, SyncEvent{Kind: SyncEventFetchExcluded, Path: rel})
 		}
 	}
 	if fetchErr != nil {

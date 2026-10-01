@@ -15,6 +15,16 @@ builds:
       - -X main.commit={{.ShortCommit}}
     env:
       - CGO_ENABLED=0
+    hooks:
+      # A binary dot update could not extract fails the release before
+      # anything is published (#231). The test runs on the host, not the target.
+      post:
+        - cmd: go test ./internal/fileutil -run ^TestReleaseBinaryFitsArchiveLimits$ -count=1
+          env:
+            - DOT_RELEASE_BINARY={{ .Path }}
+            - GOOS=
+            - GOARCH=
+          output: true
 
 archives:
   - formats:
