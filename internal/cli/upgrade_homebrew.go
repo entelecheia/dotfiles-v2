@@ -114,6 +114,8 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 			}
 		}
 	}
+	linked := filepath.Join(h.prefix, "bin", "dot")
+	before, _ := filepath.EvalSymlinks(linked)
 	upgradeErr := brew("upgrade", info.FullName)
 	if upgradeErr == nil && !dryRun {
 		var installed string
@@ -121,8 +123,12 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 			p.Line("Upgraded: %s → %s (Homebrew)", current, installed)
 		}
 	}
-	// brew may have replaced the binary even when it or the check failed, and
-	// the jobs then fail their next spawn, so the reload always runs.
+	// brew links each version from its own keg. Reload whenever the link
+	// moved, even when brew or the check failed afterwards, since the jobs then
+	// fail their next spawn; an unchanged link leaves healthy jobs running.
+	if after, _ := filepath.EvalSymlinks(linked); !dryRun && after == before {
+		return upgradeErr
+	}
 	return errors.Join(upgradeErr, reloadDotLaunchAgents(work, p, h, dryRun))
 }
 
@@ -207,7 +213,7 @@ func reloadDotLaunchAgents(ctx context.Context, p *Printer, h homebrewDot, dryRu
 		p.Line("Reloaded %s", label)
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("upgraded, but could not reload %s", strings.Join(failed, ", "))
+		return fmt.Errorf("could not reload %s", strings.Join(failed, ", "))
 	}
 	return nil
 }

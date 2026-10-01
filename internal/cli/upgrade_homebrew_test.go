@@ -43,7 +43,8 @@ type fakeUpgrade struct {
 	acquired   int
 	deferErr   error
 	launchd    func(args []string) (string, error)
-	upgradeErr error // returned by brew upgrade
+	upgradeErr error  // returned by brew upgrade
+	onUpgrade  func() // runs when brew upgrade is called, e.g. to relink
 	// canceled lists calls made with a canceled context: brew and the
 	// reload must not be killed by a signal (#235 review).
 	canceled []string
@@ -82,6 +83,9 @@ func (f *fakeUpgrade) install(t *testing.T) {
 		case len(args) > 0 && args[0] == "--version":
 			return f.version, nil
 		case len(args) > 0 && args[0] == "upgrade":
+			if f.onUpgrade != nil {
+				f.onUpgrade()
+			}
 			return "", f.upgradeErr
 		}
 		return "", nil
@@ -364,9 +368,16 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 	}
 	h := homebrewDot{prefix: filepath.Join(root, "brew"), formula: "dotfiles"}
 	kegDot := filepath.Join(h.prefix, "Cellar", "dotfiles", "2.0.0", "bin", "dot")
+	newKeg := filepath.Join(h.prefix, "Cellar", "dotfiles", "2.1.0", "bin", "dot")
 	linked := filepath.Join(h.prefix, "bin", "dot")
 	other := filepath.Join(root, "other", "dot")
-	for _, f := range []string{kegDot, other} {
+	link := func(target string) {
+		_ = os.Remove(linked)
+		if err := os.Symlink(target, linked); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{kegDot, newKeg, other} {
 		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -375,9 +386,6 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(linked), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(kegDot, linked); err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Join(root, "home")
@@ -398,6 +406,7 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 		name          string
 		run           func(ctx context.Context, p *Printer) error
 		cancel        bool
+		relink        bool // brew upgrade links a new keg
 		upgradeFail   bool
 		bootstrapFail bool
 		stuck         bool // the job never leaves the domain after bootout
@@ -421,6 +430,7 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 			run: func(ctx context.Context, p *Printer) error {
 				return upgradeHomebrew(ctx, p, h, "1.0.0", "2.0.0", false)
 			},
+			relink:   true,
 			attempts: 1,
 			wantErr:  "not 2.0.0 or newer",
 			wantLine: "Reloaded com.dotfiles.sync",
@@ -430,13 +440,25 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 			run: func(ctx context.Context, p *Printer) error {
 				return upgradeHomebrew(ctx, p, h, "1.0.0", "2.0.0", false)
 			},
+			relink:      true,
 			upgradeFail: true,
 			attempts:    1,
 			wantErr:     "brew upgrade entelecheia/tap/dotfiles: exit status 1",
 			wantLine:    "Reloaded com.dotfiles.sync",
 		},
+		{
+			// A brew upgrade that failed without relinking changed nothing,
+			// so the healthy jobs keep running.
+			name: "after a failed brew upgrade that kept the link",
+			run: func(ctx context.Context, p *Printer) error {
+				return upgradeHomebrew(ctx, p, h, "1.0.0", "2.0.0", false)
+			},
+			upgradeFail: true,
+			wantErr:     "brew upgrade entelecheia/tap/dotfiles: exit status 1",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			link(kegDot)
 			loaded := map[string]string{
 				"com.dotfiles.sync":   linked,
 				"com.dotfiles.broken": kegDot,
@@ -466,6 +488,9 @@ func TestReloadDotLaunchAgents(t *testing.T) {
 			}}
 			if tc.upgradeFail {
 				f.upgradeErr = errors.New("exit status 1")
+			}
+			if tc.relink {
+				f.onUpgrade = func() { link(newKeg) }
 			}
 			f.install(t)
 			ctx, cancel := context.WithCancel(context.Background())
