@@ -86,7 +86,7 @@ func runSyncSharedList(cmd *cobra.Command, _ []string) error {
 		p.Line("  %-8s  %-40s  %s", e.Reason.String(), e.RelPath, detail)
 	}
 	for _, raw := range dropped {
-		p.Line("  %-8s  %-40s  %s", "ignored", raw, "(not a path under the workspace; dot sync shared remove it)")
+		p.Line("  %-8s  %-40q  %s", "ignored", raw, "(not a path under the workspace; dot sync shared remove it)")
 	}
 	p.Blank()
 	p.Line("auto entries are detected from filesystem properties; manual entries are operator-curated.")

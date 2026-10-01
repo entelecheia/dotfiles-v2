@@ -170,9 +170,13 @@ func conflictDirSize(dir string) int64 {
 
 // ListConflicts enumerates timestamped backup directories under
 // <treeRoot>/.sync-conflicts/, sorted oldest-first. Returns an empty
-// slice (not error) if the conflicts root doesn't exist.
+// slice (not error) if the conflicts root doesn't exist. A symlinked root is
+// refused, so a prune never deletes directories outside the tree (#231).
 func ListConflicts(treeRoot string) ([]ConflictEntry, error) {
 	root := filepath.Join(treeRoot, conflictsDirName)
+	if err := refuseUnsafeBackupDir(treeRoot, conflictsDirName); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {

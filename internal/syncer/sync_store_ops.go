@@ -319,13 +319,13 @@ func SharedCount(cfg *Config) (int, error) {
 }
 
 // DroppedSharedEntries returns the stored shared entries that name no path
-// under the workspace (an absolute path, one outside the tree), which
+// under the workspace (blank, an absolute path, one outside the tree), which
 // ScanShared and both filter sides ignore. `shared list` shows them so they
 // can be removed by their stored text (#231).
 func DroppedSharedEntries(manual []string) []string {
 	var out []string
 	for _, e := range manual {
-		if e = strings.TrimSpace(e); e != "" && treeRel(e) == "" && !slices.Contains(out, e) {
+		if e = strings.TrimSpace(e); treeRel(e) == "" && !slices.Contains(out, e) {
 			out = append(out, e)
 		}
 	}

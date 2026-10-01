@@ -8,6 +8,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -810,7 +811,7 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 			e.isDir = info.IsDir()
 			e.known = true
 		}
-		if fetchExcluded(filter, norm, e.isDir) {
+		if fetchEntryExcluded(filter, e) {
 			res.Excluded = append(res.Excluded, norm)
 			continue
 		}
@@ -861,10 +862,20 @@ func Fetch(ctx context.Context, runner *exec.Runner, cfg *Config, rels []string,
 	return res, nil
 }
 
+// fetchEntryExcluded reports whether a filter layer keeps a requested path out
+// of a fetch. An SSH path of unknown shape goes to rsync in both its directory
+// and its file form (fetchScopeArgs), so it is excluded only when both forms
+// are: an allow parent-dir include opens a directory, not a file.
+func fetchEntryExcluded(f *syncFilter, e fetchEntry) bool {
+	if !e.known {
+		return fetchExcluded(f, e.rel, false) && fetchExcluded(f, e.rel, true)
+	}
+	return fetchExcluded(f, e.rel, e.isDir)
+}
+
 // fetchExcluded reports whether a filter layer keeps rel out of a fetch. rsync
 // never visits a path below a directory a layer excludes, so the parents are
-// checked first, as its traversal does. An SSH path of unknown shape is
-// checked as a file.
+// checked first, as its traversal does.
 func fetchExcluded(f *syncFilter, rel string, isDir bool) bool {
 	parts := strings.Split(rel, "/")
 	for i := 1; i < len(parts); i++ {
@@ -943,10 +954,12 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 		return err
 	}
 	conflict := NewConflictDir()
-	if err := refuseUnsafeBackupDir(strings.TrimRight(cfg.LocalPath, "/"), conflict.PullBackupRel()); err != nil {
-		return fmt.Errorf("pull: %w", err)
-	}
 	args := pullArgs(cfg, conflict, rf, dryRun)
+	if slices.Contains(args, "--backup") {
+		if err := refuseUnsafeBackupDir(strings.TrimRight(cfg.LocalPath, "/"), conflict.PullBackupRel()); err != nil {
+			return fmt.Errorf("pull: %w", err)
+		}
+	}
 	fmt.Fprintf(cfg.out(), "  Pull: %s → %s\n", cfg.Target.RsyncDest(), cfg.LocalPath)
 	if err := runRsync(ctx, runner, cfg, args); err != nil {
 		return err

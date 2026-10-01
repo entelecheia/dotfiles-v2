@@ -16,6 +16,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -610,6 +612,20 @@ func TestReleaseBinaryFitsArchiveLimits(t *testing.T) {
 	}
 	if info.Size() > DefaultArchiveLimits.MaxEntryBytes {
 		t.Fatalf("%s is %d bytes; dot update extracts at most %d per entry (raise DefaultArchiveLimits.MaxEntryBytes)", path, info.Size(), DefaultArchiveLimits.MaxEntryBytes)
+	}
+}
+
+// The release hook names the size check by function name; a rename that left
+// the hook behind would make go test run nothing and pass (#231).
+func TestReleaseHookRunsTheSizeCheck(t *testing.T) {
+	body, err := os.ReadFile("../../.goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := runtime.FuncForPC(reflect.ValueOf(TestReleaseBinaryFitsArchiveLimits).Pointer()).Name()
+	name = name[strings.LastIndex(name, ".")+1:]
+	if !strings.Contains(string(body), "-run ^"+name+"$") {
+		t.Errorf(".goreleaser.yaml does not run %s on the built binaries", name)
 	}
 }
 

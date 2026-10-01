@@ -2,6 +2,8 @@ package syncer
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -9,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/exec"
 )
 
 func requireRsync(t *testing.T) {
@@ -243,5 +247,47 @@ func TestWorkspaceBackupWritersRefuseASymlinkedConflictsDir(t *testing.T) {
 	}
 	if body, _ := os.ReadFile(filepath.Join(f.local, "notes/a.md")); string(body) != "old" {
 		t.Errorf("the workspace copy changed: %q", body)
+	}
+}
+
+// An SSH path of unknown shape goes to rsync in both forms, so it is excluded
+// only when both are: a shared folder an allow re-include opens is fetched as
+// a directory (#231).
+func TestFetchEntryExcluded_AnUnknownShapeNeedsBothForms(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.SharedExcludes = []string{"team/ops"}
+	f.cfg.AllowPatterns = []string{"/team/ops/.env"}
+	filter, err := newSyncFilter(f.cfg, f.mirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		e    fetchEntry
+		want bool
+	}{
+		{fetchEntry{rel: "team/ops"}, false},
+		{fetchEntry{rel: "team/ops", known: true}, true},
+		{fetchEntry{rel: "team/ops", known: true, isDir: true}, false},
+		{fetchEntry{rel: "team/ops/r.pdf"}, true},
+		{fetchEntry{rel: "notes/a.pdf"}, false},
+	} {
+		if got := fetchEntryExcluded(filter, tc.e); got != tc.want {
+			t.Errorf("fetchEntryExcluded(%+v) = %v, want %v", tc.e, got, tc.want)
+		}
+	}
+}
+
+// A pull that backs nothing up (a peer transfer passes no --backup) is not
+// refused over a symlinked .sync-conflicts it never writes into.
+func TestPullDirect_WithoutBackupIgnoresTheConflictsDir(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := newPeerWorktreeTestConfig(t, workspace)
+	cfg.LogFile = filepath.Join(t.TempDir(), "sync.log")
+	if err := os.Symlink(t.TempDir(), filepath.Join(workspace, conflictsDirName)); err != nil {
+		t.Fatal(err)
+	}
+	runner := exec.NewRunner(true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := PullDirect(context.Background(), runner, cfg, false); err != nil && strings.Contains(err.Error(), "unsafe backup directory") {
+		t.Errorf("PullDirect refused although it passes no --backup: %v", err)
 	}
 }

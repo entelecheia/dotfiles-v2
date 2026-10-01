@@ -222,3 +222,26 @@ func TestPruneConflicts_StrayFileSurvivesAndBlocksRootRemoval(t *testing.T) {
 		t.Errorf("root with strays must survive: %v", err)
 	}
 }
+
+// A symlinked .sync-conflicts would make a prune delete directories outside
+// the tree; listing and pruning refuse it and delete nothing (#231).
+func TestPruneConflicts_RefusesASymlinkedRoot(t *testing.T) {
+	tree := t.TempDir()
+	outside := t.TempDir()
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	if err := os.MkdirAll(filepath.Join(outside, "photos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(outside, "photos"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(tree, conflictsDirName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PruneConflicts(tree, time.Now(), false); err == nil || !strings.Contains(err.Error(), "unsafe backup directory") {
+		t.Errorf("PruneConflicts = %v, want a refusal", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "photos")); err != nil {
+		t.Errorf("the prune deleted a directory outside the tree: %v", err)
+	}
+}

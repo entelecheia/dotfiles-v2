@@ -541,3 +541,31 @@ func TestSyncPushCLI_RecordsAnOwnerRefusalUnlessPaused(t *testing.T) {
 		t.Errorf("a paused profile recorded %q", st.LastPushError)
 	}
 }
+
+// A stored shared entry the cleaning drops is listed as ignored, and `shared
+// clear` clears it instead of reporting an empty list (#231).
+func TestSyncSharedCLI_ListsAndClearsAnEntryTheCleaningDrops(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	if _, errOut, err := runDotForTest("gsync", "shared", "add", "team/x"); err != nil {
+		t.Fatalf("shared add: %v\nstderr=%s", err, errOut)
+	}
+	paths := syncer.ResolveLocalPaths(f.local + "/")
+	cfg, _, err := syncer.LoadLocalConfig(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SharedExcludes = append(cfg.SharedExcludes, "/team/ops")
+	if err := syncer.SaveLocalConfig(paths, cfg); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, err := runDotForTest("gsync", "shared", "list")
+	if err != nil || !strings.Contains(out, "team/x") || !strings.Contains(out, "ignored") || !strings.Contains(out, `"/team/ops"`) {
+		t.Fatalf("shared list = %v\n%s%s", err, out, errOut)
+	}
+	if out, errOut, err := runDotForTest("gsync", "shared", "clear", "--yes"); err != nil || !strings.Contains(out, "Cleared 2") {
+		t.Fatalf("shared clear = %v\n%s%s", err, out, errOut)
+	}
+	if cfg, _, _ := syncer.LoadLocalConfig(paths); len(cfg.SharedExcludes) != 0 {
+		t.Errorf("stored entries after clear = %q", cfg.SharedExcludes)
+	}
+}
