@@ -816,7 +816,7 @@ func SyncPause(ctx context.Context, cfg *Config, runner *exec.Runner) (*PauseRes
 	}
 	stopped := false
 	for index, kind := range [2]SchedulerKind{SchedulerKindPush, SchedulerKindIntake} {
-		if states[index] != SchedulerRunning && states[index] != SchedulerTargetUserActionRequired {
+		if states[index] != SchedulerRunning && states[index] != SchedulerSpawnFailed && states[index] != SchedulerTargetUserActionRequired {
 			continue
 		}
 		stopped = true

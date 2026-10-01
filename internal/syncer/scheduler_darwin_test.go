@@ -67,6 +67,38 @@ func TestSchedulerStateKind_SpawnFailedIsNotRunning(t *testing.T) {
 	}
 }
 
+func TestSyncPauseResumeReloadsSpawnFailedJobs(t *testing.T) {
+	cfg, record, paths := schedulerLifecycleConfig(t, true, true, "pause", false)
+	stub := `#!/bin/sh
+printf '%s\n' "$*" >> "$DOTFILES_TEST_SCHEDULER_ARGS"
+case "$1" in
+  print)
+    label="${2##*/}"
+    [ ! -f "$HOME/Library/LaunchAgents/$label.plist.unloaded" ] || exit 1
+    printf 'state = spawn failed\nlast exit code = 78: EX_CONFIG\n'
+    ;;
+  unload) : > "$2.unloaded" ;;
+  load) [ -f "$2.unloaded" ] || exit 42 ;;
+  *) exit 99 ;;
+esac
+`
+	writeStub(t, filepath.Join(os.Getenv("PATH"), "launchctl"), stub)
+	runner := exec.NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	paused, err := SyncPause(context.Background(), cfg, runner)
+	if err != nil || paused.SchedulerErr != nil || !paused.SchedulerStopped {
+		t.Fatalf("pause did not unload failed jobs: %+v, %v", paused, err)
+	}
+	resumed, err := SyncResume(context.Background(), cfg, runner)
+	if err != nil || resumed.SchedulerErr != nil || !resumed.SchedulerResumed {
+		t.Fatalf("resume did not reload failed jobs: %+v, %v", resumed, err)
+	}
+	want := append(schedulerLifecycleCommands(paths, true, true, "pause", false), schedulerLifecycleCommands(paths, true, true, "resume", false)...)
+	got := readSchedulerLifecycleCommands(t, record)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("service-manager commands = %q, want unload before load: %q", got, want)
+	}
+}
+
 func TestLaunchdStateFromPrintStatus(t *testing.T) {
 	cases := []struct {
 		name        string
