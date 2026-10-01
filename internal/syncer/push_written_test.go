@@ -244,6 +244,15 @@ func TestPushCommand_MovesMirrorLeftoversOutOfTheMirror(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(f.mirror, "keep./b.md")); err != nil {
 		t.Errorf("a workspace unsupported name's mirror copy was touched: %v", err)
 	}
+	// A pull would read a moved leftover still in the baseline as a mirror
+	// deletion.
+	if baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile); len(baseline) > 0 {
+		for _, rel := range []string{"spoc/notice./a.pdf", "old./sub/c.md"} {
+			if _, ok := baseline[rel]; ok {
+				t.Errorf("the baseline still lists moved leftover %s", rel)
+			}
+		}
+	}
 
 	f.cfg.MaxDelete = 0
 	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
@@ -706,5 +715,23 @@ func TestPushCommand_LeftoversNeedDeletePropagationAndADeclineRecordsNothing(t *
 	}
 	if _, err := os.Stat(filepath.Join(f.mirror, "old./c.md")); err != nil {
 		t.Errorf("a leftover moved without delete propagation: %v", err)
+	}
+}
+
+// A leftover the workspace has again by the time of the move (a rename undone
+// during the push, or the same name in another Unicode form) stays (#225).
+func TestPushCommand_ALeftoverTheWorkspaceHasAgainStays(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/keep.md", "keep")
+	f.seedBaseline("old./c.md", "c", f.writeMirror("old./c.md", "c"))
+	restored := filepath.Join(f.local, "old.", "c.md")
+	f.cfg.RsyncPath = writeRsyncThen(t, `mkdir -p "`+filepath.Dir(restored)+`" && printf c > "`+restored+`"`)
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("PushCommand: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "old./c.md")); err != nil {
+		t.Errorf("a leftover the workspace has again left the mirror: %v", err)
 	}
 }

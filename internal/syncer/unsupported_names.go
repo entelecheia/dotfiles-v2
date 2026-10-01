@@ -121,16 +121,23 @@ func CountUnsupportedNames(cfg *Config) (int, error) {
 // refresh dropped (edited in the cloud or evicted during the run) stays put.
 // It returns the backup directory and how many leftovers it moved.
 func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
+	local := strings.TrimRight(cfg.LocalPath, "/")
+	var baseline map[string]Fingerprint
 	if len(rels) > 0 && cfg.LocalPaths != nil {
-		baseline, err := LoadBaselineManifest(cfg.LocalPaths.BaselineFile)
-		if err != nil {
+		var err error
+		if baseline, err = LoadBaselineManifest(cfg.LocalPaths.BaselineFile); err != nil {
 			return "", 0, fmt.Errorf("loading baseline: %w", err)
 		}
-		rels = slices.DeleteFunc(slices.Clone(rels), func(rel string) bool {
-			_, ok := baseline[rel]
-			return !ok
-		})
 	}
+	rels = slices.DeleteFunc(slices.Clone(rels), func(rel string) bool {
+		// The workspace has it now: a rename undone during the push, or the
+		// same name in another Unicode form the plan's byte match missed.
+		if _, err := os.Lstat(filepath.Join(local, rel)); err == nil {
+			return true
+		}
+		_, ok := baseline[rel]
+		return baseline != nil && !ok
+	})
 	if len(rels) == 0 {
 		return "", 0, nil
 	}
@@ -138,23 +145,39 @@ func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
 		return "", 0, fmt.Errorf("%d mirror leftover(s) exceed max_delete %d; raise max_delete or move them out of %s by hand", len(rels), cfg.MaxDelete, cfg.MirrorPath)
 	}
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
-	backup := filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), NewConflictDir().LeftoverBackupRel())
-	for i, rel := range rels {
+	backup := filepath.Join(local, NewConflictDir().LeftoverBackupRel())
+	moved := 0
+	var moveErr error
+	for _, rel := range rels {
 		dst := filepath.Join(backup, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return backup, i, fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+			moveErr = fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+			break
 		}
 		if _, err := os.Lstat(dst); err == nil {
 			// Two names one filesystem folds together (Unicode
 			// normalization): a rename would replace the first backup.
-			return backup, i, fmt.Errorf("moving mirror leftover %s: %s already holds a backup", rel, dst)
+			moveErr = fmt.Errorf("moving mirror leftover %s: %s already holds a backup", rel, dst)
+			break
 		}
 		if err := moveFile(filepath.Join(mirror, rel), dst); err != nil {
-			return backup, i, fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+			moveErr = fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+			break
 		}
 		pruneUnsupportedDirs(mirror, filepath.Dir(rel))
+		moved++
 	}
-	return backup, len(rels), nil
+	// The push refreshed the baseline before this move, so it still lists
+	// what just left the mirror; a pull would read those as mirror deletions.
+	if baseline != nil && moved > 0 {
+		for _, rel := range rels[:moved] {
+			delete(baseline, rel)
+		}
+		if err := SaveBaselineManifest(cfg.LocalPaths.BaselineFile, baseline); err != nil && moveErr == nil {
+			moveErr = fmt.Errorf("saving baseline: %w", err)
+		}
+	}
+	return backup, moved, moveErr
 }
 
 // moveFile renames src to dst, copying then removing when they are on

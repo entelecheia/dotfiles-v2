@@ -441,7 +441,7 @@ func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 	// gitignored leaves do not leave behind shells of folder structure.
 	args = append(args, "--prune-empty-dirs")
 	if !cfg.Target.IsSSH() && !dryRun {
-		// The baseline refresh needs what this run wrote (#224).
+		// The baseline refresh needs what this run sent (#224).
 		args = append(args, "--out-format="+writtenOutFormat)
 	}
 	if !peerNormalTransfer(cfg) {
@@ -926,7 +926,10 @@ func runRsyncOutput(ctx context.Context, runner *exec.Runner, cfg *Config, args 
 const writtenOutFormat = "@@written %i %n"
 
 // writtenFiles returns the relative paths of the regular files a push with
-// writtenOutFormat received (itemized ">f"). rsync may print a name through
+// writtenOutFormat sent (itemized ">f"). rsync lists a file as it starts to
+// send it, so a file whose receive then failed is listed too: an accepted
+// limit, since it also needs that file's local twin to vanish in the same run
+// (PR #226 review record). rsync may print a name through
 // its \#ooo escapes (openrsync escapes non-ASCII bytes, all of them outside a
 // UTF-8 locale), so each is decoded. A line that does not parse is skipped:
 // that file only misses the written-path rule and is classified as before.
