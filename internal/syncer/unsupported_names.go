@@ -1,11 +1,13 @@
 package syncer
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Dropbox cannot store a file or folder whose name ends with a space (or a
@@ -102,4 +104,71 @@ func CountUnsupportedNames(cfg *Config) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// MoveMirrorLeftovers moves plan leftovers (mirror-only paths with a name
+// Dropbox cannot store) into the workspace's .sync-conflicts/<ts>/from-mirror/
+// and returns that directory. The provider cannot hold these names, so no
+// cloud copy exists to protect, and the workspace no longer has them. The
+// backup sits outside the mirror so it does not keep an unstorable name in
+// the provider folder. Leftovers count against max_delete (#225).
+func MoveMirrorLeftovers(cfg *Config, rels []string) (string, error) {
+	if len(rels) == 0 {
+		return "", nil
+	}
+	if len(rels) > cfg.MaxDelete {
+		return "", fmt.Errorf("%d mirror leftover(s) exceed max_delete %d; raise max_delete or move them out of %s by hand", len(rels), cfg.MaxDelete, cfg.MirrorPath)
+	}
+	mirror := strings.TrimRight(cfg.MirrorPath, "/")
+	backup := filepath.Join(strings.TrimRight(cfg.LocalPath, "/"), NewConflictDir().LeftoverBackupRel())
+	for _, rel := range rels {
+		dst := filepath.Join(backup, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return backup, err
+		}
+		if err := moveFile(filepath.Join(mirror, rel), dst); err != nil {
+			return backup, fmt.Errorf("moving mirror leftover %s: %w", rel, err)
+		}
+		pruneUnsupportedDirs(mirror, filepath.Dir(rel))
+	}
+	return backup, nil
+}
+
+// moveFile renames src to dst, copying then removing when they are on
+// different volumes.
+func moveFile(src, dst string) error {
+	err := os.Rename(src, dst)
+	if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	if err := copyFilePreservingMtime(src, dst); err != nil {
+		return err
+	}
+	return os.Remove(src)
+}
+
+// pruneUnsupportedDirs removes rel and its parents while each is an empty
+// directory whose own name Dropbox cannot store. Finder's .DS_Store does not
+// keep one alive.
+func pruneUnsupportedDirs(mirror, rel string) {
+	for rel != "." && rel != "" {
+		name := filepath.Base(rel)
+		if name == strings.TrimRight(name, " .") {
+			return
+		}
+		abs := filepath.Join(mirror, rel)
+		entries, err := os.ReadDir(abs)
+		if err != nil {
+			return
+		}
+		if len(entries) == 1 && entries[0].Name() == ".DS_Store" {
+			_ = os.Remove(filepath.Join(abs, ".DS_Store"))
+		} else if len(entries) > 0 {
+			return
+		}
+		if os.Remove(abs) != nil {
+			return
+		}
+		rel = filepath.Dir(rel)
+	}
 }

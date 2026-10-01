@@ -23,13 +23,18 @@ type PushPlan struct {
 	Deletes       []string
 	SkippedPolicy []string
 	Conflicts     []PushConflict
-	// Unsupported holds sync-set paths Dropbox/Windows cannot store (a name
+	// Unsupported holds workspace paths Dropbox/Windows cannot store (a name
 	// segment ending in a space or a period). They stay out of every transfer
 	// list above — and out of the rsync run itself — so a provider-side
 	// "(Unicode Encoding Conflict)" rename can never turn them into
 	// mirror-only conflicts. `dot sync names trim` renames the
 	// trailing-whitespace ones.
 	Unsupported []string
+	// Leftovers are such paths that exist only in the mirror: copies pushed
+	// before the name filter, or before a workspace rename. The rsync
+	// exclude also shields them from --delete, so a push with delete
+	// propagation moves them out itself (MoveMirrorLeftovers, #225).
+	Leftovers   []string
 	Propagation PropagationPolicy
 	// Placeholders counts mirror files whose content lives only in the
 	// provider's cloud. They are reported because a mirror that is mostly
@@ -41,7 +46,8 @@ func (p *PushPlan) HasChanges() bool {
 	if p == nil {
 		return false
 	}
-	return len(p.Creates) > 0 || len(p.Updates) > 0 || len(p.Deletes) > 0
+	return len(p.Creates) > 0 || len(p.Updates) > 0 || len(p.Deletes) > 0 ||
+		(p.Propagation.Delete && len(p.Leftovers) > 0)
 }
 
 func (p *PushPlan) HasConflicts() bool {
@@ -96,7 +102,11 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 			// Never classify as create/update/delete/conflict: the transfer
 			// layer excludes the name too, so uploading it (or deleting the
 			// provider's renamed twin) is not on the table.
-			plan.Unsupported = append(plan.Unsupported, rel)
+			if _, local := localInv.files[rel]; local {
+				plan.Unsupported = append(plan.Unsupported, rel)
+			} else {
+				plan.Leftovers = append(plan.Leftovers, rel)
+			}
 			continue
 		}
 		localFP, localOK := localInv.files[rel]
@@ -246,6 +256,7 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	sort.Strings(plan.Deletes)
 	sort.Strings(plan.SkippedPolicy)
 	sort.Strings(plan.Unsupported)
+	sort.Strings(plan.Leftovers)
 	sort.Slice(plan.Conflicts, func(i, j int) bool { return plan.Conflicts[i].RelPath < plan.Conflicts[j].RelPath })
 	return plan, nil
 }

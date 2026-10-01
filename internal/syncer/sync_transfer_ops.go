@@ -42,7 +42,7 @@ type PushCommandResult struct {
 // PushCommand runs the `dot sync push` transaction. It holds the sync lock
 // across name normalization, planning, the confirmation and the transfer, so
 // no second writer can interleave with any of them.
-func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, error) {
+func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult, err error) {
 	cfg, runner, state := opts.Config, opts.Runner, opts.State
 
 	release, lockErr := AcquireLockForRun(cfg.LockDir, opts.DryRun)
@@ -50,6 +50,16 @@ func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, err
 		return &PushCommandResult{Outcome: PushLockBusy, LockErr: lockErr}, nil
 	}
 	defer release()
+	if !opts.DryRun {
+		defer func() {
+			if res != nil && res.Outcome == PushAborted {
+				return
+			}
+			if recErr := recordPushAttempt(cfg, err); recErr != nil && err == nil {
+				err = fmt.Errorf("state update: %w", recErr)
+			}
+		}()
+	}
 
 	// Once the explicit workspace migration has written its marker, every real
 	// push canonicalizes newly downloaded or created NFC names before either a
@@ -103,7 +113,9 @@ func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, err
 		return &PushCommandResult{Outcome: PushPlanned}, nil
 	}
 	if opts.Mode == ModeClean && plan.HasConflicts() {
-		return nil, fmt.Errorf("push refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
+		refused := fmt.Errorf("push refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
+		RecordResult(state, cfg, "push", refused, false)
+		return nil, refused
 	}
 	if opts.Mode == ModeManual {
 		confirmed, err := askSync(opts.Confirm, ConfirmRequest{Kind: ConfirmPushPlan})
@@ -115,11 +127,44 @@ func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, err
 		}
 	}
 	pushErr := downgradePartial(opts.Progress, Push(ctx, runner, cfg, false))
+	if pushErr == nil && cfg.Propagation.Delete && len(plan.Leftovers) > 0 {
+		dir, moveErr := MoveMirrorLeftovers(cfg, plan.Leftovers)
+		if moveErr != nil {
+			pushErr = moveErr
+		} else {
+			emitSync(opts.Progress, SyncEvent{Kind: SyncEventLeftoversMoved, Path: dir, Candidates: len(plan.Leftovers)})
+		}
+	}
 	RecordResult(state, cfg, "push", pushErr, false)
 	if pushErr != nil {
 		return nil, fmt.Errorf("push failed: %w", pushErr)
 	}
 	return &PushCommandResult{Outcome: PushComplete}, nil
+}
+
+// recordPushAttempt notes how a real push run ended in the profile state: a
+// completed run clears the error, a refused or failed one keeps its first
+// line and the time the failing streak began.
+func recordPushAttempt(cfg *Config, runErr error) error {
+	if cfg.LocalPaths == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	return UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
+		s.LastPushAttempt = now
+		if runErr == nil {
+			s.LastPushError, s.LastPushErrorSince = "", time.Time{}
+			return
+		}
+		if s.LastPushError == "" {
+			s.LastPushErrorSince = now
+		}
+		msg := []rune(firstLine(runErr.Error()))
+		if len(msg) > 300 {
+			msg = append(msg[:300], []rune("...")...)
+		}
+		s.LastPushError = string(msg)
+	})
 }
 
 // downgradePartial turns an rsync partial transfer (exit 23/24) into a

@@ -440,6 +440,10 @@ func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 	// Skip directories that would be empty on the target after filtering, so
 	// gitignored leaves do not leave behind shells of folder structure.
 	args = append(args, "--prune-empty-dirs")
+	if !cfg.Target.IsSSH() && !dryRun {
+		// The baseline refresh needs what this run wrote (#224).
+		args = append(args, "--out-format="+writtenOutFormat)
+	}
 	if !peerNormalTransfer(cfg) {
 		args = append(args,
 			"--backup",
@@ -688,7 +692,8 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	// local delete into deletion of independent peer work. Keep that baseline
 	// unchanged on partial SSH pushes.
 	var partial error
-	if err := runRsync(ctx, runner, cfg, args); err != nil {
+	out, err := runRsyncOutput(ctx, runner, cfg, args)
+	if err != nil {
 		if !IsPartialTransfer(err) {
 			return err
 		}
@@ -707,7 +712,7 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 			cfg.Propagation.Create && cfg.Propagation.Update
 		partialPeerPolicy := cfg.Target.IsSSH() && cfg.Profile == PeerProfile && !fullPeerPush
 		if !partialPeerPolicy {
-			if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
+			if err := refreshBaseline(cfg, FingerprintFast, writtenFiles(out)); err != nil {
 				return fmt.Errorf("baseline refresh: %w", err)
 			}
 			if fullPeerPush {
@@ -895,13 +900,67 @@ func PullDirect(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bo
 }
 
 func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) error {
+	_, err := runRsyncOutput(ctx, runner, cfg, args)
+	return err
+}
+
+// runRsyncOutput is runRsync that also returns rsync's stdout.
+func runRsyncOutput(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) (string, error) {
+	var res *exec.Result
 	var err error
 	if cfg.Verbose {
-		err = runner.RunAttached(ctx, cfg.rsyncBin(), args...)
+		res, err = runner.RunTee(ctx, cfg.rsyncBin(), args...)
 	} else {
-		_, err = runner.Run(ctx, cfg.rsyncBin(), args...)
+		res, err = runner.Run(ctx, cfg.rsyncBin(), args...)
 	}
-	return classifyRsyncError(err)
+	out := ""
+	if res != nil {
+		out = res.Stdout
+	}
+	return out, classifyRsyncError(err)
+}
+
+// writtenOutFormat tags each item a mirror push reports, so its lines stand
+// apart from --progress and --stats output on the same stream.
+const writtenOutFormat = "@@written %i %n"
+
+// writtenFiles returns the relative paths of the regular files a push with
+// writtenOutFormat received (itemized ">f"). rsync prints a name through its
+// \#ooo escapes (openrsync, and rsync 3.x outside a UTF-8 locale, escape every
+// non-ASCII byte), so each is decoded. A line that does not parse is skipped:
+// that file only misses the written-path rule and is classified as before.
+func writtenFiles(stdout string) map[string]bool {
+	written := map[string]bool{}
+	for _, line := range strings.Split(stdout, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "@@written ")
+		if !ok {
+			continue
+		}
+		item, name, ok := strings.Cut(rest, " ")
+		if !ok || !strings.HasPrefix(item, ">f") {
+			continue
+		}
+		if rel := normalizeRel(unescapeRsyncName(name)); rel != "" {
+			written[rel] = true
+		}
+	}
+	return written
+}
+
+// unescapeRsyncName decodes rsync's \#ooo octal escapes back to bytes. rsync
+// escapes a literal backslash before '#' and digits too, so the decoding is
+// unambiguous for its output.
+func unescapeRsyncName(name string) string {
+	if !strings.Contains(name, `\#`) {
+		return name
+	}
+	return rsyncEscapeRe.ReplaceAllStringFunc(name, func(m string) string {
+		v, err := strconv.ParseUint(m[2:], 8, 8)
+		if err != nil {
+			return m
+		}
+		return string([]byte{byte(v)})
+	})
 }
 
 // PartialTransferError reports an rsync run that moved data but not all of it.

@@ -354,6 +354,14 @@ func copyFilePreservingMtime(src, dst string) error {
 // delete propagation working (a deleted file's baseline key keeps it in the
 // include layer until the next refresh drops it).
 func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
+	return refreshBaseline(cfg, mode, nil)
+}
+
+// refreshBaseline is RefreshBaseline that also records the mirror files a push
+// just wrote (written) whose local twin is already gone. A file created and
+// removed by a live process while the push ran is then a workspace deletion on
+// the next push, not a mirror-origin file that blocks every clean push (#224).
+func refreshBaseline(cfg *Config, mode FingerprintMode, written map[string]bool) error {
 	if cfg.LocalPaths == nil {
 		return fmt.Errorf("refresh baseline: local paths unresolved")
 	}
@@ -420,7 +428,7 @@ func RefreshBaseline(cfg *Config, mode FingerprintMode) error {
 		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
-		if requireLocalTwin {
+		if requireLocalTwin && !written[rel] {
 			localAbs := filepath.Join(local, rel)
 			localInfo, err := os.Lstat(localAbs)
 			if err != nil || localInfo.IsDir() || localInfo.Mode()&os.ModeSymlink != 0 {

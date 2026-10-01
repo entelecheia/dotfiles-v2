@@ -30,6 +30,7 @@ const (
 	SyncEventFetchMissing                         // Path: a path the target does not have
 	SyncEventPartialTransfer                      // rsync moved some but not all; Err carries it
 	SyncEventPruneSummary                         // Candidates/Reclaimed carry the prune totals
+	SyncEventLeftoversMoved                       // Candidates mirror leftovers moved into Path
 )
 
 // SyncEvent is one step outcome. Only the fields its kind documents are set.

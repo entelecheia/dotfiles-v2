@@ -153,7 +153,17 @@ func printPushPlan(p *Printer, plan *syncer.PushPlan) {
 		p.Section(fmt.Sprintf("Unsupported names: %d", len(plan.Unsupported)))
 		printPathList(p, plan.Unsupported)
 		p.Line("  Dropbox/Windows cannot store these names; they are excluded from this push.")
-		p.Line("  Run `dot sync names trim` to rename trailing-whitespace names.")
+		p.Line("  Run `dot sync names trim` to rename trailing-whitespace names; rename a name ending in a period by hand.")
+	}
+	if len(plan.Leftovers) > 0 {
+		p.Section(fmt.Sprintf("Mirror leftovers: %d", len(plan.Leftovers)))
+		printPathList(p, plan.Leftovers)
+		p.Line("  Names Dropbox cannot store that exist only in the mirror (pushed before a rename or before the name filter).")
+		if plan.Propagation.Delete {
+			p.Line("  The push moves them into the workspace's .sync-conflicts/<ts>/from-mirror/.")
+		} else {
+			p.Line("  Delete propagation is off, so they stay; a push with delete moves them into .sync-conflicts/<ts>/from-mirror/.")
+		}
 	}
 	if plan.Placeholders > 0 {
 		// Without this an operator reading a conflict list has no way to see
@@ -170,7 +180,7 @@ func printPushPlan(p *Printer, plan *syncer.PushPlan) {
 			p.Line("  !  %s — %s", c.RelPath, reason)
 		}
 	}
-	if len(affected) == 0 && len(plan.SkippedPolicy) == 0 && len(plan.Unsupported) == 0 {
+	if len(affected) == 0 && len(plan.SkippedPolicy) == 0 && len(plan.Unsupported) == 0 && len(plan.Leftovers) == 0 {
 		p.Line("  No push changes.")
 	}
 }
