@@ -108,13 +108,6 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 	emitSync(opts.Progress, SyncEvent{Kind: SyncEventPushPlanReady, PushPlan: plan})
 	if opts.DryRun || (!plan.HasChanges() && !plan.HasConflicts()) {
 		RecordResult(state, cfg, "push", nil, opts.DryRun)
-		if !opts.DryRun && cfg.LocalPaths != nil {
-			if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
-				s.LastPush = time.Now().UTC()
-			}); err != nil {
-				return nil, fmt.Errorf("state update: %w", err)
-			}
-		}
 		return &PushCommandResult{Outcome: PushPlanned}, nil
 	}
 	if opts.Mode == ModeClean && plan.HasConflicts() {
@@ -170,12 +163,13 @@ func unappliedDeletes(cfg *Config, deletes []string) error {
 	if len(left) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s; rsync skips deletions after an I/O error, and openrsync deletes nothing with --backup (install rsync 3.x)", len(left), left[0])
+	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s; rsync 3.x skips deletions after an I/O error, and openrsync deletes nothing with --backup (replace it with rsync 3.x)", len(left), left[0])
 }
 
 // recordPushAttempt notes how a real push run ended in the profile state: a
-// completed run clears the error, a refused or failed one keeps its first
-// line and the time the failing streak began.
+// completed run stamps last_push and clears the error, a refused or failed one
+// keeps its first line and the time the failing streak began. last_push is set
+// here, after the post-push checks, so a run they fail never counts as a push.
 func recordPushAttempt(cfg *Config, runErr error) error {
 	if cfg.LocalPaths == nil {
 		return nil
@@ -184,6 +178,7 @@ func recordPushAttempt(cfg *Config, runErr error) error {
 	return UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
 		s.LastPushAttempt = now
 		if runErr == nil {
+			s.LastPush = now
 			s.LastPushError, s.LastPushErrorSince = "", time.Time{}
 			return
 		}

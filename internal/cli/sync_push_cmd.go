@@ -162,7 +162,7 @@ func printPushPlan(p *Printer, plan *syncer.PushPlan) {
 		if plan.MoveLeftovers {
 			p.Line("  The push moves them into the workspace's .sync-conflicts/<ts>/from-mirror/; more than max_delete fails the run instead.")
 		} else {
-			p.Line("  Delete propagation is off, so they are listed only.")
+			p.Line("  Delete propagation is off, so they are listed only; a push without it drops their baseline proof, so move them by hand.")
 		}
 	}
 	if len(plan.MirrorUnsupported) > 0 {

@@ -142,10 +142,15 @@ func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
 	for i, rel := range rels {
 		dst := filepath.Join(backup, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return backup, i, err
+			return backup, i, fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+		}
+		if _, err := os.Lstat(dst); err == nil {
+			// Two names one filesystem folds together (Unicode
+			// normalization): a rename would replace the first backup.
+			return backup, i, fmt.Errorf("moving mirror leftover %s: %s already holds a backup", rel, dst)
 		}
 		if err := moveFile(filepath.Join(mirror, rel), dst); err != nil {
-			return backup, i, fmt.Errorf("moving mirror leftover %s: %w", rel, err)
+			return backup, i, fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
 		}
 		pruneUnsupportedDirs(mirror, filepath.Dir(rel))
 	}

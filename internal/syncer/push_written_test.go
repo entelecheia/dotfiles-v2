@@ -350,10 +350,13 @@ func TestPushCommand_RecordsWrittenFilesWhenRsyncStopsAtMaxDelete(t *testing.T) 
 	f.cfg.Propagation.Delete = true
 	f.writeLocal("notes/a.md", "a")
 	f.writeLocal("notes/b.md", "b")
-	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
 		t.Fatalf("push 1: %v", err)
 	}
 	before, _ := LoadLocalState(f.cfg.LocalPaths)
+	if before.LastPush.IsZero() {
+		t.Fatal("a completed push did not stamp last_push")
+	}
 	for _, rel := range []string{"notes/a.md", "notes/b.md"} {
 		if err := os.Remove(filepath.Join(f.local, rel)); err != nil {
 			t.Fatal(err)
@@ -390,9 +393,10 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 	f.cfg.Propagation.Delete = true
 	f.writeLocal("notes/keep.md", "keep")
 	f.writeLocal("notes/gone.md", "gone")
-	if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
 		t.Fatalf("push 1: %v", err)
 	}
+	before, _ := LoadLocalState(f.cfg.LocalPaths)
 	if err := os.Remove(filepath.Join(f.local, "notes/gone.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -406,8 +410,8 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md") {
 		t.Fatalf("PushCommand = %v, want the unapplied deletion", err)
 	}
-	if st, _ := LoadLocalState(f.cfg.LocalPaths); !strings.Contains(st.LastPushError, "planned deletion(s) left") {
-		t.Errorf("LastPushError = %q", st.LastPushError)
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); !strings.Contains(st.LastPushError, "planned deletion(s) left") || !st.LastPush.Equal(before.LastPush) {
+		t.Errorf("state after the failed run = %+v; want the error recorded and last_push unchanged", st)
 	}
 
 	if isOpenrsync() {
