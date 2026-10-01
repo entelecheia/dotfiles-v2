@@ -60,6 +60,13 @@ func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
 	if document.Jobs[0].LastRunAt == nil || *document.Jobs[0].LastRunAt != lastPush.Format(time.RFC3339Nano) {
 		t.Fatalf("unexpected last run: %+v", document.Jobs[0].LastRunAt)
 	}
+	since := lastPush.Add(time.Hour)
+	status.LastPushAttempt, status.LastPushError, status.LastPushErrorSince = since, "push refused: 1 conflict(s)", since
+	failing := buildSyncStatusJSON(cfg, status, scheduler)
+	if failing.LastPushError != "push refused: 1 conflict(s)" || failing.LastPushErrorSince == nil ||
+		*failing.LastPushErrorSince != since.Format(time.RFC3339Nano) || failing.LastPushAttemptAt == nil {
+		t.Fatalf("push error fields = %q, %v, %v", failing.LastPushError, failing.LastPushErrorSince, failing.LastPushAttemptAt)
+	}
 	cfg.Profile = "archive"
 	if got := buildSyncStatusJSON(cfg, status, scheduler).Kind; got != "mirror" {
 		t.Fatalf("non-peer profile kind = %q, want mirror", got)

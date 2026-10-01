@@ -462,3 +462,82 @@ func TestSyncTargetOnThePeerProfileKeepsOwnerAndEpoch(t *testing.T) {
 		t.Fatalf("store = %+v", got)
 	}
 }
+
+// A refusal before the engine runs (here a missing mirror) is recorded like a
+// refused plan, so `dot sync status` shows it; a dry-run records nothing.
+func TestSyncPushCLI_RecordsAPreflightRefusal(t *testing.T) {
+	if _, err := osexec.LookPath("rsync"); err != nil {
+		t.Skip("rsync not installed; gsync preflight would refuse to run")
+	}
+	f := newSyncCLIFixture(t)
+	if err := os.RemoveAll(f.mirror); err != nil {
+		t.Fatal(err)
+	}
+	paths := syncer.ResolveLocalPaths(f.local + "/")
+	if _, errOut, err := runDotForTest("gsync", "push", "--mode=clean", "--dry-run"); err != nil {
+		t.Fatalf("push --dry-run: %v\nstderr=%s", err, errOut)
+	}
+	if st, _ := syncer.LoadLocalState(paths); st != nil && st.LastPushError != "" {
+		t.Fatalf("a dry-run recorded %q", st.LastPushError)
+	}
+	if _, errOut, err := runDotForTest("gsync", "push", "--mode=clean"); err != nil {
+		t.Fatalf("push: %v\nstderr=%s", err, errOut)
+	}
+	st, err := syncer.LoadLocalState(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "push refused: Mirror path missing: "; !strings.HasPrefix(st.LastPushError, want) {
+		t.Errorf("LastPushError = %q, want prefix %q", st.LastPushError, want)
+	}
+	if out, _, _ := runDotForTest("gsync", "status"); !strings.Contains(out, "Push stalled") || !strings.Contains(out, "Mirror path missing") {
+		t.Errorf("status does not name the refusal:\n%s", out)
+	}
+	// A paused profile records nothing, whatever else blocks the push.
+	if err := syncer.UpdateLocalState(paths, func(s *syncer.LocalState) { s.LastPushError = "" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, err := runDotForTest("gsync", "pause"); err != nil {
+		t.Fatalf("pause: %v\nstderr=%s", err, errOut)
+	}
+	if _, errOut, err := runDotForTest("gsync", "push", "--mode=clean"); err != nil {
+		t.Fatalf("paused push: %v\nstderr=%s", err, errOut)
+	}
+	if st, _ = syncer.LoadLocalState(paths); st.LastPushError != "" {
+		t.Errorf("a paused profile recorded %q", st.LastPushError)
+	}
+}
+
+// An owner mismatch is recorded like any refusal, but not on a paused profile.
+func TestSyncPushCLI_RecordsAnOwnerRefusalUnlessPaused(t *testing.T) {
+	f := newSyncCLIFixture(t)
+	paths := syncer.ResolveLocalPaths(f.local + "/")
+	if err := syncer.SaveLocalConfig(paths, &syncer.LocalConfig{
+		Target:      "local:" + f.mirror,
+		Propagation: syncer.DefaultPropagationPolicy(),
+		Owner:       "some-other-mac",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runDotForTest("gsync", "push", "--mode=clean"); err == nil {
+		t.Fatal("a push on a non-owner succeeded")
+	}
+	st, err := syncer.LoadLocalState(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(st.LastPushError, "push refused: profile ") {
+		t.Fatalf("LastPushError = %q, want the owner refusal", st.LastPushError)
+	}
+
+	if err := syncer.UpdateLocalState(paths, func(s *syncer.LocalState) { s.LastPushError = "" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, err := runDotForTest("gsync", "pause"); err != nil {
+		t.Fatalf("pause: %v\nstderr=%s", err, errOut)
+	}
+	_, _, _ = runDotForTest("gsync", "push", "--mode=clean")
+	if st, _ = syncer.LoadLocalState(paths); st.LastPushError != "" {
+		t.Errorf("a paused profile recorded %q", st.LastPushError)
+	}
+}

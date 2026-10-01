@@ -23,14 +23,28 @@ type PushPlan struct {
 	Deletes       []string
 	SkippedPolicy []string
 	Conflicts     []PushConflict
-	// Unsupported holds sync-set paths Dropbox/Windows cannot store (a name
+	// Unsupported holds workspace paths Dropbox/Windows cannot store (a name
 	// segment ending in a space or a period). They stay out of every transfer
 	// list above — and out of the rsync run itself — so a provider-side
 	// "(Unicode Encoding Conflict)" rename can never turn them into
 	// mirror-only conflicts. `dot sync names trim` renames the
 	// trailing-whitespace ones.
 	Unsupported []string
-	Propagation PropagationPolicy
+	// Leftovers are such paths that exist only in the mirror and that the
+	// baseline proves the workspace put there, with the mirror copy unchanged:
+	// copies pushed before the name filter, left behind by a workspace
+	// rename. The rsync exclude also shields them from --delete, so a push
+	// with delete propagation moves them out itself (MoveLeftovers, #225).
+	Leftovers []string
+	// MirrorUnsupported are the other mirror-only unsupported paths: no
+	// baseline proof, a changed copy, or an online-only stub. The provider
+	// may hold these names (Google Drive does, Dropbox likely does for a
+	// trailing period), so they may be cloud files and are only listed.
+	MirrorUnsupported []string
+	// MoveLeftovers says the push moves Leftovers out of the mirror: delete
+	// propagation is on.
+	MoveLeftovers bool
+	Propagation   PropagationPolicy
 	// Placeholders counts mirror files whose content lives only in the
 	// provider's cloud. They are reported because a mirror that is mostly
 	// placeholders explains conflicts an operator cannot otherwise see.
@@ -41,7 +55,8 @@ func (p *PushPlan) HasChanges() bool {
 	if p == nil {
 		return false
 	}
-	return len(p.Creates) > 0 || len(p.Updates) > 0 || len(p.Deletes) > 0
+	return len(p.Creates) > 0 || len(p.Updates) > 0 || len(p.Deletes) > 0 ||
+		(p.MoveLeftovers && len(p.Leftovers) > 0)
 }
 
 func (p *PushPlan) HasConflicts() bool {
@@ -89,14 +104,30 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 		return nil, fmt.Errorf("scanning mirror: %w", err)
 	}
 
-	plan := &PushPlan{Propagation: cfg.Propagation, Placeholders: len(mirrorInv.dehydrated)}
+	plan := &PushPlan{
+		Propagation:   cfg.Propagation,
+		Placeholders:  len(mirrorInv.dehydrated),
+		MoveLeftovers: cfg.Propagation.Delete,
+	}
 	rels := unionKeys(localInv.files, mirrorInv.files)
 	for _, rel := range rels {
 		if UnsupportedPathName(rel) {
 			// Never classify as create/update/delete/conflict: the transfer
 			// layer excludes the name too, so uploading it (or deleting the
 			// provider's renamed twin) is not on the table.
-			plan.Unsupported = append(plan.Unsupported, rel)
+			if _, inWorkspace := localInv.files[rel]; inWorkspace {
+				plan.Unsupported = append(plan.Unsupported, rel)
+			} else if base, ok := baseline[rel]; ok && !mirrorInv.dehydrated[rel] &&
+				FingerprintsCompatible(base, mirrorInv.files[rel], filepath.Join(mirror, rel)) {
+				// The move skips a path the workspace has (APFS finds an NFD
+				// twin under its NFC name, listed as Unsupported above), so
+				// the plan promises only what it moves.
+				if _, err := os.Lstat(filepath.Join(local, rel)); errors.Is(err, fs.ErrNotExist) {
+					plan.Leftovers = append(plan.Leftovers, rel)
+				}
+			} else {
+				plan.MirrorUnsupported = append(plan.MirrorUnsupported, rel)
+			}
 			continue
 		}
 		localFP, localOK := localInv.files[rel]
@@ -246,6 +277,8 @@ func PlanPush(cfg *Config) (*PushPlan, error) {
 	sort.Strings(plan.Deletes)
 	sort.Strings(plan.SkippedPolicy)
 	sort.Strings(plan.Unsupported)
+	sort.Strings(plan.Leftovers)
+	sort.Strings(plan.MirrorUnsupported)
 	sort.Slice(plan.Conflicts, func(i, j int) bool { return plan.Conflicts[i].RelPath < plan.Conflicts[j].RelPath })
 	return plan, nil
 }

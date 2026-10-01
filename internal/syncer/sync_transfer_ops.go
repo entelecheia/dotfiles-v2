@@ -2,7 +2,12 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/entelecheia/dotfiles-v2/internal/config"
@@ -42,7 +47,7 @@ type PushCommandResult struct {
 // PushCommand runs the `dot sync push` transaction. It holds the sync lock
 // across name normalization, planning, the confirmation and the transfer, so
 // no second writer can interleave with any of them.
-func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, error) {
+func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult, err error) {
 	cfg, runner, state := opts.Config, opts.Runner, opts.State
 
 	release, lockErr := AcquireLockForRun(cfg.LockDir, opts.DryRun)
@@ -50,6 +55,21 @@ func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, err
 		return &PushCommandResult{Outcome: PushLockBusy, LockErr: lockErr}, nil
 	}
 	defer release()
+	// Whether this run completed is decided here, once, from how it returned.
+	partial := false
+	if !opts.DryRun {
+		defer func() {
+			switch {
+			case res != nil && res.Outcome == PushAborted:
+				return // an operator decline is not an attempt
+			case res == nil && err == nil:
+				return // a panic: the run neither completed nor failed
+			}
+			if recErr := recordPushAttempt(cfg, err, partial); recErr != nil && err == nil {
+				err = fmt.Errorf("state update: %w", recErr)
+			}
+		}()
+	}
 
 	// Once the explicit workspace migration has written its marker, every real
 	// push canonicalizes newly downloaded or created NFC names before either a
@@ -74,7 +94,9 @@ func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, err
 				return &PushCommandResult{Outcome: PushAborted}, nil
 			}
 		}
-		pushErr := downgradePartial(opts.Progress, Push(ctx, runner, cfg, opts.DryRun))
+		raw := Push(ctx, runner, cfg, opts.DryRun)
+		partial = skippedFiles(raw)
+		pushErr := downgradePartial(opts.Progress, raw)
 		RecordResult(state, cfg, "push", pushErr, opts.DryRun)
 		if pushErr != nil {
 			return nil, fmt.Errorf("push failed: %w", pushErr)
@@ -93,17 +115,12 @@ func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, err
 	emitSync(opts.Progress, SyncEvent{Kind: SyncEventPushPlanReady, PushPlan: plan})
 	if opts.DryRun || (!plan.HasChanges() && !plan.HasConflicts()) {
 		RecordResult(state, cfg, "push", nil, opts.DryRun)
-		if !opts.DryRun && cfg.LocalPaths != nil {
-			if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
-				s.LastPush = time.Now().UTC()
-			}); err != nil {
-				return nil, fmt.Errorf("state update: %w", err)
-			}
-		}
 		return &PushCommandResult{Outcome: PushPlanned}, nil
 	}
 	if opts.Mode == ModeClean && plan.HasConflicts() {
-		return nil, fmt.Errorf("push refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
+		refused := fmt.Errorf("push refused: %d conflict(s); rerun with --mode=force to overwrite with backups", len(plan.Conflicts))
+		RecordResult(state, cfg, "push", refused, false)
+		return nil, refused
 	}
 	if opts.Mode == ModeManual {
 		confirmed, err := askSync(opts.Confirm, ConfirmRequest{Kind: ConfirmPushPlan})
@@ -114,12 +131,136 @@ func PushCommand(ctx context.Context, opts PushOptions) (*PushCommandResult, err
 			return &PushCommandResult{Outcome: PushAborted}, nil
 		}
 	}
-	pushErr := downgradePartial(opts.Progress, Push(ctx, runner, cfg, false))
+	raw := Push(ctx, runner, cfg, false)
+	partial = skippedFiles(raw)
+	pushErr := downgradePartial(opts.Progress, raw)
+	if pushErr == nil {
+		pushErr = unappliedDeletes(ctx, runner, cfg, plan.Deletes)
+	}
+	if pushErr == nil && plan.MoveLeftovers && len(plan.Leftovers) > 0 {
+		dir, moved, moveErr := MoveMirrorLeftovers(cfg, plan.Leftovers)
+		if moveErr != nil {
+			pushErr = moveErr
+		} else if moved > 0 {
+			emitSync(opts.Progress, SyncEvent{Kind: SyncEventLeftoversMoved, Path: dir, Candidates: moved})
+		}
+	}
 	RecordResult(state, cfg, "push", pushErr, false)
 	if pushErr != nil {
 		return nil, fmt.Errorf("push failed: %w", pushErr)
 	}
 	return &PushCommandResult{Outcome: PushComplete}, nil
+}
+
+// unappliedDeletes fails a push that left a planned deletion in the mirror
+// while the workspace still lacks the file. The baseline keeps such a file
+// proven, so the run must not pass as complete (#224).
+//
+// It names a cause only when the evidence is certain: the rsync this run used
+// prints an openrsync banner, and openrsync deletes nothing with --backup.
+// Otherwise it lists what makes rsync 3.x keep a file without picking one: an
+// exit code does not say which (exit 23 also follows receiver errors that leave
+// the deletions applied), and a filter can protect a name the plan matched
+// literally (rsync reads [, * and ? as wildcards).
+func unappliedDeletes(ctx context.Context, runner *exec.Runner, cfg *Config, deletes []string) error {
+	local := strings.TrimRight(cfg.LocalPath, "/")
+	mirror := strings.TrimRight(cfg.MirrorPath, "/")
+	var left []string
+	for _, rel := range deletes {
+		if _, err := os.Lstat(filepath.Join(local, rel)); err == nil {
+			continue // restored in the workspace since the plan
+		}
+		if _, err := os.Lstat(filepath.Join(mirror, rel)); err == nil {
+			left = append(left, rel)
+		}
+	}
+	if len(left) == 0 {
+		return nil
+	}
+	why := "rsync kept them: it skips deletions after an I/O error (see its output), and a filter can protect a name (rsync reads [, * and ? as wildcards)"
+	if res, err := runner.RunQuery(ctx, cfg.rsyncBin(), "--version"); err == nil && strings.Contains(res.Stdout, "openrsync") {
+		why = "openrsync deletes nothing with --backup; install rsync 3.x (#227)"
+	}
+	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s: %s", len(left), left[0], why)
+}
+
+// skippedFiles reports an rsync run that left files out because of an error
+// (exit 23). Exit 24 only means files vanished before transfer: every file
+// still in the workspace was sent, so that run is complete.
+func skippedFiles(err error) bool {
+	var p *PartialTransferError
+	return errors.As(err, &p) && p.Code == 23
+}
+
+// RecordPushRefusal records a push the CLI refused before PushCommand ran (an
+// owner mismatch, a preflight block), so status shows it like any refusal. A
+// paused profile records nothing, whatever refused the push: a pause is meant
+// to stop pushes. The write takes the sync lock; while a run holds it, that
+// run records its own outcome instead.
+func RecordPushRefusal(cfg *Config, why error) error {
+	if cfg.Paused {
+		return nil
+	}
+	release, err := AcquireLockForRun(cfg.LockDir, false)
+	if err != nil {
+		return nil
+	}
+	defer release()
+	return recordPushAttempt(cfg, why, false)
+}
+
+// recordPushAttempt notes how a real push run ended in the profile state. A
+// refused or failed run keeps its first line and the time the failing streak
+// began. Any other run clears the error, and only a run that sent every file
+// still in the workspace stamps last_push: one that skipped files (exit 23)
+// does not, so a push that keeps skipping them goes stale in status (#224). It
+// runs after the post-push checks, so a run they fail never counts as a push.
+func recordPushAttempt(cfg *Config, runErr error, partial bool) error {
+	if cfg.LocalPaths == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	return UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
+		s.LastPushAttempt = now
+		if runErr == nil {
+			if !partial {
+				s.LastPush = now
+			}
+			s.LastPushError, s.LastPushErrorSince = "", time.Time{}
+			return
+		}
+		if s.LastPushError == "" {
+			s.LastPushErrorSince = now
+		}
+		msg := []rune(pushErrorSummary(runErr))
+		if len(msg) > 300 {
+			msg = append(msg[:300], []rune("...")...)
+		}
+		s.LastPushError = string(msg)
+	})
+}
+
+// pushErrorSummary names a push error in one line. A failed command's error
+// text leads with its whole argv, which says nothing, so it becomes the
+// program's name, its exit status and the first line of what it printed.
+func pushErrorSummary(err error) string {
+	var ce *exec.CmdError
+	if !errors.As(err, &ce) {
+		return firstLine(err.Error())
+	}
+	var ee *osexec.ExitError
+	if !errors.As(ce.Err, &ee) {
+		return "push failed: " + firstLine(ce.Err.Error()) // it never started
+	}
+	name := "command"
+	if f := strings.Fields(ce.Cmd); len(f) > 0 {
+		name = filepath.Base(f[0])
+	}
+	msg := fmt.Sprintf("push failed: %s exit %d", name, ce.ExitCode)
+	if line := firstLine(strings.TrimSpace(ce.Stderr)); line != "" {
+		msg += ": " + line
+	}
+	return msg
 }
 
 // downgradePartial turns an rsync partial transfer (exit 23/24) into a

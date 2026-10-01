@@ -72,9 +72,11 @@ func TestPlanPush_TrailingSpaceFolderGoesToUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanPush: %v", err)
 	}
-	wantUnsupported := []string{"docs /report.md", "old /twin.md"}
-	if !slices.Equal(plan.Unsupported, wantUnsupported) {
-		t.Errorf("Unsupported = %v, want %v", plan.Unsupported, wantUnsupported)
+	if !slices.Equal(plan.Unsupported, []string{"docs /report.md"}) {
+		t.Errorf("Unsupported = %v, want the workspace name only", plan.Unsupported)
+	}
+	if !slices.Equal(plan.MirrorUnsupported, []string{"old /twin.md"}) || len(plan.Leftovers) != 0 {
+		t.Errorf("MirrorUnsupported = %v, Leftovers = %v; want the unproven mirror-only name listed only", plan.MirrorUnsupported, plan.Leftovers)
 	}
 	if len(plan.Conflicts) != 0 {
 		t.Errorf("Conflicts = %+v, want none", plan.Conflicts)
@@ -83,7 +85,7 @@ func TestPlanPush_TrailingSpaceFolderGoesToUnsupported(t *testing.T) {
 		t.Errorf("Creates = %v, want it to contain notes/keep.md", plan.Creates)
 	}
 	for _, list := range [][]string{plan.Creates, plan.Updates, plan.Deletes, plan.SkippedPolicy} {
-		for _, rel := range wantUnsupported {
+		for _, rel := range []string{"docs /report.md", "old /twin.md"} {
 			if slices.Contains(list, rel) {
 				t.Errorf("unsupported rel %q leaked into a transfer list: %v", rel, list)
 			}

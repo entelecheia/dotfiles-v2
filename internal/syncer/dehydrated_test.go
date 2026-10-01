@@ -217,3 +217,30 @@ func TestRefreshBaselineKeepsPlaceholderStubsOut(t *testing.T) {
 		t.Error("baseline invented an entry for a placeholder it had never seen hydrated")
 	}
 }
+
+// A proven entry is carried while its local copy is gone only if the mirror
+// copy is real content. A placeholder of an empty file keeps its size and
+// mtime, so only the marker tells the two apart, for a file an earlier push
+// wrote (#224) and for an unsupported name (#225) alike.
+func TestRefreshBaselineCarriesNoProofForAnEvictedCopy(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	for _, rel := range []string{"docs/e.md", "a./e.md"} {
+		mtime := f.writeMirror(rel, "")
+		f.seedBaseline(rel, "", mtime)
+		abs := filepath.Join(f.mirror, rel)
+		makePlaceholder(t, abs)
+		if err := os.Chtimes(abs, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RefreshBaseline(f.cfg, FingerprintFast); err != nil {
+		t.Fatalf("RefreshBaseline: %v", err)
+	}
+	baseline, _ := LoadBaselineManifest(f.cfg.LocalPaths.BaselineFile)
+	for _, rel := range []string{"docs/e.md", "a./e.md"} {
+		if fp, ok := baseline[rel]; ok {
+			t.Errorf("the refresh carried %s's proof over a placeholder: %+v", rel, fp)
+		}
+	}
+}

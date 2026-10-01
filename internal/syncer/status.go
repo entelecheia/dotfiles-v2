@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -28,13 +29,16 @@ type Status struct {
 	AllowCount           int // active allow.txt patterns (secrets opt-in) — warn when > 0
 	SensitiveOverrides   []SensitiveOverride
 	SubmoduleCount       int // submodules excluded from sync (they sync via Git)
-	UnsupportedNames     int // local names Dropbox/Windows cannot store — see `dot sync names trim`
+	UnsupportedNames     int // workspace names Dropbox/Windows cannot store — see `dot sync names trim`
 	Propagation          PropagationPolicy
 	LastPull             time.Time
 	LastPush             time.Time
 	LastIntake           time.Time
 	LastIntakeTSDir      string
 	LastHeld             time.Time // last peer run that held destructive transitions
+	LastPushAttempt      time.Time // latest real push run
+	LastPushError        string    // why the latest push did not complete; empty once one does
+	LastPushErrorSince   time.Time // when the failing streak began
 	RsyncVersion         string    // empty if not installed
 	LockHeld             bool      // someone has gsync.lock right now
 	MaxDelete            int
@@ -98,6 +102,9 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		LastIntake:         localState.LastIntake,
 		LastIntakeTSDir:    localState.LastIntakeTSDir,
 		LastHeld:           localState.LastHeld,
+		LastPushAttempt:    localState.LastPushAttempt,
+		LastPushError:      localState.LastPushError,
+		LastPushErrorSince: localState.LastPushErrorSince,
 		LockHeld:           pathExists(cfg.LockDir) && !lockIsStale(cfg.LockDir),
 		MaxDelete:          cfg.MaxDelete,
 		Interval:           cfg.Interval,
@@ -143,4 +150,30 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 	}
 
 	return s, nil
+}
+
+// PushStalled reports why pushes look stuck, or "" when they do not: the last
+// push run failed, or the push scheduler is on and no push completed within
+// three intervals, or none ever did although runs were attempted (#224). The
+// stale check is skipped while paused (pushes are meant to stop) or while a
+// run holds the lock (a long push is still going).
+func (s *Status) PushStalled(now time.Time) string {
+	if s.LastPushError != "" {
+		return fmt.Sprintf("pushes failing since %s: %s",
+			s.LastPushErrorSince.Local().Format("2006-01-02 15:04"), s.LastPushError)
+	}
+	if s.Interval <= 0 || s.SchedulerState != SchedulerRunning || s.Paused || s.LockHeld {
+		return ""
+	}
+	if s.LastPush.IsZero() {
+		if !s.LastPushAttempt.IsZero() {
+			return "no push has completed yet; the runs so far skipped files"
+		}
+		return ""
+	}
+	if now.Sub(s.LastPush) > 3*time.Duration(s.Interval)*time.Second {
+		return fmt.Sprintf("no push completed for %s (interval %s)",
+			now.Sub(s.LastPush).Truncate(time.Minute), time.Duration(s.Interval)*time.Second)
+	}
+	return ""
 }

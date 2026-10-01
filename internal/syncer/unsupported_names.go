@@ -1,11 +1,14 @@
 package syncer
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 )
 
 // Dropbox cannot store a file or folder whose name ends with a space (or a
@@ -102,4 +105,124 @@ func CountUnsupportedNames(cfg *Config) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// MoveMirrorLeftovers moves plan leftovers (mirror-only paths with a name
+// Dropbox/Windows cannot store, which the baseline proves the workspace put
+// there) into the workspace's .sync-conflicts/<ts>/from-mirror/ and returns
+// that directory. The workspace no longer has them, so this is a workspace
+// deletion that rsync cannot carry out: its exclude shields the name from
+// --delete. The backup sits outside the mirror so it does not keep an
+// unstorable name in the provider folder. Leftovers have their own max_delete
+// budget, apart from rsync's deletes (#225).
+//
+// It runs after the push refreshed the baseline, which keeps a leftover only
+// while its mirror copy still matches and is not a placeholder. A leftover the
+// refresh dropped (edited in the cloud or evicted during the run) stays put.
+// It returns the backup directory and how many leftovers it moved.
+func MoveMirrorLeftovers(cfg *Config, rels []string) (string, int, error) {
+	local := strings.TrimRight(cfg.LocalPath, "/")
+	var baseline map[string]Fingerprint
+	if len(rels) > 0 && cfg.LocalPaths != nil {
+		var err error
+		if baseline, err = LoadBaselineManifest(cfg.LocalPaths.BaselineFile); err != nil {
+			return "", 0, fmt.Errorf("loading baseline: %w", err)
+		}
+	}
+	rels = slices.DeleteFunc(slices.Clone(rels), func(rel string) bool {
+		// The workspace has it now: a rename undone during the push, or the
+		// same name in another Unicode form the plan's byte match missed.
+		// Only a path proven absent moves; an unreadable one stays.
+		if _, err := os.Lstat(filepath.Join(local, rel)); !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+		_, ok := baseline[rel]
+		return baseline != nil && !ok
+	})
+	if len(rels) == 0 {
+		return "", 0, nil
+	}
+	if len(rels) > cfg.MaxDelete {
+		return "", 0, fmt.Errorf("%d mirror leftover(s) exceed max_delete %d; raise max_delete or move them out of %s by hand", len(rels), cfg.MaxDelete, cfg.MirrorPath)
+	}
+	mirror := strings.TrimRight(cfg.MirrorPath, "/")
+	backupRel := NewConflictDir().LeftoverBackupRel()
+	backup := filepath.Join(local, backupRel)
+	moved := 0
+	var moveErr error
+	for _, rel := range rels {
+		dst := filepath.Join(backup, rel)
+		// Each directory is created and checked in turn, as for the peer
+		// quarantine: a symlinked .sync-conflicts must not carry the backup
+		// out of the workspace, or back into the provider folder.
+		dir := local
+		for _, part := range strings.Split(filepath.Join(backupRel, filepath.Dir(rel)), string(filepath.Separator)) {
+			dir = filepath.Join(dir, part)
+			if err := ensurePeerLocalDirectory(dir); err != nil {
+				moveErr = fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+				break
+			}
+		}
+		if moveErr != nil {
+			break
+		}
+		if _, err := os.Lstat(dst); err == nil {
+			// Two names one filesystem folds together (Unicode
+			// normalization): a rename would replace the first backup.
+			moveErr = fmt.Errorf("moving mirror leftover %s: %s already holds a backup", rel, dst)
+			break
+		}
+		if err := moveFile(filepath.Join(mirror, rel), dst); err != nil {
+			moveErr = fmt.Errorf("moving mirror leftover %s into %s: %w", rel, backup, err)
+			break
+		}
+		pruneUnsupportedDirs(mirror, filepath.Dir(rel))
+		moved++
+	}
+	// The push refreshed the baseline before this move, so it still lists
+	// what just left the mirror; a pull would read those as mirror deletions.
+	if baseline != nil && moved > 0 {
+		for _, rel := range rels[:moved] {
+			delete(baseline, rel)
+		}
+		if err := SaveBaselineManifest(cfg.LocalPaths.BaselineFile, baseline); err != nil && moveErr == nil {
+			moveErr = fmt.Errorf("saving baseline after moving %d mirror leftover(s) into %s: %w", moved, backup, err)
+		}
+	}
+	return backup, moved, moveErr
+}
+
+// moveFile renames src to dst, copying then removing when they are on
+// different volumes.
+func moveFile(src, dst string) error {
+	err := os.Rename(src, dst)
+	if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	if err := copyFilePreservingMtime(src, dst); err != nil {
+		return err
+	}
+	return os.Remove(src)
+}
+
+// pruneUnsupportedDirs removes rel and its parents while each is an empty
+// directory inside a name Dropbox cannot store (old./sub/ as well as old./).
+// Finder's .DS_Store does not keep one alive.
+func pruneUnsupportedDirs(mirror, rel string) {
+	for rel != "." && rel != "" && UnsupportedPathName(rel) {
+		abs := filepath.Join(mirror, rel)
+		entries, err := os.ReadDir(abs)
+		if err != nil {
+			return
+		}
+		if len(entries) == 1 && entries[0].Name() == ".DS_Store" {
+			_ = os.Remove(filepath.Join(abs, ".DS_Store"))
+		} else if len(entries) > 0 {
+			return
+		}
+		if os.Remove(abs) != nil {
+			return
+		}
+		rel = filepath.Dir(rel)
+	}
 }

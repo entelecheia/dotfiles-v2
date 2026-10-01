@@ -3,6 +3,8 @@ package exec
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -31,5 +33,15 @@ func TestRunInteractive_DryRunSkipsExecution(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, "level=WARN") {
 		t.Errorf("expected WARN level, got: %q", logOutput)
+	}
+}
+
+// A failed tee'd run keeps its stderr, so a caller can say why it failed.
+func TestRunTee_KeepsStderrOnFailure(t *testing.T) {
+	runner := NewRunner(false, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := runner.RunTee(context.Background(), "sh", "-c", "echo why >&2; exit 3")
+	var ce *CmdError
+	if !errors.As(err, &ce) || ce.ExitCode != 3 || strings.TrimSpace(ce.Stderr) != "why" {
+		t.Fatalf("RunTee error = %#v", err)
 	}
 }

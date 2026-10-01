@@ -14,8 +14,9 @@ import (
 
 // syncStatusSchemaVersion advances whenever the status document gains,
 // drops, or renames a field, so a strict consumer can reject a document
-// shape it does not know. v3 adds unsupportedNameCount, v4 ownerAliases.
-const syncStatusSchemaVersion = 4
+// shape it does not know. v3 adds unsupportedNameCount, v4 ownerAliases,
+// v5 lastPushAttemptAt, lastPushError and lastPushErrorSince.
+const syncStatusSchemaVersion = 5
 
 type syncTargetJSON struct {
 	Kind string `json:"kind"`
@@ -70,6 +71,9 @@ type syncStatusJSON struct {
 	RsyncVersion         string                      `json:"rsyncVersion,omitempty"`
 	LastPullAt           *string                     `json:"lastPullAt"`
 	LastPushAt           *string                     `json:"lastPushAt"`
+	LastPushAttemptAt    *string                     `json:"lastPushAttemptAt"`
+	LastPushError        string                      `json:"lastPushError,omitempty"`
+	LastPushErrorSince   *string                     `json:"lastPushErrorSince"`
 	LastIntakeAt         *string                     `json:"lastIntakeAt"`
 	ConflictCount        int                         `json:"conflictCount"`
 	UnsupportedNameCount int                         `json:"unsupportedNameCount"`
@@ -163,6 +167,9 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 		RsyncVersion:         st.RsyncVersion,
 		LastPullAt:           timeJSON(st.LastPull),
 		LastPushAt:           timeJSON(st.LastPush),
+		LastPushAttemptAt:    timeJSON(st.LastPushAttempt),
+		LastPushError:        st.LastPushError,
+		LastPushErrorSince:   timeJSON(st.LastPushErrorSince),
 		LastIntakeAt:         timeJSON(st.LastIntake),
 		ConflictCount:        len(st.Conflicts),
 		UnsupportedNameCount: st.UnsupportedNames,

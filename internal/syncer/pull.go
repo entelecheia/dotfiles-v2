@@ -126,6 +126,12 @@ func PullTracked(cfg *Config, opts PullOptions) (*PullResult, error) {
 			return nil, fmt.Errorf("stat local %s: %w", rel, err)
 		}
 		if localMissing {
+			if cfg.Propagation.Delete && UnsupportedPathName(rel) {
+				// A name the push never sends that the workspace renamed
+				// away: its proven mirror copy is a leftover the push moves
+				// out. Restoring it would undo the rename for good (#225).
+				continue
+			}
 			if err := pullCopy(mirrorAbs, localAbs, opts.DryRun); err != nil {
 				return nil, fmt.Errorf("restore %s: %w", rel, err)
 			}
