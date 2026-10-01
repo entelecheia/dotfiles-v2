@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -404,13 +405,24 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	real, _ := osexec.LookPath("rsync")
-	f.cfg.RsyncPath = filepath.Join(t.TempDir(), "rsync")
-	dropDeletes := "#!/bin/sh\nfor a do\n  shift\n  [ \"$a\" = --delete-after ] || set -- \"$@\" \"$a\"\ndone\nexec \"" + real + "\" \"$@\"\n"
-	if err := os.WriteFile(f.cfg.RsyncPath, []byte(dropDeletes), 0o755); err != nil {
-		t.Fatal(err)
+	// dropDeletes runs the real rsync without --delete-after, then exits with
+	// status rc: deletions skipped silently (0) or after an I/O error (23).
+	dropDeletes := func(rc string) string {
+		script := filepath.Join(t.TempDir(), "rsync")
+		body := "#!/bin/sh\nfor a do\n  shift\n  [ \"$a\" = --delete-after ] || set -- \"$@\" \"$a\"\ndone\n\"" + real + "\" \"$@\" || exit\nexit " + rc + "\n"
+		if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return script
 	}
+	f.cfg.RsyncPath = dropDeletes("23")
 	_, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
-	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md") {
+	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md: rsync skipped every deletion after an I/O error") {
+		t.Fatalf("PushCommand after exit 23 = %v, want the unapplied deletion and its cause", err)
+	}
+	f.cfg.RsyncPath = dropDeletes("0")
+	_, err = PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
+	if err == nil || !strings.Contains(err.Error(), "1 planned deletion(s) left in the mirror, first notes/gone.md: openrsync deletes nothing") {
 		t.Fatalf("PushCommand = %v, want the unapplied deletion", err)
 	}
 	if st, _ := LoadLocalState(f.cfg.LocalPaths); !strings.Contains(st.LastPushError, "planned deletion(s) left") || !st.LastPush.Equal(before.LastPush) {
@@ -564,5 +576,27 @@ func TestPushCommand_AFailedRunKeepsItsReasonWhenTheRefreshFails(t *testing.T) {
 	}
 	if st, _ := LoadLocalState(f.cfg.LocalPaths); st.LastPushError != "push failed: rsync exit 12: rsync: connection unexpectedly closed" {
 		t.Errorf("LastPushError = %q, want the rsync failure", st.LastPushError)
+	}
+}
+
+// A refusal recorded outside PushCommand respects a pause and the sync lock:
+// while a run holds the lock, that run records its own outcome.
+func TestRecordPushRefusal_SkipsWhilePausedOrLocked(t *testing.T) {
+	f := newIntakeFixture(t)
+	release, err := AcquireLockForRun(f.cfg.LockDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = RecordPushRefusal(f.cfg, errors.New("push refused: while locked"))
+	release()
+	f.cfg.Paused = true
+	_ = RecordPushRefusal(f.cfg, errors.New("push refused: while paused"))
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); st.LastPushError != "" {
+		t.Fatalf("recorded %q while locked or paused", st.LastPushError)
+	}
+	f.cfg.Paused = false
+	_ = RecordPushRefusal(f.cfg, errors.New("push refused: now"))
+	if st, _ := LoadLocalState(f.cfg.LocalPaths); st.LastPushError != "push refused: now" {
+		t.Errorf("LastPushError = %q, want the refusal", st.LastPushError)
 	}
 }

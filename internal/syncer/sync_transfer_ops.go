@@ -135,7 +135,7 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 	partial = skippedFiles(raw)
 	pushErr := downgradePartial(opts.Progress, raw)
 	if pushErr == nil {
-		pushErr = unappliedDeletes(cfg, plan.Deletes)
+		pushErr = unappliedDeletes(cfg, plan.Deletes, partial)
 	}
 	if pushErr == nil && plan.MoveLeftovers && len(plan.Leftovers) > 0 {
 		dir, moved, moveErr := MoveMirrorLeftovers(cfg, plan.Leftovers)
@@ -154,10 +154,10 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 
 // unappliedDeletes fails a push that left a planned deletion in the mirror
 // while the workspace still lacks the file. rsync skips every deletion after
-// an I/O error (exit 23, a partial transfer), and openrsync deletes nothing
-// when --backup is set. The baseline keeps such a file proven, so the run must
-// not pass as complete (#224).
-func unappliedDeletes(cfg *Config, deletes []string) error {
+// an I/O error (exit 23, skipped set), and openrsync deletes nothing when
+// --backup is set. The baseline keeps such a file proven, so the run must not
+// pass as complete (#224).
+func unappliedDeletes(cfg *Config, deletes []string, skipped bool) error {
 	local := strings.TrimRight(cfg.LocalPath, "/")
 	mirror := strings.TrimRight(cfg.MirrorPath, "/")
 	var left []string
@@ -172,7 +172,11 @@ func unappliedDeletes(cfg *Config, deletes []string) error {
 	if len(left) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s; rsync 3.x skips deletions after an I/O error, and openrsync deletes nothing with --backup (replace it with rsync 3.x)", len(left), left[0])
+	why := "openrsync deletes nothing with --backup; install rsync 3.x if `rsync --version` names openrsync"
+	if skipped {
+		why = "rsync skipped every deletion after an I/O error (exit 23); fix the error it printed"
+	}
+	return fmt.Errorf("%d planned deletion(s) left in the mirror, first %s: %s", len(left), left[0], why)
 }
 
 // skippedFiles reports an rsync run that left files out because of an error
@@ -184,8 +188,19 @@ func skippedFiles(err error) bool {
 }
 
 // RecordPushRefusal records a push the CLI refused before PushCommand ran (an
-// owner mismatch, a preflight block), so status shows it like any refusal.
+// owner mismatch, a preflight block), so status shows it like any refusal. A
+// paused profile records nothing, whatever refused the push: a pause is meant
+// to stop pushes. The write takes the sync lock; while a run holds it, that
+// run records its own outcome instead.
 func RecordPushRefusal(cfg *Config, why error) error {
+	if cfg.Paused {
+		return nil
+	}
+	release, err := AcquireLockForRun(cfg.LockDir, false)
+	if err != nil {
+		return nil
+	}
+	defer release()
 	return recordPushAttempt(cfg, why, false)
 }
 

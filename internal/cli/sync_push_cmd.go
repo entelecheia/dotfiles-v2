@@ -90,9 +90,7 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 	}
 
 	if block := syncPreflight(p, cfg, bs.Runner); block != nil {
-		if !cfg.Paused { // a pause is meant to stop pushes, whatever else blocks them
-			recordPushRefusal(cfg, errors.New(block.Reason()), dryRun)
-		}
+		recordPushRefusal(cfg, errors.New(block.Reason()), dryRun)
 		return nil
 	}
 	mode, err := gdriveSyncModeFrom(cmd)
