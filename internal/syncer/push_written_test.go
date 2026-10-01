@@ -21,7 +21,7 @@ func TestWrittenFiles(t *testing.T) {
 		"@@written *deleting   notes/old.md",
 		"*deleting old.txt",
 		"@@written >f+++++++ \\#355\\#225\\#234\\#352\\#270\\#200.txt", // openrsync escapes non-ASCII
-		"@@written >f+++++++++ lit\\#134#123.md",                     // a literal \#123 in the name
+		"@@written >f+++++++++ lit\\#134#123.md",                       // a literal \#123 in the name
 		"Number of files: 3 (reg: 2, dir: 1)",
 		"",
 	}, "\n")

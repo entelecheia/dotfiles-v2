@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "peer",
   "profile": {
-    "schemaVersion": 4,
+    "schemaVersion": 5,
     "kind": "peer-profile",
     "profile": "peer",
     "configured": true,
@@ -32,6 +32,8 @@
     "maxDelete": 1000,
     "lastPullAt": null,
     "lastPushAt": null,
+    "lastPushAttemptAt": null,
+    "lastPushErrorSince": null,
     "lastIntakeAt": null,
     "conflictCount": 0,
     "unsupportedNameCount": 0,

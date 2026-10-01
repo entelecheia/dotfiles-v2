@@ -507,17 +507,17 @@ func TestPushFinalizesLocalTargetAfterPartialTransfer(t *testing.T) {
 	}
 	push := body[start : start+end]
 
-	rsyncAt := strings.Index(push, "runRsync(")
+	rsyncAt := strings.Index(push, "runRsyncOutput(")
 	guardAt := strings.Index(push, "IsPartialTransfer(")
-	baselineAt := strings.Index(push, "RefreshBaseline(")
+	baselineAt := strings.Index(push, "refreshBaseline(")
 	if rsyncAt < 0 || baselineAt < 0 {
-		t.Fatal("Push no longer calls runRsync and RefreshBaseline")
+		t.Fatal("Push no longer calls runRsyncOutput and refreshBaseline")
 	}
 	if guardAt < 0 {
 		t.Fatal("Push does not classify partial transfers; exit 23 would skip finalization")
 	}
 	if rsyncAt >= guardAt || guardAt >= baselineAt {
-		t.Errorf("expected runRsync -> IsPartialTransfer -> RefreshBaseline, got %d/%d/%d",
+		t.Errorf("expected runRsyncOutput -> IsPartialTransfer -> refreshBaseline, got %d/%d/%d",
 			rsyncAt, guardAt, baselineAt)
 	}
 	if !strings.Contains(push, "return partial") {
