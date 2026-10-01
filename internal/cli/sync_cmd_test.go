@@ -2,11 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	osexec "os/exec"
 	"strconv"
 	"strings"
 	"testing"
+
+	"charm.land/huh/v2"
 
 	"github.com/entelecheia/dotfiles-v2/internal/syncer"
 )
@@ -289,4 +292,18 @@ func rsyncExit(t *testing.T, code int) error {
 		t.Fatalf("expected exit %d", code)
 	}
 	return err
+}
+
+// Ctrl-C at a push prompt declines the run; any other prompt error stays one.
+func TestDeclinedOnAbort(t *testing.T) {
+	if ok, err := declinedOnAbort(false, huh.ErrUserAborted); ok || err != nil {
+		t.Errorf("Ctrl-C = %v, %v; want a decline", ok, err)
+	}
+	other := errors.New("no terminal")
+	if _, err := declinedOnAbort(false, other); !errors.Is(err, other) {
+		t.Errorf("another prompt error = %v; want it kept", err)
+	}
+	if ok, err := declinedOnAbort(true, nil); !ok || err != nil {
+		t.Errorf("a yes = %v, %v", ok, err)
+	}
 }

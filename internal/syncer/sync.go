@@ -440,6 +440,10 @@ func pushArgs(cfg *Config, conflict *ConflictDir, rf runtimeFilters, dryRun bool
 	// Skip directories that would be empty on the target after filtering, so
 	// gitignored leaves do not leave behind shells of folder structure.
 	args = append(args, "--prune-empty-dirs")
+	if !cfg.Target.IsSSH() && !dryRun {
+		// The baseline refresh needs what this run sent (#224).
+		args = append(args, "--out-format="+writtenOutFormat)
+	}
 	if !peerNormalTransfer(cfg) {
 		args = append(args,
 			"--backup",
@@ -641,9 +645,10 @@ func refuseSharedDriveMirror(cfg *Config) error {
 // staging area (`inbox/gdrive/`) are always excluded so they never bounce back
 // to mirror, regardless of operator excludes.
 //
-// On a successful non-dry-run push, the baseline manifest is refreshed as the
+// After a non-dry-run push, the baseline manifest is refreshed as the
 // Git-shared Drive payload index so other machines can restore accepted
-// artifacts from the mirror.
+// artifacts from the mirror. A local target refreshes after any rsync exit
+// status, since even a failed run may have written files.
 func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) error {
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("push refused: %w", err)
@@ -676,26 +681,22 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	conflict := NewConflictDir()
 	args := pushArgs(cfg, conflict, rf, dryRun)
 	fmt.Fprintf(cfg.out(), "  Push: %s → %s (%s)\n", cfg.LocalPath, cfg.Target.RsyncDest(), cfg.Propagation)
-	// A partial transfer must still finalize. Returning here would leave the
-	// baseline stale, so every file that DID transfer comes back on the next
-	// run as "mirror-only file is not in baseline", and the conflict set grows
-	// until a clean push refuses outright - the exact failure this avoids.
+	// A run that exited with a status must still finalize: a partial transfer
+	// (23/24) moved most files, and a --max-delete stop (25) comes after every
+	// transfer. Returning here would leave the baseline stale, so every file
+	// that DID transfer comes back on the next run as "mirror-only file is not
+	// in baseline", and the conflict set grows until a clean push refuses
+	// outright - the exact failure this avoids (#224).
 	//
 	// Finalizing is safe for a local target because RefreshBaseline walks the
 	// MIRROR: a file that failed to transfer is absent there and gets retried.
-	// An SSH baseline instead walks the local tree, so refreshing after a partial
+	// An SSH baseline instead walks the local tree, so refreshing after a failed
 	// push would falsely record unsent paths as peer-seen and could later turn a
 	// local delete into deletion of independent peer work. Keep that baseline
-	// unchanged on partial SSH pushes.
-	var partial error
-	if err := runRsync(ctx, runner, cfg, args); err != nil {
-		if !IsPartialTransfer(err) {
-			return err
-		}
-		partial = err
-	}
-	if partial != nil && cfg.Target.IsSSH() {
-		return partial
+	// unchanged on any failed SSH push.
+	out, rsyncErr := runRsyncOutput(ctx, runner, cfg, args)
+	if rsyncErr != nil && (cfg.Target.IsSSH() || !rsyncExited(ctx, rsyncErr)) {
+		return rsyncErr
 	}
 	if !dryRun && cfg.LocalPaths != nil {
 		// Fast (stat-only) fingerprints: a strict pass would read every
@@ -707,7 +708,11 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 			cfg.Propagation.Create && cfg.Propagation.Update
 		partialPeerPolicy := cfg.Target.IsSSH() && cfg.Profile == PeerProfile && !fullPeerPush
 		if !partialPeerPolicy {
-			if err := RefreshBaseline(cfg, FingerprintFast); err != nil {
+			if err := refreshBaseline(cfg, FingerprintFast, writtenFiles(out)); err != nil {
+				if rsyncErr != nil && !IsPartialTransfer(rsyncErr) {
+					// The failed run is the reason to report, not its aftermath.
+					return fmt.Errorf("%w; baseline refresh: %v", rsyncErr, err)
+				}
 				return fmt.Errorf("baseline refresh: %w", err)
 			}
 			if fullPeerPush {
@@ -716,13 +721,8 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 				}
 			}
 		}
-		if err := UpdateLocalState(cfg.LocalPaths, func(s *LocalState) {
-			s.LastPush = time.Now().UTC()
-		}); err != nil {
-			return fmt.Errorf("state update: %w", err)
-		}
 	}
-	return partial
+	return rsyncErr
 }
 
 // Sync is now a thin alias for Push — the historical bidirectional Pull
@@ -902,6 +902,81 @@ func runRsync(ctx context.Context, runner *exec.Runner, cfg *Config, args []stri
 		_, err = runner.Run(ctx, cfg.rsyncBin(), args...)
 	}
 	return classifyRsyncError(err)
+}
+
+// runRsyncOutput is runRsync that also returns rsync's stdout, for the mirror
+// push that parses it (#224); a --verbose run tees it to the terminal.
+func runRsyncOutput(ctx context.Context, runner *exec.Runner, cfg *Config, args []string) (string, error) {
+	var res *exec.Result
+	var err error
+	if cfg.Verbose {
+		res, err = runner.RunTee(ctx, cfg.rsyncBin(), args...)
+	} else {
+		res, err = runner.Run(ctx, cfg.rsyncBin(), args...)
+	}
+	out := ""
+	if res != nil {
+		out = res.Stdout
+	}
+	return out, classifyRsyncError(err)
+}
+
+// writtenOutFormat tags each item a mirror push reports, so its lines stand
+// apart from --progress and --stats output on the same stream.
+const writtenOutFormat = "@@written %i %n"
+
+// writtenFiles returns the relative paths of the regular files a push with
+// writtenOutFormat sent (itemized ">f"). rsync lists a file as it starts to
+// send it, so a file whose receive then failed is listed too: an accepted
+// limit, since it also needs that file's local twin to vanish in the same run
+// (PR #226 review record). rsync may print a name through
+// its \#ooo escapes (openrsync escapes non-ASCII bytes, all of them outside a
+// UTF-8 locale), so each is decoded. A line that does not parse is skipped:
+// that file only misses the written-path rule and is classified as before.
+func writtenFiles(stdout string) map[string]bool {
+	written := map[string]bool{}
+	for _, line := range strings.Split(stdout, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "@@written ")
+		if !ok {
+			continue
+		}
+		item, name, ok := strings.Cut(rest, " ")
+		if !ok || !strings.HasPrefix(item, ">f") {
+			continue
+		}
+		if rel := normalizeRel(unescapeRsyncName(name)); rel != "" {
+			written[rel] = true
+		}
+	}
+	return written
+}
+
+// unescapeRsyncName decodes rsync's \#ooo octal escapes back to bytes. rsync
+// escapes a literal backslash before '#' and digits too, so the decoding is
+// unambiguous for its output.
+func unescapeRsyncName(name string) string {
+	if !strings.Contains(name, `\#`) {
+		return name
+	}
+	return rsyncEscapeRe.ReplaceAllStringFunc(name, func(m string) string {
+		v, err := strconv.ParseUint(m[2:], 8, 8)
+		if err != nil {
+			return m
+		}
+		return string([]byte{byte(v)})
+	})
+}
+
+// rsyncExited reports whether rsync ran and exited with a status, so it may
+// have written files. A run that never started, or that a signal killed before
+// rsync could exit, has no status; rsync that catches SIGINT or SIGTERM exits
+// 20 and is finalized like any other exit. A run during which dot itself was
+// interrupted is not: a terminal Ctrl-C reaches rsync too, which can exit 20
+// before the cancellation kills it, and the refresh would then walk the whole
+// mirror after the user asked to stop.
+func rsyncExited(ctx context.Context, err error) bool {
+	var ee *osexec.ExitError
+	return ctx.Err() == nil && errors.As(err, &ee) && ee.ExitCode() > 0
 }
 
 // PartialTransferError reports an rsync run that moved data but not all of it.

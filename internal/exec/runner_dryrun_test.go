@@ -27,6 +27,7 @@ var runnerMethods = map[string]bool{
 	// Mutating: each must have a dry-run branch and an exercise below.
 	"Run":             true,
 	"RunAttached":     true,
+	"RunTee":          true,
 	"RunInteractive":  true,
 	"RunShell":        true,
 	"WriteFile":       true,
@@ -97,6 +98,7 @@ func TestRunner_MutatingAreNoOpsUnderDryRun(t *testing.T) {
 	calls := map[string]func() error{
 		"Run":             func() error { _, err := r.Run(ctx, "touch", p("a")); return err },
 		"RunAttached":     func() error { return r.RunAttached(ctx, "touch", p("b")) },
+		"RunTee":          func() error { _, err := r.RunTee(ctx, "touch", p("t")); return err },
 		"RunInteractive":  func() error { return r.RunInteractive(ctx, "touch", p("c")) },
 		"RunShell":        func() error { _, err := r.RunShell(ctx, "touch "+p("d")); return err },
 		"WriteFile":       func() error { return r.WriteFile(p("e"), []byte("x"), 0o644) },

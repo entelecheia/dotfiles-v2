@@ -71,7 +71,7 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 		p.KV("Submodules", fmt.Sprintf("%d excluded — they sync via Git, not `dot sync`", st.SubmoduleCount))
 	}
 	if st.UnsupportedNames > 0 {
-		p.KV("Unsupported names", ui.StyleWarning.Render(fmt.Sprintf("%d — Dropbox/Windows cannot store these; `dot sync names trim` fixes trailing whitespace, names ending in a period need a manual rename", st.UnsupportedNames)))
+		p.KV("Unsupported names", ui.StyleWarning.Render(fmt.Sprintf("%d in the workspace — Dropbox/Windows cannot store these; `dot sync names trim` fixes trailing whitespace, names ending in a period need a manual rename", st.UnsupportedNames)))
 	}
 	if st.AllowCount > 0 {
 		p.KV("Secrets", ui.StyleWarning.Render(fmt.Sprintf("allowed: %d pattern(s) in allow.txt — these sync to the target", st.AllowCount)))
@@ -108,6 +108,9 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	p.KV("Lock held", boolStr(st.LockHeld))
 	p.KV("Last pull", formatLastSync(st.LastPull))
 	p.KV("Last push", formatLastSync(st.LastPush))
+	if why := st.PushStalled(time.Now()); why != "" {
+		p.KV("Push stalled", ui.StyleWarning.Render(why+" — run `dot sync push` to see the plan, `dot sync log` for each run"))
+	}
 	p.KV("Last intake", formatLastSync(st.LastIntake))
 	if st.LastIntakeTSDir != "" {
 		p.KV("Last intake dir", st.LastIntakeTSDir)

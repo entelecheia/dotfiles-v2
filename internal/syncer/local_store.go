@@ -200,6 +200,13 @@ type LocalState struct {
 	// `dot peer status` can tell a held run from a complete one instead of
 	// reading both as a successful sync.
 	LastHeld time.Time `yaml:"last_held,omitempty"`
+	// LastPushAttempt is the latest real push run. LastPushError holds why it
+	// did not complete (a refusal or a failure) and LastPushErrorSince when the
+	// failing streak began; a completed push clears both, so status can tell a
+	// scheduled push that keeps refusing from a quiet workspace (#224).
+	LastPushAttempt    time.Time `yaml:"last_push_attempt,omitempty"`
+	LastPushError      string    `yaml:"last_push_error,omitempty"`
+	LastPushErrorSince time.Time `yaml:"last_push_error_since,omitempty"`
 }
 
 // LocalPaths resolves every well-known path under

@@ -18,6 +18,9 @@ const conflictsDirName = ".sync-conflicts"
 const (
 	backupSubFromGdrive    = "from-gdrive"
 	backupSubFromWorkspace = "from-workspace"
+	// from-mirror lands inside the workspace tree: mirror leftovers a push
+	// moved out of the mirror (MoveMirrorLeftovers).
+	backupSubFromMirror = "from-mirror"
 )
 
 // ConflictDir holds the timestamp shared between the pull and push passes
@@ -44,6 +47,12 @@ func (c *ConflictDir) PullBackupRel() string {
 // relative to the destination (mirror).
 func (c *ConflictDir) PushBackupRel() string {
 	return filepath.Join(conflictsDirName, c.Timestamp, backupSubFromWorkspace)
+}
+
+// LeftoverBackupRel returns the workspace-relative directory that mirror
+// leftovers move into.
+func (c *ConflictDir) LeftoverBackupRel() string {
+	return filepath.Join(conflictsDirName, c.Timestamp, backupSubFromMirror)
 }
 
 // PullLocalBackupRel returns the backup path for a pull that overwrites a

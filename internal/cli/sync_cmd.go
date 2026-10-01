@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
@@ -168,24 +170,12 @@ func syncBootstrapOptions(cmd *cobra.Command, readOnly bool) syncer.BootstrapOpt
 // refusal when it may not. Where this sits among each handler's other guards
 // is what fixes that command's error precedence, so the call stays in cli even
 // though syncer.Preflight does the classifying.
-func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) bool {
+func syncPreflight(p *Printer, cfg *syncer.Config, runner *exec.Runner) *syncer.PreflightBlock {
 	block := syncer.Preflight(runner, cfg)
-	if block == nil {
-		return true
+	if block != nil {
+		p.Line("%s", block.Reason())
 	}
-	switch block.Kind {
-	case syncer.PreflightRsyncMissing:
-		p.Line("rsync not installed. Install via: brew install rsync")
-	case syncer.PreflightLocalMissing:
-		p.Line("Local path missing: %s", block.Path)
-	case syncer.PreflightSSHUnreachable:
-		p.Line("SSH target unreachable: %v", block.Err)
-	case syncer.PreflightMirrorMissing:
-		p.Line("Mirror path missing: %s", block.Path)
-	case syncer.PreflightPaused:
-		p.Line("sync is paused. Run `dot sync resume` to activate.")
-	}
-	return false
+	return block
 }
 
 // syncRender carries what the shared event renderer needs from the invoking
@@ -233,6 +223,8 @@ func renderSyncEvent(p *Printer, r syncRender) func(syncer.SyncEvent) {
 			p.Warn("not on target, skipped: %s", e.Path)
 		case syncer.SyncEventPartialTransfer:
 			_ = reportPushPartial(p, e.Err)
+		case syncer.SyncEventLeftoversMoved:
+			p.Line("  Moved %d mirror leftover(s) to %s", e.Candidates, e.Path)
 		case syncer.SyncEventPruneSummary:
 			p.Line("Would reclaim %s across %d backup dir(s).", ws.FormatSize(e.Reclaimed), e.Candidates)
 		}
@@ -249,14 +241,23 @@ func strictLabel(strict bool) string {
 
 // confirmSync answers the engine's confirmation requests. The engine names the
 // decision; cli owns both the wording and the `--yes` policy (D-09).
+// declinedOnAbort reads Ctrl-C at a push prompt as a decline: the operator
+// stopped the run, which is not a failed push (#224).
+func declinedOnAbort(ok bool, err error) (bool, error) {
+	if errors.Is(err, huh.ErrUserAborted) {
+		return false, nil
+	}
+	return ok, err
+}
+
 func confirmSync(cmd *cobra.Command) syncer.ConfirmFunc {
 	return func(req syncer.ConfirmRequest) (bool, error) {
 		yes, _ := cmd.Flags().GetBool("yes")
 		switch req.Kind {
 		case syncer.ConfirmPushSSH:
-			return ui.Confirm("Push to SSH target?", yes)
+			return declinedOnAbort(ui.Confirm("Push to SSH target?", yes))
 		case syncer.ConfirmPushPlan:
-			return ui.Confirm("Apply this push plan?", yes)
+			return declinedOnAbort(ui.Confirm("Apply this push plan?", yes))
 		case syncer.ConfirmPullPlan:
 			return ui.Confirm("Apply this pull plan?", yes)
 		case syncer.ConfirmPruneConflicts:
