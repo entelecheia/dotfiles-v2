@@ -140,7 +140,7 @@ func TestContainerMacFreshInstall(t *testing.T) {
 		t.Fatalf("state = %+v, %v", st, err)
 	}
 	shim, err := os.ReadFile(container.ShimPath(rc.HomeDir))
-	if err != nil || string(shim) != string(container.ShimScript(container.DotPath(), st.Binary)) {
+	if err != nil || string(shim) != string(container.ShimScript(container.DotPath(rc.HomeDir), st.Binary)) {
 		t.Fatalf("shim = %q, %v", shim, err)
 	}
 	if fi, _ := os.Stat(container.ShimPath(rc.HomeDir)); fi.Mode()&0o111 == 0 {

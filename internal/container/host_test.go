@@ -2,6 +2,7 @@ package container
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -157,6 +158,40 @@ func TestResolveSkipsShimAndPrefersState(t *testing.T) {
 	}
 	if b, _ := Resolve(home, "darwin", &State{Backend: BackendApple, Binary: ShimPath(home)}); b != "" {
 		t.Fatalf("a state naming the shim must not resolve, got backend %q", b)
+	}
+}
+
+func TestDotPathPrefersLocalBin(t *testing.T) {
+	home := t.TempDir()
+	local := filepath.Join(home, ".local", "bin", "dot")
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(local, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(local)
+	if got := DotPath(home); got != want {
+		t.Fatalf("DotPath = %s, want %s", got, want)
+	}
+	if got := DotPath(t.TempDir()); got == want || got == "" {
+		t.Fatalf("without ~/.local/bin/dot, DotPath = %q, want this executable", got)
+	}
+}
+
+func TestShimFallsBackLoudly(t *testing.T) {
+	dir := t.TempDir()
+	backend := filepath.Join(dir, "backend")
+	if err := os.WriteFile(backend, []byte("#!/bin/sh\necho \"backend $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(dir, "container")
+	if err := os.WriteFile(shim, ShimScript(filepath.Join(dir, "gone", "dot"), backend), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(shim, "ls", "-a").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "is missing; running") || !strings.Contains(string(out), "backend ls -a") {
+		t.Fatalf("fallback output = %q, %v", out, err)
 	}
 }
 

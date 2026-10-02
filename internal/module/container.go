@@ -179,7 +179,7 @@ func (m *ContainerModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 	if h.noKernel {
 		add("install the recommended guest kernel", "container system kernel set --recommended")
 	}
-	if h.binary == "" || fileutil.NeedsUpdate(rc.Runner, container.ShimPath(rc.HomeDir), container.ShimScript(container.DotPath(), h.binary)) {
+	if h.binary == "" || fileutil.NeedsUpdate(rc.Runner, container.ShimPath(rc.HomeDir), container.ShimScript(container.DotPath(rc.HomeDir), h.binary)) {
 		add("write "+container.ShimPath(rc.HomeDir), "")
 	}
 	if want := m.state(ctx, rc, h); want == nil || !want.Same(m.loadState(rc)) {
@@ -216,7 +216,7 @@ func (m *ContainerModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		}
 	}
 
-	if written, err := fileutil.EnsureFileAtomic(rc.Runner, rc.HomeDir, container.ShimPath(rc.HomeDir), container.ShimScript(container.DotPath(), h.binary), 0o755); err != nil {
+	if written, err := fileutil.EnsureFileAtomic(rc.Runner, rc.HomeDir, container.ShimPath(rc.HomeDir), container.ShimScript(container.DotPath(rc.HomeDir), h.binary), 0o755); err != nil {
 		return nil, fmt.Errorf("writing shim: %w", err)
 	} else if written {
 		msgs = append(msgs, "wrote "+container.ShimPath(rc.HomeDir))

@@ -98,27 +98,31 @@ func (s *State) Marshal() []byte {
 }
 
 // ShimScript is the POSIX sh shim. It hands every call to dot, and execs the
-// backend directly when dot is missing so a broken dot never takes
-// containers down. dot is named by absolute path: Graphviz installs a `dot`
-// of its own that can come first on PATH.
+// backend directly, with a warning, when dot is missing so a broken dot
+// never takes containers down. dot is named by absolute path: Graphviz
+// installs a `dot` of its own that can come first on PATH.
 func ShimScript(dotPath, backendBinary string) []byte {
-	dot := shellQuote(dotPath)
+	dot, backend := shellQuote(dotPath), shellQuote(backendBinary)
 	return []byte(`#!/bin/sh
 # Managed by dot (modules.container). Rewritten by dot container setup.
 if [ -x ` + dot + ` ]; then
   exec ` + dot + ` container exec -- "$@"
 fi
-exec ` + shellQuote(backendBinary) + ` "$@"
+printf 'container: %s is missing; running %s untranslated (rerun dot container setup)\n' ` + dot + ` ` + backend + ` >&2
+exec ` + backend + ` "$@"
 `)
 }
 
-// DotPath is the dot binary the shim runs: this executable, with a Homebrew
-// keg (<prefix>/Cellar/<formula>/<version>/bin/dot) mapped to the formula's
-// opt link so a brew upgrade keeps the shim valid.
-func DotPath() string {
-	self, err := os.Executable()
-	if err != nil {
-		return "dot"
+// DotPath is the dot binary the shim runs: ~/.local/bin/dot when present (the
+// stable target the guard hook also pins), else this executable. A Homebrew
+// keg path (<prefix>/Cellar/<formula>/<version>/bin/dot) is mapped to the
+// formula's opt link so a brew upgrade keeps the shim valid.
+func DotPath(home string) string {
+	self := filepath.Join(home, ".local", "bin", "dot")
+	if _, err := os.Stat(self); err != nil {
+		if self, err = os.Executable(); err != nil {
+			return "dot"
+		}
 	}
 	if resolved, err := filepath.EvalSymlinks(self); err == nil {
 		self = resolved

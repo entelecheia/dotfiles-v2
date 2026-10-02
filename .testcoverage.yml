@@ -93,8 +93,8 @@ override:
     threshold: 69
   - path: ^internal/config/catalog$ # measured 91.4894% (43/47)
     threshold: 90
-  - path: ^internal/container$ # measured 88.8889% (192/216) on darwin; DotPath's os.Executable read stays unhit
-    threshold: 87
+  - path: ^internal/container$ # measured 91.2442% (198/217) on darwin
+    threshold: 89
   - path: ^internal/exec$ # measured 46.5318% (161/346)
     threshold: 45
   - path: ^internal/fileutil$ # measured 55.1867% (133/241)

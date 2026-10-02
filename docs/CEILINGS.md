@@ -260,7 +260,9 @@ image with a fixed list of Apple options that take a value: an option it does
 not know is read as a boolean, so the scan can stop early and leave a later
 `-c` or `-a` untranslated, which docker reads as `--cpu-shares` or
 `--attach`. Unknown verbs and flags pass through untouched, and short-flag
-clusters (`-c4`) are not split. The table tracks Apple's CLI by hand.
+clusters (`-c4`) are not split. `volume prune` keeps docker's scope, which
+removes anonymous volumes only, while Apple's removes every volume no
+container references. The table tracks Apple's CLI by hand.
 
 Replace this when upstream ships a Linux build, or when daily use needs a
 verb or flag the table misses: add the row and its test.
