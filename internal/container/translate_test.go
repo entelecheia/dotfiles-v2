@@ -27,7 +27,8 @@ func TestTranslate(t *testing.T) {
 		{"stats", "stats --no-stream", "stats --no-stream", false},
 		{"export", "export -o web.tar web", "export -o web.tar web", false},
 		{"build", "build -t t .", "build -t t .", false},
-		{"prune", "prune", "container prune", false},
+		{"prune", "prune", "container prune --force", false},
+		{"prune keeps -f", "prune -f", "container prune -f", false},
 		// renamed verbs
 		{"copy", "copy web:/etc/hosts .", "cp web:/etc/hosts .", false},
 		{"cp", "cp web:/etc/hosts .", "cp web:/etc/hosts .", false},
@@ -46,7 +47,7 @@ func TestTranslate(t *testing.T) {
 		{"image save", "image save -o a.tar a", "image save -o a.tar a", false},
 		{"image load", "image load -i a.tar", "image load -i a.tar", false},
 		{"image inspect", "image inspect a", "image inspect a", false},
-		{"image prune", "image prune -a", "image prune -a", false},
+		{"image prune", "image prune -a", "image prune -a --force", false},
 		// registry
 		{"registry login", "registry login ghcr.io", "login ghcr.io", false},
 		{"registry logout", "r logout ghcr.io", "logout ghcr.io", false},
@@ -55,12 +56,12 @@ func TestTranslate(t *testing.T) {
 		{"network delete", "n delete n1", "network rm n1", false},
 		{"network list", "network list", "network ls", false},
 		{"network inspect", "network inspect n1", "network inspect n1", false},
-		{"network prune", "network prune", "network prune", false},
+		{"network prune", "network prune", "network prune --force", false},
 		{"volume create", "volume create v1", "volume create v1", false},
 		{"volume rm", "v rm v1", "volume rm v1", false},
 		{"volume ls", "volume ls", "volume ls", false},
 		{"volume inspect", "volume inspect v1", "volume inspect v1", false},
-		{"volume prune", "volume prune", "volume prune", false},
+		{"volume prune", "volume prune", "volume prune --force", false},
 		// system
 		{"system status", "system status", "info", false},
 		{"system version", "s version", "version", false},
@@ -87,6 +88,7 @@ func TestTranslate(t *testing.T) {
 		// unknown passes through
 		{"unknown verb", "frobnicate --x", "frobnicate --x", false},
 		{"unknown flag", "run --rosetta alpine", "run --rosetta alpine", false},
+		{"--gpus before rewrites", "run --gpus all -c 4 --rm img", "run --gpus all --cpus 4 --rm img", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,7 +117,7 @@ func TestTranslateUnsupportedExitsTwo(t *testing.T) {
 		"system kernel set --recommended", "system dns create x", "system property list", "system logs",
 		"registry list", "r ls", "machine list", "m ls", "k8s up", "clean web",
 		"run -k /vmlinux alpine", "run --kernel=/vmlinux alpine", "create --kernel /vmlinux alpine",
-		"list --format yaml", "image ls --format=yaml",
+		"list --format yaml", "image ls --format=yaml", "ls --format toml",
 	} {
 		_, err := Translate(strings.Fields(in))
 		var exit *ExitError

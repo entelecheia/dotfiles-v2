@@ -45,9 +45,10 @@ func newContainerSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
 		Short: "Install the backend and write the container shim",
-		Long: `Enable the container module in user state, install the backend, and write
-the shim, its PATH entry and the state file. Afterwards it is equivalent to
-dot apply --module container (plus the shell module for the PATH entry).
+		Long: `Install the backend and write the shim and its state file, then enable the
+container module in user state and render the shim's PATH entry (the shell
+module). Afterwards it is equivalent to dot apply --module container. A host
+the module cannot set up keeps its config and shell files untouched.
 
 On Linux an existing, usable docker is used as is. With no docker or podman,
 setup offers to install the distro docker package (--yes accepts) and falls
@@ -100,11 +101,6 @@ func runContainerSetup(cmd *cobra.Command, _ []string) error {
 			p.Line("  hint: set modules.container.dns: [%s] or pass --dns per call", strings.Join(container.SuggestedDNS, ", "))
 		}
 	}
-	if changed {
-		if err := saveStateFor(p, homeOverride, state, dryRun); err != nil {
-			return err
-		}
-	}
 
 	profileName, _ := cmd.Flags().GetString("profile")
 	configPath, _ := cmd.Flags().GetString("config")
@@ -135,8 +131,19 @@ func runContainerSetup(cmd *cobra.Command, _ []string) error {
 		HomeDir:      home,
 		Out:          p.Out,
 	}
+	// The container module runs first, so a host it cannot set up (unusable
+	// docker, no sudo) keeps its config and shell files untouched.
+	registry := module.NewRegistry()
+	if err := module.RunAll(ctx, registry.Resolve(cfg, []string{"container"}), rc); err != nil {
+		return err
+	}
+	if changed {
+		if err := saveStateFor(p, homeOverride, state, dryRun); err != nil {
+			return err
+		}
+	}
 	// The shell module renders the PATH entry that puts the shim first.
-	if err := module.RunAll(ctx, module.NewRegistry().Resolve(cfg, []string{"shell", "container"}), rc); err != nil {
+	if err := module.RunAll(ctx, registry.Resolve(cfg, []string{"shell"}), rc); err != nil {
 		return err
 	}
 	if !dryRun && container.LookPath("container", "") != container.ShimPath(home) {
@@ -252,22 +259,22 @@ func newContainerExecCmd() *cobra.Command {
 			if len(args) > 0 && args[0] == "--" {
 				args = args[1:]
 			}
-			return containerExec(homeFor(cmd), args)
+			var dns []string
+			if us, err := loadStateFor(homeOverrideFrom(cmd)); err == nil {
+				dns = us.Modules.Container.DNS
+			}
+			return containerExec(homeFor(cmd), args, dns)
 		},
 	}
 }
 
 // containerExec replaces this process with the backend, so exit codes,
 // signals and TTYs pass through untouched.
-func containerExec(home string, args []string) error {
+func containerExec(home string, args, dns []string) error {
 	st, _ := container.LoadState(home)
 	backend, binary := container.Resolve(home, runtime.GOOS, st)
 	if binary == "" {
 		return fmt.Errorf("no container backend found; run dot container setup")
-	}
-	var dns []string
-	if us, err := config.LoadStateForHome(home); err == nil {
-		dns = us.Modules.Container.DNS
 	}
 	t, err := container.Argv(backend, args, dns)
 	if err != nil {

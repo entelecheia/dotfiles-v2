@@ -99,15 +99,43 @@ func (s *State) Marshal() []byte {
 
 // ShimScript is the POSIX sh shim. It hands every call to dot, and execs the
 // backend directly when dot is missing so a broken dot never takes
-// containers down.
-func ShimScript(backendBinary string) []byte {
+// containers down. dot is named by absolute path: Graphviz installs a `dot`
+// of its own that can come first on PATH.
+func ShimScript(dotPath, backendBinary string) []byte {
+	dot := shellQuote(dotPath)
 	return []byte(`#!/bin/sh
 # Managed by dot (modules.container). Rewritten by dot container setup.
-if command -v dot >/dev/null 2>&1; then
-  exec dot container exec -- "$@"
+if [ -x ` + dot + ` ]; then
+  exec ` + dot + ` container exec -- "$@"
 fi
 exec ` + shellQuote(backendBinary) + ` "$@"
 `)
+}
+
+// DotPath is the dot binary the shim runs: this executable, with a Homebrew
+// keg (<prefix>/Cellar/<formula>/<version>/bin/dot) mapped to the formula's
+// opt link so a brew upgrade keeps the shim valid.
+func DotPath() string {
+	self, err := os.Executable()
+	if err != nil {
+		return "dot"
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	return optLinkFor(self)
+}
+
+func optLinkFor(self string) string {
+	p := filepath.ToSlash(self)
+	if i := strings.Index(p, "/Cellar/"); i >= 0 {
+		if formula, rest, ok := strings.Cut(p[i+len("/Cellar/"):], "/"); ok {
+			if _, bin, ok := strings.Cut(rest, "/"); ok {
+				return filepath.FromSlash(p[:i] + "/opt/" + formula + "/" + bin)
+			}
+		}
+	}
+	return self
 }
 
 func shellQuote(s string) string {

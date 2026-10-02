@@ -4,9 +4,10 @@ Install the backend and write the container shim
 
 ### Synopsis
 
-Enable the container module in user state, install the backend, and write
-the shim, its PATH entry and the state file. Afterwards it is equivalent to
-dot apply --module container (plus the shell module for the PATH entry).
+Install the backend and write the shim and its state file, then enable the
+container module in user state and render the shim's PATH entry (the shell
+module). Afterwards it is equivalent to dot apply --module container. A host
+the module cannot set up keeps its config and shell files untouched.
 
 On Linux an existing, usable docker is used as is. With no docker or podman,
 setup offers to install the distro docker package (--yes accepts) and falls

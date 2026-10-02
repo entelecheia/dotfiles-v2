@@ -839,9 +839,13 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	if len(state.Modules.MacApps.CasksExtra) > 0 {
 		cfg.CasksExtra = append(cfg.CasksExtra, state.Modules.MacApps.CasksExtra...)
 	}
-	if c := state.Modules.Container; !c.IsZero() {
-		cfg.Modules.Container.Enabled = c.Enabled
+	if c := state.Modules.Container; c.Enabled {
+		cfg.Modules.Container.Enabled = true
+	}
+	if c := state.Modules.Container; c.Backend != "" {
 		cfg.Modules.Container.Backend = c.Backend
+	}
+	if c := state.Modules.Container; len(c.DNS) > 0 {
 		cfg.Modules.Container.DNS = append([]string(nil), c.DNS...)
 	}
 }

@@ -140,7 +140,7 @@ func TestContainerMacFreshInstall(t *testing.T) {
 		t.Fatalf("state = %+v, %v", st, err)
 	}
 	shim, err := os.ReadFile(container.ShimPath(rc.HomeDir))
-	if err != nil || string(shim) != string(container.ShimScript(st.Binary)) {
+	if err != nil || string(shim) != string(container.ShimScript(container.DotPath(), st.Binary)) {
 		t.Fatalf("shim = %q, %v", shim, err)
 	}
 	if fi, _ := os.Stat(container.ShimPath(rc.HomeDir)); fi.Mode()&0o111 == 0 {
@@ -240,7 +240,7 @@ func TestContainerLinuxDockerOfferAccepted(t *testing.T) {
 		h.linux()
 		h.stub("pacman", "exit 0")
 		rc := containerTestContext(t, tc.sys, true) // --yes accepts the offer
-		user := filepath.Base(rc.HomeDir)
+		user := dockerGroupUser(rc)
 
 		if err := runContainer(t, &ContainerModule{}, rc); err != nil {
 			t.Fatal(err)

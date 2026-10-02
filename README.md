@@ -438,7 +438,8 @@ kernel`, `machine` and `k8s` exit 2. `DOT_CONTAINER_TRACE=1` prints the argv
 the shim runs.
 
 `modules.container.dns` adds `--dns` to `run`, `create`, `build` and
-`builder start` unless the call already passes `--dns` or `--no-dns`. When
+`builder start` (on Linux `run` and `create` only, since docker `build` has
+no `--dns`) unless the call already passes `--dns` or `--no-dns`. When
 Cloudflare WARP holds port 53, DNS inside apple/container fails
 (apple/container#402) and setup offers `[1.1.1.1, 1.0.0.1]`. `dot container
 status [--probe]` reports the backend, service, shim, DNS and WARP state.

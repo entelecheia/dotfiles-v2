@@ -124,8 +124,9 @@ func TestStateRoundTripAndShim(t *testing.T) {
 		t.Fatalf("LoadState = %+v, %v; want %+v", got, err, want)
 	}
 
-	shim := string(ShimScript("/opt/it's/container"))
-	for _, s := range []string{"#!/bin/sh\n", `exec dot container exec -- "$@"`, `exec '/opt/it'\''s/container' "$@"`} {
+	shim := string(ShimScript("/opt/homebrew/opt/dotfiles/bin/dot", "/opt/it's/container"))
+	for _, s := range []string{"#!/bin/sh\n", `if [ -x '/opt/homebrew/opt/dotfiles/bin/dot' ]; then`,
+		`exec '/opt/homebrew/opt/dotfiles/bin/dot' container exec -- "$@"`, `exec '/opt/it'\''s/container' "$@"`} {
 		if !strings.Contains(shim, s) {
 			t.Errorf("shim lacks %q:\n%s", s, shim)
 		}
@@ -156,5 +157,17 @@ func TestResolveSkipsShimAndPrefersState(t *testing.T) {
 	}
 	if b, _ := Resolve(home, "darwin", &State{Backend: BackendApple, Binary: ShimPath(home)}); b != "" {
 		t.Fatalf("a state naming the shim must not resolve, got backend %q", b)
+	}
+}
+
+func TestOptLinkFor(t *testing.T) {
+	for in, want := range map[string]string{
+		"/opt/homebrew/Cellar/dotfiles/2.70.33/bin/dot":              "/opt/homebrew/opt/dotfiles/bin/dot",
+		"/home/linuxbrew/.linuxbrew/Cellar/dotfiles/2.70.33/bin/dot": "/home/linuxbrew/.linuxbrew/opt/dotfiles/bin/dot",
+		"/Users/u/.local/bin/dot":                                    "/Users/u/.local/bin/dot",
+	} {
+		if got := optLinkFor(in); got != want {
+			t.Errorf("optLinkFor(%s) = %s, want %s", in, got, want)
+		}
 	}
 }

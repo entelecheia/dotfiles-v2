@@ -56,6 +56,7 @@ var runValueFlags = map[string]bool{
 	"--read-only-path": true, "--runtime": true, "--shm-size": true, "--tmpfs": true,
 	"-v": true, "--volume": true, "--scheme": true, "--progress": true,
 	"--max-concurrent-downloads": true,
+	"--gpus":                     true, // docker-only, passed through on Linux
 }
 
 // flagSpan returns the index of the first positional argument (the image for
@@ -90,7 +91,7 @@ func Translate(args []string) (Translation, error) {
 	case "start", "stop", "kill", "exec", "logs", "inspect", "stats", "export", "build":
 		return with(verb, rest), nil
 	case "prune": // docker has no top-level prune; Apple's removes stopped containers
-		return with("container", append([]string{"prune"}, rest...)), nil
+		return with("container", forcePrune(rest)), nil
 	case "copy", "cp":
 		return with("cp", rest), nil
 	case "list", "ls":
@@ -135,6 +136,8 @@ func translateImage(args []string) (Translation, error) {
 		return listVerb([]string{"image", "ls"}, rest)
 	case "delete", "rm":
 		return with("image", append([]string{"rm"}, rest...)), nil
+	case "prune":
+		return with("image", forcePrune(rest)), nil
 	}
 	return with("image", args), nil
 }
@@ -163,8 +166,22 @@ func translateObject(kind string, args []string) (Translation, error) {
 		return listVerb([]string{kind, "ls"}, rest)
 	case "delete", "rm":
 		return with(kind, append([]string{"rm"}, rest...)), nil
+	case "prune":
+		return with(kind, forcePrune(rest)), nil
 	}
 	return with(kind, args), nil
+}
+
+// forcePrune keeps Apple's prune semantics: it never asks, while docker and
+// podman prompt unless given --force.
+func forcePrune(args []string) []string {
+	out := append([]string{"prune"}, args...)
+	for _, a := range args {
+		if a == "-f" || a == "--force" {
+			return out
+		}
+	}
+	return append(out, "--force")
 }
 
 func translateSystem(args []string) (Translation, error) {
@@ -185,8 +202,9 @@ func translateSystem(args []string) (Translation, error) {
 	return Translation{}, unsupported("system " + sub)
 }
 
-// listVerb maps Apple's list --format (json|table|yaml) onto docker's:
-// json is the same, table is docker's default output, yaml has no equivalent.
+// listVerb maps Apple's list --format (json|table|yaml|toml) onto docker's:
+// json is the same, table is docker's default output, yaml and toml have no
+// equivalent.
 func listVerb(prefix, args []string) (Translation, error) {
 	out := append([]string(nil), prefix...)
 	for i := 0; i < len(args); i++ {
@@ -205,8 +223,8 @@ func listVerb(prefix, args []string) (Translation, error) {
 		}
 		switch value {
 		case "table":
-		case "yaml":
-			return Translation{}, unsupported("--format yaml")
+		case "yaml", "toml":
+			return Translation{}, unsupported("--format " + value)
 		default:
 			out = append(out, "--format", value)
 		}

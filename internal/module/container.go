@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 	"time"
 
@@ -178,7 +179,7 @@ func (m *ContainerModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 	if h.noKernel {
 		add("install the recommended guest kernel", "container system kernel set --recommended")
 	}
-	if h.binary == "" || fileutil.NeedsUpdate(rc.Runner, container.ShimPath(rc.HomeDir), container.ShimScript(h.binary)) {
+	if h.binary == "" || fileutil.NeedsUpdate(rc.Runner, container.ShimPath(rc.HomeDir), container.ShimScript(container.DotPath(), h.binary)) {
 		add("write "+container.ShimPath(rc.HomeDir), "")
 	}
 	if want := m.state(ctx, rc, h); want == nil || !want.Same(m.loadState(rc)) {
@@ -215,7 +216,7 @@ func (m *ContainerModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		}
 	}
 
-	if written, err := fileutil.EnsureFileAtomic(rc.Runner, rc.HomeDir, container.ShimPath(rc.HomeDir), container.ShimScript(h.binary), 0o755); err != nil {
+	if written, err := fileutil.EnsureFileAtomic(rc.Runner, rc.HomeDir, container.ShimPath(rc.HomeDir), container.ShimScript(container.DotPath(), h.binary), 0o755); err != nil {
 		return nil, fmt.Errorf("writing shim: %w", err)
 	} else if written {
 		msgs = append(msgs, "wrote "+container.ShimPath(rc.HomeDir))
@@ -299,8 +300,19 @@ func (m *ContainerModule) dockerInstallCmds(rc *RunContext) [][]string {
 	return [][]string{
 		m.pkgInstall(rc, pkg),
 		{"sudo", "systemctl", "enable", "--now", "docker"},
-		{"sudo", "usermod", "-aG", "docker", currentUser(rc)},
+		{"sudo", "usermod", "-aG", "docker", dockerGroupUser(rc)},
 	}
+}
+
+// dockerGroupUser is who joins the docker group: the invoking user ($USER),
+// or the target home's owner on an explicit --home run.
+func dockerGroupUser(rc *RunContext) string {
+	if !rc.ExplicitHome {
+		if u, err := user.Current(); err == nil {
+			return u.Username
+		}
+	}
+	return currentUser(rc)
 }
 
 func (m *ContainerModule) installLinux(ctx context.Context, rc *RunContext, h *containerHost) ([]string, error) {

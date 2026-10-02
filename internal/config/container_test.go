@@ -57,3 +57,15 @@ func TestValidate_Container(t *testing.T) {
 		}
 	}
 }
+
+// State overlays the profile or --config block field by field: an opt-in
+// written by setup must not wipe a --config backend or DNS list.
+func TestContainerStateOverlaysFieldByField(t *testing.T) {
+	cfg := &Config{Modules: ModulesConfig{Container: ContainerConfig{Enabled: true, Backend: "podman", DNS: []string{"9.9.9.9"}}}}
+	state := &UserState{}
+	state.Modules.Container.Enabled = true
+	ApplyStateToConfig(cfg, state)
+	if c := cfg.Modules.Container; !c.Enabled || c.Backend != "podman" || !reflect.DeepEqual(c.DNS, []string{"9.9.9.9"}) {
+		t.Fatalf("overlay = %+v, want the --config backend and DNS kept", c)
+	}
+}
