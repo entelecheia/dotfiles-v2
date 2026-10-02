@@ -173,6 +173,9 @@ func mergeModules(base, overlay ModulesConfig) ModulesConfig {
 	if overlay.MacApps.Enabled {
 		m.MacApps = overlay.MacApps
 	}
+	if overlay.Container.Enabled {
+		m.Container = overlay.Container
+	}
 	return m
 }
 

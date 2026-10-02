@@ -251,3 +251,28 @@ first unplanned switch impossible, which is the exact moment takeover exists
 for. The generation counter closes the stale-replica hole from the second
 switch onward. Replace this limit if the replica gains a signature or a
 second, independent provenance channel.
+
+## Container translation table
+
+`internal/container/translate.go` translates a finite set of Apple
+`container` verbs and run/create flags into the docker dialect. It finds the
+image with a fixed list of Apple options that take a value: an option it does
+not know is read as a boolean, so the scan can stop early and leave a later
+`-c` or `-a` untranslated, which docker reads as `--cpu-shares` or
+`--attach`. Unknown verbs and flags pass through untouched, and short-flag
+clusters (`-c4`) are not split. The table tracks Apple's CLI by hand.
+
+Replace this when upstream ships a Linux build, or when daily use needs a
+verb or flag the table misses: add the row and its test.
+
+## Container DNS injection
+
+`internal/container/host.go` (`InjectDNS`) adds `--dns` for every
+`modules.container.dns` server on each shim call, because apple/container has
+no default-DNS property (apple/container#1449) and Cloudflare WARP's resolver
+blocks the vmnet DNS proxy (apple/container#402). A user `--dns` or
+`--no-dns` among the options suppresses it, so a `--dns` value given to
+another option also does. On Linux it covers `run` and `create` only.
+
+Replace this when apple/container#1449 lands: set the property in setup and
+drop the injection.

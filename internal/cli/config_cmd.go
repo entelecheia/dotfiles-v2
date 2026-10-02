@@ -191,6 +191,7 @@ func runConfig(cmd *cobra.Command, _ []string) error {
 		{"conda", cfg.Modules.Conda.Enabled, ""},
 		{"gpg", cfg.Modules.GPG.Enabled, ""},
 		{"secrets", cfg.Modules.Secrets.Enabled, ""},
+		{"container", cfg.Modules.Container.Enabled, cfg.Modules.Container.Backend},
 	}
 
 	for _, m := range allModules {

@@ -11,6 +11,11 @@ export PATH="/opt/homebrew/bin:$PATH"
 {{ else -}}
 [ -d /home/linuxbrew/.linuxbrew ] && export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
 {{ end -}}
+{{ if .EnableContainer -}}
+# Shared `container` command (modules.container): the shim must come before
+# the brew bin dirs, which ship apple/container's own binary.
+export PATH="$HOME/.local/share/dotfiles/shims:$PATH"
+{{ end -}}
 {{ if .HasCUDA -}}
 # CUDA
 export CUDA_HOME={{ .CUDAHome }}

@@ -14,6 +14,10 @@ modules:
     enabled: true
     warp: false
     prompt_style: minimal
+  # Shared `container` command (apple/container on macOS, docker or podman
+  # on Linux). Opt-in: dot container setup enables it in user state.
+  container:
+    enabled: false
 
 packages:
   - git

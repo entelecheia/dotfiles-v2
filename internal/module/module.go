@@ -67,6 +67,7 @@ var defaultOrder = []string{
 	"git",
 	"ssh",
 	"terminal",
+	"container",
 	"tmux",
 	"workspace",
 	"ai",
@@ -91,6 +92,7 @@ func NewRegistry() *Registry {
 	r.Register(&GitModule{})
 	r.Register(&SSHModule{})
 	r.Register(&TerminalModule{})
+	r.Register(&ContainerModule{})
 	r.Register(&TmuxModule{})
 	r.Register(&WorkspaceModule{})
 	r.Register(&AIModule{})

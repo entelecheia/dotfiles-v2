@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,8 @@ import (
 // sentinel for a file written before the field existed, which is a normal
 // state and not an error.
 // Version 3 adds portable AI policy; older writers must not drop it.
-const currentSchemaVersion = 3
+// Version 4 adds modules.container, for the same reason.
+const currentSchemaVersion = 4
 
 // peekSchemaVersion recovers the top-level schema_version from raw state bytes
 // with a second decode into a one-field struct.
@@ -166,6 +168,19 @@ type UserModulesState struct {
 	MacApps      UserMacAppsState      `yaml:"macapps,omitempty"`
 	Tunnel       UserTunnelState       `yaml:"tunnel,omitempty"`
 	Guard        UserGuardState        `yaml:"guard,omitempty"`
+	Container    UserContainerState    `yaml:"container,omitempty"`
+}
+
+// UserContainerState holds the opt-in and settings for the container module.
+type UserContainerState struct {
+	Enabled bool     `yaml:"enabled,omitempty"`
+	Backend string   `yaml:"backend,omitempty"`
+	DNS     []string `yaml:"dns,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset container block from user state.
+func (s UserContainerState) IsZero() bool {
+	return !s.Enabled && s.Backend == "" && len(s.DNS) == 0
 }
 
 // UserAIState holds user selections for AI CLI/config helpers.
@@ -378,6 +393,16 @@ func (s *UserState) Validate() error {
 	}
 	if err := validateTunnelState(s.Modules.Tunnel); err != nil {
 		return err
+	}
+	switch s.Modules.Container.Backend {
+	case "", "auto", "apple", "docker", "podman":
+	default:
+		return fmt.Errorf("modules.container.backend must be auto, apple, docker, or podman (got %q)", s.Modules.Container.Backend)
+	}
+	for _, ip := range s.Modules.Container.DNS {
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("modules.container.dns entry %q is not an IP address", ip)
+		}
 	}
 	if s.Modules.Guard.FreezeDir != "" && !filepath.IsAbs(s.Modules.Guard.FreezeDir) {
 		return fmt.Errorf("modules.guard.freeze_dir must be an absolute path (got %q)", s.Modules.Guard.FreezeDir)
@@ -813,5 +838,10 @@ func ApplyStateToConfig(cfg *Config, state *UserState) {
 	}
 	if len(state.Modules.MacApps.CasksExtra) > 0 {
 		cfg.CasksExtra = append(cfg.CasksExtra, state.Modules.MacApps.CasksExtra...)
+	}
+	if c := state.Modules.Container; !c.IsZero() {
+		cfg.Modules.Container.Enabled = c.Enabled
+		cfg.Modules.Container.Backend = c.Backend
+		cfg.Modules.Container.DNS = append([]string(nil), c.DNS...)
 	}
 }
