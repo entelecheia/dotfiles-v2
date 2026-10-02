@@ -64,11 +64,14 @@ container() {
 }
 `
 
-// State records the backend setup chose, so the shim and exec need no probe.
+// State records this host's own container decision: the backend setup chose,
+// so the shim and exec need no probe, or that the host declined. It lives
+// outside the synced config, so each host decides for itself.
 type State struct {
 	Backend   string    `json:"backend"`
 	Binary    string    `json:"binary"`
 	Version   string    `json:"version,omitempty"`
+	Declined  bool      `json:"declined,omitempty"`
 	CheckedAt time.Time `json:"checked_at"`
 }
 

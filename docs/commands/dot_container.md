@@ -8,7 +8,10 @@ One `container` command with Apple container syntax on every host.
 
 On macOS it runs apple/container (Apple silicon, macOS 26+). On Linux a shim
 translates the same syntax for docker, or podman when no docker is usable.
-The module is opt-in: dot container setup enables it in user state.
+The module is opt-in: dot container setup enables it in user state. That
+opt-in syncs with your config, but each host chooses whether to install: dot
+apply asks a host that has not chosen (from a terminal only; --yes and
+scheduled runs never install there), and dot container setup is a yes.
 
 Config (~/.config/dotfiles/config.yaml):
   modules:
