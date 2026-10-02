@@ -22,7 +22,7 @@ func TestMirrorPush_CanceledProbeKeepsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := PushCommand(ctx, PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
-	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "brew install") {
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "push interrupted") || strings.Contains(err.Error(), "brew install") {
 		t.Fatalf("want cancellation without installation advice, got %v", err)
 	}
 	state, err := LoadLocalState(f.cfg.LocalPaths)
