@@ -122,6 +122,32 @@ func TestIntake_SkipsBaselineMatches(t *testing.T) {
 	}
 }
 
+func TestIntake_RsyncCopiesNewlineFilenameExactly(t *testing.T) {
+	requireRsync(t)
+	f := newIntakeFixture(t)
+	rel := "incoming/line\nbreak.txt"
+	body := "content with exact filename"
+	f.writeMirror(rel, body)
+
+	res, err := Intake(context.Background(), f.runner, f.cfg, IntakeOptions{})
+	if err != nil {
+		t.Fatalf("Intake: %v", err)
+	}
+	if len(res.Intaked) != 1 || res.Intaked[0] != rel {
+		t.Fatalf("Intaked = %q, want exact path %q", res.Intaked, rel)
+	}
+	got, err := os.ReadFile(filepath.Join(res.StagingDir, rel))
+	if err != nil {
+		t.Fatalf("reading staged path: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("staged content = %q, want %q", got, body)
+	}
+	if _, err := os.Stat(filepath.Join(res.StagingDir, "incoming", "line")); !os.IsNotExist(err) {
+		t.Errorf("rsync created a split filename artifact (err=%v)", err)
+	}
+}
+
 func TestPullTracked_RestoresMissingBaselineFile(t *testing.T) {
 	f := newIntakeFixture(t)
 	body := "binary-payload"

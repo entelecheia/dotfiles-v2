@@ -23,18 +23,24 @@ func gitSubmodulePaths(root string) []string {
 	if _, err := os.Stat(gitmodules); err != nil {
 		return nil
 	}
-	out, err := exec.Command("git", "config", "-f", gitmodules, "--get-regexp", `submodule\..*\.path`).Output()
+	out, err := exec.Command("git", "config", "-z", "-f", gitmodules, "--get-regexp", `submodule\..*\.path`).Output()
 	if err != nil {
 		return nil
 	}
 	seen := map[string]bool{}
 	var paths []string
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
+	for _, record := range bytes.Split(out, []byte{0}) {
+		if len(record) == 0 {
 			continue
 		}
-		rel := treeRel(strings.Join(fields[1:], " "))
+		// With -z, git config writes each matching key, a newline, its
+		// value, and a NUL record terminator. Splitting on whitespace would
+		// corrupt both subsection names and paths containing spaces.
+		sep := bytes.IndexByte(record, '\n')
+		if sep < 0 || !strings.HasSuffix(string(record[:sep]), ".path") {
+			continue
+		}
+		rel := treeRel(string(record[sep+1:]))
 		if rel == "" || seen[rel] {
 			continue
 		}
