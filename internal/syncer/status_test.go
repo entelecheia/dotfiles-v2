@@ -27,6 +27,28 @@ func TestGetStatus_IgnoresStaleLock(t *testing.T) {
 	}
 }
 
+func TestGetStatus_DoesNotReportUnavailableRsync(t *testing.T) {
+	for _, mode := range []string{"missing", "probe fails"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newIntakeFixture(t)
+			t.Setenv("PATH", t.TempDir())
+			if mode == "probe fails" {
+				f.cfg.RsyncPath = filepath.Join(t.TempDir(), "rsync")
+				if err := os.WriteFile(f.cfg.RsyncPath, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			st, err := GetStatus(context.Background(), f.runner, f.cfg, &config.UserState{}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.RsyncPath != "" || st.RsyncVersion != "" {
+				t.Fatalf("unavailable client reported: path=%q version=%q", st.RsyncPath, st.RsyncVersion)
+			}
+		})
+	}
+}
+
 func TestGetStatus_SSHPeerCountsLocalConflictsOnce(t *testing.T) {
 	f := newIntakeFixture(t)
 	f.cfg.Profile = PeerProfile
