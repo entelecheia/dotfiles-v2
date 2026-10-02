@@ -654,6 +654,9 @@ func Push(ctx context.Context, runner *exec.Runner, cfg *Config, dryRun bool) er
 	if err := cfg.Propagation.Validate(); err != nil {
 		return fmt.Errorf("push refused: %w", err)
 	}
+	if err := ResolvePushRsync(ctx, runner, cfg); err != nil {
+		return fmt.Errorf("push refused: %w", err)
+	}
 	// CLI callers normalize under the shared workspace lock before planning.
 	// Keep the same marker-gated check here so library callers cannot bypass
 	// automatic NFD normalization on a real push.

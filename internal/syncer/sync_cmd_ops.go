@@ -127,7 +127,7 @@ func (b *PreflightBlock) Reason() string {
 // of the refusals is what fixes each command's error precedence, so the call
 // site stays in cli even though the classification is the engine's.
 func Preflight(runner *exec.Runner, cfg *Config) *PreflightBlock {
-	if !runner.CommandExists("rsync") {
+	if !runner.CommandExists(cfg.rsyncBin()) {
 		return &PreflightBlock{Kind: PreflightRsyncMissing}
 	}
 	if !runner.IsDir(cfg.LocalPath) {

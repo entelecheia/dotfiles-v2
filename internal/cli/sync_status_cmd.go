@@ -47,7 +47,7 @@ func runSyncStatus(cmd *cobra.Command, _ []string) error {
 	p.Header("Sync Status")
 
 	if st.RsyncVersion != "" {
-		p.KV("rsync", st.RsyncVersion)
+		p.KV("rsync", st.RsyncPath+" ("+st.RsyncVersion+")")
 	} else {
 		p.KV("rsync", "not installed")
 	}

@@ -57,7 +57,7 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 	defer release()
 	// Whether this run completed is decided here, once, from how it returned.
 	partial := false
-	if !opts.DryRun {
+	if !opts.DryRun && !cfg.Paused {
 		defer func() {
 			switch {
 			case res != nil && res.Outcome == PushAborted:
@@ -69,6 +69,10 @@ func PushCommand(ctx context.Context, opts PushOptions) (res *PushCommandResult,
 				err = fmt.Errorf("state update: %w", recErr)
 			}
 		}()
+	}
+
+	if err := ResolvePushRsync(ctx, runner, cfg); err != nil {
+		return nil, fmt.Errorf("push refused: %w", err)
 	}
 
 	// Once the explicit workspace migration has written its marker, every real

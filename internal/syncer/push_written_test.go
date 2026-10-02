@@ -46,23 +46,13 @@ func TestWrittenFiles(t *testing.T) {
 // refresh runs, #224), and exits with rsync's status.
 func writeRsyncThen(t *testing.T, after string) string {
 	t.Helper()
-	real, err := osexec.LookPath("rsync")
-	if err != nil {
-		t.Skip("rsync not installed")
-	}
+	real := requirePeerRsync(t)
 	script := filepath.Join(t.TempDir(), "rsync")
-	body := "#!/bin/sh\n\"" + real + "\" \"$@\"\nrc=$?\n" + after + "\nexit $rc\n"
+	body := "#!/bin/sh\n[ \"$1\" = --version ] && exec \"" + real + "\" --version\n\"" + real + "\" \"$@\"\nrc=$?\n" + after + "\nexit $rc\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return script
-}
-
-// isOpenrsync reports whether the rsync on PATH is Apple's openrsync, which
-// deletes nothing when --backup is set.
-func isOpenrsync() bool {
-	out, _ := osexec.Command("rsync", "--version").Output()
-	return strings.Contains(string(out), "openrsync")
 }
 
 func TestPush_RecordsAWrittenFileWhoseLocalTwinVanished(t *testing.T) {
@@ -100,13 +90,6 @@ func TestPush_RecordsAWrittenFileWhoseLocalTwinVanished(t *testing.T) {
 	}
 
 	_, err = PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeForce})
-	if isOpenrsync() {
-		// openrsync deletes nothing when --backup is set; the run says so.
-		if err == nil || !strings.Contains(err.Error(), "planned deletion(s) left in the mirror") {
-			t.Fatalf("PushCommand under openrsync = %v, want the unapplied deletion", err)
-		}
-		return
-	}
 	if err != nil {
 		t.Fatalf("PushCommand: %v", err)
 	}
@@ -345,9 +328,7 @@ func TestPush_CarriesAProvenEntryWhoseLocalCopyVanishedDuringThePush(t *testing.
 // completes (#224).
 func TestPushCommand_DeletesWhatVanishedDuringTheLastPush(t *testing.T) {
 	requireRsync(t)
-	if isOpenrsync() {
-		t.Skip("openrsync deletes nothing with --backup (#227)")
-	}
+	requirePeerRsync(t)
 	f := newIntakeFixture(t)
 	f.cfg.Propagation.Delete = true
 	clean := PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}
@@ -408,9 +389,7 @@ func TestPushCommand_RecordsARsyncThatDidNotStart(t *testing.T) {
 // (--delete-after), so the files that run wrote are still recorded (#224).
 func TestPushCommand_RecordsWrittenFilesWhenRsyncStopsAtMaxDelete(t *testing.T) {
 	requireRsync(t)
-	if isOpenrsync() {
-		t.Skip("openrsync deletes nothing with --backup, so --max-delete never stops it")
-	}
+	requirePeerRsync(t)
 	f := newIntakeFixture(t)
 	f.cfg.Propagation.Delete = true
 	f.writeLocal("notes/a.md", "a")
@@ -465,7 +444,7 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 	if err := os.Remove(filepath.Join(f.local, "notes/gone.md")); err != nil {
 		t.Fatal(err)
 	}
-	real, _ := osexec.LookPath("rsync")
+	real := requirePeerRsync(t)
 	// dropDeletes runs the real rsync without --delete-after, then exits with
 	// status rc: deletions skipped silently (0) or after an I/O error (23). A
 	// version query reaches the real rsync, so its banner stays the evidence.
@@ -477,12 +456,8 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 		}
 		return script
 	}
-	// The exit code does not pick the cause (exit 23 also follows receiver
-	// errors that leave the deletions applied); only an openrsync banner does.
+	// The same post-transfer check catches silent skips and I/O failures.
 	cause := "rsync kept them: it skips deletions after an I/O error"
-	if isOpenrsync() {
-		cause = "openrsync deletes nothing with --backup"
-	}
 	for _, rc := range []string{"23", "0"} {
 		f.cfg.RsyncPath = dropDeletes(rc)
 		_, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
@@ -494,9 +469,6 @@ func TestPushCommand_FailsWhenAPlannedDeletionStaysInTheMirror(t *testing.T) {
 		t.Errorf("state after the failed run = %+v; want the error recorded and last_push unchanged", st)
 	}
 
-	if isOpenrsync() {
-		return
-	}
 	f.cfg.RsyncPath = ""
 	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
 		t.Fatalf("next push: %v", err)
