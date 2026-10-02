@@ -125,9 +125,10 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 
 	statusConfig := *cfg
 	_ = ResolvePushRsync(ctx, runner, &statusConfig)
-	s.RsyncPath = statusConfig.rsyncBin()
-	if runner.CommandExists(s.RsyncPath) {
-		if result, err := runner.RunQuery(ctx, s.RsyncPath, "--version"); err == nil {
+	rsyncPath := statusConfig.rsyncBin()
+	if runner.CommandExists(rsyncPath) {
+		if result, err := runner.RunQuery(ctx, rsyncPath, "--version"); err == nil {
+			s.RsyncPath = rsyncPath
 			if i := strings.IndexByte(result.Stdout, '\n'); i > 0 {
 				s.RsyncVersion = strings.TrimSpace(result.Stdout[:i])
 			} else {
