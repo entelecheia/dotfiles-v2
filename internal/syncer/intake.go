@@ -282,7 +282,7 @@ func rsyncStage(ctx context.Context, runner *exec.Runner, cfg *Config, mirror, s
 	}
 	defer os.Remove(listFile.Name())
 	for _, r := range rels {
-		if _, err := fmt.Fprintln(listFile, r); err != nil {
+		if _, err := listFile.Write(append([]byte(r), 0)); err != nil {
 			listFile.Close()
 			return err
 		}
@@ -292,6 +292,7 @@ func rsyncStage(ctx context.Context, runner *exec.Runner, cfg *Config, mirror, s
 	}
 	args := []string{
 		"-a", "--no-links",
+		"--from0",
 		"--files-from=" + listFile.Name(),
 		mirror + "/", stagingDir + "/",
 	}

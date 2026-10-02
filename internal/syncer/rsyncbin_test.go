@@ -2,16 +2,118 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"golang.org/x/text/unicode/norm"
 )
 
 const openrsyncBanner = "openrsync: protocol version 29\nrsync version 2.6.9 compatible"
+
+func TestMirrorPush_CanceledProbeKeepsCancellation(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	withLocalRsyncCandidates(t, filepath.Join(t.TempDir(), "missing"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := PushCommand(ctx, PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "push interrupted") || strings.Contains(err.Error(), "brew install") {
+		t.Fatalf("want cancellation without installation advice, got %v", err)
+	}
+	state, err := LoadLocalState(f.cfg.LocalPaths)
+	if err != nil || !strings.Contains(state.LastPushError, "context canceled") || strings.Contains(state.LastPushError, "brew install") {
+		t.Fatalf("recorded refusal = %+v, %v", state, err)
+	}
+}
+
+func TestMirrorPush_OldRsyncStillWorksWithoutDeletes(t *testing.T) {
+	real := requirePeerRsync(t)
+	f := newIntakeFixture(t)
+	stub := filepath.Join(t.TempDir(), "rsync")
+	writeStub(t, stub, "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  printf '%s\\n' '"+openrsyncBanner+"'\nelse\n  exec '"+real+"' \"$@\"\nfi\n")
+	withLocalRsyncCandidates(t, stub)
+	f.cfg.RsyncPath = stub
+	f.writeLocal("notes/new.md", "new")
+	if _, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}); err != nil {
+		t.Fatalf("push without deletes refused: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(f.mirror, "notes/new.md")); err != nil || string(body) != "new" {
+		t.Fatalf("mirror = %q, %v", body, err)
+	}
+}
+
+func TestMirrorPush_RefusesOldRsyncBeforeTransfer(t *testing.T) {
+	for _, mode := range []string{"real", "dry-run", "paused"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newIntakeFixture(t)
+			stub := openrsyncOnPath(t, "")
+			withLocalRsyncCandidates(t, "rsync")
+			f.cfg.RsyncPath = stub
+			f.cfg.Propagation.Delete = true
+			f.cfg.Paused = mode == "paused"
+			f.writeLocal("notes/new.md", "new")
+			_, err := PushCommand(context.Background(), PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean, DryRun: mode == "dry-run"})
+			if err == nil || !strings.Contains(err.Error(), "rsync 3.x is needed to delete with a backup") || strings.Contains(err.Error(), "exit status 97") {
+				t.Fatalf("want pre-transfer refusal, got %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(f.mirror, "notes/new.md")); !os.IsNotExist(err) {
+				t.Fatalf("refused push transferred a file: %v", err)
+			}
+			state, _ := LoadLocalState(f.cfg.LocalPaths)
+			if mode == "real" {
+				if state.LastPushAttempt.IsZero() || !strings.Contains(state.LastPushError, "brew install rsync") {
+					t.Fatalf("refusal not recorded: %+v", state)
+				}
+			} else if !state.LastPushAttempt.IsZero() || state.LastPushError != "" {
+				t.Fatalf("%s recorded a refusal: %+v", mode, state)
+			}
+		})
+	}
+}
+
+func TestMirrorPush_UsesFallbackRsyncForBackedUpDeletes(t *testing.T) {
+	real := requirePeerRsync(t)
+	f := newIntakeFixture(t)
+	stub := openrsyncOnPath(t, "")
+	withLocalRsyncCandidates(t, "rsync", real)
+	f.cfg.RsyncPath = stub
+	f.cfg.Propagation.Delete = true
+	f.writeLocal("notes/gone.md", "original")
+	clean := PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean}
+	if _, err := PushCommand(context.Background(), clean); err != nil {
+		t.Fatal(err)
+	}
+	if f.cfg.RsyncPath != real {
+		t.Fatalf("client = %q, want fallback %q", f.cfg.RsyncPath, real)
+	}
+	if err := os.Remove(filepath.Join(f.local, "notes/gone.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PushCommand(context.Background(), clean); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.mirror, "notes/gone.md")); !os.IsNotExist(err) {
+		t.Fatalf("delete did not apply: %v", err)
+	}
+	backups, err := filepath.Glob(filepath.Join(f.mirror, ".sync-conflicts", "*", "from-workspace", "notes", "gone.md"))
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("want one deletion backup: %v, %v", backups, err)
+	}
+	if body, err := os.ReadFile(backups[0]); err != nil || string(body) != "original" {
+		t.Fatalf("backup = %q, %v", body, err)
+	}
+	// Status resolves from the same PATH and fallbacks without mutating cfg.
+	f.cfg.RsyncPath = stub
+	status, err := GetStatus(context.Background(), f.runner, f.cfg, &config.UserState{}, nil)
+	if err != nil || status.RsyncPath != real || !remoteRsyncUsable(status.RsyncVersion) || f.cfg.RsyncPath != stub {
+		t.Fatalf("status = %+v, %v; cfg client = %q", status, err, f.cfg.RsyncPath)
+	}
+}
 
 // requirePeerRsync skips a test that drives a real peer run when this host
 // has no rsync 3.x client: peer runs refuse openrsync (#175).

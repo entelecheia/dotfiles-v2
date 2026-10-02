@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"context"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -20,12 +21,18 @@ func TestGitSubmodulePaths_ParsesGitmodules(t *testing.T) {
 [submodule "vault"]
 	path = vault
 	url = https://example.com/vault.git
+[submodule "my sub"]
+	path = vendor/my sub
+	url = https://example.com/my-sub.git
+[submodule "a b"]
+	path = a  b
+	url = https://example.com/a-b.git
 `
 	if err := os.WriteFile(filepath.Join(root, ".gitmodules"), []byte(gitmodules), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := gitSubmodulePaths(root)
-	want := []string{"dev", "sites/a", "vault"}
+	want := []string{"a  b", "dev", "sites/a", "vault", "vendor/my sub"}
 	if !slices.Equal(got, want) {
 		t.Errorf("gitSubmodulePaths = %v, want %v", got, want)
 	}
@@ -34,6 +41,83 @@ func TestGitSubmodulePaths_ParsesGitmodules(t *testing.T) {
 func TestGitSubmodulePaths_MissingFileReturnsNil(t *testing.T) {
 	if got := gitSubmodulePaths(t.TempDir()); got != nil {
 		t.Errorf("expected nil for missing .gitmodules, got %v", got)
+	}
+}
+
+func TestPush_SubmodulePathsWithSpacesAreExcludedByBothFilters(t *testing.T) {
+	requireRsync(t)
+	tests := []struct {
+		name string
+		path string
+		near string
+	}{
+		{name: "my sub", path: "vendor/my sub", near: "vendor/my sub-nearby"},
+		{name: "sub", path: "a  b", near: "a b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			f := newIntakeFixture(t)
+			gitmodules := "[submodule \"" + tt.name + "\"]\n\tpath = " + tt.path + "\n\turl = https://example.com/lib.git\n"
+			if err := os.WriteFile(filepath.Join(f.local, ".gitmodules"), []byte(gitmodules), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			excluded := tt.path + "/inside.txt"
+			f.writeLocal(excluded, "local submodule content")
+			f.writeMirror(excluded, "mirror submodule content")
+			kept := tt.near + "/nearby.txt"
+			f.writeLocal(kept, "workspace content")
+
+			filter, err := newSyncFilter(f.cfg, f.mirror)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !filter.shouldSkip(filepath.Join(f.local, excluded), excluded, false) {
+				t.Fatalf("Go filter did not exclude submodule path %q; paths=%q", excluded, filter.submodules)
+			}
+			plan, err := PlanPush(f.cfg)
+			if err != nil {
+				t.Fatalf("PlanPush: %v", err)
+			}
+			if slices.Contains(plan.Creates, excluded) || slices.Contains(plan.Updates, excluded) || slices.Contains(plan.Deletes, excluded) {
+				t.Errorf("PlanPush includes excluded submodule path %q: %+v", excluded, plan)
+			}
+			if err := os.Remove(filepath.Join(f.local, excluded)); err != nil {
+				t.Fatal(err)
+			}
+
+			// PullTracked must not restore a mirror-side path under a submodule.
+			mtime, err := os.Stat(filepath.Join(f.mirror, excluded))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.seedBaseline(excluded, "mirror submodule content", mtime.ModTime())
+			if _, err := PullTracked(f.cfg, PullOptions{}); err != nil {
+				t.Fatalf("PullTracked: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(f.local, excluded)); !os.IsNotExist(err) {
+				t.Errorf("PullTracked restored excluded submodule path (err=%v)", err)
+			}
+
+			fetch, err := Fetch(context.Background(), f.runner, f.cfg, []string{excluded}, true)
+			if err != nil {
+				t.Fatalf("Fetch dry run: %v", err)
+			}
+			if !slices.Equal(fetch.Excluded, []string{excluded}) {
+				t.Errorf("Fetch Excluded = %q, want [%q]", fetch.Excluded, excluded)
+			}
+
+			f.writeLocal(excluded, "local submodule content")
+			if err := Push(context.Background(), f.runner, f.cfg, false); err != nil {
+				t.Fatalf("Push: %v", err)
+			}
+			got, err := os.ReadFile(filepath.Join(f.mirror, excluded))
+			if err != nil || string(got) != "mirror submodule content" {
+				t.Errorf("rsync changed excluded submodule file: body=%q err=%v", got, err)
+			}
+			if _, err := os.Stat(filepath.Join(f.mirror, kept)); err != nil {
+				t.Errorf("rsync excluded neighboring path %q: %v", kept, err)
+			}
+		})
 	}
 }
 

@@ -46,11 +46,16 @@ func TestBuildSyncStatusJSONReportsStableSchemaAndJobs(t *testing.T) {
 		PullMode:       syncer.ModeClean,
 		SchedulerState: syncer.SchedulerRunning,
 		LastPush:       lastPush,
+		RsyncPath:      "/opt/homebrew/bin/rsync",
+		RsyncVersion:   "rsync version 3.4.4",
 	}
 	scheduler := &syncer.Scheduler{Paths: &syncer.Paths{
 		LaunchdPlist: filepath.Join(root, "com.dotfiles.sync.plist"),
 	}}
 	document := buildSyncStatusJSON(cfg, status, scheduler)
+	if document.RsyncPath != status.RsyncPath || document.RsyncVersion != status.RsyncVersion {
+		t.Fatalf("selected rsync missing from JSON: %+v", document)
+	}
 	if document.SchemaVersion != syncStatusSchemaVersion || document.Kind != "mirror" || !document.Configured {
 		t.Fatalf("unexpected status document: %+v", document)
 	}

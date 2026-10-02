@@ -39,8 +39,9 @@ type Status struct {
 	LastPushAttempt      time.Time // latest real push run
 	LastPushError        string    // why the latest push did not complete; empty once one does
 	LastPushErrorSince   time.Time // when the failing streak began
-	RsyncVersion         string    // empty if not installed
-	LockHeld             bool      // someone has gsync.lock right now
+	RsyncPath            string
+	RsyncVersion         string // empty if not installed
+	LockHeld             bool   // someone has gsync.lock right now
 	MaxDelete            int
 	Interval             int
 	PullInterval         int            // 0 → no pull scheduler
@@ -122,8 +123,12 @@ func GetStatus(ctx context.Context, runner *exec.Runner, cfg *Config, state *con
 		s.IntakeSchedulerState, s.IntakeSchedulerLastExitCode = intake.State, intake.LastExitCode
 	}
 
-	if runner.CommandExists("rsync") {
-		if result, err := runner.RunQuery(ctx, "rsync", "--version"); err == nil {
+	statusConfig := *cfg
+	_ = ResolvePushRsync(ctx, runner, &statusConfig)
+	rsyncPath := statusConfig.rsyncBin()
+	if runner.CommandExists(rsyncPath) {
+		if result, err := runner.RunQuery(ctx, rsyncPath, "--version"); err == nil {
+			s.RsyncPath = rsyncPath
 			if i := strings.IndexByte(result.Stdout, '\n'); i > 0 {
 				s.RsyncVersion = strings.TrimSpace(result.Stdout[:i])
 			} else {

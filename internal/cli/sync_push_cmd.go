@@ -89,6 +89,11 @@ func runSyncPush(cmd *cobra.Command, _ []string) error {
 		cfg.Propagation = policy
 	}
 
+	if err := syncer.ResolvePushRsync(cmd.Context(), bs.Runner, cfg); err != nil && !cfg.Paused {
+		recordPushRefusal(cfg, err, dryRun)
+		return err
+	}
+
 	if block := syncPreflight(p, cfg, bs.Runner); block != nil {
 		recordPushRefusal(cfg, errors.New(block.Reason()), dryRun)
 		return nil

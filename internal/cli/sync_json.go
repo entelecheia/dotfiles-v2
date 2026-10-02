@@ -70,6 +70,7 @@ type syncStatusJSON struct {
 	SubmoduleCount       int                         `json:"submoduleCount"`
 	Propagation          syncPropagationJSON         `json:"propagation"`
 	MaxDelete            int                         `json:"maxDelete"`
+	RsyncPath            string                      `json:"rsyncPath,omitempty"`
 	RsyncVersion         string                      `json:"rsyncVersion,omitempty"`
 	LastPullAt           *string                     `json:"lastPullAt"`
 	LastPushAt           *string                     `json:"lastPushAt"`
@@ -169,6 +170,7 @@ func buildSyncStatusJSON(cfg *syncer.Config, st *syncer.Status, sched *syncer.Sc
 			Delete: st.Propagation.Delete,
 		},
 		MaxDelete:            st.MaxDelete,
+		RsyncPath:            st.RsyncPath,
 		RsyncVersion:         st.RsyncVersion,
 		LastPullAt:           timeJSON(st.LastPull),
 		LastPushAt:           timeJSON(st.LastPush),

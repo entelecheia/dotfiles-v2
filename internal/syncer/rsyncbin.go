@@ -72,9 +72,13 @@ var localRsyncCandidates = []string{"rsync", "/opt/homebrew/bin/rsync", "/usr/lo
 // as \#ooo, and the inventory then rejected valid NFD names as unnormalized
 // (#175). Every local invocation of a peer run uses the path returned here.
 func LocalRsyncPath(ctx context.Context, runner *exec.Runner) (string, string, error) {
+	return localRsyncPath(ctx, runner, localRsyncCandidates)
+}
+
+func localRsyncPath(ctx context.Context, runner *exec.Runner, candidates []string) (string, string, error) {
 	var rejected []string
 	seen := map[string]bool{}
-	for _, cand := range localRsyncCandidates {
+	for _, cand := range candidates {
 		path := cand
 		if !filepath.IsAbs(path) {
 			found, err := osexec.LookPath(cand)
@@ -100,9 +104,34 @@ func LocalRsyncPath(ctx context.Context, runner *exec.Runner) (string, string, e
 		rejected = append(rejected, fmt.Sprintf("%s (%s)", path, strings.ReplaceAll(ver, "\n", ", ")))
 	}
 	if len(rejected) == 0 {
-		return "", "", fmt.Errorf("no local rsync found (tried %s); install rsync 3.x (brew install rsync)", strings.Join(localRsyncCandidates, ", "))
+		return "", "", fmt.Errorf("no local rsync found (tried %s); install rsync 3.x (brew install rsync)", strings.Join(candidates, ", "))
 	}
-	return "", "", fmt.Errorf("local rsync is openrsync or 2.x: %s; peer sync needs rsync 3.x (brew install rsync)", strings.Join(rejected, "; "))
+	return "", "", fmt.Errorf("local rsync is openrsync or 2.x: %s; sync needs rsync 3.x (brew install rsync)", strings.Join(rejected, "; "))
+}
+
+// ResolvePushRsync pins a modern client for a local mirror push. Without
+// delete propagation an older client remains usable; with backups, deletes
+// require rsync 3.x before planning or normalization can change anything.
+func ResolvePushRsync(ctx context.Context, runner *exec.Runner, cfg *Config) error {
+	if cfg.Target.IsSSH() || !cfg.Propagation.Delete {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("push interrupted: %w", err)
+	}
+	candidates := localRsyncCandidates
+	if cfg.RsyncPath != "" {
+		candidates = append([]string{cfg.RsyncPath}, candidates...)
+	}
+	path, _, err := localRsyncPath(ctx, runner, candidates)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("push interrupted: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("rsync 3.x is needed to delete with a backup; brew install rsync: %w", err)
+	}
+	cfg.RsyncPath = path
+	return nil
 }
 
 // rsyncBin is the local rsync client for this run: the binary a peer run
