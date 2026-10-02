@@ -1,11 +1,13 @@
 package container
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -113,13 +115,14 @@ exec ` + backend + ` "$@"
 `)
 }
 
-// DotPath is the dot binary the shim runs: ~/.local/bin/dot when present (the
-// stable target the guard hook also pins), else this executable. A Homebrew
-// keg path (<prefix>/Cellar/<formula>/<version>/bin/dot) is mapped to the
-// formula's opt link so a brew upgrade keeps the shim valid.
+// DotPath is the dot binary the shim runs: ~/.local/bin/dot when it has the
+// container command (the stable target the guard hook also pins), else this
+// executable. A Homebrew keg path (<prefix>/Cellar/<formula>/<version>/bin/dot)
+// is mapped to the formula's opt link so a brew upgrade keeps the shim valid.
 func DotPath(home string) string {
 	self := filepath.Join(home, ".local", "bin", "dot")
-	if _, err := os.Stat(self); err != nil {
+	if !hasContainerCommand(self) {
+		var err error
 		if self, err = os.Executable(); err != nil {
 			return "dot"
 		}
@@ -128,6 +131,14 @@ func DotPath(home string) string {
 		self = resolved
 	}
 	return optLinkFor(self)
+}
+
+// hasContainerCommand reports whether dot predates this feature: an older
+// dot rejects `container` as an unknown command.
+func hasContainerCommand(dot string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return osexec.CommandContext(ctx, dot, "container", "--help").Run() == nil
 }
 
 func optLinkFor(self string) string {

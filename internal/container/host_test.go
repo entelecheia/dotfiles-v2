@@ -177,6 +177,13 @@ func TestDotPathPrefersLocalBin(t *testing.T) {
 	if got := DotPath(t.TempDir()); got == want || got == "" {
 		t.Fatalf("without ~/.local/bin/dot, DotPath = %q, want this executable", got)
 	}
+	// A dot that predates the container command is not pinned.
+	if err := os.WriteFile(local, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := DotPath(home); got == want {
+		t.Fatalf("DotPath pinned a dot without the container command: %s", got)
+	}
 }
 
 func TestShimFallsBackLoudly(t *testing.T) {
