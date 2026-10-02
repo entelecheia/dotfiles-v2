@@ -23,6 +23,7 @@ func TestIsModuleEnabled(t *testing.T) {
 			GPG:       ModuleToggle{Enabled: false},
 			Secrets:   ModuleToggle{Enabled: true},
 			MacApps:   MacAppsConfig{Enabled: true},
+			Container: ContainerConfig{Enabled: true},
 		},
 	}
 
@@ -44,6 +45,7 @@ func TestIsModuleEnabled(t *testing.T) {
 		{"gpg", false},
 		{"secrets", true},
 		{"macapps", true},
+		{"container", true},
 		{"unknown", false},
 	}
 

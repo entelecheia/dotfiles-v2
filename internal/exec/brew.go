@@ -110,6 +110,26 @@ func (b *Brew) IsCaskInstalled(cask string) bool {
 	return result.ExitCode == 0
 }
 
+// ServiceRegistered reports whether `brew services` has a launchd entry for
+// formula, whether or not the job is running right now.
+func (b *Brew) ServiceRegistered(formula string) bool {
+	result, err := b.Runner.RunQuery(context.Background(), b.brewCmd(), "services", "info", formula, "--json")
+	if err != nil {
+		return false
+	}
+	var info []struct {
+		Registered bool `json:"registered"`
+	}
+	return json.Unmarshal([]byte(result.Stdout), &info) == nil && len(info) > 0 && info[0].Registered
+}
+
+// StartService registers formula with `brew services start`, which runs it
+// now and at every login.
+func (b *Brew) StartService(ctx context.Context, formula string) error {
+	_, err := b.Runner.Run(ctx, b.brewCmd(), "services", "start", formula)
+	return err
+}
+
 // Install installs formulas.
 func (b *Brew) Install(ctx context.Context, formulas []string) error {
 	if len(formulas) == 0 {

@@ -33,6 +33,8 @@ modules:
     enabled: true
     # Cask list is pulled from the embedded catalog (internal/config/catalog/macos-apps.yaml).
     # Override casks / casks_extra at the Config level to install a custom set.
+  container:
+    enabled: false
 
 casks_extra:
   - maru-workspace

@@ -36,6 +36,7 @@ dot [flags]
 * [dot check](dot_check.md)	 - Check current state against profile
 * [dot clean](dot_clean.md)	 - Remove junk directories (node_modules, caches, venvs) from workspace
 * [dot config](dot_config.md)	 - Show current configuration
+* [dot container](dot_container.md)	 - Shared container command (apple/container on macOS, docker or podman on Linux)
 * [dot diff](dot_diff.md)	 - Show pending changes without applying
 * [dot doctor](dot_doctor.md)	 - Check workspace tool installation status
 * [dot guard](dot_guard.md)	 - Claude Code safety hooks (careful warnings + freeze boundary)

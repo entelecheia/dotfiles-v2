@@ -63,6 +63,9 @@ Also available as 'dotfiles' for back-compat.`,
 	root.AddCommand(newUsecaseCmd())
 	root.AddCommand(newAICmd())
 
+	// Shared `container` command (apple/container, docker or podman)
+	root.AddCommand(newContainerCmd())
+
 	// Workspace cleanup
 	root.AddCommand(newCleanCmd())
 

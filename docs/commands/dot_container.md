@@ -1,0 +1,41 @@
+## dot container
+
+Shared container command (apple/container on macOS, docker or podman on Linux)
+
+### Synopsis
+
+One `container` command with Apple container syntax on every host.
+
+On macOS it runs apple/container (Apple silicon, macOS 26+). On Linux a shim
+translates the same syntax for docker, or podman when no docker is usable.
+The module is opt-in: dot container setup enables it in user state.
+
+Config (~/.config/dotfiles/config.yaml):
+  modules:
+    container:
+      backend: auto   # auto | apple | docker | podman
+      dns: []         # default --dns servers, e.g. [1.1.1.1, 1.0.0.1]
+
+### Options
+
+```
+  -h, --help   help for container
+```
+
+### Options inherited from parent commands
+
+```
+      --config string    Path to custom config YAML
+      --dry-run          Show what would be done without executing
+      --home string      Override home directory (for admin setup of other users)
+      --module strings   Run specific modules only
+      --profile string   Profile name (minimal, full, server)
+      --yes              Unattended mode (skip all prompts)
+```
+
+### SEE ALSO
+
+* [dot](dot.md)	 - User environment & workspace management tool
+* [dot container setup](dot_container_setup.md)	 - Install the backend and write the container shim
+* [dot container status](dot_container_status.md)	 - Show the container backend, shim, DNS defaults and legacy snippet
+

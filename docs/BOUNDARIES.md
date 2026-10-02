@@ -104,6 +104,13 @@ Dot-owned state trees:
   worktrees. Records preserve producer claims, UTC time, commit/worktree and
   artifact digests. Show marks stale evidence for revalidation; neither command
   expands raw transcript collection or publishes records externally.
+- `~/.local/share/dotfiles/shims/container` — the `container` shim (POSIX
+  sh, mode 0755) and `~/.local/share/dotfiles/container/state.json` — the
+  chosen backend, its binary and version; both written by `dot container
+  setup` and by `dot apply` when `modules.container` is enabled. The shim
+  directory goes on PATH through the shell module's `00-exports.sh`. Setup
+  also removes `~/.config/shell/45-container.sh`, only when it still matches
+  the old hand-written workaround byte for byte
 - `~/.local/share/dotfiles/ai/tooling-state.json` — private machine-local
   installation receipts: adopted provider/path/version/status/check time.
   Native provider files remain native-installer owned.
@@ -163,6 +170,14 @@ tool):
   `~/.codex/plugins/cache/` are updated through their owning CLIs
   (`claude plugin update`, `codex plugin remove/add`), never edited
   directly
+- the Homebrew service `sh.brew.container`
+  (`~/Library/LaunchAgents/sh.brew.container.plist`) — created by
+  `brew services start container`, which `dot container setup` runs on macOS
+  when brew reports the service unregistered; dot never writes the plist.
+  On Linux, setup may run `apt-get install`/`pacman -S` for docker or podman,
+  `systemctl enable --now docker` and `usermod -aG docker`, through sudo and
+  only when no docker or podman is present and the user accepts (or passes
+  `--yes`); an existing docker is never changed
 - `~/Library/LaunchAgents/com.dotfiles.watchdog.reap.plist` — the user
   LaunchAgent that runs the watchdog reaper on its configured interval,
   written and loaded by `dot watchdog setup` and removed by

@@ -11,6 +11,8 @@ modules:
     enabled: true
     warp: false
     prompt_style: minimal
+  container:
+    enabled: false
 
 packages_extra:
   - btop

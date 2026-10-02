@@ -16,7 +16,7 @@ func TestPolicyPersistenceAndClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.SchemaVersion != 3 {
+	if loaded.SchemaVersion != currentSchemaVersion {
 		t.Fatalf("schema %d", loaded.SchemaVersion)
 	}
 	cfg := &Config{}

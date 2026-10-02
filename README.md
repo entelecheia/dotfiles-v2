@@ -158,7 +158,7 @@ For the full command reference, see [docs/commands](docs/commands/). Cross-comma
 ### Execution Order
 
 ```
-packages → shell → node → git → ssh → terminal → tmux →
+packages → shell → node → git → ssh → terminal → container → tmux →
 workspace → ai → fonts → macapps → conda → gpg → secrets
 ```
 
@@ -172,6 +172,7 @@ workspace → ai → fonts → macapps → conda → gpg → secrets
 | **git** | minimal | git config, aliases, global ignore |
 | **ssh** | minimal | SSH config, config.d includes |
 | **terminal** | minimal | starship prompt, Orca auto-install (macOS/Arch), Warp theme |
+| **container** | opt-in | One `container` command with Apple syntax: apple/container on macOS, docker or podman on Linux (see [Container](#container)) |
 | **tmux** | full | tmux.conf (256color, vim keys, C-a prefix) |
 | **workspace** | full | Dual-workspace: git repo clone, gh auth, symlink federation (cloud mirror, vault, inbox). Vault location is selectable at init and auto-detected from existing `<workspace>/work/vault` or `<workspace>/vault`; the separate vault repo entry is skipped when the vault lives inside work (e.g. as a submodule). Cloud mirror is selected at init from detected mounts (Dropbox preferred, Google Drive accounts are listed); shell exports `CLOUD_WORKSPACE`/`CLOUD_WORK`, alias `cwork`, and the `ws()` jumper (formerly `GDRIVE_*`/`gwork`) |
 | **ai** | full | AI CLI/config helpers, Claude/Codex/Copilot/Kiro/Kimi/Qwen/pi/Antigravity/Aider/Maru settings backup, optional HUD |
@@ -415,6 +416,34 @@ helper is unavailable. Other Linux distributions do not attempt an automatic
 GUI app install. This preference controls dot's selected terminal workspace
 app and does not register an operating-system terminal command handler.
 
+### Container
+
+The `container` module is opt-in in every profile. `dot container setup`
+enables it in user state, installs the backend, and writes the shim
+`~/.local/share/dotfiles/shims/container`, which `00-exports.sh` puts ahead of
+the brew bin dirs. Every host then takes Apple `container` syntax:
+
+| Host | Backend | Setup installs |
+|------|---------|----------------|
+| macOS 26+ on Apple silicon | apple/container | `brew install container`, `brew services start container`, the recommended guest kernel |
+| Linux with a usable docker | docker | nothing; an existing docker is never changed |
+| Linux without docker or podman | docker, or podman when declined | the distro package (`docker.io` or `docker`), `systemctl enable --now docker`, the `docker` group (root-equivalent; log in again) |
+
+Intel Macs and macOS before 26 are reported as unsupported and skipped. On
+Linux the shim translates verbs (`list` → `ps`, `image list` → `image ls`,
+`registry login` → `login`, `system status` → `info`) and flags (`-c` →
+`--cpus`, `-a`/`--os` → `--platform`, `--format yaml` is refused). Verbs with
+no Linux meaning (`system start`, `builder start`) are no-ops; `system
+kernel`, `machine` and `k8s` exit 2. `DOT_CONTAINER_TRACE=1` prints the argv
+the shim runs.
+
+`modules.container.dns` adds `--dns` to `run`, `create`, `build` and
+`builder start` (on Linux `run` and `create` only, since docker `build` has
+no `--dns`) unless the call already passes `--dns` or `--no-dns`. When
+Cloudflare WARP holds port 53, DNS inside apple/container fails
+(apple/container#402) and setup offers `[1.1.1.1, 1.0.0.1]`. `dot container
+status [--probe]` reports the backend, service, shim, DNS and WARP state.
+
 ### Packages
 
 **minimal** (17):
@@ -566,6 +595,10 @@ modules:
       - raycast
       - obsidian
     backup_root: "~/Library/CloudStorage/GoogleDrive-*/My Drive/secrets/dotfiles-backup"
+  container:
+    enabled: true
+    backend: auto          # auto | apple | docker | podman
+    dns: [1.1.1.1, 1.0.0.1]  # default --dns; empty = backend default
   rsync:
     remote_host: "user@ubuntu-server"
     remote_path: "~/workspace/work/"
@@ -590,6 +623,7 @@ secrets:
 | `DOTFILES_REPO_DIR` | Dotfiles repo directory |
 | `DOTFILES_HOME` | Override home directory |
 | `GITHUB_TOKEN` | GitHub API token for `update` |
+| `DOT_CONTAINER_TRACE` | Set to `1` to print the backend argv the `container` shim runs |
 | `DOT_SCHEMA_FORCE` | Set to `1` to overwrite a state file written by a newer `dot`, dropping any keys this binary does not know |
 
 ### Peer profile

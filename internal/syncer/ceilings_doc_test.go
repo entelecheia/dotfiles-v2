@@ -57,6 +57,9 @@ func TestCeilingsDoc(t *testing.T) {
 	if !strings.Contains(doc, "## Unknown config keys, top level only") {
 		t.Error("unknown config keys ceiling (#196) missing from docs/CEILINGS.md")
 	}
+	if !strings.Contains(doc, "## Container translation table") || !strings.Contains(doc, "## Container DNS injection") {
+		t.Error("container ceilings (#223) missing from docs/CEILINGS.md")
+	}
 
 	for _, path := range []string{
 		"internal/syncer/manifest.go",
@@ -87,6 +90,8 @@ func TestCeilingsDoc(t *testing.T) {
 		{"internal/syncer/sync_store_ops.go", "ponytail: known ceiling. See docs/CEILINGS.md (owner aliases outside the coordinator's peer run)."},
 		{"internal/syncer/local_store.go", "ponytail: known ceiling. See docs/CEILINGS.md (unknown config keys, top level only)."},
 		{"internal/syncer/gitrescue.go", "ponytail: known ceiling. See docs/CEILINGS.md (rewrite twins by author, date and subject)."},
+		{"internal/container/translate.go", "ponytail: known ceiling. See docs/CEILINGS.md (container translation table)."},
+		{"internal/container/host.go", "ponytail: known ceiling. See docs/CEILINGS.md (container DNS injection)."},
 	} {
 		data, err := os.ReadFile(filepath.Join("..", "..", want.path))
 		if err != nil {

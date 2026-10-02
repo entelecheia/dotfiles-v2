@@ -33,20 +33,21 @@ type Config struct {
 
 // ModulesConfig holds per-module configuration.
 type ModulesConfig struct {
-	Packages  ModuleToggle  `yaml:"packages"`
-	Shell     ShellConfig   `yaml:"shell"`
-	Node      ModuleToggle  `yaml:"node"`
-	Git       GitConfig     `yaml:"git"`
-	SSH       SSHModConfig  `yaml:"ssh"`
-	Terminal  TermConfig    `yaml:"terminal"`
-	Tmux      ModuleToggle  `yaml:"tmux"`
-	Workspace WorkConfig    `yaml:"workspace"`
-	AI        AIConfig      `yaml:"ai"`
-	Fonts     FontsConfig   `yaml:"fonts"`
-	Conda     ModuleToggle  `yaml:"conda"`
-	GPG       ModuleToggle  `yaml:"gpg"`
-	Secrets   ModuleToggle  `yaml:"secrets"`
-	MacApps   MacAppsConfig `yaml:"macapps"`
+	Packages  ModuleToggle    `yaml:"packages"`
+	Shell     ShellConfig     `yaml:"shell"`
+	Node      ModuleToggle    `yaml:"node"`
+	Git       GitConfig       `yaml:"git"`
+	SSH       SSHModConfig    `yaml:"ssh"`
+	Terminal  TermConfig      `yaml:"terminal"`
+	Tmux      ModuleToggle    `yaml:"tmux"`
+	Workspace WorkConfig      `yaml:"workspace"`
+	AI        AIConfig        `yaml:"ai"`
+	Fonts     FontsConfig     `yaml:"fonts"`
+	Conda     ModuleToggle    `yaml:"conda"`
+	GPG       ModuleToggle    `yaml:"gpg"`
+	Secrets   ModuleToggle    `yaml:"secrets"`
+	MacApps   MacAppsConfig   `yaml:"macapps"`
+	Container ContainerConfig `yaml:"container"`
 }
 
 // UnmarshalYAML accepts the legacy modules.ai_tools key as read-only input and
@@ -82,6 +83,13 @@ func (m *ModulesConfig) UnmarshalYAML(value *yaml.Node) error {
 type MacAppsConfig struct {
 	Enabled    bool   `yaml:"enabled"`
 	BackupRoot string `yaml:"backup_root,omitempty"` // shared root for app-settings/ + profiles/ snapshots
+}
+
+// ContainerConfig configures the shared `container` command (opt-in).
+type ContainerConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Backend string   `yaml:"backend,omitempty"` // auto (default) | apple | docker | podman
+	DNS     []string `yaml:"dns,omitempty"`     // default --dns servers; empty = backend default
 }
 
 // ModuleToggle is a simple enabled/disabled toggle.
@@ -384,6 +392,8 @@ func (c *Config) IsModuleEnabled(name string) bool {
 		return c.Modules.Secrets.Enabled
 	case "macapps":
 		return c.Modules.MacApps.Enabled
+	case "container":
+		return c.Modules.Container.Enabled
 	default:
 		return false
 	}
@@ -553,6 +563,7 @@ func (c *Config) TemplateData(home string) map[string]any {
 		"Editor":          EditorCommand(c.Modules.Shell.Editor, isDarwin),
 		"EnableWorkspace": c.Modules.Workspace.Enabled,
 		"EnableAI":        c.Modules.AI.Enabled,
+		"EnableContainer": c.Modules.Container.Enabled,
 		"WorkspacePath":   c.Modules.Workspace.Path,
 		"VaultPath":       c.VaultPath(home),
 		"CloudSymlink":    c.Modules.Workspace.GdriveSymlink,

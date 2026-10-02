@@ -292,3 +292,32 @@ func TestRender_WithTemplateData(t *testing.T) {
 		t.Errorf("Render git/config.tmpl: expected Email in output, got:\n%s", content)
 	}
 }
+
+func TestRender_ExportsPutContainerShimAheadOfBrew(t *testing.T) {
+	e := NewEngine()
+	const shimLine = `export PATH="$HOME/.local/share/dotfiles/shims:$PATH"`
+	for _, isDarwin := range []bool{true, false} {
+		brewLine := `export PATH="/opt/homebrew/bin:$PATH"`
+		if !isDarwin {
+			brewLine = `export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"`
+		}
+		out, err := e.Render("shell/00-exports.sh.tmpl", map[string]any{"IsDarwin": isDarwin, "EnableContainer": true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := string(out)
+		brew, shim := strings.Index(content, brewLine), strings.Index(content, shimLine)
+		// Each line prepends, so the later line wins on PATH.
+		if brew < 0 || shim < brew {
+			t.Errorf("darwin=%v: shim line at %d must follow the brew line at %d", isDarwin, shim, brew)
+		}
+
+		out, err = e.Render("shell/00-exports.sh.tmpl", map[string]any{"IsDarwin": isDarwin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(out), "dotfiles/shims") {
+			t.Errorf("darwin=%v: shim line rendered with the module disabled", isDarwin)
+		}
+	}
+}
