@@ -19,9 +19,55 @@ import (
 // ContainerModule installs the backend behind the shared `container` command
 // (apple/container on macOS, docker or podman on Linux) and writes its shim
 // and state file. An existing docker is never installed over or reconfigured.
+//
+// modules.container.enabled travels with the synced config, but whether a
+// host installs a backend is that host's choice, recorded in its state.json:
+// dot container setup chooses yes, and dot apply asks a host that has not
+// chosen. --yes and runs without a terminal never install on such a host.
 type ContainerModule struct {
-	// confirm asks before installing docker; nil uses ui.Confirm.
+	// Chosen is set by dot container setup: this host chose to set up.
+	Chosen bool
+	// confirm answers the host-choice and docker prompts; nil uses ui.Confirm.
 	confirm func(prompt string) (bool, error)
+}
+
+type hostChoice int
+
+const (
+	choiceUndecided hostChoice = iota
+	choiceSetUp
+	choiceDeclined
+)
+
+// hostChoice reads this host's decision from its state.json.
+func (m *ContainerModule) hostChoice(rc *RunContext) hostChoice {
+	if m.Chosen {
+		return choiceSetUp
+	}
+	switch st := m.loadState(rc); {
+	case st == nil || (st.Backend == "" && !st.Declined):
+		return choiceUndecided
+	case st.Declined:
+		return choiceDeclined
+	}
+	return choiceSetUp
+}
+
+// chooseHost asks a host that has not chosen whether to set up the command.
+// asked is false when no prompt could run (--yes, no terminal).
+func (m *ContainerModule) chooseHost(rc *RunContext) (install, asked bool, err error) {
+	if rc.Yes {
+		return false, false, nil
+	}
+	confirm := m.confirm
+	if confirm == nil {
+		if !ui.TerminalAttached() {
+			return false, false, nil
+		}
+		confirm = func(p string) (bool, error) { return ui.Confirm(p, false) }
+	}
+	install, err = confirm(hostChoicePrompt)
+	return install, true, err
 }
 
 func (m *ContainerModule) Name() string { return "container" }
@@ -41,6 +87,11 @@ type containerHost struct {
 }
 
 const (
+	hostChoicePrompt = "modules.container is on in your synced config, but this host has not chosen. " +
+		"Set up the container command here (on macOS it installs apple/container, about 431 MB)? " +
+		"No skips this host until you run dot container setup."
+	undecidedNote = "not set up on this host: run dot container setup to install it, " +
+		"or dot apply from a terminal to choose"
 	dockerOfferPrompt = "No docker or podman found. Install docker with sudo? " +
 		"Members of the docker group are root-equivalent. Choosing No installs podman instead."
 	reloginNote = "log out and back in so the docker group applies, then use container"
@@ -148,16 +199,26 @@ func appleBinary(shims string) string {
 }
 
 func (m *ContainerModule) Check(ctx context.Context, rc *RunContext) (*CheckResult, error) {
+	choice := m.hostChoice(rc)
+	if choice == choiceDeclined {
+		return &CheckResult{Satisfied: true}, nil
+	}
 	h, err := m.probe(ctx, rc)
 	if err != nil {
 		return nil, err
 	}
 	var changes []Change
 	add := func(desc, cmd string) { changes = append(changes, Change{Description: desc, Command: cmd}) }
-	switch {
-	case h.unsupported != "":
+	if h.unsupported != "" {
 		add("unsupported platform, skipped: "+h.unsupported, "")
 		return &CheckResult{Changes: changes}, nil
+	}
+	if choice == choiceUndecided {
+		// Only the note: what a yes would install is not this host's plan yet.
+		add(undecidedNote, "dot container setup")
+		return &CheckResult{Changes: changes}, nil
+	}
+	switch {
 	case h.stop != "":
 		add(h.stop, "")
 		return &CheckResult{Changes: changes}, nil
@@ -198,6 +259,25 @@ func (m *ContainerModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 	}
 	if h.unsupported != "" {
 		return &ApplyResult{}, nil
+	}
+	switch m.hostChoice(rc) {
+	case choiceDeclined:
+		return &ApplyResult{}, nil
+	case choiceUndecided:
+		install, asked, err := m.chooseHost(rc)
+		if err != nil {
+			return nil, err
+		}
+		if !asked { // Check already printed the undecided note
+			return &ApplyResult{}, nil
+		}
+		if !install {
+			st := &container.State{Declined: true, CheckedAt: time.Now().UTC()}
+			if _, err := fileutil.EnsureFileAtomic(rc.Runner, rc.HomeDir, container.StatePath(rc.HomeDir), st.Marshal(), 0o644); err != nil {
+				return nil, fmt.Errorf("recording the declined choice: %w", err)
+			}
+			return &ApplyResult{Changed: true, Messages: []string{"declined on this host; dot container setup installs it later"}}, nil
+		}
 	}
 	if h.stop != "" {
 		return nil, errors.New(h.stop)

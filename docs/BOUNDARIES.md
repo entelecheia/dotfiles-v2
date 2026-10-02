@@ -105,9 +105,12 @@ Dot-owned state trees:
   artifact digests. Show marks stale evidence for revalidation; neither command
   expands raw transcript collection or publishes records externally.
 - `~/.local/share/dotfiles/shims/container` — the `container` shim (POSIX
-  sh, mode 0755) and `~/.local/share/dotfiles/container/state.json` — the
-  chosen backend, its binary and version; both written by `dot container
-  setup` and by `dot apply` when `modules.container` is enabled. The shim
+  sh, mode 0755) and `~/.local/share/dotfiles/container/state.json` — this
+  host's own choice: the chosen backend, its binary and version, or that the
+  host declined. Both are written by `dot container setup`, and by `dot apply`
+  when `modules.container` is enabled and the host chose yes (a no writes only
+  the declined `state.json`). The file stays out of the synced config, so the
+  synced opt-in never installs a backend on a host that did not choose it. The shim
   directory goes on PATH through the shell module's `00-exports.sh`. Setup
   also removes `~/.config/shell/45-container.sh`, only when it still matches
   the old hand-written workaround byte for byte

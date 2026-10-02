@@ -421,7 +421,13 @@ app and does not register an operating-system terminal command handler.
 The `container` module is opt-in in every profile. `dot container setup`
 enables it in user state, installs the backend, and writes the shim
 `~/.local/share/dotfiles/shims/container`, which `00-exports.sh` puts ahead of
-the brew bin dirs. Every host then takes Apple `container` syntax:
+the brew bin dirs.
+
+The opt-in syncs with `~/.config/dotfiles`, but each host chooses whether to
+install: `dot container setup` is that host's yes, and `dot apply` run from a
+terminal asks a host that has not chosen (a no is remembered in the host's
+`state.json`). `dot apply --yes` and scheduled runs never install on an
+undecided host. Every host that is set up takes Apple `container` syntax:
 
 | Host | Backend | Setup installs |
 |------|---------|----------------|

@@ -29,7 +29,10 @@ func newContainerCmd() *cobra.Command {
 
 On macOS it runs apple/container (Apple silicon, macOS 26+). On Linux a shim
 translates the same syntax for docker, or podman when no docker is usable.
-The module is opt-in: dot container setup enables it in user state.
+The module is opt-in: dot container setup enables it in user state. That
+opt-in syncs with your config, but each host chooses whether to install: dot
+apply asks a host that has not chosen (from a terminal only; --yes and
+scheduled runs never install there), and dot container setup is a yes.
 
 Config (~/.config/dotfiles/config.yaml):
   modules:
@@ -45,10 +48,14 @@ func newContainerSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
 		Short: "Install the backend and write the container shim",
-		Long: `Install the backend and write the shim and its state file, then enable the
-container module in user state and render the shim's PATH entry (the shell
-module). Afterwards it is equivalent to dot apply --module container. A host
-the module cannot set up keeps its config and shell files untouched.
+		Long: `Set up the container command on this host: install the backend and write
+the shim and its state file, then enable the container module in user state
+and render the shim's PATH entry (the shell module). Afterwards it is
+equivalent to dot apply --module container. A host the module cannot set up
+keeps its config and shell files untouched.
+
+The opt-in in user state syncs to your other machines, but each host chooses
+for itself: running setup is this host's yes, and it overrides an earlier no.
 
 On Linux an existing, usable docker is used as is. With no docker or podman,
 setup offers to install the distro docker package (--yes accepts) and falls
@@ -134,6 +141,7 @@ func runContainerSetup(cmd *cobra.Command, _ []string) error {
 	// The container module runs first, so a host it cannot set up (unusable
 	// docker, no sudo) keeps its config and shell files untouched.
 	registry := module.NewRegistry()
+	registry.Register(&module.ContainerModule{Chosen: true}) // running setup is this host's choice
 	if err := module.RunAll(ctx, registry.Resolve(cfg, []string{"container"}), rc); err != nil {
 		return err
 	}
@@ -190,11 +198,19 @@ func runContainerStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	switch {
+	case st != nil && st.Declined:
+		p.KV("This host", "declined (dot container setup installs it here)")
+	case (st == nil || st.Backend == "") && cs.Enabled:
+		p.KV("This host", "not chosen (dot apply asks from a terminal; dot container setup installs)")
+	case st != nil && st.Backend != "":
+		p.KV("This host", "set up")
+	}
 	backend, binary := container.Resolve(home, sysInfo.OS, st)
 	switch {
 	case backend == "":
 		p.KV("Backend", "none found")
-	case st == nil:
+	case st == nil || st.Backend == "":
 		p.KV("Backend", fmt.Sprintf("%s (%s; not set up)", backend, binary))
 	default:
 		p.KV("Backend", fmt.Sprintf("%s (%s)", st.Backend, st.Binary))

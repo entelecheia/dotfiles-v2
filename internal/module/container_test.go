@@ -12,6 +12,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/container"
 	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 // fakeHost is a PATH of shell stubs that log every call to $FAKE_LOG, the
@@ -126,7 +127,7 @@ func TestContainerMacFreshInstall(t *testing.T) {
 	h.mac("27.0")
 	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, true)
 
-	if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+	if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
 		t.Fatal(err)
 	}
 	assertCalls(t, h.calls(macProbes...),
@@ -147,7 +148,7 @@ func TestContainerMacFreshInstall(t *testing.T) {
 		t.Fatal("shim must be executable")
 	}
 
-	check, err := (&ContainerModule{}).Check(context.Background(), rc)
+	check, err := (&ContainerModule{Chosen: true}).Check(context.Background(), rc)
 	if err != nil || !check.Satisfied {
 		t.Fatalf("second check = %+v, %v; want satisfied", check, err)
 	}
@@ -201,7 +202,7 @@ func TestContainerLinuxExistingDockerIsUsedAsIs(t *testing.T) {
 	h.stub("docker", `[ "$1" = "--version" ] && echo "Docker version 29.1.3"; exit 0`)
 	rc := containerTestContext(t, ubuntu, true)
 
-	if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+	if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
 		t.Fatal(err)
 	}
 	// AC7: only the read-only probes ran; nothing installed or reconfigured.
@@ -218,7 +219,7 @@ func TestContainerLinuxUnusableDockerStops(t *testing.T) {
 	h.stub("docker", `[ "$1" = "info" ] && exit 1; exit 0`)
 	rc := containerTestContext(t, ubuntu, true)
 
-	err := runContainer(t, &ContainerModule{}, rc)
+	err := runContainer(t, &ContainerModule{Chosen: true}, rc)
 	if err == nil || !strings.Contains(err.Error(), "sudo usermod -aG docker $USER") {
 		t.Fatalf("err = %v, want the usermod guidance", err)
 	}
@@ -242,7 +243,7 @@ func TestContainerLinuxDockerOfferAccepted(t *testing.T) {
 		rc := containerTestContext(t, tc.sys, true) // --yes accepts the offer
 		user := dockerGroupUser(rc)
 
-		if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+		if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
 			t.Fatal(err)
 		}
 		assertCalls(t, h.calls("sudo -n", "docker --version"),
@@ -261,7 +262,7 @@ func TestContainerLinuxDockerDeclinedInstallsPodman(t *testing.T) {
 	h.linux()
 	rc := containerTestContext(t, ubuntu, false)
 	asked := ""
-	m := &ContainerModule{confirm: func(p string) (bool, error) { asked = p; return false, nil }}
+	m := &ContainerModule{Chosen: true, confirm: func(p string) (bool, error) { asked = p; return false, nil }}
 
 	if err := runContainer(t, m, rc); err != nil {
 		t.Fatal(err)
@@ -281,7 +282,7 @@ func TestContainerLinuxDockerInstallFailureFallsBackToPodman(t *testing.T) {
 	t.Setenv("FAKE_FAIL", "docker.io")
 	rc := containerTestContext(t, ubuntu, true)
 
-	if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+	if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
 		t.Fatal(err)
 	}
 	assertCalls(t, h.calls("sudo -n", "podman --version"),
@@ -300,7 +301,7 @@ func TestContainerLinuxBackendPodmanSkipsDockerOffer(t *testing.T) {
 	rc := containerTestContext(t, ubuntu, true)
 	rc.Config.Modules.Container.Backend = container.BackendPodman
 
-	if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+	if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
 		t.Fatal(err)
 	}
 	assertCalls(t, h.calls("sudo -n", "podman --version"), "sudo apt-get install -y podman")
@@ -311,7 +312,7 @@ func TestContainerLinuxWithoutSudoPrintsCommands(t *testing.T) {
 	h.stub("apt-get", "exit 0") // no sudo on PATH
 	rc := containerTestContext(t, ubuntu, true)
 
-	err := runContainer(t, &ContainerModule{}, rc)
+	err := runContainer(t, &ContainerModule{Chosen: true}, rc)
 	for _, want := range []string{"sudo apt-get install -y docker.io", "sudo systemctl enable --now docker", "sudo apt-get install -y podman"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %v, want it to list %q", err, want)
@@ -344,7 +345,7 @@ func TestContainerLegacySnippetCleanup(t *testing.T) {
 		if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+		if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(path); os.IsNotExist(err) != tc.removed {
@@ -369,11 +370,133 @@ func TestContainerLinuxPodmanFallbackSticksOverBrokenDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+	if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
 		t.Fatalf("podman fallback must not stop on the leftover docker: %v", err)
 	}
 	assertCalls(t, h.calls("docker info", "podman --version"))
 	if got, _ := container.LoadState(rc.HomeDir); got == nil || got.Backend != container.BackendPodman {
 		t.Fatalf("state = %+v", got)
+	}
+}
+
+// --- host choice ---------------------------------------------------------
+
+// The opt-in syncs between machines; a host that has not chosen never gets an
+// install from an unattended run.
+func TestContainerUndecidedHostNeverInstallsUnattended(t *testing.T) {
+	h := newFakeHost(t)
+	h.mac("27.0")
+	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, true) // --yes
+
+	check, err := (&ContainerModule{}).Check(context.Background(), rc)
+	if err != nil || check.Satisfied || len(check.Changes) != 1 || !strings.Contains(check.Changes[0].Description, "not set up on this host") {
+		t.Fatalf("check = %+v, %v; want only the undecided note", check, err)
+	}
+	// --yes skips the question even where a prompt could run.
+	noPrompt := &ContainerModule{confirm: func(p string) (bool, error) {
+		t.Fatalf("--yes must not ask %q", p)
+		return true, nil
+	}}
+	if err := runContainer(t, noPrompt, rc); err != nil {
+		t.Fatal(err)
+	}
+	assertCalls(t, h.calls(macProbes...))
+	if entries, _ := os.ReadDir(rc.HomeDir); len(entries) != 0 {
+		t.Fatalf("an unattended run on an undecided host wrote %v", entries)
+	}
+}
+
+// Without a terminal and without --yes, an undecided host is not asked.
+func TestContainerUndecidedHostWithoutTerminalSkips(t *testing.T) {
+	h := newFakeHost(t)
+	h.mac("27.0")
+	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, false)
+	saved := ui.TerminalAttached
+	ui.TerminalAttached = func() bool { return false }
+	t.Cleanup(func() { ui.TerminalAttached = saved })
+
+	if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+		t.Fatal(err)
+	}
+	assertCalls(t, h.calls(macProbes...))
+	if entries, _ := os.ReadDir(rc.HomeDir); len(entries) != 0 {
+		t.Fatalf("a run without a terminal wrote %v", entries)
+	}
+}
+
+func TestContainerUndecidedHostDeclinesOnce(t *testing.T) {
+	h := newFakeHost(t)
+	h.mac("27.0")
+	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, false)
+	asked := 0
+	m := &ContainerModule{confirm: func(p string) (bool, error) {
+		if !strings.Contains(p, "this host has not chosen") {
+			t.Fatalf("unexpected prompt %q", p)
+		}
+		asked++
+		return false, nil
+	}}
+
+	if err := runContainer(t, m, rc); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := container.LoadState(rc.HomeDir)
+	if st == nil || !st.Declined || st.Backend != "" {
+		t.Fatalf("state = %+v, want a recorded decline", st)
+	}
+	check, err := m.Check(context.Background(), rc)
+	if err != nil || !check.Satisfied {
+		t.Fatalf("declined host check = %+v, %v; want satisfied", check, err)
+	}
+	if res, err := m.Apply(context.Background(), rc); err != nil || res.Changed {
+		t.Fatalf("declined host apply = %+v, %v; want a no-op", res, err)
+	}
+	if asked != 1 {
+		t.Fatalf("asked %d times, want once", asked)
+	}
+	assertCalls(t, h.calls(macProbes...))
+}
+
+func TestContainerUndecidedHostAccepts(t *testing.T) {
+	h := newFakeHost(t)
+	h.mac("27.0")
+	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, false)
+	m := &ContainerModule{confirm: func(string) (bool, error) { return true, nil }}
+
+	if err := runContainer(t, m, rc); err != nil {
+		t.Fatal(err)
+	}
+	assertCalls(t, h.calls(macProbes...),
+		"brew install container",
+		"brew services start container",
+		"container system start --disable-kernel-install",
+		"container system kernel set --recommended",
+	)
+	if st, _ := container.LoadState(rc.HomeDir); st == nil || st.Backend != container.BackendApple {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+func TestContainerSetupOverridesDecline(t *testing.T) {
+	h := newFakeHost(t)
+	h.mac("27.0")
+	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, true)
+	declined := &container.State{Declined: true}
+	if err := os.MkdirAll(filepath.Dir(container.StatePath(rc.HomeDir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(container.StatePath(rc.HomeDir), declined.Marshal(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runContainer(t, &ContainerModule{Chosen: true}, rc); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := container.LoadState(rc.HomeDir)
+	if st == nil || st.Declined || st.Backend != container.BackendApple {
+		t.Fatalf("state = %+v, want setup to replace the decline", st)
+	}
+	if calls := h.calls(macProbes...); len(calls) == 0 || calls[0] != "brew install container" {
+		t.Fatalf("setup after a decline did not install: %q", calls)
 	}
 }
