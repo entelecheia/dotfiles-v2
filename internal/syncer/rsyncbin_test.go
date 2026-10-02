@@ -2,6 +2,7 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,22 @@ import (
 )
 
 const openrsyncBanner = "openrsync: protocol version 29\nrsync version 2.6.9 compatible"
+
+func TestMirrorPush_CanceledProbeKeepsCancellation(t *testing.T) {
+	f := newIntakeFixture(t)
+	f.cfg.Propagation.Delete = true
+	withLocalRsyncCandidates(t, filepath.Join(t.TempDir(), "missing"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := PushCommand(ctx, PushOptions{Config: f.cfg, Runner: f.runner, Mode: ModeClean})
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "brew install") {
+		t.Fatalf("want cancellation without installation advice, got %v", err)
+	}
+	state, err := LoadLocalState(f.cfg.LocalPaths)
+	if err != nil || !strings.Contains(state.LastPushError, "context canceled") || strings.Contains(state.LastPushError, "brew install") {
+		t.Fatalf("recorded refusal = %+v, %v", state, err)
+	}
+}
 
 func TestMirrorPush_OldRsyncStillWorksWithoutDeletes(t *testing.T) {
 	real := requirePeerRsync(t)

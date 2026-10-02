@@ -116,11 +116,17 @@ func ResolvePushRsync(ctx context.Context, runner *exec.Runner, cfg *Config) err
 	if cfg.Target.IsSSH() || !cfg.Propagation.Delete {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	candidates := localRsyncCandidates
 	if cfg.RsyncPath != "" {
 		candidates = append([]string{cfg.RsyncPath}, candidates...)
 	}
 	path, _, err := localRsyncPath(ctx, runner, candidates)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err != nil {
 		return fmt.Errorf("rsync 3.x is needed to delete with a backup; brew install rsync: %w", err)
 	}
