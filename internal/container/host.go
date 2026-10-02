@@ -133,7 +133,7 @@ func DotPath(home string) string {
 	return optLinkFor(self)
 }
 
-// hasContainerCommand reports whether dot predates this feature: an older
+// hasContainerCommand reports whether dot has the container command; an older
 // dot rejects `container` as an unknown command.
 func hasContainerCommand(dot string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
