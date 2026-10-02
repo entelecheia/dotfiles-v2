@@ -12,6 +12,7 @@ import (
 	"github.com/entelecheia/dotfiles-v2/internal/config"
 	"github.com/entelecheia/dotfiles-v2/internal/container"
 	dotexec "github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/ui"
 )
 
 // fakeHost is a PATH of shell stubs that log every call to $FAKE_LOG, the
@@ -388,8 +389,8 @@ func TestContainerUndecidedHostNeverInstallsUnattended(t *testing.T) {
 	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, true) // --yes
 
 	check, err := (&ContainerModule{}).Check(context.Background(), rc)
-	if err != nil || check.Satisfied || !strings.Contains(check.Changes[0].Description, "not set up on this host") {
-		t.Fatalf("check = %+v, %v; want the undecided note first", check, err)
+	if err != nil || check.Satisfied || len(check.Changes) != 1 || !strings.Contains(check.Changes[0].Description, "not set up on this host") {
+		t.Fatalf("check = %+v, %v; want only the undecided note", check, err)
 	}
 	// --yes skips the question even where a prompt could run.
 	noPrompt := &ContainerModule{confirm: func(p string) (bool, error) {
@@ -402,6 +403,24 @@ func TestContainerUndecidedHostNeverInstallsUnattended(t *testing.T) {
 	assertCalls(t, h.calls(macProbes...))
 	if entries, _ := os.ReadDir(rc.HomeDir); len(entries) != 0 {
 		t.Fatalf("an unattended run on an undecided host wrote %v", entries)
+	}
+}
+
+// Without a terminal and without --yes, an undecided host is not asked.
+func TestContainerUndecidedHostWithoutTerminalSkips(t *testing.T) {
+	h := newFakeHost(t)
+	h.mac("27.0")
+	rc := containerTestContext(t, &config.SystemInfo{OS: "darwin", Arch: "arm64"}, false)
+	saved := ui.TerminalAttached
+	ui.TerminalAttached = func() bool { return false }
+	t.Cleanup(func() { ui.TerminalAttached = saved })
+
+	if err := runContainer(t, &ContainerModule{}, rc); err != nil {
+		t.Fatal(err)
+	}
+	assertCalls(t, h.calls(macProbes...))
+	if entries, _ := os.ReadDir(rc.HomeDir); len(entries) != 0 {
+		t.Fatalf("a run without a terminal wrote %v", entries)
 	}
 }
 

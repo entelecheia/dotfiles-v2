@@ -201,16 +201,16 @@ func runContainerStatus(cmd *cobra.Command, _ []string) error {
 	switch {
 	case st != nil && st.Declined:
 		p.KV("This host", "declined (dot container setup installs it here)")
-	case st == nil || st.Backend == "":
+	case (st == nil || st.Backend == "") && cs.Enabled:
 		p.KV("This host", "not chosen (dot apply asks from a terminal; dot container setup installs)")
-	default:
+	case st != nil && st.Backend != "":
 		p.KV("This host", "set up")
 	}
 	backend, binary := container.Resolve(home, sysInfo.OS, st)
 	switch {
 	case backend == "":
 		p.KV("Backend", "none found")
-	case st == nil:
+	case st == nil || st.Backend == "":
 		p.KV("Backend", fmt.Sprintf("%s (%s; not set up)", backend, binary))
 	default:
 		p.KV("Backend", fmt.Sprintf("%s (%s)", st.Backend, st.Binary))

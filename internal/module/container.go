@@ -214,7 +214,9 @@ func (m *ContainerModule) Check(ctx context.Context, rc *RunContext) (*CheckResu
 		return &CheckResult{Changes: changes}, nil
 	}
 	if choice == choiceUndecided {
+		// Only the note: what a yes would install is not this host's plan yet.
 		add(undecidedNote, "dot container setup")
+		return &CheckResult{Changes: changes}, nil
 	}
 	switch {
 	case h.stop != "":
@@ -266,8 +268,7 @@ func (m *ContainerModule) Apply(ctx context.Context, rc *RunContext) (*ApplyResu
 		if err != nil {
 			return nil, err
 		}
-		if !asked {
-			fmt.Fprintf(rc.out(), "  ⚠ container: %s\n", undecidedNote)
+		if !asked { // Check already printed the undecided note
 			return &ApplyResult{}, nil
 		}
 		if !install {
