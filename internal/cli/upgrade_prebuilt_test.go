@@ -567,7 +567,7 @@ func TestUpgradeHomebrewPrebuiltReloadsMovedOptAfterBrewFailure(t *testing.T) {
 		t.Fatalf("calls: brew=%d admission=%d reload=%d, want one each", upgradeCalls, acquired, reloaded)
 	}
 	resolved, err := filepath.EvalSymlinks(h.optDot())
-	if err != nil || resolved != filepath.Join(newKeg, "bin", "dot") {
+	if err != nil || !sameCanonicalHomebrewPath(resolved, filepath.Join(newKeg, "bin", "dot")) {
 		t.Fatalf("opt link after partial brew failure = %s, %v", resolved, err)
 	}
 }
