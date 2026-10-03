@@ -369,6 +369,28 @@ func TestAdmitStatusThermalRow(t *testing.T) {
 	}
 }
 
+func TestAdmitStatusDoesNotShowStaleRecoveryCountdown(t *testing.T) {
+	home, _ := admitSandbox(t)
+	stubAdmitMonitorAt(t, healthyAdmitSnapshot(), admitTestClock)
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	stale := admitTestClock.Add(-2 * time.Minute)
+	if err := admission.SaveHistory(store.HistoryPath(), admission.History{
+		DeferActive:  true,
+		DeferSince:   stale,
+		RecoverSince: stale,
+		LastSampleAt: stale,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runDotForTest("admit", "status")
+	if err != nil {
+		t.Fatalf("admit status: %v", err)
+	}
+	if !strings.Contains(out, "waiting for normal telemetry") || strings.Contains(out, "0s of normal telemetry still required") {
+		t.Errorf("status showed a stale recovery countdown:\n%s", out)
+	}
+}
+
 // AC6 (CLI side): heavy work that holds no slot defers `dot admit` (#162).
 func TestAdmitDefersOnUncoveredWork(t *testing.T) {
 	admitSandbox(t)

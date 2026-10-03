@@ -498,6 +498,31 @@ func IsGateBusy(d Decision) bool {
 // a half-updated history. The evaluation clock comes from the monitor when
 // it carries one, matching the fixture seams.
 func (s *Store) Gate(ctx context.Context, m *Monitor, th Thresholds) (Decision, error) {
+	return s.GateWithPolicy(ctx, m, GatePolicy{Thresholds: th})
+}
+
+// GatePolicy supplies an isolated history and optional pressure evaluator for
+// a narrowly-scoped admission policy. HistoryFile must be a basename under
+// Store.Root; the default policy uses history.json.
+type GatePolicy struct {
+	HistoryFile string
+	Thresholds  Thresholds
+	Snapshot    func(context.Context) PressureSnapshot
+	Evaluate    func(PressureSnapshot, Thresholds, History, time.Time) Decision
+}
+
+// GateWithPolicy runs one locked pressure evaluation and persists its result.
+// Policies share the root lock and slot state while selecting a separate
+// history file when needed.
+func (s *Store) GateWithPolicy(ctx context.Context, m *Monitor, policy GatePolicy) (Decision, error) {
+	historyName := policy.HistoryFile
+	if historyName == "" {
+		historyName = "history.json"
+	}
+	if filepath.Base(historyName) != historyName || historyName == "." || historyName == ".." || strings.ContainsAny(historyName, `/\\`) {
+		return Decision{}, fmt.Errorf("invalid history file name %q", policy.HistoryFile)
+	}
+	historyPath := filepath.Join(s.Root, historyName)
 	release, touch, busy, err := acquireHistoryLock(s.Root)
 	if err != nil {
 		return Decision{}, fmt.Errorf("locking history: %w", err)
@@ -510,21 +535,32 @@ func (s *Store) Gate(ctx context.Context, m *Monitor, th Thresholds) (Decision, 
 		}, nil
 	}
 	defer release()
-	hist, err := LoadHistory(s.HistoryPath())
+	hist, err := LoadHistory(historyPath)
 	if err != nil {
 		return Decision{}, err
 	}
+	snapshot := policy.Snapshot
+	if snapshot == nil {
+		snapshot = func(ctx context.Context) PressureSnapshot { return m.SnapshotPressure(ctx) }
+	}
+	snap := snapshot(ctx)
+	// Take the evaluation timestamp after all probes have completed.
 	now := s.now()
 	if m.Now != nil {
 		now = m.Now()
 	}
-	snap := m.SnapshotPressure(ctx)
+	hist = PrepareHistorySample(hist, policy.Thresholds, snap, now)
 	// The snapshot can run for most of a minute on a loaded host (probe
 	// timeouts); refresh the lock so a concurrent invocation never reads
 	// this live evaluation as abandoned.
 	touch()
-	d := EvaluatePressure(snap, th, hist, now)
-	if err := SaveHistory(s.HistoryPath(), d.Next); err != nil {
+	evaluate := policy.Evaluate
+	if evaluate == nil {
+		evaluate = EvaluatePressure
+	}
+	d := evaluate(snap, policy.Thresholds, hist, now)
+	d.Next.LastSampleAt = now
+	if err := SaveHistory(historyPath, d.Next); err != nil {
 		return Decision{}, err
 	}
 	return d, nil
