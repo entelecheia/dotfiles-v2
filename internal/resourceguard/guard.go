@@ -68,6 +68,41 @@ func Acquire(ctx context.Context, opts Options) (func(), error) {
 	return native().acquire(ctx, opts)
 }
 
+// AcquireVerifiedPrebuiltUpdate reserves the host maintenance slot for the
+// single bounded, checksum-verified native dot release update operation.
+func AcquireVerifiedPrebuiltUpdate(ctx context.Context) (func(), error) {
+	a := native()
+	monitor := a.monitor()
+	opts := Options{Purpose: "verified prebuilt dot update", ScopeKey: "tooling"}
+	policy := admission.GatePolicy{
+		HistoryFile: admission.PrebuiltHistoryFile,
+		Thresholds:  admission.PrebuiltThresholds(),
+		Snapshot: func(ctx context.Context) admission.PressureSnapshot {
+			return admission.SnapshotPrebuilt(ctx, monitor)
+		},
+		Evaluate: admission.EvaluatePrebuiltPressure,
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, admission.PrebuiltSafetyWindow+sampleInterval)
+	defer cancel()
+	var lastErr error
+	for {
+		release, err := a.acquirePolicy(waitCtx, opts, policy, monitor)
+		if err == nil {
+			return release, nil
+		}
+		lastErr = err
+		var deferred *DeferredError
+		if !errors.As(err, &deferred) || (!strings.Contains(deferred.Reason, "prebuilt safety window") && !strings.Contains(deferred.Reason, "swap activity; restarting")) {
+			return nil, err
+		}
+		select {
+		case <-waitCtx.Done():
+			return nil, fmt.Errorf("%w (sample window wait ended: %v)", lastErr, waitCtx.Err())
+		case <-time.After(sampleInterval):
+		}
+	}
+}
+
 // WaitAcquire retries deferrals with bounded, cancellable waits.
 func WaitAcquire(ctx context.Context, opts Options, maxWait time.Duration) (func(), error) {
 	return native().waitAcquire(ctx, opts, maxWait)
@@ -94,6 +129,10 @@ func (a *adapter) waitAcquire(ctx context.Context, opts Options, maxWait time.Du
 }
 
 func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
+	return a.acquirePolicy(ctx, opts, admission.GatePolicy{}, nil)
+}
+
+func (a *adapter) acquirePolicy(ctx context.Context, opts Options, policy admission.GatePolicy, selectedMonitor *admission.Monitor) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -122,7 +161,7 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 		return nil, fmt.Errorf("unknown shared resource scope %q", opts.ScopeKey)
 	}
 	// A child of a job that already holds this slot runs inside it.
-	if admission.NestedScope(os.Getenv(admission.NestedEnv), scope, class) {
+	if policy.HistoryFile == "" && admission.NestedScope(os.Getenv(admission.NestedEnv), scope, class) {
 		return func() {}, nil
 	}
 	root, err := a.root()
@@ -130,9 +169,18 @@ func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
 		return nil, err
 	}
 	store := admission.NewStore(root, a.runner)
+	monitor := a.monitor()
+	if selectedMonitor != nil {
+		monitor = selectedMonitor
+	}
 	// The probes are bounded on their own; a caller canceling mid-probe must
 	// not record failed telemetry into the shared history.
-	d, err := store.Gate(context.WithoutCancel(ctx), a.monitor(), admission.DefaultThresholds())
+	var d admission.Decision
+	if policy.HistoryFile == "" {
+		d, err = store.Gate(context.WithoutCancel(ctx), monitor, admission.DefaultThresholds())
+	} else {
+		d, err = store.GateWithPolicy(context.WithoutCancel(ctx), monitor, policy)
+	}
 	if err != nil {
 		return nil, err
 	}

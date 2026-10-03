@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -30,15 +29,18 @@ func newUpgradeCmd(currentVersion string) *cobra.Command {
 		Short:   "Update dot binary to latest version",
 		Long: `Download and install the latest dot release from GitHub.
 
-A Homebrew install is upgraded through the brew that owns it instead: dot runs
-brew update when the tap lags the release, then brew upgrade, checks the new
-version and reloads the dot LaunchAgents that run it. A pinned formula is left
-alone. --check only reports the latest version.`,
+A Homebrew install is upgraded through the brew that owns it instead: when the
+installed tap recipe matches the verified native release, dot uses its bounded
+prebuilt update policy. Stale or changed tap metadata uses the full maintenance
+gate before brew update. A pinned formula is left alone. Use --homebrew to
+target an existing Homebrew install from a standalone dot binary. --check only
+reports the latest version.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runUpgrade(cmd, currentVersion)
 		},
 	}
 	cmd.Flags().Bool("check", false, "Only check for updates without installing")
+	cmd.Flags().Bool("homebrew", false, "Target the installed Homebrew dot formula")
 	return cmd
 }
 
@@ -50,6 +52,8 @@ type githubRelease struct {
 func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	ctx := cmd.Context()
 	checkOnly, _ := cmd.Flags().GetBool("check")
+	homebrewTarget, _ := cmd.Flags().GetBool("homebrew")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	p := printerFrom(cmd)
 
 	p.Line("Current version: %s", currentVersion)
@@ -57,7 +61,15 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	var execPath string
 	var brew homebrewDot
 	var viaBrew bool
-	if !checkOnly {
+	if homebrewTarget {
+		var err error
+		brew, currentVersion, err = discoverHomebrewDot(ctx)
+		if err != nil {
+			return err
+		}
+		viaBrew = true
+		p.Line("Homebrew target version: %s", currentVersion)
+	} else if !checkOnly {
 		// Resolve the install target before downloading anything: a binary inside
 		// a package manager's tree is not dot's to replace. On a Homebrew install
 		// EvalSymlinks resolves ~/.local/bin/dot → /opt/homebrew/bin/dot →
@@ -102,22 +114,52 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 
 	if checkOnly {
 		p.Line("\nUpdate available: %s → %s", currentClean, latestVersion)
-		p.Line("Run 'dot update' to install.")
+		if homebrewTarget {
+			p.Line("Run 'dot update --homebrew' to install.")
+		} else {
+			p.Line("Run 'dot update' to install.")
+		}
 		return nil
 	}
 
-	if viaBrew {
-		dryRun, _ := cmd.Flags().GetBool("dry-run")
-		return upgradeHomebrew(ctx, p, brew, currentClean, latestVersion, dryRun)
+	if dryRun {
+		if viaBrew {
+			return upgradeHomebrew(ctx, p, brew, currentClean, latestVersion, true)
+		}
+		p.Line("[dry-run] would download and verify dot %s, then replace %s under verified-prebuilt admission", latestVersion, execPath)
+		return nil
 	}
 
-	osName := runtime.GOOS
-	archName := runtime.GOARCH
-	assetName := fmt.Sprintf("dot_%s_%s_%s.tar.gz", latestVersion, osName, archName)
-	downloadURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest.TagName, assetName)
-	checksumsURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/checksums.txt", githubRepo, latest.TagName)
-
-	p.Line("\nDownloading %s...", assetName)
+	fullHomebrewFallback := func(reason string) error {
+		p.Line("Verified-prebuilt Homebrew update unavailable (%s); using the full maintenance gate.", reason)
+		return upgradeHomebrew(ctx, p, brew, currentClean, latestVersion, false)
+	}
+	osName, archName, err := supportedNativeReleaseTarget()
+	if err != nil {
+		if viaBrew {
+			return fullHomebrewFallback("cannot use the verified-prebuilt policy")
+		}
+		return err
+	}
+	plan, err := planVerifiedPrebuilt(latest.TagName, osName, archName)
+	if err != nil {
+		if viaBrew {
+			return fullHomebrewFallback("cannot use the verified-prebuilt policy")
+		}
+		return err
+	}
+	var checksums []byte
+	if viaBrew {
+		checksums, err = fetchPrebuiltChecksums(ctx, plan.ChecksumsURL)
+		if err != nil {
+			return fullHomebrewFallback("cannot validate the release checksum list")
+		}
+		info, infoErr := brewFormulaInfoNoAutoUpdate(ctx, brew)
+		if infoErr != nil || !prebuiltFormulaInfoEligible(info, currentClean, latestVersion, checksums) || !prebuiltFormulaSourceEligible(ctx, brew, info.FullName, latestVersion, checksums) {
+			return fullHomebrewFallback("is not eligible for the verified-prebuilt policy")
+		}
+	}
+	p.Line("\nDownloading %s...", plan.AssetName)
 
 	tmpDir, err := os.MkdirTemp("", "dot-upgrade-*")
 	if err != nil {
@@ -125,64 +167,27 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	runner := exec.NewRunner(false, logger)
 	p.Line("Verifying checksum...")
-	if err := downloadVerifiedArchive(ctx, runner, downloadURL, checksumsURL, assetName, tmpDir); err != nil {
+	var newBinary string
+	if viaBrew {
+		newBinary, checksums, err = downloadVerifiedPrebuiltWithChecksums(ctx, plan, tmpDir, checksums)
+	} else {
+		newBinary, checksums, err = downloadVerifiedPrebuilt(ctx, plan, tmpDir)
+	}
+	if err != nil {
 		return err
 	}
-
-	newBinary := filepath.Join(tmpDir, "dot")
-	if _, err := os.Stat(newBinary); err != nil {
-		return fmt.Errorf("downloaded binary not found: %w", err)
+	if err := verifyExactPrebuiltBinary(ctx, newBinary, latestVersion); err != nil {
+		return fmt.Errorf("downloaded binary failed exact version validation: %w", err)
 	}
-
-	// Sanity-check the downloaded binary before replacing the current one.
-	// Runs '<new_binary> --version' with a 5s timeout and verifies it produces
-	// some output starting with "dot ". Catches wrong-arch/corrupted downloads.
-	if err := verifyBinary(ctx, newBinary); err != nil {
-		return fmt.Errorf("downloaded binary failed sanity check: %w", err)
+	if viaBrew {
+		err := upgradeHomebrewPrebuilt(ctx, p, brew, currentClean, latestVersion, checksums, false)
+		if !errors.Is(err, errHomebrewNeedsFullGate) {
+			return err
+		}
+		return fullHomebrewFallback("changed while the update was being prepared")
 	}
-
-	// Atomic replace: write a sibling of execPath, then rename over it.
-	// A direct write(2) to the running binary fails with ETXTBSY on Linux;
-	// rename(2) only swaps the directory entry, leaving the running process
-	// mapped to the old inode so it can finish cleanly.
-	data, err := os.ReadFile(newBinary)
-	if err != nil {
-		return fmt.Errorf("reading new binary: %w", err)
-	}
-
-	dir := filepath.Dir(execPath)
-	tmp, err := os.CreateTemp(dir, ".dot.*.new")
-	if err != nil {
-		return fmt.Errorf("creating staging file in %s: %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpPath) }
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("writing staging file: %w", err)
-	}
-	if err := tmp.Chmod(0755); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return fmt.Errorf("chmod staging file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return fmt.Errorf("closing staging file: %w", err)
-	}
-	if err := os.Rename(tmpPath, execPath); err != nil {
-		cleanup()
-		return fmt.Errorf("replacing binary %s: %w", execPath, err)
-	}
-
-	p.Line("Upgraded: %s → %s", currentClean, latestVersion)
-	p.Line("Binary: %s", execPath)
-	return nil
+	return installStandalonePrebuilt(ctx, p, newBinary, execPath, latestVersion)
 }
 
 // downloadVerifiedArchive downloads the release archive and the release's

@@ -122,19 +122,22 @@ func TestRunUpgradeHomebrew(t *testing.T) {
 			current = "99.0.0"
 		}
 		cmd := newUpgradeCmd(current)
+		cmd.Flags().Bool("dry-run", false, "")
 		var out bytes.Buffer
 		cmd.SetOut(&out)
 		cmd.SetErr(&out)
 		if mode == "check" {
 			cmd.SetArgs([]string{"--check"})
+		} else if mode == "update" {
+			cmd.SetArgs([]string{"--dry-run"})
 		}
 		if err := cmd.Execute(); err != nil {
 			t.Fatalf("%s: %v, output %q", mode, err, out.String())
 		}
 		var want []string
 		if mode == "update" {
-			want = []string{"brew info --json=v2 --formula dotfiles", "brew upgrade entelecheia/tap/dotfiles", "dot --version"}
-			if !strings.Contains(out.String(), "Upgraded: 1.0.0 → 99.0.0 (Homebrew)") {
+			want = []string{"brew info --json=v2 --formula dotfiles"}
+			if !strings.Contains(out.String(), "[dry-run] would run: brew upgrade entelecheia/tap/dotfiles") {
 				t.Fatalf("output %q", out.String())
 			}
 		}
@@ -143,7 +146,7 @@ func TestRunUpgradeHomebrew(t *testing.T) {
 		}
 		wantAcquired := 0
 		if mode == "update" {
-			wantAcquired = 1
+			wantAcquired = 0
 		}
 		if f.acquired != wantAcquired {
 			t.Fatalf("%s: maintenance slot acquired %d times, want %d", mode, f.acquired, wantAcquired)

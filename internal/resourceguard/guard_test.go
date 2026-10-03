@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,32 @@ func TestAdapterNestedMarker(t *testing.T) {
 	release()
 	if got := os.Getenv(admission.NestedEnv); got != "" {
 		t.Fatalf("nested marker not restored: %q", got)
+	}
+}
+
+func TestVerifiedPrebuiltPolicyDoesNotTrustNestedMarker(t *testing.T) {
+	snap, none := healthySnapshot(), []string(nil)
+	snap.VMActivityAvailable = true
+	snap.SwapInAvailable = true
+	snap.SwapOutAvailable = true
+	snap.SwapInBytes = 4096
+	snap.SwapOutBytes = 8192
+	a, store := testAdapter(t, &snap, &none)
+	t.Setenv(admission.NestedEnv, admission.NestedEnvValue(admission.MaintenanceScope, admission.ClassMaintenance))
+	policy := admission.GatePolicy{
+		HistoryFile: admission.PrebuiltHistoryFile,
+		Thresholds:  admission.PrebuiltThresholds(),
+		Evaluate:    admission.EvaluatePrebuiltPressure,
+	}
+	_, err := a.acquirePolicy(context.Background(), Options{Purpose: "verified prebuilt dot update", ScopeKey: "tooling"}, policy, nil)
+	if !deferred(err) || !strings.Contains(err.Error(), "prebuilt safety window") {
+		t.Fatalf("nested marker bypassed the verified prebuilt gate: %v", err)
+	}
+	if _, err := os.Stat(store.HistoryPath()); !os.IsNotExist(err) {
+		t.Fatalf("prebuilt gate changed heavy history: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root, admission.PrebuiltHistoryFile)); err != nil {
+		t.Fatalf("prebuilt gate did not persist separate history: %v", err)
 	}
 }
 
