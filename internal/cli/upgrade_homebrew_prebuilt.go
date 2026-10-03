@@ -276,18 +276,34 @@ func managedHomebrewOptBinary(h homebrewDot) (string, string, error) {
 		return "", "", err
 	}
 	managed, ok := homebrewDotFor(resolved)
-	if !ok || managed.formula != h.formula || filepath.Clean(managed.prefix) != filepath.Clean(h.prefix) {
+	if !ok || managed.formula != h.formula || !sameCanonicalHomebrewPath(managed.prefix, h.prefix) {
 		return "", "", fmt.Errorf("homebrew opt binary does not resolve into the managed %s formula", h.formula)
 	}
-	rel, err := filepath.Rel(filepath.Join(h.prefix, "Cellar", h.formula), resolved)
+	cellarRoot, err := filepath.EvalSymlinks(filepath.Join(h.prefix, "Cellar", h.formula))
+	if err != nil {
+		return "", "", err
+	}
+	rel, err := filepath.Rel(cellarRoot, resolved)
 	if err != nil {
 		return "", "", err
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) != 3 || parts[1] != "bin" || parts[2] != "dot" {
+	if len(parts) != 3 || parts[0] == ".." || filepath.IsAbs(rel) || parts[1] != "bin" || parts[2] != "dot" {
 		return "", "", fmt.Errorf("unexpected Homebrew opt binary path %s", resolved)
 	}
 	return resolved, parts[0], nil
+}
+
+func sameCanonicalHomebrewPath(left, right string) bool {
+	leftResolved, err := filepath.EvalSymlinks(left)
+	if err != nil {
+		return false
+	}
+	rightResolved, err := filepath.EvalSymlinks(right)
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(leftResolved) == filepath.Clean(rightResolved)
 }
 
 func canonicalGoReleaserFormula(version string, checksums []byte) (string, error) {
@@ -398,7 +414,7 @@ func discoverHomebrewDot(ctx context.Context) (homebrewDot, string, error) {
 		return homebrewDot{}, "", fmt.Errorf("resolving installed Homebrew dotfiles binary: %w", err)
 	}
 	managed, ok := homebrewDotFor(dot)
-	if !ok || managed.formula != h.formula || filepath.Clean(managed.prefix) != filepath.Clean(h.prefix) {
+	if !ok || managed.formula != h.formula || !sameCanonicalHomebrewPath(managed.prefix, h.prefix) {
 		return homebrewDot{}, "", fmt.Errorf("homebrew opt link does not resolve into the expected dotfiles formula")
 	}
 	version, err := readManagedHomebrewVersion(ctx, h)

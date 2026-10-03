@@ -60,6 +60,18 @@ func TestNativeTargetUsesHostCapabilityAndBinaryBuildInfo(t *testing.T) {
 	}
 }
 
+func TestSameCanonicalHomebrewPathFollowsPrefixAliases(t *testing.T) {
+	realPrefix := t.TempDir()
+	aliasRoot := t.TempDir()
+	alias := filepath.Join(aliasRoot, "prefix-alias")
+	if err := os.Symlink(realPrefix, alias); err != nil {
+		t.Fatal(err)
+	}
+	if !sameCanonicalHomebrewPath(alias, realPrefix) {
+		t.Fatalf("failed to match Homebrew prefix alias %s to %s", alias, realPrefix)
+	}
+}
+
 func TestParseUniqueChecksumRejectsAmbiguousOrMalformedEntries(t *testing.T) {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	if got, err := parseUniqueChecksum([]byte(sum+"  dot.tar.gz\n"), "dot.tar.gz"); err != nil || got != sum {
