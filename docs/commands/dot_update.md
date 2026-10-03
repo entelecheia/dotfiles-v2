@@ -6,10 +6,12 @@ Update dot binary to latest version
 
 Download and install the latest dot release from GitHub.
 
-A Homebrew install is upgraded through the brew that owns it instead: dot runs
-brew update when the tap lags the release, then brew upgrade, checks the new
-version and reloads the dot LaunchAgents that run it. A pinned formula is left
-alone. --check only reports the latest version.
+A Homebrew install is upgraded through the brew that owns it instead: when the
+installed tap recipe matches the verified native release, dot uses its bounded
+prebuilt update policy. Stale or changed tap metadata uses the full maintenance
+gate before brew update. A pinned formula is left alone. Use --homebrew to
+target an existing Homebrew install from a standalone dot binary. --check only
+reports the latest version.
 
 ```
 dot update [flags]
@@ -18,8 +20,9 @@ dot update [flags]
 ### Options
 
 ```
-      --check   Only check for updates without installing
-  -h, --help    help for update
+      --check      Only check for updates without installing
+  -h, --help       help for update
+      --homebrew   Target the installed Homebrew dot formula
 ```
 
 ### Options inherited from parent commands

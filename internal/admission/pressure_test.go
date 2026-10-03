@@ -229,6 +229,7 @@ func TestEvaluateLoadSustain(t *testing.T) {
 	if d.Next.OverSince.IsZero() {
 		t.Error("excursion start not recorded")
 	}
+	d = EvaluatePressure(snap, th, d.Next, evalT0.Add(30*time.Second))
 	// Sustained past DeferSustain: deferred.
 	d = EvaluatePressure(snap, th, d.Next, evalT0.Add(th.DeferSustain+time.Second))
 	if d.Admit || !strings.Contains(evalDeferReasons(d), "sustained") {
@@ -249,6 +250,7 @@ func TestEvaluateIdleSustain(t *testing.T) {
 	if !d.Admit {
 		t.Errorf("first low-idle sample deferred: %s", evalDeferReasons(d))
 	}
+	d = EvaluatePressure(snap, th, d.Next, evalT0.Add(30*time.Second))
 	d = EvaluatePressure(snap, th, d.Next, evalT0.Add(61*time.Second))
 	if d.Admit || !strings.Contains(evalDeferReasons(d), "cpu idle") {
 		t.Errorf("sustained low idle = %+v, want defer", d)
@@ -263,8 +265,8 @@ func TestEvaluateWindowServerGrace(t *testing.T) {
 	if d.Admit || !strings.Contains(evalDeferReasons(d), "WindowServer") {
 		t.Errorf("recent WindowServer event = %+v, want defer", d)
 	}
-	if d.RetryAfter != 20*time.Minute {
-		t.Errorf("retry after = %v, want 20m (grace remainder)", d.RetryAfter)
+	if d.RetryAfter != th.MaxSampleGap/2 {
+		t.Errorf("retry after = %v, want the sample-safe cadence %v", d.RetryAfter, th.MaxSampleGap/2)
 	}
 	// Outside the grace window: admitted.
 	snap.WSEvent = evalT0.Add(-time.Hour)
@@ -302,10 +304,16 @@ func TestEvaluateFullHysteresis(t *testing.T) {
 	if d.Next.RecoverSince.IsZero() {
 		t.Error("recovery streak start not recorded")
 	}
-	// Four minutes in: still recovering.
-	d = EvaluatePressure(normal, th, d.Next, evalT0.Add(4*time.Minute))
+	// Sample every 30 seconds through minute four so the recovery streak is
+	// supported by observations within the maximum sample gap.
+	for at := evalT0.Add(90 * time.Second); !at.After(evalT0.Add(4 * time.Minute)); at = at.Add(30 * time.Second) {
+		d = EvaluatePressure(normal, th, d.Next, at)
+	}
 	if d.Admit {
 		t.Error("admitted before the recovery window completed")
+	}
+	if !d.Next.RecoverSince.Equal(evalT0.Add(time.Minute)) {
+		t.Errorf("recovery start moved across fresh samples: got %v, want %v", d.Next.RecoverSince, evalT0.Add(time.Minute))
 	}
 	// A condition breaks at minute four: the window restarts.
 	blocked := healthyDarwin()
@@ -319,12 +327,102 @@ func TestEvaluateFullHysteresis(t *testing.T) {
 	}
 	// Five continuous minutes of normality after that: admitted, episode closed.
 	d = EvaluatePressure(normal, th, d.Next, evalT0.Add(5*time.Minute))
-	d = EvaluatePressure(normal, th, d.Next, evalT0.Add(10*time.Minute))
+	for at := evalT0.Add(5*time.Minute + 30*time.Second); !at.After(evalT0.Add(10 * time.Minute)); at = at.Add(30 * time.Second) {
+		d = EvaluatePressure(normal, th, d.Next, at)
+	}
 	if !d.Admit {
 		t.Errorf("completed recovery still deferred: %s", evalDeferReasons(d))
 	}
 	if d.Next.DeferActive {
 		t.Error("episode did not close on recovery")
+	}
+}
+
+func TestRecoveryRetryCadencePreservesContinuity(t *testing.T) {
+	th := DefaultThresholds()
+	deferred := History{DeferActive: true, DeferSince: evalT0}
+	blocked := healthyDarwin()
+	blocked.IdlePct = 20
+	d := EvaluatePressure(blocked, th, deferred, evalT0)
+	if d.RetryAfter <= 0 || d.RetryAfter > th.MaxSampleGap {
+		t.Fatalf("blocked recovery retry after %v exceeds sample gap %v", d.RetryAfter, th.MaxSampleGap)
+	}
+	now := evalT0.Add(d.RetryAfter)
+	d = EvaluatePressure(healthyDarwin(), th, d.Next, now)
+	for attempts := 0; !d.Admit && attempts < 32; attempts++ {
+		if d.RetryAfter <= 0 || d.RetryAfter > th.MaxSampleGap {
+			t.Fatalf("retry after %v exceeds sample gap %v", d.RetryAfter, th.MaxSampleGap)
+		}
+		now = now.Add(d.RetryAfter)
+		d = EvaluatePressure(healthyDarwin(), th, d.Next, now)
+	}
+	if !d.Admit {
+		t.Fatalf("recovery did not complete after retry-driven samples; last=%+v", d)
+	}
+	if now.Sub(evalT0) < th.RecoverSustain {
+		t.Fatalf("recovered after %v, before required %v", now.Sub(evalT0), th.RecoverSustain)
+	}
+}
+
+func TestEvaluateSampleGapBoundary(t *testing.T) {
+	th := DefaultThresholds()
+	over := healthyDarwin()
+	over.Load1 = 12
+	first := EvaluatePressure(over, th, History{}, evalT0)
+	atBoundary := EvaluatePressure(over, th, first.Next, evalT0.Add(th.MaxSampleGap))
+	if !atBoundary.Next.OverSince.Equal(evalT0) {
+		t.Fatalf("sample at gap boundary restarted CPU streak: %+v", atBoundary.Next)
+	}
+	afterBoundaryAt := evalT0.Add(th.MaxSampleGap + time.Nanosecond)
+	afterBoundary := EvaluatePressure(over, th, first.Next, afterBoundaryAt)
+	if !afterBoundary.Next.OverSince.Equal(afterBoundaryAt) {
+		t.Fatalf("sample after gap boundary retained CPU streak: %+v", afterBoundary.Next)
+	}
+}
+
+func TestEvaluateSampleContinuity(t *testing.T) {
+	th := DefaultThresholds()
+	over := healthyDarwin()
+	over.Load1 = 12
+	first := EvaluatePressure(over, th, History{}, evalT0)
+	far := EvaluatePressure(over, th, first.Next, evalT0.Add(2*time.Minute))
+	if !far.Admit || far.Next.OverSince.Equal(first.Next.OverSince) {
+		t.Fatalf("separated CPU samples claimed continuity: %+v", far)
+	}
+	if far.Next.DeferActive {
+		t.Fatal("separated CPU samples opened a defer episode")
+	}
+
+	active := History{DeferActive: true, DeferSince: evalT0, RecoverSince: evalT0, LastSampleAt: evalT0}
+	staleRecovery := EvaluatePressure(healthyDarwin(), th, active, evalT0.Add(2*time.Minute))
+	if staleRecovery.Admit || !staleRecovery.Next.RecoverSince.Equal(evalT0.Add(2*time.Minute)) {
+		t.Fatalf("stale recovery sample did not restart its window: %+v", staleRecovery)
+	}
+	if !staleRecovery.Next.DeferActive {
+		t.Fatal("sample gap cleared the active defer episode")
+	}
+	for at := evalT0.Add(2*time.Minute + 30*time.Second); !at.After(evalT0.Add(7 * time.Minute)); at = at.Add(30 * time.Second) {
+		staleRecovery = EvaluatePressure(healthyDarwin(), th, staleRecovery.Next, at)
+	}
+	if !staleRecovery.Admit || staleRecovery.Next.DeferActive {
+		t.Fatalf("fresh regular samples did not complete recovery: %+v", staleRecovery)
+	}
+}
+
+func TestEvaluateContinuityRollbackAndUnavailable(t *testing.T) {
+	th := DefaultThresholds()
+	over := healthyDarwin()
+	over.Load1 = 12
+	hist := History{OverSince: evalT0.Add(-time.Minute), LastSampleAt: evalT0}
+	rollback := EvaluatePressure(over, th, hist, evalT0.Add(-time.Second))
+	if !rollback.Admit || !rollback.Next.OverSince.Equal(evalT0.Add(-time.Second)) {
+		t.Fatalf("clock rollback retained old CPU streak: %+v", rollback)
+	}
+	unavailable := over
+	unavailable.IdleAvailable = false
+	gap := EvaluatePressure(unavailable, th, History{OverSince: evalT0.Add(-time.Minute), RecoverSince: evalT0.Add(-time.Minute), LastSampleAt: evalT0}, evalT0.Add(10*time.Second))
+	if !gap.Next.OverSince.IsZero() || !gap.Next.RecoverSince.IsZero() {
+		t.Fatalf("unavailable probe retained a streak: %+v", gap.Next)
 	}
 }
 
@@ -355,8 +453,12 @@ func TestEvaluateLinuxApplicability(t *testing.T) {
 		t.Errorf("linux snapshot deferred on macOS-only probes: %s", evalDeferReasons(d))
 	}
 	snap.Load1 = 9
-	hist := History{OverSince: evalT0.Add(-2 * time.Minute)}
-	d = EvaluatePressure(snap, DefaultThresholds(), hist, evalT0)
+	th := DefaultThresholds()
+	hist := History{}
+	for at := evalT0.Add(-90 * time.Second); !at.After(evalT0); at = at.Add(30 * time.Second) {
+		d = EvaluatePressure(snap, th, hist, at)
+		hist = d.Next
+	}
 	if d.Admit {
 		t.Error("sustained linux load admitted")
 	}

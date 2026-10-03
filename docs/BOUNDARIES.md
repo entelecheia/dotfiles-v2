@@ -242,14 +242,21 @@ tool):
 - `~/.local/state/dot/admission/` — the resource-admission controller state:
   the slot directories (`slots/`, one per repo plus the shared maintenance
   slot, each holding a `lease.json` with the owner pid/start, heartbeat and
-  deadline), the cross-invocation pressure history (`history.json`), and the
-  per-scope notify dedup marks (`notify/`); written by every `dot admit`
-  gate evaluation, slot acquire/heartbeat/release, and defer notification,
-  and by `dot ai run` and the tooling updates through the same controller.
+  deadline), the heavy-work pressure history (`history.json`), the verified
+  native dot-update pressure and quiet-swap history (`history-prebuilt.json`),
+  and the per-scope notify dedup marks (`notify/`). `history.json` is written
+  by `dot admit` gate evaluations and by `dot ai run` and tooling updates
+  through the same controller; slot acquire/heartbeat/release and defer
+  notification also update this state. A completed `dot update` prebuilt-gate
+  evaluation writes `history-prebuilt.json` atomically whether it admits or
+  defers. This file is separate from `history.json`; prebuilt evaluations use
+  the same host history lock, and admitted updates use the shared maintenance
+  slot, without overwriting heavy history. `dot admit status` reads pressure
+  history without changing it.
   The root is the real user's (`$HOME`), never a `--home` or CODEX_HOME
   override, so one repository has one slot per user. Slots are removed by
-  their owner's release or by stale-owner recovery; the history and notify
-  marks are small JSON files with no scheduled cleanup
+  their owner's release or by stale-owner recovery; both pressure-history
+  files and notify marks are small JSON files with no scheduled cleanup
 - `~/Library/Logs/dot/watchdog.log` — the watchdog JSON-lines event log
   (`dot watchdog log` tails it), plus the reaper unit's launchd
   stdout/stderr logs beside it

@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -27,6 +28,7 @@ const (
 	DefaultLoadRecoverFrac = 0.7  // load1 < this * ncpu recovers
 	DefaultDeferSustain    = time.Minute
 	DefaultRecoverSustain  = 5 * time.Minute
+	DefaultMaxSampleGap    = 45 * time.Second
 
 	// Linux memory levels derive from MemAvailable percent; the workspace
 	// policy is written against macOS pressure levels, so these two cutoffs
@@ -51,6 +53,7 @@ type Thresholds struct {
 	LoadRecoverFrac     float64
 	DeferSustain        time.Duration
 	RecoverSustain      time.Duration
+	MaxSampleGap        time.Duration // largest supported interval between completed samples; <= 0 uses the default
 	WSGrace             time.Duration
 	MemAvailWarnPct     float64
 	MemAvailCriticalPct float64
@@ -65,6 +68,7 @@ func DefaultThresholds() Thresholds {
 		LoadRecoverFrac:     DefaultLoadRecoverFrac,
 		DeferSustain:        DefaultDeferSustain,
 		RecoverSustain:      DefaultRecoverSustain,
+		MaxSampleGap:        DefaultMaxSampleGap,
 		WSGrace:             DefaultWSGrace,
 		MemAvailWarnPct:     DefaultMemAvailWarnPct,
 		MemAvailCriticalPct: DefaultMemAvailCriticalPct,
@@ -98,6 +102,12 @@ type PressureSnapshot struct {
 
 	BootTime      time.Time `json:"boot_time"`
 	BootAvailable bool      `json:"boot_available"` // boot time known; only suppresses pre-boot evidence
+
+	VMActivityAvailable bool   `json:"vm_activity_available,omitempty"`
+	SwapInBytes         uint64 `json:"swap_in_bytes,omitempty"`
+	SwapInAvailable     bool   `json:"swap_in_available,omitempty"`
+	SwapOutBytes        uint64 `json:"swap_out_bytes,omitempty"`
+	SwapOutAvailable    bool   `json:"swap_out_available,omitempty"`
 }
 
 // History is the cross-invocation pressure state persisted between gate
@@ -105,10 +115,33 @@ type PressureSnapshot struct {
 // excursion began (the 60-second sustain), and when the current all-normal
 // streak began (the 5-minute recovery window).
 type History struct {
-	DeferActive  bool      `json:"defer_active,omitempty"`
-	DeferSince   time.Time `json:"defer_since,omitempty"`
-	OverSince    time.Time `json:"over_since,omitempty"`
-	RecoverSince time.Time `json:"recover_since,omitempty"`
+	DeferActive          bool      `json:"defer_active,omitempty"`
+	DeferSince           time.Time `json:"defer_since,omitempty"`
+	OverSince            time.Time `json:"over_since,omitempty"`
+	RecoverSince         time.Time `json:"recover_since,omitempty"`
+	LastSampleAt         time.Time `json:"last_sample_at,omitempty"`
+	PrebuiltSwapOutBytes uint64    `json:"prebuilt_swap_out_bytes,omitempty"`
+	PrebuiltSwapInBytes  uint64    `json:"prebuilt_swap_in_bytes,omitempty"`
+	PrebuiltSwapAt       time.Time `json:"prebuilt_swap_at,omitempty"`
+}
+
+// MarshalJSON omits newly-added sample metadata when it has not been set,
+// while preserving the legacy zero-time fields in the existing history
+// shape. This keeps empty-history diagnostic goldens stable.
+func (h History) MarshalJSON() ([]byte, error) {
+	type historyAlias History
+	var lastSampleAt, prebuiltSwapAt *time.Time
+	if !h.LastSampleAt.IsZero() {
+		lastSampleAt = &h.LastSampleAt
+	}
+	if !h.PrebuiltSwapAt.IsZero() {
+		prebuiltSwapAt = &h.PrebuiltSwapAt
+	}
+	return json.Marshal(struct {
+		historyAlias
+		LastSampleAt   *time.Time `json:"last_sample_at,omitempty"`
+		PrebuiltSwapAt *time.Time `json:"prebuilt_swap_at,omitempty"`
+	}{historyAlias: historyAlias(h), LastSampleAt: lastSampleAt, PrebuiltSwapAt: prebuiltSwapAt})
 }
 
 // Decision is the gate verdict plus the history the caller must persist.
@@ -117,7 +150,10 @@ type Decision struct {
 	Admit      bool
 	Reasons    []string
 	RetryAfter time.Duration
-	Next       History
+	// ProfileRetry marks a warning-tolerant profile window defer that is safe
+	// to resample. Hard pressure and telemetry blockers never set it.
+	ProfileRetry bool
+	Next         History
 }
 
 // EvaluatePressure decides admission from one snapshot. Pure: same inputs,
@@ -127,7 +163,8 @@ type Decision struct {
 // true again, and a telemetry gap blocks recovery the same way it blocks
 // admission.
 func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now time.Time) Decision {
-	next := hist
+	next := PrepareHistorySample(hist, th, snap, now)
+	next.LastSampleAt = now
 	var reasons []string
 	retry := 30 * time.Second
 	bump := func(d time.Duration) {
@@ -138,8 +175,11 @@ func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now ti
 
 	// Required telemetry first: a failed probe is a defer reason of its own,
 	// never an implicit pass.
-	for _, p := range requiredProbes(snap) {
+	probes := requiredProbes(snap)
+	telemetryUnavailable := false
+	for _, p := range probes {
 		if !p.ok {
+			telemetryUnavailable = true
 			reasons = append(reasons, "telemetry unavailable: "+p.name)
 		}
 	}
@@ -169,13 +209,15 @@ func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now ti
 	// CPU/load defers only after the excursion sustains for DeferSustain;
 	// a brief spike is recorded but admitted.
 	cpuOver, cpuDetail := cpuExcursion(snap, th)
+	if telemetryUnavailable {
+		cpuOver = false
+	}
 	if cpuOver {
 		if next.OverSince.IsZero() {
 			next.OverSince = now
 		}
 		if now.Sub(next.OverSince) >= th.DeferSustain {
 			reasons = append(reasons, "cpu saturation sustained "+th.DeferSustain.String()+": "+cpuDetail)
-			bump(th.DeferSustain)
 		}
 	} else {
 		next.OverSince = time.Time{}
@@ -187,7 +229,7 @@ func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now ti
 		}
 		next.DeferActive = true
 		next.RecoverSince = time.Time{}
-		return Decision{Admit: false, Reasons: reasons, RetryAfter: retry, Next: next}
+		return Decision{Admit: false, Reasons: reasons, RetryAfter: boundedRetryAfter(th, retry), Next: next}
 	}
 	if !next.DeferActive {
 		return Decision{Admit: true, Next: next}
@@ -200,7 +242,7 @@ func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now ti
 		return Decision{
 			Admit:      false,
 			Reasons:    []string{"recovery conditions not met: " + strings.Join(blockers, "; ")},
-			RetryAfter: th.RecoverSustain,
+			RetryAfter: boundedRetryAfter(th, 0),
 			Next:       next,
 		}
 	}
@@ -217,9 +259,51 @@ func EvaluatePressure(snap PressureSnapshot, th Thresholds, hist History, now ti
 	return Decision{
 		Admit:      false,
 		Reasons:    []string{fmt.Sprintf("recovering from resource pressure (%s of normal telemetry still required)", remaining.Round(time.Second))},
-		RetryAfter: remaining,
+		RetryAfter: boundedRetryAfter(th, remaining),
 		Next:       next,
 	}
+}
+
+func boundedRetryAfter(th Thresholds, suggested time.Duration) time.Duration {
+	maxGap := th.MaxSampleGap
+	if maxGap <= 0 {
+		maxGap = DefaultMaxSampleGap
+	}
+	cadence := 30 * time.Second
+	if halfGap := maxGap / 2; halfGap < cadence {
+		cadence = halfGap
+	}
+	if cadence <= 0 {
+		cadence = maxGap
+	}
+	// A positive custom gap shorter than the snapshot's runtime may never
+	// support a continuous streak; in that case each completed probe safely
+	// starts a new streak instead of treating separated observations as proof.
+	if suggested > 0 && suggested < cadence {
+		return suggested
+	}
+	return cadence
+}
+
+// PrepareHistorySample drops time-based streaks that cannot be supported by
+// the previous sample. An active defer episode is deliberately preserved.
+func PrepareHistorySample(hist History, th Thresholds, snap PressureSnapshot, now time.Time) History {
+	maxGap := th.MaxSampleGap
+	if maxGap <= 0 {
+		maxGap = DefaultMaxSampleGap
+	}
+	if hist.LastSampleAt.IsZero() || now.Before(hist.LastSampleAt) || now.Sub(hist.LastSampleAt) > maxGap {
+		hist.OverSince = time.Time{}
+		hist.RecoverSince = time.Time{}
+	}
+	for _, p := range requiredProbes(snap) {
+		if !p.ok {
+			hist.OverSince = time.Time{}
+			hist.RecoverSince = time.Time{}
+			break
+		}
+	}
+	return hist
 }
 
 type probeCheck struct {

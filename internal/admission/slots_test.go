@@ -283,6 +283,63 @@ func TestHistoryRoundTripAndGate(t *testing.T) {
 	if !hist.DeferActive || !hist.DeferSince.Equal(fixed) {
 		t.Errorf("persisted history = %+v, want episode opened at %v", hist, fixed)
 	}
+	if !hist.LastSampleAt.Equal(fixed) {
+		t.Errorf("last sample = %v, want completed-snapshot time %v", hist.LastSampleAt, fixed)
+	}
+}
+
+func TestLoadLegacyHistoryWithoutSampleTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.json")
+	if err := os.WriteFile(path, []byte(`{"defer_active":true,"defer_since":"2026-09-27T12:00:00Z","recover_since":"2026-09-27T12:00:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hist, err := LoadHistory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hist.DeferActive || !hist.LastSampleAt.IsZero() || hist.RecoverSince.IsZero() {
+		t.Fatalf("legacy history decode = %+v; want existing fields and no sample timestamp", hist)
+	}
+	updated := EvaluatePressure(healthyDarwin(), DefaultThresholds(), hist, evalT0)
+	if updated.Admit || !updated.Next.DeferActive || !updated.Next.RecoverSince.Equal(evalT0) || !updated.Next.LastSampleAt.Equal(evalT0) {
+		t.Errorf("legacy history evaluation = %+v; want preserved defer with recovery restarted at this sample", updated)
+	}
+}
+
+func TestGateWithPolicyUsesCompletedSnapshotTimeAndOwnHistory(t *testing.T) {
+	store := testStore(t)
+	fixed := evalT0
+	snapshotComplete := false
+	monitor := &Monitor{Now: func() time.Time {
+		if snapshotComplete {
+			return fixed
+		}
+		return fixed.Add(-time.Minute)
+	}}
+	d, err := store.GateWithPolicy(context.Background(), monitor, GatePolicy{
+		HistoryFile: "history-prebuilt.json",
+		Thresholds:  DefaultThresholds(),
+		Snapshot: func(context.Context) PressureSnapshot {
+			snapshotComplete = true
+			return healthyDarwin()
+		},
+	})
+	if err != nil || !d.Admit {
+		t.Fatalf("GateWithPolicy = %+v, %v", d, err)
+	}
+	hist, err := LoadHistory(filepath.Join(store.Root, "history-prebuilt.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hist.LastSampleAt.Equal(fixed) {
+		t.Errorf("sample time = %v, want post-snapshot clock %v", hist.LastSampleAt, fixed)
+	}
+	if _, err := os.Stat(store.HistoryPath()); !os.IsNotExist(err) {
+		t.Errorf("policy wrote default history path: %v", err)
+	}
+	if _, err := store.GateWithPolicy(context.Background(), monitor, GatePolicy{HistoryFile: "../outside.json"}); err == nil {
+		t.Error("unsafe history path was accepted")
+	}
 }
 
 // TestClaimNotifyConcurrent pins the atomic claim: any number of
@@ -586,9 +643,15 @@ func TestGateHoldsLockDuringSnapshot(t *testing.T) {
 		done <- d
 	}()
 	<-inSnapshot
-	second, err := store.Gate(context.Background(), monitor, DefaultThresholds())
+	second, err := store.GateWithPolicy(context.Background(), monitor, GatePolicy{
+		HistoryFile: "history-prebuilt.json",
+		Thresholds:  DefaultThresholds(),
+	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !IsGateBusy(second) {
+		t.Errorf("custom policy did not share the root history lock: %+v", second)
 	}
 	close(unblock)
 	if second.Admit {

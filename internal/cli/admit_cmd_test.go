@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -366,6 +367,40 @@ func TestAdmitStatusThermalRow(t *testing.T) {
 	out, _, _ = runDotForTest("admit", "status")
 	if !regexp.MustCompile(`Thermal:\s+\(unavailable\)`).MatchString(out) || strings.Contains(out, "nominal") {
 		t.Errorf("unavailable thermal probe must print (unavailable):\n%s", out)
+	}
+}
+
+func TestAdmitStatusDoesNotShowStaleRecoveryCountdown(t *testing.T) {
+	home, _ := admitSandbox(t)
+	stubAdmitMonitorAt(t, healthyAdmitSnapshot(), admitTestClock)
+	store := admission.NewStore(admission.DefaultStateRoot(home), nil)
+	stale := admitTestClock.Add(-2 * time.Minute)
+	if err := admission.SaveHistory(store.HistoryPath(), admission.History{
+		DeferActive:  true,
+		DeferSince:   stale,
+		RecoverSince: stale,
+		LastSampleAt: stale,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runDotForTest("admit", "status")
+	if err != nil {
+		t.Fatalf("admit status: %v", err)
+	}
+	zeroCountdown := regexp.MustCompile(`(?m)^[ \t]*Recovery:[ \t]+0s of normal telemetry still required[ \t]*$`)
+	if !strings.Contains(out, "waiting for normal telemetry") || zeroCountdown.MatchString(out) {
+		t.Errorf("status showed a stale recovery countdown:\n%s", out)
+	}
+	after, err := os.ReadFile(store.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Errorf("status modified persisted admission history:\nbefore: %s\nafter:  %s", before, after)
 	}
 }
 

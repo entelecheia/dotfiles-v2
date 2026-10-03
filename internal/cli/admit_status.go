@@ -44,6 +44,8 @@ func runAdmitStatus(cmd *cobra.Command, _ []string) error {
 	store := admission.NewStore(root, runner)
 	monitor := admitNewMonitor(runner, home)
 	snap := monitor.SnapshotPressure(ctx)
+	// Status samples are read-only, but the timestamp is still taken after
+	// probing so slow probes cannot make a stale recovery countdown look fresh.
 	now := time.Now()
 	if monitor.Now != nil {
 		now = monitor.Now()
@@ -52,9 +54,11 @@ func runAdmitStatus(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	th := admission.DefaultThresholds()
+	hist = admission.PrepareHistorySample(hist, th, snap, now)
 	// Read-only evaluation: status shows the hysteresis countdown but never
 	// advances or resets it — only real gate runs move the streak.
-	d := admission.EvaluatePressure(snap, admission.DefaultThresholds(), hist, now)
+	d := admission.EvaluatePressure(snap, th, hist, now)
 	owners, err := store.ListLeases()
 	if err != nil {
 		return err

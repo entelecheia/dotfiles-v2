@@ -24,10 +24,13 @@ type upgradeReleaseTransport struct{ requests int }
 
 func (tr *upgradeReleaseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	tr.requests++
-	if req.URL.Host != "api.github.com" || !strings.HasSuffix(req.URL.Path, "/releases/latest") {
-		return nil, fmt.Errorf("unexpected download attempt: %s", req.URL.Path)
+	if req.URL.Host == "api.github.com" && strings.HasSuffix(req.URL.Path, "/releases/latest") {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tag_name":"v99.0.0"}`)), Request: req}, nil
 	}
-	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tag_name":"v99.0.0"}`)), Request: req}, nil
+	if req.URL.Host == "github.com" && strings.HasSuffix(req.URL.Path, "/checksums.txt") {
+		return &http.Response{StatusCode: http.StatusNotFound, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("not available in fallback fixture")), Request: req}, nil
+	}
+	return nil, fmt.Errorf("unexpected download attempt: %s", req.URL.Path)
 }
 
 func formulaJSON(stable string, pinned bool) string {
@@ -74,6 +77,10 @@ func (f *fakeUpgrade) install(t *testing.T) {
 				return "", errors.New("not loaded")
 			}
 			return f.launchd(args)
+		case filepath.Base(name) == "sysctl":
+			return "1\n", nil
+		case filepath.Base(name) == "uname":
+			return "x86_64\n", nil
 		case len(args) > 0 && args[0] == "info":
 			out := f.infos[0]
 			if len(f.infos) > 1 {
@@ -98,7 +105,7 @@ func (f *fakeUpgrade) install(t *testing.T) {
 func (f *fakeUpgrade) brewCalls() []string {
 	var out []string
 	for _, c := range f.calls {
-		if !strings.HasPrefix(c, "launchctl ") {
+		if strings.HasPrefix(c, "brew ") || strings.HasPrefix(c, "dot ") {
 			out = append(out, c)
 		}
 	}
@@ -122,6 +129,7 @@ func TestRunUpgradeHomebrew(t *testing.T) {
 			current = "99.0.0"
 		}
 		cmd := newUpgradeCmd(current)
+		cmd.Flags().Bool("dry-run", false, "")
 		var out bytes.Buffer
 		cmd.SetOut(&out)
 		cmd.SetErr(&out)
@@ -148,8 +156,12 @@ func TestRunUpgradeHomebrew(t *testing.T) {
 		if f.acquired != wantAcquired {
 			t.Fatalf("%s: maintenance slot acquired %d times, want %d", mode, f.acquired, wantAcquired)
 		}
-		if transport.requests != 1 {
-			t.Fatalf("made %d HTTP requests, want 1", transport.requests)
+		wantRequests := 1
+		if mode == "update" && runtime.GOOS == "darwin" || mode == "update" && runtime.GOOS == "linux" {
+			wantRequests = 2 // release metadata plus the intentionally missing checksum list
+		}
+		if transport.requests != wantRequests {
+			t.Fatalf("made %d HTTP requests, want %d", transport.requests, wantRequests)
 		}
 		return
 	}
@@ -171,6 +183,13 @@ func TestRunUpgradeHomebrew(t *testing.T) {
 	}
 	link := filepath.Join(root, "dot")
 	if err := os.Symlink(binary, link); err != nil {
+		t.Fatal(err)
+	}
+	optDir := filepath.Join(root, "opt", "dotfiles")
+	if err := os.MkdirAll(filepath.Dir(optDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "Cellar", "dotfiles", "1.0.0"), optDir); err != nil {
 		t.Fatal(err)
 	}
 	before := sha256.Sum256(data)
