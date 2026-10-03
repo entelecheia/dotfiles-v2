@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var errHomebrewNeedsFullGate = errors.New("Homebrew metadata or recipe needs a full maintenance gate")
+var errHomebrewNeedsFullGate = errors.New("homebrew metadata or recipe needs a full maintenance gate")
 
 var prebuiltHomebrewEnvironment = []string{
 	"HOMEBREW_NO_AUTO_UPDATE=1",
@@ -65,7 +65,7 @@ func upgradeHomebrewPrebuilt(ctx context.Context, p *Printer, h homebrewDot, cur
 			var installed string
 			installed, readbackErr = upgradedVersion(context.WithoutCancel(ctx), h, version)
 			if readbackErr == nil && installed != version {
-				readbackErr = fmt.Errorf("Homebrew installed %s, expected exact prebuilt version %s", installed, version)
+				readbackErr = fmt.Errorf("homebrew installed %s, expected exact prebuilt version %s", installed, version)
 			}
 		}
 		if readbackErr == nil {
@@ -248,14 +248,14 @@ func readManagedHomebrewVersion(ctx context.Context, h homebrewDot) (string, err
 	}
 	goos, goarch, err := binaryBuildTarget(optBinary)
 	if err != nil || goos != runtime.GOOS || (goarch != "amd64" && goarch != "arm64") {
-		return "", fmt.Errorf("Homebrew opt binary has unsupported target %s/%s", goos, goarch)
+		return "", fmt.Errorf("homebrew opt binary has unsupported target %s/%s", goos, goarch)
 	}
 	version, err := readDotBinaryVersion(ctx, optBinary)
 	if err != nil {
 		return "", err
 	}
 	if version != kegVersion {
-		return "", fmt.Errorf("Homebrew Cellar version %s does not match executable version %s", kegVersion, version)
+		return "", fmt.Errorf("homebrew Cellar version %s does not match executable version %s", kegVersion, version)
 	}
 	return version, nil
 }
@@ -267,7 +267,7 @@ func managedHomebrewOptBinary(h homebrewDot) (string, string, error) {
 	}
 	managed, ok := homebrewDotFor(resolved)
 	if !ok || managed.formula != h.formula || filepath.Clean(managed.prefix) != filepath.Clean(h.prefix) {
-		return "", "", fmt.Errorf("Homebrew opt binary does not resolve into the managed %s formula", h.formula)
+		return "", "", fmt.Errorf("homebrew opt binary does not resolve into the managed %s formula", h.formula)
 	}
 	rel, err := filepath.Rel(filepath.Join(h.prefix, "Cellar", h.formula), resolved)
 	if err != nil {
@@ -376,11 +376,11 @@ func discoverHomebrewDot(ctx context.Context) (homebrewDot, string, error) {
 	defer cancel()
 	prefixOut, err := upgradeRun(probeCtx, false, "/usr/bin/env", "HOMEBREW_NO_AUTO_UPDATE=1", brewPath, "--prefix")
 	if err != nil {
-		return homebrewDot{}, "", fmt.Errorf("reading Homebrew prefix: %w", err)
+		return homebrewDot{}, "", fmt.Errorf("reading homebrew prefix: %w", err)
 	}
 	prefix := strings.TrimSpace(prefixOut)
 	if !filepath.IsAbs(prefix) {
-		return homebrewDot{}, "", fmt.Errorf("Homebrew returned an invalid prefix %q", prefix)
+		return homebrewDot{}, "", fmt.Errorf("homebrew returned an invalid prefix %q", prefix)
 	}
 	h := homebrewDot{prefix: prefix, formula: "dotfiles"}
 	dot, err := filepath.EvalSymlinks(h.optDot())
@@ -389,7 +389,7 @@ func discoverHomebrewDot(ctx context.Context) (homebrewDot, string, error) {
 	}
 	managed, ok := homebrewDotFor(dot)
 	if !ok || managed.formula != h.formula || filepath.Clean(managed.prefix) != filepath.Clean(h.prefix) {
-		return homebrewDot{}, "", fmt.Errorf("Homebrew opt link does not resolve into the expected dotfiles formula")
+		return homebrewDot{}, "", fmt.Errorf("homebrew opt link does not resolve into the expected dotfiles formula")
 	}
 	version, err := readManagedHomebrewVersion(ctx, h)
 	if err != nil {

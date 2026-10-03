@@ -489,8 +489,10 @@ func parseTarOctal(field []byte) (int64, error) {
 	if text == "" {
 		return 0, nil
 	}
-	if strings.ContainsAny(text, "\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f") {
-		return 0, fmt.Errorf("release archive uses unsupported base-256 tar sizes")
+	for _, digit := range text {
+		if digit < '0' || digit > '7' {
+			return 0, fmt.Errorf("release archive has invalid octal tar size %q", text)
+		}
 	}
 	size, err := strconv.ParseInt(text, 8, 64)
 	if err != nil || size < 0 {
