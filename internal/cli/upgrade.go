@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -121,18 +120,21 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		}
 		return nil
 	}
+	return performVerifiedUpdate(ctx, p, execPath, brew, viaBrew, currentClean, latestVersion, latest.TagName, dryRun)
+}
 
+func performVerifiedUpdate(ctx context.Context, p *Printer, execPath string, brew homebrewDot, viaBrew bool, current, latest, tag string, dryRun bool) error {
 	if dryRun {
 		if viaBrew {
-			return upgradeHomebrew(ctx, p, brew, currentClean, latestVersion, true)
+			return upgradeHomebrew(ctx, p, brew, current, latest, true)
 		}
-		p.Line("[dry-run] would download and verify dot %s, then replace %s under verified-prebuilt admission", latestVersion, execPath)
+		p.Line("[dry-run] would download and verify dot %s, then replace %s under verified-prebuilt admission", latest, execPath)
 		return nil
 	}
 
 	fullHomebrewFallback := func(reason string) error {
 		p.Line("Verified-prebuilt Homebrew update unavailable (%s); using the full maintenance gate.", reason)
-		return upgradeHomebrew(ctx, p, brew, currentClean, latestVersion, false)
+		return upgradeHomebrew(ctx, p, brew, current, latest, false)
 	}
 	osName, archName, err := supportedNativeReleaseTarget()
 	if err != nil {
@@ -141,7 +143,7 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		}
 		return err
 	}
-	plan, err := planVerifiedPrebuilt(latest.TagName, osName, archName)
+	plan, err := planVerifiedPrebuilt(tag, osName, archName)
 	if err != nil {
 		if viaBrew {
 			return fullHomebrewFallback("cannot use the verified-prebuilt policy")
@@ -154,8 +156,7 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 		if err != nil {
 			return fullHomebrewFallback("cannot validate the release checksum list")
 		}
-		info, infoErr := brewFormulaInfoNoAutoUpdate(ctx, brew)
-		if infoErr != nil || !prebuiltFormulaInfoEligible(info, currentClean, latestVersion, checksums) || !prebuiltFormulaSourceEligible(ctx, brew, info.FullName, latestVersion, checksums) {
+		if !prebuiltFormulaEligible(ctx, brew, current, latest, checksums) {
 			return fullHomebrewFallback("is not eligible for the verified-prebuilt policy")
 		}
 	}
@@ -177,17 +178,17 @@ func runUpgrade(cmd *cobra.Command, currentVersion string) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyExactPrebuiltBinary(ctx, newBinary, latestVersion); err != nil {
+	if err := verifyExactPrebuiltBinary(ctx, newBinary, latest, osName, archName); err != nil {
 		return fmt.Errorf("downloaded binary failed exact version validation: %w", err)
 	}
 	if viaBrew {
-		err := upgradeHomebrewPrebuilt(ctx, p, brew, currentClean, latestVersion, checksums, false)
+		err := upgradeHomebrewPrebuilt(ctx, p, brew, current, latest, checksums, false)
 		if !errors.Is(err, errHomebrewNeedsFullGate) {
 			return err
 		}
 		return fullHomebrewFallback("changed while the update was being prepared")
 	}
-	return installStandalonePrebuilt(ctx, p, newBinary, execPath, latestVersion)
+	return installStandalonePrebuilt(ctx, p, newBinary, execPath, latest, osName, archName)
 }
 
 // downloadVerifiedArchive downloads the release archive and the release's
@@ -250,23 +251,6 @@ func parseChecksums(data []byte, assetName string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("asset %s not listed in checksums.txt", assetName)
-}
-
-// verifyBinary runs the binary with --version and checks for expected output.
-func verifyBinary(ctx context.Context, path string) error {
-	verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	runner := exec.NewRunner(false, slog.Default())
-	res, err := runner.RunQuery(verifyCtx, path, "--version")
-	if err != nil {
-		return fmt.Errorf("running %s --version: %w", path, err)
-	}
-	combined := res.Stdout + res.Stderr
-	if !strings.Contains(strings.ToLower(combined), "dot version") {
-		return fmt.Errorf("unexpected version output: %s", strings.TrimSpace(combined))
-	}
-	return nil
 }
 
 func fetchLatestRelease(ctx context.Context) (*githubRelease, error) {

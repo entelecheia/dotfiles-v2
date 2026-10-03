@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -382,12 +383,24 @@ func TestAdmitStatusDoesNotShowStaleRecoveryCountdown(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	before, err := os.ReadFile(store.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, _, err := runDotForTest("admit", "status")
 	if err != nil {
 		t.Fatalf("admit status: %v", err)
 	}
-	if !strings.Contains(out, "waiting for normal telemetry") || strings.Contains(out, "0s of normal telemetry still required") {
+	zeroCountdown := regexp.MustCompile(`(?m)^[ \t]*Recovery:[ \t]+0s of normal telemetry still required[ \t]*$`)
+	if !strings.Contains(out, "waiting for normal telemetry") || zeroCountdown.MatchString(out) {
 		t.Errorf("status showed a stale recovery countdown:\n%s", out)
+	}
+	after, err := os.ReadFile(store.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Errorf("status modified persisted admission history:\nbefore: %s\nafter:  %s", before, after)
 	}
 }
 

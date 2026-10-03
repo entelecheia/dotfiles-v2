@@ -17,6 +17,7 @@ import (
 
 	"github.com/entelecheia/dotfiles-v2/internal/admission"
 	"github.com/entelecheia/dotfiles-v2/internal/exec"
+	"github.com/entelecheia/dotfiles-v2/internal/watchdog"
 )
 
 // Options selects the slot. HomeDir is accepted for callers' symmetry but
@@ -29,7 +30,10 @@ type Options struct {
 }
 
 // DeferredError reports that admission deferred the job; callers retry later.
-type DeferredError struct{ Reason string }
+type DeferredError struct {
+	Reason              string
+	prebuiltSampleRetry bool
+}
 
 func (e *DeferredError) Error() string { return "deferred-resource-pressure: " + e.Reason }
 
@@ -37,13 +41,14 @@ func (e *DeferredError) Error() string { return "deferred-resource-pressure: " +
 const sampleInterval = 15 * time.Second
 
 type adapter struct {
-	root      func() (string, error)
-	runner    *exec.Runner
-	monitor   func() *admission.Monitor
-	uncovered func(ctx context.Context, dir string, maintenance bool, leased []int) ([]string, error)
-	lease     func(ctx context.Context, runner *exec.Runner, dir string) (admission.Lease, error)
-	resolve   func(ctx context.Context, runner *exec.Runner, dir string) (string, error)
-	heartbeat time.Duration
+	root        func() (string, error)
+	runner      *exec.Runner
+	monitor     func() *admission.Monitor
+	uncovered   func(ctx context.Context, dir string, maintenance bool, leased []int) ([]string, error)
+	lease       func(ctx context.Context, runner *exec.Runner, dir string) (admission.Lease, error)
+	resolve     func(ctx context.Context, runner *exec.Runner, dir string) (string, error)
+	parentLease func(ctx context.Context, store *admission.Store, scope, class string, childPID int) bool
+	heartbeat   time.Duration
 }
 
 func native() *adapter {
@@ -58,6 +63,9 @@ func native() *adapter {
 		uncovered: admission.FindUncovered,
 		lease:     admission.SelfLease,
 		resolve:   admission.ResolveScope,
+		parentLease: func(ctx context.Context, store *admission.Store, scope, class string, childPID int) bool {
+			return hasLiveParentLease(ctx, runner, store, scope, class, childPID)
+		},
 		heartbeat: admission.DefaultHeartbeatInterval,
 	}
 }
@@ -82,23 +90,35 @@ func AcquireVerifiedPrebuiltUpdate(ctx context.Context) (func(), error) {
 		},
 		Evaluate: admission.EvaluatePrebuiltPressure,
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, admission.PrebuiltSafetyWindow+sampleInterval)
+	return retryPrebuiltAcquire(ctx, admission.PrebuiltSafetyWindow+sampleInterval, sampleInterval, func(waitCtx context.Context) (func(), error) {
+		return a.acquirePolicy(waitCtx, opts, policy, monitor)
+	})
+}
+
+func retryPrebuiltAcquire(ctx context.Context, maxWait, delay time.Duration, attempt func(context.Context) (func(), error)) (func(), error) {
+	return retryAcquire(ctx, maxWait, delay, attempt, func(err error) bool {
+		var deferred *DeferredError
+		return errors.As(err, &deferred) && deferred.prebuiltSampleRetry
+	}, "sample window wait ended")
+}
+
+func retryAcquire(ctx context.Context, maxWait, delay time.Duration, attempt func(context.Context) (func(), error), retryable func(error) bool, timeoutLabel string) (func(), error) {
+	waitCtx, cancel := context.WithTimeout(ctx, maxWait)
 	defer cancel()
 	var lastErr error
 	for {
-		release, err := a.acquirePolicy(waitCtx, opts, policy, monitor)
+		release, err := attempt(waitCtx)
 		if err == nil {
 			return release, nil
 		}
 		lastErr = err
-		var deferred *DeferredError
-		if !errors.As(err, &deferred) || (!strings.Contains(deferred.Reason, "prebuilt safety window") && !strings.Contains(deferred.Reason, "swap activity; restarting")) {
+		if !retryable(err) {
 			return nil, err
 		}
 		select {
 		case <-waitCtx.Done():
-			return nil, fmt.Errorf("%w (sample window wait ended: %v)", lastErr, waitCtx.Err())
-		case <-time.After(sampleInterval):
+			return nil, fmt.Errorf("%w (%s: %v)", lastErr, timeoutLabel, waitCtx.Err())
+		case <-time.After(delay):
 		}
 	}
 }
@@ -109,23 +129,12 @@ func WaitAcquire(ctx context.Context, opts Options, maxWait time.Duration) (func
 }
 
 func (a *adapter) waitAcquire(ctx context.Context, opts Options, maxWait time.Duration) (func(), error) {
-	ctx, cancel := context.WithTimeout(ctx, maxWait)
-	defer cancel()
-	for {
-		release, err := a.acquire(ctx, opts)
-		if err == nil {
-			return release, nil
-		}
+	return retryAcquire(ctx, maxWait, sampleInterval, func(ctx context.Context) (func(), error) {
+		return a.acquire(ctx, opts)
+	}, func(err error) bool {
 		var deferred *DeferredError
-		if !errors.As(err, &deferred) {
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%w (wait ended: %v)", err, ctx.Err())
-		case <-time.After(sampleInterval):
-		}
-	}
+		return errors.As(err, &deferred)
+	}, "wait ended")
 }
 
 func (a *adapter) acquire(ctx context.Context, opts Options) (func(), error) {
@@ -161,7 +170,8 @@ func (a *adapter) acquirePolicy(ctx context.Context, opts Options, policy admiss
 		return nil, fmt.Errorf("unknown shared resource scope %q", opts.ScopeKey)
 	}
 	// A child of a job that already holds this slot runs inside it.
-	if policy.HistoryFile == "" && admission.NestedScope(os.Getenv(admission.NestedEnv), scope, class) {
+	nested := admission.NestedScope(os.Getenv(admission.NestedEnv), scope, class)
+	if policy.HistoryFile == "" && nested && class != admission.ClassMaintenance {
 		return func() {}, nil
 	}
 	root, err := a.root()
@@ -185,12 +195,25 @@ func (a *adapter) acquirePolicy(ctx context.Context, opts Options, policy admiss
 		return nil, err
 	}
 	if !d.Admit {
-		return nil, &DeferredError{Reason: strings.Join(d.Reasons, "; ")}
+		return nil, &DeferredError{Reason: strings.Join(d.Reasons, "; "), prebuiltSampleRetry: d.ProfileRetry}
 	}
 	if ctx.Err() != nil {
 		// The wait ended during the gate; report it as a deferral, not as a
 		// later identity-probe failure.
 		return nil, &DeferredError{Reason: "the gate outlived the wait"}
+	}
+	if nested && class == admission.ClassMaintenance && a.parentLease != nil && a.parentLease(ctx, store, scope, class, os.Getpid()) {
+		// A verified ancestor owns this exact slot. Re-scan after our gate and
+		// immediately before reuse because uncovered work may have started while
+		// the quiet-window samples were collected.
+		jobs, scanErr := a.uncovered(ctx, dir, true, admission.LeasedPIDs(store))
+		if scanErr != nil {
+			return nil, &DeferredError{Reason: "heavy-work inventory unavailable: " + scanErr.Error()}
+		}
+		if len(jobs) > 0 {
+			return nil, &DeferredError{Reason: "uncovered heavyweight work: " + strings.Join(jobs, ", ")}
+		}
+		return func() {}, nil
 	}
 	lease, err := a.lease(ctx, a.runner, dir)
 	if err != nil {
@@ -254,4 +277,78 @@ func (a *adapter) acquirePolicy(ctx context.Context, opts Options, policy admiss
 			_ = slot.Release()
 		})
 	}, nil
+}
+
+func hasLiveParentLease(ctx context.Context, runner *exec.Runner, store *admission.Store, scope, class string, childPID int) bool {
+	if !admission.NestedScope(os.Getenv(admission.NestedEnv), scope, class) || scope != admission.MaintenanceScope || class != admission.ClassMaintenance {
+		return false
+	}
+	leases, err := store.ListLeases()
+	if err != nil {
+		return false
+	}
+	var parent *admission.Lease
+	for i := range leases {
+		if leases[i].Scope == scope && leases[i].Class == class {
+			if parent != nil {
+				return false
+			}
+			parent = &leases[i]
+		}
+	}
+	if parent == nil || parent.PID <= 0 || parent.PIDStart == "" || time.Now().After(parent.Deadline) {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	match, err := watchdog.ProcessStartMatches(probeCtx, runner, parent.PID, parent.PIDStart)
+	if err != nil || !match {
+		return false
+	}
+	res, err := runner.RunQuery(probeCtx, "ps", "-Ao", watchdog.PSArgs)
+	if err != nil {
+		return false
+	}
+	processes, err := watchdog.ParsePS(res.Stdout)
+	if err != nil {
+		return false
+	}
+	byPID := make(map[int]watchdog.Process, len(processes))
+	for _, process := range processes {
+		byPID[process.PID] = process
+	}
+	ancestor, ok := byPID[parent.PID]
+	if !ok || ancestor.Started != parent.PIDStart {
+		return false
+	}
+	// `dot admit` may transfer the lease identity to its wrapped child after
+	// exec; processHasAncestor accepts a self match only after these identity
+	// checks have succeeded.
+	return processHasAncestor(childPID, parent.PID, byPID)
+}
+
+func processHasAncestor(childPID, ancestorPID int, processes map[int]watchdog.Process) bool {
+	seen := make(map[int]bool)
+	current, ok := processes[childPID]
+	if !ok || current.PID == 0 {
+		return false
+	}
+	if childPID == ancestorPID {
+		return true
+	}
+	for depth := 0; depth < 64 && current.PPID > 0; depth++ {
+		pid := current.PPID
+		if pid == ancestorPID {
+			return true
+		}
+		if seen[pid] {
+			return false
+		}
+		seen[pid] = true
+		current, ok = processes[pid]
+		if !ok {
+			return false
+		}
+	}
+	return false
 }

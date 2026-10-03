@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,10 +24,13 @@ import (
 const (
 	prebuiltMaxCompressedBytes = int64(32 << 20)
 	prebuiltMaxBinaryBytes     = int64(64 << 20)
-	prebuiltMaxExpandedBytes   = int64((64 << 20) + (1 << 20))
-	prebuiltMaxMembers         = 1
+	prebuiltMaxDocBytes        = int64(1 << 20)
+	prebuiltMaxExpandedBytes   = int64(67 << 20)
+	prebuiltMaxMembers         = 3
 	prebuiltMaxChecksumBytes   = int64(1 << 20)
 )
+
+var errPrebuiltExpansionLimit = errors.New("release archive exceeds expanded size limit")
 
 var stableReleaseTag = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
@@ -102,8 +106,8 @@ func downloadVerifiedPrebuiltWithChecksums(ctx context.Context, plan verifiedPre
 	if err != nil {
 		return "", nil, err
 	}
-	want, err := planVerifiedPrebuilt("v"+plan.Version, goos, goarch)
-	if err != nil || plan != want {
+	expectedPlan, err := planVerifiedPrebuilt("v"+plan.Version, goos, goarch)
+	if err != nil || plan != expectedPlan {
 		return "", nil, fmt.Errorf("release plan does not match the exact native GitHub release")
 	}
 	archivePath := filepath.Join(dir, plan.AssetName)
@@ -114,11 +118,11 @@ func downloadVerifiedPrebuiltWithChecksums(ctx context.Context, plan verifiedPre
 	if size > prebuiltMaxCompressedBytes {
 		return "", nil, fmt.Errorf("release archive is %d bytes, maximum is %d", size, prebuiltMaxCompressedBytes)
 	}
-	want, err := parseUniqueChecksum(checksums, plan.AssetName)
+	expectedHash, err := parseUniqueChecksum(checksums, plan.AssetName)
 	if err != nil {
 		return "", nil, err
 	}
-	if !strings.EqualFold(sum, want) {
+	if !strings.EqualFold(sum, expectedHash) {
 		return "", nil, fmt.Errorf("checksum mismatch for %s", plan.AssetName)
 	}
 	archive, err := os.Open(archivePath)
@@ -246,92 +250,91 @@ func parseUniqueChecksum(data []byte, asset string) (string, error) {
 	return found, nil
 }
 
-func extractSinglePrebuilt(r io.Reader, destination string) error {
+func extractSinglePrebuilt(r io.ReadSeeker, destination string) error {
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return fmt.Errorf("opening release archive: %w", err)
 	}
+	bounded := &expandedLimitReader{reader: gz, limit: prebuiltMaxExpandedBytes}
+	entries, expandedSize, err := scanPrebuiltTar(bounded)
+	closeErr := gz.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	gz, err = gzip.NewReader(r)
+	if err != nil {
+		return fmt.Errorf("reopening release archive: %w", err)
+	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
-	count := 0
-	var expanded int64
-	var binarySize int64
+	limited := &expandedLimitReader{reader: gz, limit: prebuiltMaxExpandedBytes}
+	tr := tar.NewReader(limited)
+	seen := make(map[string]bool, len(entries))
 	var file *os.File
+	var binarySize int64
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			if file != nil {
-				_ = file.Close()
-				_ = os.Remove(destination)
-			}
+			cleanupExtracted(file, destination)
 			return fmt.Errorf("reading release archive: %w", err)
 		}
-		count++
-		if count > prebuiltMaxMembers || h.Name != "dot" || h.Typeflag != tar.TypeReg || h.Size <= 0 || h.Size > prebuiltMaxBinaryBytes || h.Mode&07000 != 0 {
-			if file != nil {
-				_ = file.Close()
-				_ = os.Remove(destination)
-			}
-			return fmt.Errorf("release archive must contain only one regular root dot executable no larger than %d bytes", prebuiltMaxBinaryBytes)
+		if !allowedPrebuiltMember(h.Name) || h.Typeflag != tar.TypeReg || h.Mode&07000 != 0 || seen[h.Name] {
+			cleanupExtracted(file, destination)
+			return fmt.Errorf("release archive contains an unexpected or duplicate member %q", h.Name)
 		}
-		expanded += h.Size
-		if expanded > prebuiltMaxExpandedBytes {
-			return fmt.Errorf("release archive expands beyond %d bytes", prebuiltMaxExpandedBytes)
+		seen[h.Name] = true
+		maxSize := prebuiltMaxDocBytes
+		if h.Name == "dot" {
+			maxSize = prebuiltMaxBinaryBytes
+		}
+		if h.Size <= 0 || h.Size > maxSize {
+			cleanupExtracted(file, destination)
+			return fmt.Errorf("release archive member %q has invalid size %d", h.Name, h.Size)
+		}
+		if h.Name != "dot" {
+			if _, err := io.CopyN(io.Discard, tr, h.Size); err != nil {
+				cleanupExtracted(file, destination)
+				return fmt.Errorf("reading release document %q: %w", h.Name, err)
+			}
+			continue
 		}
 		binarySize = h.Size
 		file, err = os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
 		if err != nil {
 			return fmt.Errorf("creating extracted executable: %w", err)
 		}
-		written, copyErr := io.Copy(file, io.LimitReader(tr, prebuiltMaxBinaryBytes+1))
+		written, copyErr := io.CopyN(file, tr, h.Size)
 		if copyErr != nil {
-			_ = file.Close()
-			_ = os.Remove(destination)
+			cleanupExtracted(file, destination)
 			return fmt.Errorf("reading release executable: %w", copyErr)
 		}
 		if written != binarySize {
-			_ = file.Close()
-			_ = os.Remove(destination)
+			cleanupExtracted(file, destination)
 			return fmt.Errorf("release executable has invalid size: wrote %d of %d bytes", written, binarySize)
 		}
 	}
-	var tail [32 * 1024]byte
-	var trailingBytes int64
-	for {
-		n, readErr := gz.Read(tail[:])
-		trailingBytes += int64(n)
-		if expanded+trailingBytes > prebuiltMaxExpandedBytes {
-			if file != nil {
-				_ = file.Close()
-				_ = os.Remove(destination)
-			}
-			return fmt.Errorf("release archive expands beyond %d bytes", prebuiltMaxExpandedBytes)
-		}
-		for _, b := range tail[:n] {
-			if b != 0 {
-				if file != nil {
-					_ = file.Close()
-					_ = os.Remove(destination)
-				}
-				return fmt.Errorf("release archive contains trailing non-tar data")
-			}
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			if file != nil {
-				_ = file.Close()
-				_ = os.Remove(destination)
-			}
-			return fmt.Errorf("reading release archive trailer: %w", readErr)
-		}
+	if !seen["dot"] || len(seen) != len(entries) {
+		cleanupExtracted(file, destination)
+		return fmt.Errorf("release archive must contain one dot executable and only bounded release documents")
 	}
-	if count != prebuiltMaxMembers || file == nil {
-		return fmt.Errorf("release archive contains %d members, want exactly %d", count, prebuiltMaxMembers)
+	if _, err := io.Copy(io.Discard, limited); err != nil {
+		cleanupExtracted(file, destination)
+		return fmt.Errorf("checking release archive trailer: %w", err)
+	}
+	if limited.total != expandedSize {
+		cleanupExtracted(file, destination)
+		return fmt.Errorf("release archive changed while extracting")
 	}
 	if err := file.Close(); err != nil {
 		_ = os.Remove(destination)
@@ -344,22 +347,193 @@ func extractSinglePrebuilt(r io.Reader, destination string) error {
 	return nil
 }
 
-func verifyExactPrebuiltBinary(ctx context.Context, path, version string) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	out, err := upgradeRun(ctx, false, path, "--version")
-	if err != nil {
-		return fmt.Errorf("running verified release --version: %w", err)
+func allowedPrebuiltMember(name string) bool {
+	switch name {
+	case "dot", "LICENSE", "README.md":
+		return true
+	default:
+		return false
 	}
-	fields := strings.Fields(out)
-	if len(fields) < 3 || fields[0] != "dot" || fields[1] != "version" || strings.TrimPrefix(fields[2], "v") != version {
-		return fmt.Errorf("verified executable reports %q, expected exact dot version %s", strings.TrimSpace(out), version)
+}
+
+func cleanupExtracted(file *os.File, destination string) {
+	if file != nil {
+		_ = file.Close()
+		_ = os.Remove(destination)
+	}
+}
+
+type expandedLimitReader struct {
+	reader io.Reader
+	limit  int64
+	total  int64
+}
+
+func (r *expandedLimitReader) Read(p []byte) (int, error) {
+	if r.total > r.limit {
+		return 0, errPrebuiltExpansionLimit
+	}
+	remaining := r.limit - r.total
+	if int64(len(p)) > remaining+1 {
+		p = p[:remaining+1]
+	}
+	n, err := r.reader.Read(p)
+	r.total += int64(n)
+	if r.total > r.limit {
+		return n, errPrebuiltExpansionLimit
+	}
+	return n, err
+}
+
+func scanPrebuiltTar(r io.Reader) (map[string]bool, int64, error) {
+	entries := make(map[string]bool, prebuiltMaxMembers)
+	var expanded *expandedLimitReader
+	if bounded, ok := r.(*expandedLimitReader); ok {
+		expanded = bounded
+	}
+	var header [512]byte
+	for {
+		if _, err := io.ReadFull(r, header[:]); err != nil {
+			return nil, 0, fmt.Errorf("reading tar header: %w", err)
+		}
+		if allZeroBytes(header[:]) {
+			var second [512]byte
+			if _, err := io.ReadFull(r, second[:]); err != nil || !allZeroBytes(second[:]) {
+				return nil, 0, fmt.Errorf("release archive has an incomplete tar trailer")
+			}
+			if err := drainTarPadding(r); err != nil {
+				return nil, 0, err
+			}
+			break
+		}
+		if err := validateTarChecksum(header[:]); err != nil {
+			return nil, 0, err
+		}
+		typeFlag := header[156]
+		if typeFlag != 0 && typeFlag != '0' {
+			return nil, 0, fmt.Errorf("release archive contains unsupported tar type %q", typeFlag)
+		}
+		name := tarFieldString(header[0:100])
+		prefix := tarFieldString(header[345:500])
+		if prefix != "" {
+			name = prefix + "/" + name
+		}
+		if !allowedPrebuiltMember(name) || entries[name] {
+			return nil, 0, fmt.Errorf("release archive contains an unexpected or duplicate member %q", name)
+		}
+		entries[name] = true
+		if len(entries) > prebuiltMaxMembers {
+			return nil, 0, fmt.Errorf("release archive exceeds %d members", prebuiltMaxMembers)
+		}
+		size, err := parseTarOctal(header[124:136])
+		if err != nil {
+			return nil, 0, err
+		}
+		maxSize := prebuiltMaxDocBytes
+		if name == "dot" {
+			maxSize = prebuiltMaxBinaryBytes
+		}
+		if size <= 0 || size > maxSize {
+			return nil, 0, fmt.Errorf("release archive member %q has invalid size %d", name, size)
+		}
+		padded := size + (512-size%512)%512
+		if _, err := io.CopyN(io.Discard, r, padded); err != nil {
+			return nil, 0, fmt.Errorf("reading tar member %q: %w", name, err)
+		}
+	}
+	if !entries["dot"] {
+		return nil, 0, fmt.Errorf("release archive has no root dot executable")
+	}
+	if expanded == nil {
+		return nil, 0, fmt.Errorf("release archive scanner has no expanded-byte counter")
+	}
+	return entries, expanded.total, nil
+}
+
+func drainTarPadding(r io.Reader) error {
+	var block [32 * 1024]byte
+	for {
+		n, err := r.Read(block[:])
+		for _, b := range block[:n] {
+			if b != 0 {
+				return fmt.Errorf("release archive contains nonzero data after tar trailer")
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("reading tar padding: %w", err)
+		}
+	}
+}
+
+func allZeroBytes(data []byte) bool {
+	for _, b := range data {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func tarFieldString(field []byte) string {
+	if i := strings.IndexByte(string(field), 0); i >= 0 {
+		field = field[:i]
+	}
+	return string(field)
+}
+
+func parseTarOctal(field []byte) (int64, error) {
+	text := strings.Trim(string(field), "\x00 ")
+	if text == "" {
+		return 0, nil
+	}
+	if strings.ContainsAny(text, "\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f") {
+		return 0, fmt.Errorf("release archive uses unsupported base-256 tar sizes")
+	}
+	size, err := strconv.ParseInt(text, 8, 64)
+	if err != nil || size < 0 {
+		return 0, fmt.Errorf("release archive has invalid octal tar size %q", text)
+	}
+	return size, nil
+}
+
+func validateTarChecksum(header []byte) error {
+	stored, err := parseTarOctal(header[148:156])
+	if err != nil {
+		return fmt.Errorf("release archive has invalid tar checksum: %w", err)
+	}
+	var sum int64
+	for i, b := range header {
+		if i >= 148 && i < 156 {
+			sum += int64(' ')
+		} else {
+			sum += int64(b)
+		}
+	}
+	if sum != stored {
+		return fmt.Errorf("release archive tar checksum mismatch")
 	}
 	return nil
 }
 
-func installStandalonePrebuilt(ctx context.Context, p *Printer, source, destination, version string) error {
-	if err := verifyExactPrebuiltBinary(ctx, source, version); err != nil {
+func verifyExactPrebuiltBinary(ctx context.Context, path, version, goos, goarch string) error {
+	if err := verifyNativeBinaryTarget(path, goos, goarch); err != nil {
+		return fmt.Errorf("downloaded executable is not the selected native target: %w", err)
+	}
+	got, err := readDotBinaryVersion(ctx, path)
+	if err != nil {
+		return fmt.Errorf("running verified release --version: %w", err)
+	}
+	if got != version {
+		return fmt.Errorf("verified executable reports %q, expected exact dot version %s", got, version)
+	}
+	return nil
+}
+
+func installStandalonePrebuilt(ctx context.Context, p *Printer, source, destination, version, goos, goarch string) error {
+	if err := verifyExactPrebuiltBinary(ctx, source, version, goos, goarch); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(source)

@@ -16,8 +16,8 @@ const PrebuiltSafetyWindow = 30 * time.Second
 // recovery history. A warning-tolerant decision can never clear a heavy defer.
 const PrebuiltHistoryFile = "history-prebuilt.json"
 
-// PrebuiltThresholds keeps the stricter recovery and CPU limits for the small
-// verified release update operation.
+// PrebuiltThresholds uses immediate hard blockers and lets the independent
+// 30-second swap-quiet window provide continuous recovery for this operation.
 func PrebuiltThresholds() Thresholds {
 	th := DefaultThresholds()
 	th.IdleDeferBelow = 30
@@ -25,7 +25,7 @@ func PrebuiltThresholds() Thresholds {
 	th.LoadDeferFrac = 0.7
 	th.LoadRecoverFrac = 0.7
 	th.DeferSustain = 0
-	th.RecoverSustain = PrebuiltSafetyWindow
+	th.RecoverSustain = 0
 	return th
 }
 
@@ -63,7 +63,7 @@ func SnapshotPrebuilt(ctx context.Context, m *Monitor) PressureSnapshot {
 // swap activity remain hard deferrals.
 func EvaluatePrebuiltPressure(snap PressureSnapshot, th Thresholds, hist History, now time.Time) Decision {
 	th.DeferSustain = 0
-	th.RecoverSustain = PrebuiltSafetyWindow
+	th.RecoverSustain = 0
 	check := snap
 	if check.MemoryLevel == MemoryWarn {
 		check.MemoryLevel = MemoryNormal
@@ -105,6 +105,7 @@ func EvaluatePrebuiltPressure(snap PressureSnapshot, th Thresholds, hist History
 		d.Next.PrebuiltSwapOutBytes = snap.SwapOutBytes
 		d.Next.PrebuiltSwapAt = now
 		d.Admit = false
+		d.ProfileRetry = true
 		d.Reasons = []string{"prebuilt safety window needs fresh samples"}
 		d.RetryAfter = 15 * time.Second
 		return d
@@ -114,6 +115,7 @@ func EvaluatePrebuiltPressure(snap PressureSnapshot, th Thresholds, hist History
 		d.Next.PrebuiltSwapOutBytes = snap.SwapOutBytes
 		d.Next.PrebuiltSwapAt = now
 		d.Admit = false
+		d.ProfileRetry = true
 		d.Reasons = []string{"prebuilt safety window needs 30 seconds without swap activity"}
 		d.RetryAfter = 15 * time.Second
 		return d
@@ -123,6 +125,7 @@ func EvaluatePrebuiltPressure(snap PressureSnapshot, th Thresholds, hist History
 		d.Next.PrebuiltSwapOutBytes = snap.SwapOutBytes
 		d.Next.PrebuiltSwapAt = now
 		d.Admit = false
+		d.ProfileRetry = true
 		d.Reasons = []string{"swap activity; restarting the 30-second safety window"}
 		d.RetryAfter = PrebuiltSafetyWindow
 		return d
@@ -130,6 +133,7 @@ func EvaluatePrebuiltPressure(snap PressureSnapshot, th Thresholds, hist History
 	remaining := PrebuiltSafetyWindow - now.Sub(hist.PrebuiltSwapAt)
 	if remaining > 0 {
 		d.Admit = false
+		d.ProfileRetry = true
 		d.Reasons = []string{"prebuilt safety window needs 30 seconds without swap activity"}
 		d.RetryAfter = remaining
 		return d

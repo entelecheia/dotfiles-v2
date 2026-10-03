@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -30,6 +33,32 @@ func TestPlanVerifiedPrebuiltPinsNativeStableRelease(t *testing.T) {
 	}
 }
 
+func TestNativeTargetUsesHostCapabilityAndBinaryBuildInfo(t *testing.T) {
+	if got, err := darwinNativeArch("1"); err != nil || got != "arm64" {
+		t.Fatalf("Apple Silicon capability under a potentially translated process = %q, %v", got, err)
+	}
+	if got, err := darwinNativeArch("0"); err != nil || got != "amd64" {
+		t.Fatalf("Intel capability = %q, %v", got, err)
+	}
+	if _, err := darwinNativeArch("unknown"); err == nil {
+		t.Fatal("accepted unknown Darwin host architecture")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyNativeBinaryTarget(self, runtime.GOOS, runtime.GOARCH); err != nil {
+		t.Fatalf("rejected current Go test binary target: %v", err)
+	}
+	wrongArch := "arm64"
+	if runtime.GOARCH == wrongArch {
+		wrongArch = "amd64"
+	}
+	if err := verifyNativeBinaryTarget(self, runtime.GOOS, wrongArch); err == nil {
+		t.Fatalf("accepted executable mislabeled as %s/%s", runtime.GOOS, wrongArch)
+	}
+}
+
 func TestParseUniqueChecksumRejectsAmbiguousOrMalformedEntries(t *testing.T) {
 	const sum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	if got, err := parseUniqueChecksum([]byte(sum+"  dot.tar.gz\n"), "dot.tar.gz"); err != nil || got != sum {
@@ -47,6 +76,13 @@ func TestParseUniqueChecksumRejectsAmbiguousOrMalformedEntries(t *testing.T) {
 }
 
 func TestStandalonePromotionRequiresExactRuntimeVersion(t *testing.T) {
+	goos, goarch, err := supportedNativeReleaseTarget()
+	if err != nil {
+		t.Skip(err)
+	}
+	if runtime.GOARCH != goarch {
+		t.Skip("the current test process is translated from the native host architecture")
+	}
 	run, acquire := upgradeRun, upgradeAcquirePrebuilt
 	t.Cleanup(func() {
 		upgradeRun, upgradeAcquirePrebuilt = run, acquire
@@ -59,17 +95,24 @@ func TestStandalonePromotionRequiresExactRuntimeVersion(t *testing.T) {
 		acquired++
 		return func() {}, nil
 	}
-
 	dir := t.TempDir()
 	source := filepath.Join(dir, "new-dot")
 	destination := filepath.Join(dir, "dot")
-	if err := os.WriteFile(source, []byte("new executable"), 0o755); err != nil {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, data, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(destination, []byte("old executable"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := installStandalonePrebuilt(context.Background(), &Printer{}, source, destination, "2.70.35"); err == nil {
+	if err := installStandalonePrebuilt(context.Background(), &Printer{}, source, destination, "2.70.35", goos, goarch); err == nil || !strings.Contains(err.Error(), "expected exact dot version") {
 		t.Fatal("accepted binary reporting the wrong release version")
 	}
 	if acquired != 0 {
@@ -83,8 +126,10 @@ func TestStandalonePromotionRequiresExactRuntimeVersion(t *testing.T) {
 
 func TestExtractSinglePrebuiltRequiresOneRootExecutable(t *testing.T) {
 	archive := tarGzFixture(t, []tar.Header{
+		{Name: "LICENSE", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+		{Name: "README.md", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
 		{Name: "dot", Typeflag: tar.TypeReg, Mode: 0o755, Size: 4},
-	}, [][]byte{[]byte("ELF!")})
+	}, [][]byte{[]byte("MIT\n"), []byte("help"), []byte("ELF!")})
 	path := filepath.Join(t.TempDir(), "dot")
 	if err := extractSinglePrebuilt(bytes.NewReader(archive), path); err != nil {
 		t.Fatal(err)
@@ -106,7 +151,6 @@ func TestExtractSinglePrebuiltRequiresOneRootExecutable(t *testing.T) {
 		{"path traversal", []tar.Header{{Name: "../dot", Typeflag: tar.TypeReg, Mode: 0o755, Size: 4}}, [][]byte{[]byte("ELF!")}},
 		{"extra member", []tar.Header{{Name: "dot", Typeflag: tar.TypeReg, Mode: 0o755, Size: 1}, {Name: "unexpected", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}}, [][]byte{[]byte("x"), []byte("y")}},
 		{"symlink", []tar.Header{{Name: "dot", Typeflag: tar.TypeSymlink, Linkname: "elsewhere", Mode: 0o777}}, [][]byte{nil}},
-		{"oversized executable", []tar.Header{{Name: "dot", Typeflag: tar.TypeReg, Mode: 0o755, Size: prebuiltMaxBinaryBytes + 1}}, [][]byte{nil}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dest := filepath.Join(t.TempDir(), "dot")
@@ -118,6 +162,56 @@ func TestExtractSinglePrebuiltRequiresOneRootExecutable(t *testing.T) {
 				t.Fatalf("unsafe archive left output behind: %v", err)
 			}
 		})
+	}
+	for _, member := range []rawTarMember{
+		{Name: "dot", Typeflag: tar.TypeReg, Size: prebuiltMaxBinaryBytes + 1, Truncated: true},
+		{Name: "README.md", Typeflag: tar.TypeReg, Size: prebuiltMaxDocBytes + 1, Truncated: true},
+	} {
+		dest := filepath.Join(t.TempDir(), "dot")
+		archive := rawTarGzFixture(t, []rawTarMember{member})
+		if err := extractSinglePrebuilt(bytes.NewReader(archive), dest); err == nil {
+			t.Fatalf("accepted oversized member %q", member.Name)
+		}
+		if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+			t.Fatalf("oversized member left output behind: %v", err)
+		}
+	}
+}
+
+func TestExtractSinglePrebuiltAllowsOmittedReleaseDocuments(t *testing.T) {
+	archive := tarGzFixture(t, []tar.Header{{Name: "dot", Typeflag: tar.TypeReg, Mode: 0o755, Size: 4}}, [][]byte{[]byte("ELF!")})
+	path := filepath.Join(t.TempDir(), "dot")
+	if err := extractSinglePrebuilt(bytes.NewReader(archive), path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "ELF!" {
+		t.Fatalf("dot-only release archive extraction = %q, %v", data, err)
+	}
+}
+
+func TestScanPrebuiltTarRejectsHiddenExtensionHeadersAndCountsWholeOutput(t *testing.T) {
+	for _, typeflag := range []byte{tar.TypeXHeader, tar.TypeXGlobalHeader, tar.TypeGNULongName, tar.TypeGNULongLink} {
+		t.Run(fmt.Sprintf("type-%d", typeflag), func(t *testing.T) {
+			archive := rawTarGzFixture(t, []rawTarMember{
+				{Name: "metadata", Typeflag: typeflag, Body: []byte("hidden")},
+				{Name: "dot", Typeflag: tar.TypeReg, Body: []byte("ELF!")},
+			})
+			gz, err := gzip.NewReader(bytes.NewReader(archive))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = scanPrebuiltTar(&expandedLimitReader{reader: gz, limit: prebuiltMaxExpandedBytes})
+			_ = gz.Close()
+			if err == nil {
+				t.Fatal("accepted hidden tar extension metadata")
+			}
+		})
+	}
+
+	limited := &expandedLimitReader{reader: strings.NewReader("012345"), limit: 4}
+	if _, err := io.ReadAll(limited); !errors.Is(err, errPrebuiltExpansionLimit) || limited.total != 5 {
+		t.Fatalf("expanded reader = %d bytes, %v; want 5 and limit error", limited.total, err)
 	}
 }
 
@@ -138,6 +232,61 @@ func tarGzFixture(t *testing.T, headers []tar.Header, bodies [][]byte) []byte {
 		}
 	}
 	if err := tr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return compressed.Bytes()
+}
+
+type rawTarMember struct {
+	Name      string
+	Typeflag  byte
+	Body      []byte
+	Size      int64
+	Truncated bool
+}
+
+func rawTarGzFixture(t *testing.T, members []rawTarMember) []byte {
+	t.Helper()
+	var raw bytes.Buffer
+	for _, member := range members {
+		size := int64(len(member.Body))
+		if member.Size > 0 {
+			size = member.Size
+		}
+		header := make([]byte, 512)
+		copy(header[:100], member.Name)
+		copy(header[100:108], "0000644\x00")
+		copy(header[108:116], "0000000\x00")
+		copy(header[116:124], "0000000\x00")
+		copy(header[124:136], fmt.Sprintf("%011o\x00", size))
+		copy(header[136:148], "00000000000\x00")
+		header[156] = member.Typeflag
+		copy(header[257:263], "ustar\x00")
+		copy(header[263:265], "00")
+		for i := 148; i < 156; i++ {
+			header[i] = ' '
+		}
+		var sum int
+		for _, b := range header {
+			sum += int(b)
+		}
+		copy(header[148:156], fmt.Sprintf("%06o\x00 ", sum))
+		_, _ = raw.Write(header)
+		if member.Truncated {
+			continue
+		}
+		_, _ = raw.Write(member.Body)
+		if rem := int(size) % 512; rem > 0 {
+			_, _ = raw.Write(make([]byte, 512-rem))
+		}
+	}
+	_, _ = raw.Write(make([]byte, 1024))
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	if _, err := gz.Write(raw.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 	if err := gz.Close(); err != nil {
@@ -171,41 +320,263 @@ func TestCanonicalHomebrewRecipeIsNativeOnlyAndExact(t *testing.T) {
 	}
 }
 
-func TestPrebuiltFormulaInfoRejectsPinsAndDependencies(t *testing.T) {
-	checksums := formulaChecksums("2.70.35")
-	base := prebuiltBrewFormula{FullName: "entelecheia/tap/dotfiles"}
-	base.Versions.Stable = "2.70.35"
-	goos, goarch, err := supportedNativeReleaseTarget()
+func TestPrebuiltHomebrewEligibilityChecksRawSourcePinAndInstalledKeg(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the Homebrew update path refuses root")
+	}
+	_, goarch, err := supportedNativeReleaseTarget()
 	if err != nil {
 		t.Skip(err)
 	}
-	asset := fmt.Sprintf("dot_2.70.35_%s_%s.tar.gz", goos, goarch)
-	base.URLs.Stable.URL = fmt.Sprintf("https://github.com/%s/releases/download/v2.70.35/%s", githubRepo, asset)
-	base.URLs.Stable.Checksum, err = parseUniqueChecksum(checksums, asset)
+	if runtime.GOARCH != goarch {
+		t.Skip("the current test process is translated from the native host architecture")
+	}
+	for _, name := range []string{"HOMEBREW_DEVELOPER", "HOMEBREW_TESTS", "HOMEBREW_FORCE_VENDOR_RUBY", "HOMEBREW_USE_RUBY_FROM_PATH", "HOMEBREW_XDG_CONFIG_HOME"} {
+		t.Setenv(name, "")
+	}
+	for _, name := range []string{"HOMEBREW_NO_AUTO_UPDATE", "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK", "HOMEBREW_NO_INSTALL_CLEANUP"} {
+		t.Setenv(name, "1")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	run := upgradeRun
+	acquire := upgradeAcquirePrebuilt
+	t.Cleanup(func() { upgradeRun, upgradeAcquirePrebuilt = run, acquire })
+	upgradeRun = func(ctx context.Context, show bool, name string, args ...string) (string, error) {
+		if len(args) == 1 && args[0] == "--version" && filepath.Base(name) == "dot" {
+			return "dot version 2.70.34 (abc)\n", nil
+		}
+		return run(ctx, show, name, args...)
+	}
+	prefix := t.TempDir()
+	h := homebrewDot{prefix: prefix, formula: "dotfiles"}
+	for _, dir := range []string{
+		filepath.Join(prefix, "bin"), filepath.Join(prefix, "Library", "Homebrew"),
+		filepath.Join(prefix, "Library", "Taps", "entelecheia", "homebrew-tap", "Formula"),
+		filepath.Join(prefix, "Cellar", "dotfiles", "2.70.34", "bin"),
+		filepath.Join(prefix, "opt", "dotfiles", "bin"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeReadyHomebrewRuby(t, prefix)
+	if err := os.WriteFile(h.brew(), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(prefix, "Cellar", "dotfiles", "2.70.34", "bin", "dot")
+	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	base.Installed = []struct {
-		Version string `json:"version"`
-	}{{Version: "2.70.34"}}
-	if !prebuiltFormulaInfoEligible(base, "2.70.34", "2.70.35", checksums) {
-		t.Fatal("rejected eligible native formula metadata")
+	data, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, edit := range []func(*prebuiltBrewFormula){
-		func(f *prebuiltBrewFormula) { f.Pinned = true },
-		func(f *prebuiltBrewFormula) { f.Dependencies = []string{"openssl"} },
-		func(f *prebuiltBrewFormula) { f.BuildDependencies = []string{"go"} },
-		func(f *prebuiltBrewFormula) { f.PostInstallDefined = true },
-		func(f *prebuiltBrewFormula) { f.Versions.Stable = "2.70.34" },
-		func(f *prebuiltBrewFormula) { f.URLs.Stable.URL = "https://example.com/dot.tar.gz" },
-		func(f *prebuiltBrewFormula) { f.URLs.Stable.Checksum = strings.Repeat("0", 64) },
-		func(f *prebuiltBrewFormula) { f.Installed[0].Version = "2.70.33" },
+	if err := os.WriteFile(binary, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(binary, h.optDot()); err != nil {
+		t.Fatal(err)
+	}
+	checksums := formulaChecksums("2.70.35")
+	formula, err := canonicalGoReleaserFormula("2.70.35", checksums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formulaPath := filepath.Join(prefix, "Library", "Taps", "entelecheia", "homebrew-tap", "Formula", "dotfiles.rb")
+	if err := os.WriteFile(formulaPath, []byte(formula), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !prebuiltFormulaEligible(context.Background(), h, "2.70.34", "2.70.35", checksums) {
+		t.Fatal("rejected canonical unpinned formula with the exact installed opt version")
+	}
+	brewEnv := filepath.Join(prefix, "etc", "homebrew", "brew.env")
+	if err := os.MkdirAll(filepath.Dir(brewEnv), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brewEnv, []byte("HOMEBREW_XDG_CONFIG_HOME=/tmp/custom-homebrew\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if prebuiltFormulaEligible(context.Background(), h, "2.70.34", "2.70.35", checksums) {
+		t.Fatal("accepted an environment-file redirect that could override Homebrew safety flags")
+	}
+	if err := os.WriteFile(brewEnv, []byte("# no Homebrew runtime overrides\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !prebuiltFormulaEligible(context.Background(), h, "2.70.34", "2.70.35", checksums) {
+		t.Fatal("rejected a ready Homebrew runtime after clearing the override")
+	}
+
+	mutated := strings.Replace(formula, `bin.install "dot"`, `system "make"`, 1)
+	if err := os.WriteFile(formulaPath, []byte(mutated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if prebuiltFormulaEligible(context.Background(), h, "2.70.34", "2.70.35", checksums) {
+		t.Fatal("accepted modified formula install source")
+	}
+	acquired := 0
+	upgradeAcquirePrebuilt = func(context.Context) (func(), error) {
+		acquired++
+		return func() {}, nil
+	}
+	if err := upgradeHomebrewPrebuilt(context.Background(), &Printer{}, h, "2.70.34", "2.70.35", checksums, false); !errors.Is(err, errHomebrewNeedsFullGate) {
+		t.Fatalf("changed raw formula did not route to full gate: %v", err)
+	}
+	if acquired != 0 {
+		t.Fatal("admission began with a changed formula source")
+	}
+	if err := os.WriteFile(formulaPath, []byte(formula), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pinDir := filepath.Join(prefix, "var", "homebrew", "pinned")
+	if err := os.MkdirAll(pinDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(filepath.Dir(binary)), filepath.Join(pinDir, "dotfiles")); err != nil {
+		t.Fatal(err)
+	}
+	if prebuiltFormulaEligible(context.Background(), h, "2.70.34", "2.70.35", checksums) {
+		t.Fatal("accepted pinned formula")
+	}
+}
+
+func TestUpgradeHomebrewPrebuiltReloadsMovedOptAfterBrewFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the Homebrew update path refuses root")
+	}
+	_, goarch, err := supportedNativeReleaseTarget()
+	if err != nil || runtime.GOARCH != goarch {
+		t.Skip("the current process cannot run the native Homebrew prebuilt path")
+	}
+	for _, name := range []string{"HOMEBREW_DEVELOPER", "HOMEBREW_TESTS", "HOMEBREW_FORCE_VENDOR_RUBY", "HOMEBREW_USE_RUBY_FROM_PATH", "HOMEBREW_XDG_CONFIG_HOME"} {
+		t.Setenv(name, "")
+	}
+	for _, name := range []string{"HOMEBREW_NO_AUTO_UPDATE", "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK", "HOMEBREW_NO_INSTALL_CLEANUP"} {
+		t.Setenv(name, "1")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	run, acquire, reload := upgradeRun, upgradeAcquirePrebuilt, upgradeReloadLaunchAgents
+	t.Cleanup(func() { upgradeRun, upgradeAcquirePrebuilt, upgradeReloadLaunchAgents = run, acquire, reload })
+	prefix := t.TempDir()
+	h := homebrewDot{prefix: prefix, formula: "dotfiles"}
+	currentKeg := filepath.Join(prefix, "Cellar", "dotfiles", "2.70.34")
+	newKeg := filepath.Join(prefix, "Cellar", "dotfiles", "2.70.35")
+	opt := filepath.Join(prefix, "opt", "dotfiles")
+	for _, path := range []string{
+		filepath.Join(prefix, "bin"), filepath.Join(prefix, "Library", "Homebrew"),
+		filepath.Join(prefix, "Library", "Taps", "entelecheia", "homebrew-tap", "Formula"),
+		filepath.Join(currentKeg, "bin"), filepath.Join(newKeg, "bin"), filepath.Join(opt, "bin"),
 	} {
-		candidate := base
-		edit(&candidate)
-		if prebuiltFormulaInfoEligible(candidate, "2.70.34", "2.70.35", checksums) {
-			t.Errorf("accepted unsafe formula metadata: %+v", candidate)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
 		}
+	}
+	writeReadyHomebrewRuby(t, prefix)
+	if err := os.WriteFile(h.brew(), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryData, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(currentKeg, "bin", "dot"), filepath.Join(newKeg, "bin", "dot")} {
+		if err := os.WriteFile(path, binaryData, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(currentKeg, opt); err != nil {
+		t.Fatal(err)
+	}
+	checksums := formulaChecksums("2.70.35")
+	formula, err := canonicalGoReleaserFormula("2.70.35", checksums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formulaPath := filepath.Join(prefix, "Library", "Taps", "entelecheia", "homebrew-tap", "Formula", "dotfiles.rb")
+	if err := os.WriteFile(formulaPath, []byte(formula), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	brewErr := errors.New("brew failed after relinking")
+	reloadErr := errors.New("reload failed")
+	upgradeCalls, acquired, reloaded := 0, 0, 0
+	upgradeRun = func(_ context.Context, _ bool, name string, args ...string) (string, error) {
+		switch {
+		case name == "/usr/sbin/sysctl":
+			if goarch == "arm64" {
+				return "1\n", nil
+			}
+			return "0\n", nil
+		case filepath.Base(name) == "uname":
+			if goarch == "arm64" {
+				return "aarch64\n", nil
+			}
+			return "x86_64\n", nil
+		case len(args) == 1 && args[0] == "--version":
+			return "dot version 2.70.34 (abc)\n", nil
+		case name == "/usr/bin/env":
+			brewIndex := slices.Index(args, h.brew())
+			if brewIndex < 0 || !slices.Contains(args, "HOMEBREW_NO_AUTO_UPDATE=1") || !slices.Contains(args, "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1") || !slices.Contains(args, "HOMEBREW_NO_INSTALL_CLEANUP=1") {
+				return "", fmt.Errorf("unsafe brew environment: %v", args)
+			}
+			if !slices.Equal(args[brewIndex+1:], []string{"upgrade", "--formula", "entelecheia/tap/dotfiles"}) {
+				return "", fmt.Errorf("unexpected brew upgrade argv: %v", args[brewIndex+1:])
+			}
+			upgradeCalls++
+			_ = os.Remove(opt)
+			if err := os.Symlink(newKeg, opt); err != nil {
+				return "", err
+			}
+			return "", brewErr
+		default:
+			return "", fmt.Errorf("unexpected command %s %v", name, args)
+		}
+	}
+	upgradeAcquirePrebuilt = func(context.Context) (func(), error) {
+		acquired++
+		return func() {}, nil
+	}
+	upgradeReloadLaunchAgents = func(context.Context, *Printer, homebrewDot, bool) error {
+		reloaded++
+		return reloadErr
+	}
+	got := upgradeHomebrewPrebuilt(context.Background(), &Printer{}, h, "2.70.34", "2.70.35", checksums, false)
+	if !errors.Is(got, brewErr) || !errors.Is(got, reloadErr) {
+		t.Fatalf("error after opt move = %v, want brew and reload errors", got)
+	}
+	if upgradeCalls != 1 || acquired != 1 || reloaded != 1 {
+		t.Fatalf("calls: brew=%d admission=%d reload=%d, want one each", upgradeCalls, acquired, reloaded)
+	}
+	resolved, err := filepath.EvalSymlinks(h.optDot())
+	if err != nil || resolved != filepath.Join(newKeg, "bin", "dot") {
+		t.Fatalf("opt link after partial brew failure = %s, %v", resolved, err)
+	}
+}
+
+func writeReadyHomebrewRuby(t *testing.T, prefix string) {
+	t.Helper()
+	vendor := filepath.Join(prefix, "Library", "Homebrew", "vendor")
+	version := "4.0.7"
+	versionRoot := filepath.Join(vendor, "portable-ruby", version)
+	if err := os.MkdirAll(filepath.Join(versionRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vendor, "portable-ruby-version"), []byte(version+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, binary := range []string{"ruby", "bundle"} {
+		if err := os.WriteFile(filepath.Join(versionRoot, "bin", binary), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(version, filepath.Join(vendor, "portable-ruby", "current")); err != nil {
+		t.Fatal(err)
 	}
 }
 

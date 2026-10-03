@@ -2,14 +2,17 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	"debug/buildinfo"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
+	"time"
 )
 
 var errHomebrewNeedsFullGate = errors.New("Homebrew metadata or recipe needs a full maintenance gate")
@@ -20,6 +23,8 @@ var prebuiltHomebrewEnvironment = []string{
 	"HOMEBREW_NO_INSTALL_CLEANUP=1",
 }
 
+var portableRubyVersionName = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(_[0-9]+)?$`)
+
 // upgradeHomebrewPrebuilt uses the warning-tolerant profile only when the
 // current Homebrew tap contains the exact GoReleaser-generated native-only
 // formula for this verified release. Any drift returns to the full-gate path.
@@ -27,15 +32,11 @@ func upgradeHomebrewPrebuilt(ctx context.Context, p *Printer, h homebrewDot, cur
 	if os.Geteuid() == 0 {
 		return fmt.Errorf("this dot binary belongs to Homebrew, which does not run as root; run dot update as the user who owns %s", h.prefix)
 	}
-	info, err := brewFormulaInfoNoAutoUpdate(ctx, h)
-	if err != nil {
-		return fmt.Errorf("%w: cannot read installed recipe: %v", errHomebrewNeedsFullGate, err)
-	}
-	if !prebuiltFormulaInfoEligible(info, current, version, checksums) || !prebuiltFormulaSourceEligible(ctx, h, info.FullName, version, checksums) {
+	if !prebuiltFormulaEligible(ctx, h, current, version, checksums) {
 		return errHomebrewNeedsFullGate
 	}
 	if dryRun {
-		p.Line("[dry-run] verified Homebrew formula %s is eligible for dot %s", info.FullName, version)
+		p.Line("[dry-run] verified Homebrew formula is eligible for dot %s", version)
 		return nil
 	}
 	release, err := upgradeAcquirePrebuilt(ctx)
@@ -43,108 +44,43 @@ func upgradeHomebrewPrebuilt(ctx context.Context, p *Printer, h homebrewDot, cur
 		return fmt.Errorf("the verified prebuilt Homebrew update needs the maintenance slot: %w; retry later", err)
 	}
 	defer release()
-	// Re-read metadata and recipe after admission, immediately before brew can
-	// mutate the managed installation.
-	info, err = brewFormulaInfoNoAutoUpdate(ctx, h)
-	if err != nil {
-		return fmt.Errorf("%w: cannot re-read installed recipe: %v", errHomebrewNeedsFullGate, err)
-	}
-	if !prebuiltFormulaInfoEligible(info, current, version, checksums) || !prebuiltFormulaSourceEligible(ctx, h, info.FullName, version, checksums) {
+	// Re-read the raw formula after admission and before any Homebrew command
+	// can load it as Ruby code.
+	if !prebuiltFormulaEligible(context.WithoutCancel(ctx), h, current, version, checksums) {
 		return errHomebrewNeedsFullGate
 	}
 	before, _ := filepath.EvalSymlinks(h.optDot())
-	args := append(append([]string{}, prebuiltHomebrewEnvironment...), h.brew(), "upgrade", "--formula", info.FullName)
-	p.Line("\nRunning verified Homebrew update for %s...", info.FullName)
-	if _, err := upgradeRun(context.WithoutCancel(ctx), true, "/usr/bin/env", args...); err != nil {
-		return fmt.Errorf("verified brew upgrade %s: %w", info.FullName, err)
+	args := append(append([]string{}, prebuiltHomebrewEnvironment...), h.brew(), "upgrade", "--formula", "entelecheia/tap/dotfiles")
+	p.Line("\nRunning verified Homebrew update for dotfiles...")
+	_, upgradeErr := upgradeRun(context.WithoutCancel(ctx), true, "/usr/bin/env", args...)
+	if upgradeErr != nil {
+		upgradeErr = fmt.Errorf("verified brew upgrade dotfiles: %w", upgradeErr)
 	}
-	installed, err := upgradedVersion(context.WithoutCancel(ctx), h, version)
-	if err == nil && installed != version {
-		err = fmt.Errorf("Homebrew installed %s, expected exact prebuilt version %s", installed, version)
-	}
-	if err == nil {
-		p.Line("Upgraded to %s (Homebrew)", installed)
+	var readbackErr error
+	if upgradeErr == nil {
+		goos, goarch, targetErr := supportedNativeReleaseTarget()
+		if targetErr != nil {
+			readbackErr = targetErr
+		} else if readbackErr = verifyNativeBinaryTarget(h.optDot(), goos, goarch); readbackErr == nil {
+			var installed string
+			installed, readbackErr = upgradedVersion(context.WithoutCancel(ctx), h, version)
+			if readbackErr == nil && installed != version {
+				readbackErr = fmt.Errorf("Homebrew installed %s, expected exact prebuilt version %s", installed, version)
+			}
+		}
+		if readbackErr == nil {
+			p.Line("Upgraded to %s (Homebrew)", version)
+		}
 	}
 	if after, _ := filepath.EvalSymlinks(h.optDot()); after == before {
-		return err
+		return errors.Join(upgradeErr, readbackErr)
 	}
-	return errors.Join(err, reloadDotLaunchAgents(context.WithoutCancel(ctx), p, h, false))
+	return errors.Join(upgradeErr, readbackErr, upgradeReloadLaunchAgents(context.WithoutCancel(ctx), p, h, false))
 }
 
-type prebuiltBrewFormula struct {
-	FullName           string `json:"full_name"`
-	Pinned             bool   `json:"pinned"`
-	PostInstallDefined bool   `json:"post_install_defined"`
-	Versions           struct {
-		Stable string `json:"stable"`
-	} `json:"versions"`
-	URLs struct {
-		Stable struct {
-			URL      string `json:"url"`
-			Checksum string `json:"checksum"`
-		} `json:"stable"`
-	} `json:"urls"`
-	Installed []struct {
-		Version string `json:"version"`
-	} `json:"installed"`
-	Dependencies            []string          `json:"dependencies"`
-	BuildDependencies       []string          `json:"build_dependencies"`
-	TestDependencies        []string          `json:"test_dependencies"`
-	RecommendedDependencies []string          `json:"recommended_dependencies"`
-	OptionalDependencies    []string          `json:"optional_dependencies"`
-	UsesFromMacOS           []string          `json:"uses_from_macos"`
-	Requirements            []json.RawMessage `json:"requirements"`
-}
-
-func brewFormulaInfoNoAutoUpdate(ctx context.Context, h homebrewDot) (prebuiltBrewFormula, error) {
-	args := append(append([]string{}, prebuiltHomebrewEnvironment...), h.brew(), "info", "--json=v2", "--formula", h.formula)
-	out, err := upgradeRun(ctx, false, "/usr/bin/env", args...)
-	if err != nil {
-		return prebuiltBrewFormula{}, fmt.Errorf("reading Homebrew metadata for %s: %w", h.formula, err)
-	}
-	var result struct {
-		Formulae []prebuiltBrewFormula `json:"formulae"`
-		Casks    []json.RawMessage     `json:"casks"`
-	}
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		return prebuiltBrewFormula{}, fmt.Errorf("parsing Homebrew metadata: %w", err)
-	}
-	if len(result.Formulae) != 1 || result.Formulae[0].FullName == "" || len(result.Casks) != 0 {
-		return prebuiltBrewFormula{}, fmt.Errorf("brew info returned %d formulae and %d casks, want one formula and no casks", len(result.Formulae), len(result.Casks))
-	}
-	return result.Formulae[0], nil
-}
-
-func prebuiltFormulaInfoEligible(info prebuiltBrewFormula, current, version string, checksums []byte) bool {
-	goos, goarch, err := supportedNativeReleaseTarget()
-	if err != nil {
-		return false
-	}
-	asset := fmt.Sprintf("dot_%s_%s_%s.tar.gz", version, goos, goarch)
-	wantHash, err := parseUniqueChecksum(checksums, asset)
-	if err != nil {
-		return false
-	}
-	wantURL := fmt.Sprintf("https://github.com/%s/releases/download/v%s/%s", githubRepo, version, asset)
-	return info.FullName != "" && !info.Pinned && info.Versions.Stable == version &&
-		info.URLs.Stable.URL == wantURL && strings.EqualFold(info.URLs.Stable.Checksum, wantHash) &&
-		len(info.Installed) == 1 && strings.TrimPrefix(info.Installed[0].Version, "v") == current &&
-		len(info.Dependencies) == 0 && len(info.BuildDependencies) == 0 &&
-		len(info.TestDependencies) == 0 && len(info.RecommendedDependencies) == 0 &&
-		len(info.OptionalDependencies) == 0 && len(info.UsesFromMacOS) == 0 &&
-		len(info.Requirements) == 0 && !info.PostInstallDefined
-}
-
-func prebuiltFormulaSourceEligible(ctx context.Context, h homebrewDot, fullName, version string, checksums []byte) bool {
-	if !isTrustedTapFormula(fullName) {
-		return false
-	}
-	args := append(append([]string{}, prebuiltHomebrewEnvironment...), h.brew(), "cat", fullName)
-	out, err := upgradeRun(ctx, false, "/usr/bin/env", args...)
-	if err != nil {
-		return false
-	}
-	return canonicalFormulaMatches(out, version, checksums)
+func prebuiltFormulaSourceEligible(h homebrewDot, version string, checksums []byte) bool {
+	source, err := readTapFormulaSource(h)
+	return err == nil && canonicalFormulaMatches(string(source), version, checksums)
 }
 
 func canonicalFormulaMatches(source, version string, checksums []byte) bool {
@@ -152,8 +88,196 @@ func canonicalFormulaMatches(source, version string, checksums []byte) bool {
 	return err == nil && strings.TrimSpace(source) == strings.TrimSpace(want)
 }
 
-func isTrustedTapFormula(fullName string) bool {
-	return fullName == "entelecheia/tap/dotfiles"
+func prebuiltFormulaEligible(ctx context.Context, h homebrewDot, current, version string, checksums []byte) bool {
+	if !prebuiltFormulaSourceEligible(h, version, checksums) {
+		return false
+	}
+	if !homebrewRuntimeReady(h) {
+		return false
+	}
+	pinned, err := homebrewFormulaPinned(h)
+	if err != nil || pinned {
+		return false
+	}
+	goos, goarch, err := supportedNativeReleaseTarget()
+	if err != nil || runtime.GOARCH != goarch {
+		return false
+	}
+	optBinary, kegVersion, err := managedHomebrewOptBinary(h)
+	if err != nil || verifyNativeBinaryTarget(optBinary, goos, goarch) != nil {
+		return false
+	}
+	installed, err := readDotBinaryVersion(ctx, optBinary)
+	return err == nil && kegVersion == current && installed == current
+}
+
+func homebrewRuntimeReady(h homebrewDot) bool {
+	repository, err := resolvedHomebrewRepository(h)
+	if err != nil {
+		return false
+	}
+	vendorDir := filepath.Join(repository, "Library", "Homebrew", "vendor")
+	vendorRoot := filepath.Join(vendorDir, "portable-ruby")
+	versionPath := filepath.Join(vendorDir, "portable-ruby-version")
+	versionFile, err := os.Open(versionPath)
+	if err != nil {
+		return false
+	}
+	versionInfo, err := versionFile.Stat()
+	if err != nil || !versionInfo.Mode().IsRegular() || versionInfo.Size() <= 0 || versionInfo.Size() > 128 {
+		_ = versionFile.Close()
+		return false
+	}
+	versionData, err := io.ReadAll(io.LimitReader(versionFile, 129))
+	closeErr := versionFile.Close()
+	if err != nil || closeErr != nil || len(versionData) > 128 {
+		return false
+	}
+	version := strings.TrimSpace(string(versionData))
+	if !portableRubyVersionName.MatchString(version) || filepath.Base(version) != version {
+		return false
+	}
+	current := filepath.Join(vendorRoot, "current")
+	linkInfo, err := os.Lstat(current)
+	if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	expectedVersion := filepath.Join(vendorRoot, version)
+	expectedInfo, err := os.Lstat(expectedVersion)
+	if err != nil || !expectedInfo.IsDir() {
+		return false
+	}
+	currentInfo, err := os.Stat(current)
+	if err != nil || !os.SameFile(currentInfo, expectedInfo) {
+		return false
+	}
+	resolvedCurrent, err := filepath.EvalSymlinks(current)
+	if err != nil {
+		return false
+	}
+	for _, binary := range []string{"ruby", "bundle"} {
+		path := filepath.Join(resolvedCurrent, "bin", binary)
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+			return false
+		}
+	}
+	return !homebrewRubyOverridesPresent(h)
+}
+
+func homebrewRubyOverridesPresent(h homebrewDot) bool {
+	for _, name := range []string{"HOMEBREW_DEVELOPER", "HOMEBREW_TESTS", "HOMEBREW_FORCE_VENDOR_RUBY", "HOMEBREW_USE_RUBY_FROM_PATH", "HOMEBREW_XDG_CONFIG_HOME"} {
+		if os.Getenv(name) != "" {
+			return true
+		}
+	}
+	for _, name := range []string{"HOMEBREW_NO_AUTO_UPDATE", "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK", "HOMEBREW_NO_INSTALL_CLEANUP"} {
+		if value, ok := os.LookupEnv(name); ok && strings.TrimSpace(value) != "1" {
+			return true
+		}
+	}
+	paths := []string{"/etc/homebrew/brew.env", filepath.Join(h.prefix, "etc", "homebrew", "brew.env")}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		paths = append(paths, filepath.Join(xdg, "homebrew", "brew.env"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".homebrew", "brew.env"))
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<10 {
+			return true
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return true
+		}
+		data, err := io.ReadAll(io.LimitReader(f, (64<<10)+1))
+		closeErr := f.Close()
+		if err != nil || closeErr != nil || len(data) > 64<<10 {
+			return true
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSuffix(line, "\r")
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if strings.HasPrefix(line, "HOMEBREW_") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolvedHomebrewRepository(h homebrewDot) (string, error) {
+	brewScript, err := filepath.EvalSymlinks(h.brew())
+	if err != nil || filepath.Base(filepath.Dir(brewScript)) != "bin" {
+		return "", fmt.Errorf("resolving Homebrew repository from its brew script")
+	}
+	repository := filepath.Dir(filepath.Dir(brewScript))
+	info, err := os.Stat(filepath.Join(repository, "Library", "Homebrew"))
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("resolved Homebrew repository has no Library/Homebrew directory")
+	}
+	return repository, nil
+}
+
+func homebrewFormulaPinned(h homebrewDot) (bool, error) {
+	path := filepath.Join(h.prefix, "var", "homebrew", "pinned", h.formula)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return true, fmt.Errorf("unexpected non-symlink pin record at %s", path)
+	}
+	return true, nil
+}
+
+func readManagedHomebrewVersion(ctx context.Context, h homebrewDot) (string, error) {
+	optBinary, kegVersion, err := managedHomebrewOptBinary(h)
+	if err != nil {
+		return "", err
+	}
+	goos, goarch, err := binaryBuildTarget(optBinary)
+	if err != nil || goos != runtime.GOOS || (goarch != "amd64" && goarch != "arm64") {
+		return "", fmt.Errorf("Homebrew opt binary has unsupported target %s/%s", goos, goarch)
+	}
+	version, err := readDotBinaryVersion(ctx, optBinary)
+	if err != nil {
+		return "", err
+	}
+	if version != kegVersion {
+		return "", fmt.Errorf("Homebrew Cellar version %s does not match executable version %s", kegVersion, version)
+	}
+	return version, nil
+}
+
+func managedHomebrewOptBinary(h homebrewDot) (string, string, error) {
+	resolved, err := filepath.EvalSymlinks(h.optDot())
+	if err != nil {
+		return "", "", err
+	}
+	managed, ok := homebrewDotFor(resolved)
+	if !ok || managed.formula != h.formula || filepath.Clean(managed.prefix) != filepath.Clean(h.prefix) {
+		return "", "", fmt.Errorf("Homebrew opt binary does not resolve into the managed %s formula", h.formula)
+	}
+	rel, err := filepath.Rel(filepath.Join(h.prefix, "Cellar", h.formula), resolved)
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) != 3 || parts[1] != "bin" || parts[2] != "dot" {
+		return "", "", fmt.Errorf("unexpected Homebrew opt binary path %s", resolved)
+	}
+	return resolved, parts[0], nil
 }
 
 func canonicalGoReleaserFormula(version string, checksums []byte) (string, error) {
@@ -229,10 +353,14 @@ func supportedNativeReleaseTarget() (string, string, error) {
 	if err := validatePrebuiltPlatform(runtime.GOOS); err != nil {
 		return "", "", err
 	}
-	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
-		return "", "", fmt.Errorf("verified prebuilt updates are unsupported on %s/%s", runtime.GOOS, runtime.GOARCH)
+	arch, err := nativeHostArchitecture(context.Background())
+	if err != nil {
+		return "", "", err
 	}
-	return runtime.GOOS, runtime.GOARCH, nil
+	if arch != "amd64" && arch != "arm64" {
+		return "", "", fmt.Errorf("verified prebuilt updates are unsupported on %s/%s", runtime.GOOS, arch)
+	}
+	return runtime.GOOS, arch, nil
 }
 
 func discoverHomebrewDot(ctx context.Context) (homebrewDot, string, error) {
@@ -240,23 +368,21 @@ func discoverHomebrewDot(ctx context.Context) (homebrewDot, string, error) {
 	if err != nil {
 		return homebrewDot{}, "", fmt.Errorf("finding Homebrew for --homebrew: %w", err)
 	}
-	prefix, err := upgradeRun(ctx, false, brewPath, "--prefix")
+	brewPath, err = filepath.Abs(brewPath)
 	if err != nil {
-		return homebrewDot{}, "", fmt.Errorf("finding Homebrew prefix: %w", err)
+		return homebrewDot{}, "", fmt.Errorf("resolving Homebrew path: %w", err)
 	}
-	h := homebrewDot{prefix: strings.TrimSpace(prefix), formula: "dotfiles"}
-	if h.prefix == "" {
-		return homebrewDot{}, "", fmt.Errorf("Homebrew returned an empty prefix")
-	}
-	listed, err := upgradeRun(ctx, false, brewPath, "list", "--formula", "--versions", h.formula)
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	prefixOut, err := upgradeRun(probeCtx, false, "/usr/bin/env", "HOMEBREW_NO_AUTO_UPDATE=1", brewPath, "--prefix")
 	if err != nil {
-		return homebrewDot{}, "", fmt.Errorf("checking installed Homebrew dotfiles formula: %w", err)
+		return homebrewDot{}, "", fmt.Errorf("reading Homebrew prefix: %w", err)
 	}
-	fields := strings.Fields(listed)
-	if len(fields) != 2 || fields[0] != h.formula {
-		return homebrewDot{}, "", fmt.Errorf("Homebrew does not report one installed dotfiles formula: %q", strings.TrimSpace(listed))
+	prefix := strings.TrimSpace(prefixOut)
+	if !filepath.IsAbs(prefix) {
+		return homebrewDot{}, "", fmt.Errorf("Homebrew returned an invalid prefix %q", prefix)
 	}
-	version := strings.TrimPrefix(fields[1], "v")
+	h := homebrewDot{prefix: prefix, formula: "dotfiles"}
 	dot, err := filepath.EvalSymlinks(h.optDot())
 	if err != nil {
 		return homebrewDot{}, "", fmt.Errorf("resolving installed Homebrew dotfiles binary: %w", err)
@@ -265,14 +391,139 @@ func discoverHomebrewDot(ctx context.Context) (homebrewDot, string, error) {
 	if !ok || managed.formula != h.formula || filepath.Clean(managed.prefix) != filepath.Clean(h.prefix) {
 		return homebrewDot{}, "", fmt.Errorf("Homebrew opt link does not resolve into the expected dotfiles formula")
 	}
-	installed, err := upgradedVersion(ctx, h, version)
+	version, err := readManagedHomebrewVersion(ctx, h)
 	if err != nil {
-		return homebrewDot{}, "", fmt.Errorf("Homebrew formula version %s does not match its opt binary: %w", version, err)
-	}
-	if installed != version {
-		return homebrewDot{}, "", fmt.Errorf("Homebrew formula version %s does not match opt binary version %s", version, installed)
+		return homebrewDot{}, "", fmt.Errorf("verifying installed Homebrew dotfiles version: %w", err)
 	}
 	return h, version, nil
+}
+
+func readTapFormulaSource(h homebrewDot) ([]byte, error) {
+	repository, err := resolvedHomebrewRepository(h)
+	if err != nil {
+		return nil, err
+	}
+	tapRoot := filepath.Join(repository, "Library", "Taps", "entelecheia", "homebrew-tap")
+	formulaPath := filepath.Join(tapRoot, "Formula", "dotfiles.rb")
+	rootInfo, err := os.Lstat(tapRoot)
+	if err != nil || !rootInfo.IsDir() {
+		return nil, fmt.Errorf("trusted Homebrew tap directory is unavailable")
+	}
+	root, err := filepath.EvalSymlinks(tapRoot)
+	if err != nil {
+		return nil, err
+	}
+	before, err := os.Lstat(formulaPath)
+	if err != nil || !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("trusted formula source is missing or not a regular file")
+	}
+	if before.Size() <= 0 || before.Size() > 1<<20 {
+		return nil, fmt.Errorf("trusted formula source size %d is outside the limit", before.Size())
+	}
+	resolved, err := filepath.EvalSymlinks(formulaPath)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("trusted formula source resolves outside its tap")
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	after, err := f.Stat()
+	if err != nil || !os.SameFile(before, after) || after.Size() != before.Size() {
+		return nil, fmt.Errorf("trusted formula source changed while opening")
+	}
+	source, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(source) == 0 || len(source) > 1<<20 {
+		return nil, fmt.Errorf("trusted formula source exceeds the limit")
+	}
+	return source, nil
+}
+
+func nativeHostArchitecture(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if runtime.GOOS == "darwin" {
+		out, err := upgradeRun(ctx, false, "/usr/sbin/sysctl", "-n", "hw.optional.arm64")
+		if err != nil {
+			return "", fmt.Errorf("cannot verify native Darwin architecture: %w", err)
+		}
+		return darwinNativeArch(strings.TrimSpace(out))
+	}
+	if runtime.GOOS == "linux" {
+		out, err := upgradeRun(ctx, false, "uname", "-m")
+		if err != nil {
+			return "", fmt.Errorf("reading native Linux architecture: %w", err)
+		}
+		switch strings.TrimSpace(out) {
+		case "x86_64", "amd64":
+			return "amd64", nil
+		case "aarch64", "arm64":
+			return "arm64", nil
+		default:
+			return "", fmt.Errorf("unsupported native Linux architecture %q", strings.TrimSpace(out))
+		}
+	}
+	return "", fmt.Errorf("cannot verify native architecture on %s", runtime.GOOS)
+}
+
+func darwinNativeArch(arm64Capability string) (string, error) {
+	switch arm64Capability {
+	case "1":
+		return "arm64", nil
+	case "0":
+		return "amd64", nil
+	default:
+		return "", fmt.Errorf("cannot verify native Darwin architecture from hw.optional.arm64=%q", arm64Capability)
+	}
+}
+
+func verifyNativeBinaryTarget(path, goos, goarch string) error {
+	actualOS, actualArch, err := binaryBuildTarget(path)
+	if err != nil {
+		return err
+	}
+	if actualOS != goos || actualArch != goarch {
+		return fmt.Errorf("release executable target is %s/%s, expected native %s/%s", actualOS, actualArch, goos, goarch)
+	}
+	return nil
+}
+
+func binaryBuildTarget(path string) (string, string, error) {
+	info, err := buildinfo.ReadFile(path)
+	if err != nil {
+		return "", "", fmt.Errorf("reading release Go build information: %w", err)
+	}
+	settings := make(map[string]string, len(info.Settings))
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	goos, goarch := settings["GOOS"], settings["GOARCH"]
+	if goos == "" || goarch == "" {
+		return "", "", fmt.Errorf("release executable is missing Go OS/architecture build settings")
+	}
+	return goos, goarch, nil
+}
+
+func readDotBinaryVersion(ctx context.Context, path string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := upgradeRun(ctx, false, path, "--version")
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) < 3 || fields[0] != "dot" || fields[1] != "version" {
+		return "", fmt.Errorf("unexpected version output from %s: %q", path, strings.TrimSpace(out))
+	}
+	return strings.TrimPrefix(fields[2], "v"), nil
 }
 
 var execLookPath = exec.LookPath

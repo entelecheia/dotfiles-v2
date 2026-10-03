@@ -124,16 +124,16 @@ func TestPrebuiltHardBlockerClearsSwapQuietWindow(t *testing.T) {
 		t.Fatalf("hard blocker did not defer and reset window: %+v", d)
 	}
 	firstFresh := EvaluatePrebuiltPressure(snap, PrebuiltThresholds(), d.Next, now.Add(30*time.Second))
-	if firstFresh.Admit || !firstFresh.Next.PrebuiltSwapAt.IsZero() {
-		t.Fatalf("hard blocker recovery did not remain active: %+v", firstFresh)
+	if firstFresh.Admit || firstFresh.Next.PrebuiltSwapAt != now.Add(30*time.Second) {
+		t.Fatalf("hard blocker did not restart the 30-second quiet window: %+v", firstFresh)
 	}
-	secondFresh := EvaluatePrebuiltPressure(snap, PrebuiltThresholds(), firstFresh.Next, now.Add(45*time.Second))
-	if secondFresh.Admit || !secondFresh.Next.PrebuiltSwapAt.IsZero() {
-		t.Fatalf("hard blocker recovery was shortened: %+v", secondFresh)
+	tooSoon := EvaluatePrebuiltPressure(snap, PrebuiltThresholds(), firstFresh.Next, now.Add(45*time.Second))
+	if tooSoon.Admit {
+		t.Fatal("hard blocker was followed by less than 30 seconds of healthy samples")
 	}
-	windowStart := EvaluatePrebuiltPressure(snap, PrebuiltThresholds(), secondFresh.Next, now.Add(60*time.Second))
-	if windowStart.Admit || windowStart.Next.PrebuiltSwapAt != now.Add(60*time.Second) {
-		t.Fatalf("fresh quiet window did not start after hard recovery: %+v", windowStart)
+	windowComplete := EvaluatePrebuiltPressure(snap, PrebuiltThresholds(), tooSoon.Next, now.Add(60*time.Second))
+	if !windowComplete.Admit {
+		t.Fatalf("hard blocker required more than the fresh 30-second quiet window: %+v", windowComplete)
 	}
 }
 

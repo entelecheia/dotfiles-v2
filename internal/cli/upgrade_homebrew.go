@@ -58,6 +58,7 @@ var upgradeRun = func(ctx context.Context, show bool, name string, args ...strin
 }
 
 var upgradeAcquire = resourceguard.Acquire
+var upgradeReloadLaunchAgents = reloadDotLaunchAgents
 
 type brewFormula struct {
 	FullName string `json:"full_name"`
@@ -133,7 +134,7 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 	if after, _ := filepath.EvalSymlinks(h.optDot()); !dryRun && after == before {
 		return upgradeErr
 	}
-	return errors.Join(upgradeErr, reloadDotLaunchAgents(work, p, h, dryRun))
+	return errors.Join(upgradeErr, upgradeReloadLaunchAgents(work, p, h, dryRun))
 }
 
 // upgradedVersion reads `<prefix>/opt/<formula>/bin/dot --version` ("dot version X (commit)")
@@ -141,17 +142,14 @@ func upgradeHomebrew(ctx context.Context, p *Printer, h homebrewDot, current, la
 // the GitHub check and brew update.
 func upgradedVersion(ctx context.Context, h homebrewDot, latest string) (string, error) {
 	dot := h.optDot()
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	out, err := upgradeRun(ctx, false, dot, "--version")
+	version, err := readDotBinaryVersion(ctx, dot)
 	if err != nil {
 		return "", fmt.Errorf("checking %s after brew upgrade: %w", dot, err)
 	}
-	f := strings.Fields(out)
-	if len(f) < 3 || f[0] != "dot" || f[1] != "version" || compareSemver(strings.TrimPrefix(f[2], "v"), latest) < 0 {
-		return "", fmt.Errorf("brew upgrade returned, but %s reports %q, not %s or newer", dot, strings.TrimSpace(out), latest)
+	if compareSemver(version, latest) < 0 {
+		return "", fmt.Errorf("brew upgrade returned, but %s reports %q, not %s or newer", dot, version, latest)
 	}
-	return strings.TrimPrefix(f[2], "v"), nil
+	return version, nil
 }
 
 func brewFormulaInfo(ctx context.Context, h homebrewDot) (brewFormula, error) {

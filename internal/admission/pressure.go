@@ -150,7 +150,10 @@ type Decision struct {
 	Admit      bool
 	Reasons    []string
 	RetryAfter time.Duration
-	Next       History
+	// ProfileRetry marks a warning-tolerant profile window defer that is safe
+	// to resample. Hard pressure and telemetry blockers never set it.
+	ProfileRetry bool
+	Next         History
 }
 
 // EvaluatePressure decides admission from one snapshot. Pure: same inputs,

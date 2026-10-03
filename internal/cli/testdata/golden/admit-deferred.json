@@ -3,5 +3,5 @@
   "scope": "@ROOT@/repo/.git",
   "class": "heavy",
   "reason": "memory pressure critical",
-  "retry_after": 30
+  "retry_after": 22
 }
