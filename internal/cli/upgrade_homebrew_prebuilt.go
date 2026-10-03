@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/entelecheia/dotfiles-v2/internal/config"
 )
 
 var errHomebrewNeedsFullGate = errors.New("homebrew metadata or recipe needs a full maintenance gate")
@@ -176,11 +178,19 @@ func homebrewRubyOverridesPresent(h homebrewDot) bool {
 			return true
 		}
 	}
-	paths := []string{"/etc/homebrew/brew.env", filepath.Join(h.prefix, "etc", "homebrew", "brew.env")}
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		paths = append(paths, filepath.Join(xdg, "homebrew", "brew.env"))
-	} else if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".homebrew", "brew.env"))
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return true
+	}
+	configHome := config.ConfigHome(home, false)
+	if !filepath.IsAbs(configHome) {
+		return true
+	}
+	paths := []string{
+		"/etc/homebrew/brew.env",
+		filepath.Join(h.prefix, "etc", "homebrew", "brew.env"),
+		filepath.Join(configHome, "homebrew", "brew.env"),
+		filepath.Join(home, ".homebrew", "brew.env"),
 	}
 	for _, path := range paths {
 		info, err := os.Stat(path)

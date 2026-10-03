@@ -547,7 +547,7 @@ func TestUpgradeHomebrewPrebuiltReloadsMovedOptAfterBrewFailure(t *testing.T) {
 		reloaded++
 		return reloadErr
 	}
-	got := upgradeHomebrewPrebuilt(context.Background(), &Printer{}, h, "2.70.34", "2.70.35", checksums, false)
+	got := upgradeHomebrewPrebuilt(context.Background(), &Printer{Out: io.Discard, Err: io.Discard}, h, "2.70.34", "2.70.35", checksums, false)
 	if !errors.Is(got, brewErr) || !errors.Is(got, reloadErr) {
 		t.Fatalf("error after opt move = %v, want brew and reload errors", got)
 	}
