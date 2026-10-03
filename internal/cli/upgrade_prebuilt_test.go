@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -468,7 +469,7 @@ func TestUpgradeHomebrewPrebuiltReloadsMovedOptAfterBrewFailure(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(prefix, "bin"), filepath.Join(prefix, "Library", "Homebrew"),
 		filepath.Join(prefix, "Library", "Taps", "entelecheia", "homebrew-tap", "Formula"),
-		filepath.Join(currentKeg, "bin"), filepath.Join(newKeg, "bin"), filepath.Join(opt, "bin"),
+		filepath.Join(currentKeg, "bin"), filepath.Join(newKeg, "bin"), filepath.Dir(opt),
 	} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatal(err)
