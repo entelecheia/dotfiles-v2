@@ -61,7 +61,7 @@ func TestSignalErr_WrapsForErrorsIs(t *testing.T) {
 }
 
 func TestResolveNotify_AndNewNotifier(t *testing.T) {
-	s := ResolveNotify(config.WatchdogNotifyConfig{MacOS: true, NtfyURL: "https://ntfy.example/x"})
+	s := ResolveNotify(config.WatchdogNotifyConfig{MacOS: true, NtfyURL: "https://ntfy.example/x"}, t.TempDir())
 	if !s.MacOS || s.NtfyURL != "https://ntfy.example/x" {
 		t.Fatalf("ResolveNotify = %#v", s)
 	}

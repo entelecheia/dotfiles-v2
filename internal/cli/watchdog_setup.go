@@ -237,7 +237,7 @@ func runWatchdogNotify(cmd *cobra.Command, args []string) error {
 	default:
 		return err
 	}
-	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(ncfg), watchdogRunner(false), runtime.GOOS)
+	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(ncfg, homeFor(cmd)), watchdogRunner(false), runtime.GOOS)
 	if err := notifier.Notify(cmd.Context(), args[0], args[1]); err != nil {
 		return err
 	}

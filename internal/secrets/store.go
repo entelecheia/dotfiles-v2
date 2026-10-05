@@ -100,6 +100,12 @@ func Entries(state *config.UserState, home string) ([]Entry, error) {
 			Plain:   filepath.Join(home, ".config", "beszel", "agent.env"),
 			DirPerm: 0o700,
 		},
+		{
+			Label:   "Telegram bot env",
+			AgeName: "telegram.env.age",
+			Plain:   filepath.Join(home, ".config", "dot", "telegram.env"),
+			DirPerm: 0o700,
+		},
 	}, nil
 }
 

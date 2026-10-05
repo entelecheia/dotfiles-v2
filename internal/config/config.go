@@ -240,13 +240,35 @@ func (c WatchdogBeszelConfig) IsZero() bool {
 
 // WatchdogNotifyConfig configures external alert fan-out.
 type WatchdogNotifyConfig struct {
-	MacOS   bool   `yaml:"macos,omitempty"`    // osascript desktop notification
-	NtfyURL string `yaml:"ntfy_url,omitempty"` // ntfy topic URL; empty skips the POST
+	MacOS    bool                   `yaml:"macos,omitempty"`    // osascript desktop notification
+	NtfyURL  string                 `yaml:"ntfy_url,omitempty"` // ntfy topic URL; empty skips the POST
+	Telegram WatchdogTelegramConfig `yaml:"telegram,omitempty"`
 }
 
 // IsZero lets yaml.v3 omit an unset notify block.
 func (c WatchdogNotifyConfig) IsZero() bool {
-	return !c.MacOS && c.NtfyURL == ""
+	return !c.MacOS && c.NtfyURL == "" && c.Telegram.IsZero()
+}
+
+// WatchdogTelegramConfig configures the Telegram alert channel. The bot
+// token and chat ID never live here: they stay in the secrets-managed env
+// file named by EnvPath (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID).
+type WatchdogTelegramConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// EnvPath names the KEY=VALUE env file with the bot credentials;
+	// default ~/.config/dot/telegram.env.
+	EnvPath string `yaml:"env_path,omitempty"`
+	// ReminderInterval is the minimum time between repeat alerts while a
+	// failure condition persists; default 30m.
+	ReminderInterval Duration `yaml:"reminder_interval,omitempty"`
+	// QuarantineThreshold alerts when one peer sync quarantines more
+	// deletions than this; 0 disables that alert.
+	QuarantineThreshold int `yaml:"quarantine_threshold,omitempty"`
+}
+
+// IsZero lets yaml.v3 omit an unset telegram block.
+func (c WatchdogTelegramConfig) IsZero() bool {
+	return !c.Enabled && c.EnvPath == "" && c.ReminderInterval.IsZero() && c.QuarantineThreshold == 0
 }
 
 // AIConfig configures AI helper files plus optional agents and skills SSOT deployment.

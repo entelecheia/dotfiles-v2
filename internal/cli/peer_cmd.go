@@ -250,6 +250,9 @@ on a laptop.`,
 
 				LocalDotVersion: c.Root().Version,
 			})
+			// Alerting observes the outcome; it never masks or replaces the
+			// run's own error and exit code below.
+			reportPeerSyncAlert(context.Background(), c, bs, res, err, dryRun, !pushOnly && !pullOnly)
 			// Under --json stdout carries the document only: hook outcomes go
 			// to stderr, like the progress lines.
 			hookOut := p

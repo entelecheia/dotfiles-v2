@@ -654,3 +654,31 @@ func TestEntries_IncludesBeszelAgentEnv(t *testing.T) {
 		t.Errorf("beszel plaintext dir perm = %v, want 0700 (it carries the hub KEY/TOKEN)", found.DirPerm)
 	}
 }
+
+// The Telegram bot env file carries TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID, so
+// it is a secrets-managed archive ↔ plaintext pair like the Beszel agent env.
+func TestEntries_IncludesTelegramBotEnv(t *testing.T) {
+	home := t.TempDir()
+	entries, err := Entries(&config.UserState{}, home)
+	if err != nil {
+		t.Fatalf("Entries: %v", err)
+	}
+	var found *Entry
+	for i := range entries {
+		if entries[i].Label == "Telegram bot env" {
+			found = &entries[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no telegram entry in %#v", entries)
+	}
+	if found.AgeName != "telegram.env.age" {
+		t.Errorf("telegram archive name = %q", found.AgeName)
+	}
+	if want := filepath.Join(home, ".config", "dot", "telegram.env"); found.Plain != want {
+		t.Errorf("telegram plaintext = %q, want %q", found.Plain, want)
+	}
+	if found.DirPerm != 0o700 {
+		t.Errorf("telegram plaintext dir perm = %v, want 0700 (it carries the bot token)", found.DirPerm)
+	}
+}
