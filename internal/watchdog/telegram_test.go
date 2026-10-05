@@ -218,6 +218,24 @@ func TestNotifier_TelegramFailureSurfaces(t *testing.T) {
 	}
 }
 
+func TestNotifier_TelegramNetworkErrorRedactsToken(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "secret-token-123")
+	t.Setenv("TELEGRAM_CHAT_ID", "1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	srv.Close() // guarantee a connection error whose url.Error carries the token URL
+	n := &Notifier{
+		Settings: NotifySettings{Telegram: TelegramSettings{Enabled: true, EnvPath: filepath.Join(t.TempDir(), "missing.env"), APIBase: srv.URL}},
+		GOOS:     "linux",
+	}
+	err := n.Notify(context.Background(), "warn", "x")
+	if err == nil {
+		t.Fatal("a refused connection must be an error")
+	}
+	if strings.Contains(err.Error(), "secret-token-123") {
+		t.Fatalf("the bot token must never appear in a logged error: %v", err)
+	}
+}
+
 func TestNotifier_TelegramEnabledButUnconfiguredIsNoOp(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "")
 	t.Setenv("TELEGRAM_CHAT_ID", "")

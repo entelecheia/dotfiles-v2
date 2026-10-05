@@ -119,12 +119,14 @@ func (n *Notifier) notifyTelegram(ctx context.Context, level, msg string) error 
 	url := strings.TrimRight(base, "/") + "/bot" + token + "/sendMessage"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("telegram sendMessage request: %s", redactTelegramToken(err, token))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		// url.Error echoes the request URL, which carries the bot token;
+		// callers log this error, so it must never contain the secret.
+		return fmt.Errorf("telegram sendMessage: %s", redactTelegramToken(err, token))
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
@@ -141,6 +143,15 @@ func telegramChatID(chatID string) any {
 		return id
 	}
 	return chatID
+}
+
+// redactTelegramToken strips the bot token from an error's text so the
+// wrapped error is safe to log.
+func redactTelegramToken(err error, token string) string {
+	if token == "" {
+		return err.Error()
+	}
+	return strings.ReplaceAll(err.Error(), token, "<redacted>")
 }
 
 // scanEnvLines parses env-file content into a KEY→VALUE map, reporting the
