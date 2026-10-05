@@ -239,6 +239,17 @@ tool):
   init/backup/restore cover it like the SSH key and shell secrets. Watchdog
   setup only probes its presence — it never reads, renders, or removes the
   file — and the beszel plist sources it at agent start
+- `~/.config/dot/telegram.env` — the Telegram alert channel env file
+  (TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID), a secrets-managed archive ↔
+  plaintext pair like the Beszel env. The watchdog notifier reads it lazily
+  when `watchdog.notify.telegram.enabled` is on, so a rotated credential
+  takes effect on the next scheduled run without re-running setup; a missing
+  or incomplete file disables the channel silently
+- `<workspace>/.dotfiles/peer/alert-state.json` — the peer sync alert
+  episode position (failing since, last sent), written atomically by
+  `dot peer sync` only when Telegram alerting is enabled and a transition or
+  reminder actually sends, and removed when a recovery sends. `--dry-run`
+  never writes it
 - `~/.local/state/dot/admission/` — the resource-admission controller state:
   the slot directories (`slots/`, one per repo plus the shared maintenance
   slot, each holding a `lease.json` with the owner pid/start, heartbeat and

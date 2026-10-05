@@ -44,8 +44,29 @@ type ReaperSettings struct {
 
 // NotifySettings is the resolved notifier configuration.
 type NotifySettings struct {
-	MacOS   bool
-	NtfyURL string
+	MacOS    bool
+	NtfyURL  string
+	Telegram TelegramSettings
+}
+
+// Defaults applied when the profile leaves a telegram knob unset. The env
+// file carries the bot credentials, so it lives outside the tracked profile
+// and the synced workspace, as a secrets-managed pair.
+const (
+	DefaultTelegramEnvPath          = "~/.config/dot/telegram.env"
+	DefaultTelegramReminderInterval = 30 * time.Minute
+	DefaultTelegramAPIBase          = "https://api.telegram.org"
+)
+
+// TelegramSettings is the resolved Telegram channel configuration. EnvPath
+// is absolute (~ expanded against the home passed to ResolveNotify). APIBase
+// exists so tests can point the channel at an httptest server.
+type TelegramSettings struct {
+	Enabled             bool
+	EnvPath             string
+	ReminderInterval    time.Duration
+	QuarantineThreshold int
+	APIBase             string
 }
 
 // ResolveReaper applies defaults and validates the mode.
@@ -82,10 +103,29 @@ func ResolveReaper(c config.WatchdogReaperConfig) (ReaperSettings, error) {
 	return s, nil
 }
 
-// ResolveNotify maps the notify block through unchanged; it exists so every
-// consumer reads notifier config through one seam.
-func ResolveNotify(c config.WatchdogNotifyConfig) NotifySettings {
-	return NotifySettings{MacOS: c.MacOS, NtfyURL: c.NtfyURL}
+// ResolveNotify applies defaults and expands telegram's env path against the
+// manager home (a scheduled run's cwd is not the user's home, the beszel
+// env_path lesson); it exists so every consumer reads notifier config
+// through one seam.
+func ResolveNotify(c config.WatchdogNotifyConfig, home string) NotifySettings {
+	tg := TelegramSettings{
+		Enabled:             c.Telegram.Enabled,
+		EnvPath:             c.Telegram.EnvPath,
+		ReminderInterval:    c.Telegram.ReminderInterval.Std(),
+		QuarantineThreshold: c.Telegram.QuarantineThreshold,
+		APIBase:             DefaultTelegramAPIBase,
+	}
+	if tg.EnvPath == "" {
+		tg.EnvPath = DefaultTelegramEnvPath
+	}
+	tg.EnvPath = fileutil.ExpandHomeFor(tg.EnvPath, home)
+	if !filepath.IsAbs(tg.EnvPath) {
+		tg.EnvPath = filepath.Join(home, tg.EnvPath)
+	}
+	if tg.Enabled && tg.ReminderInterval <= 0 {
+		tg.ReminderInterval = DefaultTelegramReminderInterval
+	}
+	return NotifySettings{MacOS: c.MacOS, NtfyURL: c.NtfyURL, Telegram: tg}
 }
 
 // Defaults applied when the profile leaves a warp knob unset: probe every

@@ -110,7 +110,7 @@ func runWatchdogReap(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
-	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), runner, runtime.GOOS)
+	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify, mgr.Home), runner, runtime.GOOS)
 	for _, c := range candidates {
 		action, aerr := actOnCandidate(ctx, settings, c, now, mgr, runner, notifier)
 		if aerr != nil {

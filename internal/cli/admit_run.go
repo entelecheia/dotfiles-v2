@@ -188,7 +188,7 @@ func notifyDefer(ctx context.Context, cmd *cobra.Command, store *admission.Store
 		_ = os.Remove(claimPath)
 		return
 	}
-	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), watchdogRunner(false), runtime.GOOS)
+	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify, homeFor(cmd)), watchdogRunner(false), runtime.GOOS)
 	msg := fmt.Sprintf("heavy job deferred for %s: %s", scope, strings.Join(d.Reasons, "; "))
 	if err := notifier.Notify(ctx, "warn", msg); err != nil {
 		_ = os.Remove(claimPath)

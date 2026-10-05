@@ -106,7 +106,7 @@ func runWatchdogWarpForGOOS(cmd *cobra.Command, _ []string, goos string) error {
 // runs without sudo: the invoking daemon is root; a manual unprivileged run
 // gets a clear error instead of a hidden password prompt.
 func executeWarpAction(ctx context.Context, mgr *watchdog.Manager, runner *exec.Runner, wcfg config.WatchdogConfig, state watchdog.WarpState, action watchdog.WarpAction, next watchdog.WarpState, now time.Time) error {
-	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify), runner, runtime.GOOS)
+	notifier := watchdog.NewNotifier(watchdog.ResolveNotify(wcfg.Notify, mgr.Home), runner, runtime.GOOS)
 	event := watchdog.Event{Time: now, Event: "warp", Action: action.String()}
 	// notifyBestEffort reports the alert, then records — not returns — a
 	// delivery failure, so the pass still persists its state.

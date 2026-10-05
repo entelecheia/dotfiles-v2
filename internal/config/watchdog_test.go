@@ -45,6 +45,11 @@ watchdog:
   notify:
     macos: true
     ntfy_url: "https://ntfy.example/dot"
+    telegram:
+      enabled: true
+      env_path: "~/.config/dot/telegram.env"
+      reminder_interval: 30m
+      quarantine_threshold: 50
 `
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(doc), &cfg); err != nil {
@@ -100,6 +105,37 @@ watchdog:
 	}
 	if !w.Notify.MacOS || w.Notify.NtfyURL != "https://ntfy.example/dot" {
 		t.Errorf("notify = %#v", w.Notify)
+	}
+	if !w.Notify.Telegram.Enabled || w.Notify.Telegram.EnvPath != "~/.config/dot/telegram.env" ||
+		w.Notify.Telegram.ReminderInterval.Std() != 30*time.Minute || w.Notify.Telegram.QuarantineThreshold != 50 {
+		t.Errorf("notify.telegram = %#v", w.Notify.Telegram)
+	}
+	var zeroTelegram WatchdogTelegramConfig
+	if !zeroTelegram.IsZero() {
+		t.Error("zero telegram config must report IsZero")
+	}
+	if (WatchdogTelegramConfig{QuarantineThreshold: 10}).IsZero() ||
+		(WatchdogTelegramConfig{ReminderInterval: Duration(time.Minute)}).IsZero() {
+		t.Error("quarantine_threshold/reminder_interval must defeat IsZero")
+	}
+	var zeroNotify WatchdogNotifyConfig
+	if !zeroNotify.IsZero() {
+		t.Error("zero notify config must report IsZero")
+	}
+	if (WatchdogNotifyConfig{Telegram: WatchdogTelegramConfig{Enabled: true}}).IsZero() {
+		t.Error("an enabled telegram block must defeat notify IsZero")
+	}
+}
+
+// TestWatchdogNotify_EmptyTelegramOmitsFromMarshal keeps a telegram-less
+// notify block rendering exactly as it did before the channel existed.
+func TestWatchdogNotify_EmptyTelegramOmitsFromMarshal(t *testing.T) {
+	out, err := yaml.Marshal(WatchdogNotifyConfig{MacOS: true, NtfyURL: "https://ntfy.example/dot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(string(out), "telegram") {
+		t.Errorf("empty telegram block must not render:\n%s", out)
 	}
 }
 
