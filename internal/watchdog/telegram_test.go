@@ -88,6 +88,8 @@ func TestLoadTelegramEnv_MalformedLineFails(t *testing.T) {
 	}
 	if _, _, _, err := LoadTelegramEnv(path); err == nil {
 		t.Fatal("a line without '=' must fail, not silently parse as empty")
+	} else if strings.Contains(err.Error(), "TELEGRAM_BOT_TOKEN") {
+		t.Fatalf("the parse error must not echo the offending line (it may hold a mistyped credential): %v", err)
 	}
 }
 

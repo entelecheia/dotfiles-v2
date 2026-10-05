@@ -58,11 +58,13 @@ func parseTelegramEnvLine(line string) (key, value string, keep bool, err error)
 	line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
 	k, v, found := strings.Cut(line, "=")
 	if !found {
-		return "", "", false, fmt.Errorf("expected KEY=VALUE, got %q", line)
+		// The offending line may itself be a mistyped credential; the
+		// caller logs this error, so it names the shape, not the content.
+		return "", "", false, fmt.Errorf("expected KEY=VALUE")
 	}
 	key = strings.TrimSpace(k)
 	if key == "" {
-		return "", "", false, fmt.Errorf("empty key in %q", line)
+		return "", "", false, fmt.Errorf("empty key")
 	}
 	v = strings.TrimSpace(v)
 	if len(v) >= 2 {

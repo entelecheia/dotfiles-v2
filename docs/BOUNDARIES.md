@@ -250,6 +250,9 @@ tool):
   `dot peer sync` only when Telegram alerting is enabled and a transition or
   reminder actually sends, and removed when a recovery sends. `--dry-run`
   never writes it
+- `<workspace>/.dotfiles/peer/alert.lock/` — the PID lock serializing peer
+  alert reporting across overlapping runs (the sync run lock is already
+  released by the time the outcome is reported)
 - `~/.local/state/dot/admission/` — the resource-admission controller state:
   the slot directories (`slots/`, one per repo plus the shared maintenance
   slot, each holding a `lease.json` with the owner pid/start, heartbeat and

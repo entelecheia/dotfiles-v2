@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +62,34 @@ func TestNotifier_NtfyFailureSurfaces(t *testing.T) {
 	n := &Notifier{Settings: NotifySettings{NtfyURL: srv.URL}, GOOS: "linux"}
 	if err := n.Notify(context.Background(), "warn", "x"); err == nil {
 		t.Fatal("a 5xx from ntfy must be an error, not a silent drop")
+	}
+}
+
+func TestNotifier_ChannelFailureDoesNotBlockTelegram(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "tok")
+	t.Setenv("TELEGRAM_CHAT_ID", "1")
+	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ntfy.Close()
+	var telegramHits int
+	tg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		telegramHits++
+	}))
+	defer tg.Close()
+	n := &Notifier{
+		Settings: NotifySettings{
+			NtfyURL:  ntfy.URL,
+			Telegram: TelegramSettings{Enabled: true, EnvPath: filepath.Join(t.TempDir(), "missing.env"), APIBase: tg.URL},
+		},
+		GOOS: "linux",
+	}
+	err := n.Notify(context.Background(), "warn", "x")
+	if err == nil || !strings.Contains(err.Error(), "ntfy") {
+		t.Fatalf("the ntfy failure must still surface: %v", err)
+	}
+	if telegramHits != 1 {
+		t.Fatalf("telegram must be attempted despite the earlier channel's failure, got %d hit(s)", telegramHits)
 	}
 }
 

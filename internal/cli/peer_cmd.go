@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -210,6 +211,22 @@ const (
 	peerAlertRecovery
 )
 
+// summarizePeerAlertError compacts a run error for an outbound alert: the
+// first line only, the operator's home folded to ~, capped in length. Full
+// diagnostics stay in the local log; the alert carries a failure summary
+// that is safe to send and to persist as the episode's LastMessage (#244).
+func summarizePeerAlertError(err error) string {
+	msg := strings.SplitN(err.Error(), "\n", 2)[0]
+	if home, herr := os.UserHomeDir(); herr == nil && home != "" {
+		msg = strings.ReplaceAll(msg, home, "~")
+	}
+	const maxRunes = 200
+	if r := []rune(msg); len(r) > maxRunes {
+		msg = string(r[:maxRunes-3]) + "..."
+	}
+	return msg
+}
+
 // classifyPeerOutcome maps a finished PeerSync call onto an alert. The
 // designed-clean shapes never alert — an offline peer, a fence demotion and
 // a lost lock race are normal operation on a laptop, and reporting them
@@ -225,7 +242,7 @@ func classifyPeerOutcome(res *syncer.PeerSyncResult, runErr error, twoWay bool, 
 		if errors.Is(runErr, fileutil.ErrLockHeld) {
 			return peerAlertNone, "", ""
 		}
-		return peerAlertFailure, "critical", fmt.Sprintf("peer sync failed on %s: %v", machine, runErr)
+		return peerAlertFailure, "critical", fmt.Sprintf("peer sync failed on %s: %s", machine, summarizePeerAlertError(runErr))
 	}
 	if res == nil {
 		return peerAlertNone, "", ""
@@ -248,21 +265,20 @@ func classifyPeerOutcome(res *syncer.PeerSyncResult, runErr error, twoWay bool, 
 // it fires only when watchdog.notify.telegram is enabled, never under
 // --dry-run, and an alert failure is a stderr warning — the sync's exit code
 // and semantics never change. Interactive runs report too; the alerter's
-// ok→fail dedup is what keeps that from spamming. The config comes through
-// the same watchdog snapshot seam every notifier consumer uses, falling back
-// to the live profile on a host that never ran `dot watchdog setup` (the
-// fallback `dot watchdog notify` takes), and the episode state lives beside
-// the peer baseline in the profile's store dir.
+// ok→fail dedup is what keeps that from spamming. Config comes from the live
+// profile (not the watchdog snapshot), so telegram knob changes take effect
+// on the next run without re-running `dot watchdog setup`. When credentials
+// are not configured the report is skipped before any state write, so an
+// episode is never recorded as delivered-or-cleared on a host that cannot
+// send. The episode state lives beside the peer baseline in the profile's
+// store dir, serialized by a PID lock because the run lock is already
+// released by the time the outcome is reported.
 func reportPeerSyncAlert(ctx context.Context, cmd *cobra.Command, bs *syncer.BootstrapResult, res *syncer.PeerSyncResult, runErr error, dryRun, twoWay bool) {
 	p := printerFrom(cmd)
 	if dryRun {
 		return
 	}
-	mgr := watchdog.NewManager(watchdogRunner(false), homeFor(cmd))
-	wcfg, err := loadWatchdogSnapshot(mgr)
-	if errors.Is(err, ErrNoWatchdogSnapshot) {
-		wcfg, err = loadWatchdogConfig(cmd)
-	}
+	wcfg, err := loadWatchdogConfig(cmd)
 	if err != nil {
 		p.Warn("peer alert skipped: %v", err)
 		return
@@ -270,7 +286,24 @@ func reportPeerSyncAlert(ctx context.Context, cmd *cobra.Command, bs *syncer.Boo
 	if !wcfg.Notify.Telegram.Enabled {
 		return
 	}
-	settings := watchdog.ResolveNotify(wcfg.Notify, mgr.Home)
+	settings := watchdog.ResolveNotify(wcfg.Notify, homeFor(cmd))
+	if _, _, ok, err := watchdog.LoadTelegramEnv(settings.Telegram.EnvPath); err != nil {
+		p.Warn("peer alert skipped: %v", err)
+		return
+	} else if !ok {
+		return
+	}
+	release, err := fileutil.AcquirePIDLock(filepath.Join(bs.Config.ConfigDir, "alert.lock"), fileutil.LockOptions{Label: "another peer alert is reporting"})
+	if errors.Is(err, fileutil.ErrLockHeld) {
+		// A concurrent run is reporting right now; the next run reconciles
+		// the episode from the persisted state.
+		return
+	}
+	if err != nil {
+		p.Warn("peer alert skipped: %v", err)
+		return
+	}
+	defer release()
 	alerter := &watchdog.Alerter{
 		Notifier:         watchdog.NewNotifier(settings, watchdogRunner(false), runtime.GOOS),
 		StatePath:        filepath.Join(bs.Config.ConfigDir, "alert-state.json"),

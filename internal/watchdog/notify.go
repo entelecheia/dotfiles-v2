@@ -2,6 +2,7 @@ package watchdog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,26 +29,29 @@ func NewNotifier(s NotifySettings, runner *exec.Runner, goos string) *Notifier {
 	return &Notifier{Settings: s, Runner: runner, GOOS: goos}
 }
 
-// Notify delivers one alert. A channel failure is an error even when the
-// other channels succeeded — an alert path that fails silently is the
-// incident this feature exists to prevent.
+// Notify delivers one alert. Every configured channel is attempted even
+// when an earlier one fails — a dead macOS or ntfy path must not starve the
+// remaining channels — and all channel failures are joined into the returned
+// error: an alert path that fails silently is the incident this feature
+// exists to prevent.
 func (n *Notifier) Notify(ctx context.Context, level, msg string) error {
+	var errs []error
 	if n.Settings.MacOS && n.GOOS == "darwin" {
 		if err := n.notifyMacOS(ctx, level, msg); err != nil {
-			return fmt.Errorf("macOS notification: %w", err)
+			errs = append(errs, fmt.Errorf("macOS notification: %w", err))
 		}
 	}
 	if n.Settings.NtfyURL != "" {
 		if err := n.notifyNtfy(ctx, level, msg); err != nil {
-			return fmt.Errorf("ntfy notification: %w", err)
+			errs = append(errs, fmt.Errorf("ntfy notification: %w", err))
 		}
 	}
 	if n.Settings.Telegram.Enabled {
 		if err := n.notifyTelegram(ctx, level, msg); err != nil {
-			return fmt.Errorf("telegram notification: %w", err)
+			errs = append(errs, fmt.Errorf("telegram notification: %w", err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (n *Notifier) notifyMacOS(ctx context.Context, level, msg string) error {

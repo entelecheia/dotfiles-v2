@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/entelecheia/dotfiles-v2/internal/fileutil"
@@ -88,5 +90,22 @@ func TestClassifyPeerOutcome_MessageContent(t *testing.T) {
 	_, _, held := classifyPeerOutcome(&syncer.PeerSyncResult{Complete: false}, nil, true, 0, "m5x26")
 	if held != "peer sync on m5x26 held destructive transitions; baseline unchanged" {
 		t.Errorf("held msg = %q", held)
+	}
+}
+
+func TestSummarizePeerAlertError(t *testing.T) {
+	if got := summarizePeerAlertError(errors.New("first line\nsecond line with detail")); got != "first line" {
+		t.Errorf("multi-line error must collapse to its first line, got %q", got)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	if got := summarizePeerAlertError(fmt.Errorf("rsync failed under %s/private/x", home)); strings.Contains(got, home) {
+		t.Errorf("the home path must fold to ~ in an outbound alert, got %q", got)
+	}
+	long := summarizePeerAlertError(errors.New(strings.Repeat("x", 500)))
+	if r := []rune(long); len(r) > 200 || !strings.HasSuffix(long, "...") {
+		t.Errorf("long errors must cap at 200 runes with an ellipsis, got %d runes", len(r))
 	}
 }
