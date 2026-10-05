@@ -394,3 +394,5 @@ generic skill source in automatic updates.
 
 If this boundary changes, update the matching Maru boundary document and the
 workspace rule at `~/workspace/work/_meta/rules/skills-ssot.md`.
+
+<!-- ci-probe: trivial change to trigger test.yaml; never merge -->
