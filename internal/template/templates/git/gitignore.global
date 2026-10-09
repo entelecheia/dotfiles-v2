@@ -104,6 +104,7 @@ htmlcov/
 .qwen/
 .firecrawl/
 node_modules/
+brag-output*/
 
 # Claude #
 ##########
