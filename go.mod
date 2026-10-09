@@ -1,6 +1,6 @@
 module github.com/entelecheia/dotfiles-v2
 
-go 1.25.14
+go 1.26.9
 
 require (
 	charm.land/huh/v2 v2.0.3
